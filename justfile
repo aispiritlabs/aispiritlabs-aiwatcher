@@ -528,6 +528,13 @@ e2e-docker *args:
 e2e-processes *args:
     ./scripts/e2e-pod-steps.py --runtime process {{args}}
 
+# A step's pod killed while it holds its attempt (stage C's pod acceptance): the
+# watch ends the attempt as infrastructure with the cluster's reason, a second
+# pod runs it again, the run completes and no Job is left. `--runtime docker`
+# or `process` asks the same of a container or a process on this host.
+e2e-pod-death *args:
+    ./scripts/e2e-pod-death.py {{args}}
+
 # One managed run that evaluates a prompt, optimises it, evaluates the
 # candidate on held-out cases, records the server's verdict and asks an admin —
 # three times: approved, kept back, and rejected before anybody is asked. Starts

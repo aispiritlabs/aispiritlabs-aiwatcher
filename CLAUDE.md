@@ -62,6 +62,7 @@ just seed-conversations # one reviewed exchange, an export job, an immutable cor
 just e2e-pods         # four stages as four pods on a local cluster, against the same four in one worker
 just e2e-docker       # the same four as four containers on this host: the image and its limits, no cluster
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
+just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just e2e-generate     # a baseline and a candidate generate answers on a worker, are scored and compared
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error
@@ -364,7 +365,12 @@ area.
    as in a cluster; `process` keeps neither and needs nothing installed, not
    even the cargo feature. `just e2e-docker` and `just e2e-processes` prove
    that whole path with no cluster; no chart value renders either, because in a
-   cluster they would be step code beside the API (ADR_0029, amended).
+   cluster they would be step code beside the API (ADR_0029, amended). A pod
+   that dies while it holds its attempt is proven by `just e2e-pod-death`, on
+   the local cluster and on this host's engine: the watch ends the attempt as
+   `Infrastructure` within seconds with what it saw — `BackoffLimitExceeded`
+   for a pod deleted at once, `Error (exit 137)` for a killed container — a
+   second pod runs it again, the run completes and no Job is left.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),

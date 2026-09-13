@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -2375,3 +2375,193 @@ przywrócony; na `:8080` i `:18080` nic nie nasłuchiwało przed i po.
 - Z odbioru etapu C dalej otwarte: **C2** Experiments, **C3** bramka CI, **C4**
   feedback → przypadek testowy, test śmierci workera i Joba na klastrze dla kroku
   podowego; z B3 — kontekst wariantu w obserwacjach.
+
+## 31. Ograniczenia sekcji 30 i C2–C4
+
+Użytkownik wskazał pięć ograniczeń z 30.8 do zamknięcia i resztę etapu C: C2
+Experiments, C3 bramkę CI, C4 feedback → przypadek testowy oraz test śmierci
+workera dla kroku podowego. Commity: `267c74b` (zapytanie Flow w procesie
+potomnym), `9922c96` (token i egress serwisu scorerów), `4d5ada3`
+(`generated_with`), `78b9621` (kalibracja: rubryki liczbowe, gamma, dopasowany
+próg), `ecc8ba5` (wersje i różnice kart), `9656db2` (C2), `0b81193` (C3 i linie
+zatwierdzeń), `cd3f35e` (C4) oraz commit testu śmierci poda. Reguły są w
+[ADR 0028](ADR/ADR_0028_QUERY_ENGINES.md) i
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) (poprawki z 2026-09-13) i w
+Guardrails `CLAUDE.md`.
+
+### 31.1 Flow zatrzymuje się w dowolnym miejscu
+
+Zapytanie z `execution_id` biegnie w procesie potomnym (`bin/query.php`,
+uruchamiany przez `ChildQuery` z argv, bez powłoki). Żądanie czyta odpowiedź na
+bieżąco, co 100 ms sprawdza znacznik anulowania i zabija dziecko po znaczniku
+albo po przekroczeniu limitu na zegarze ściennym. Status błędu decyduje
+`Failure::of` tam, gdzie błąd powstał, a żądanie go przekazuje bez zmian.
+Zapytanie ad hoc z panelu, którego nic nie anuluje, zostaje w żądaniu.
+Zmierzone w obrazie z systemem plików tylko do odczytu: agregacja 1,5 mln
+wierszy trwająca 33 s, anulowana po 4 s, odpowiedziała 409 po 4,08 s i nie
+zostawiła procesu.
+
+### 31.2 Serwis scorerów: token zawsze, egress tylko do modelu
+
+Poza localhostem serwis nie startuje bez `AIWATCHER_SCORERS_TOKEN`, chyba że
+`AIWATCHER_SCORERS_UNAUTHENTICATED=true` mówi, że płotem jest sieć. Chart
+generuje token w `<release>-scorers-token`, gdy nie wskazano Secretu, i odczytuje
+go przy upgradzie (`lookup`). Z `networkPolicy.enabled` pod dostaje egress do DNS
+i do modelu wyprowadzonego z `scorers.model.url`: Service w klastrze
+(`llama`, `llama.models.svc`) przez namespace, literał adresu jako `ipBlock`.
+Nazwa hosta spoza klastra jest odmawiana przy renderze, dopóki
+`scorers.egress.rules` nie poda adresów albo `scorers.egress.open` nie zdejmie
+ograniczenia.
+
+### 31.3 Generowanie mówi, z czym generowało
+
+Krok generowania pisze drugi artefakt `generated_with`: skróty `code` i
+`generation_config` (oraz `response_schema` i `tools`, gdy wariant je przypina),
+które worker trzyma. Krok oceny odmawia odpowiedzi bez niego albo z innymi
+skrótami, nazywając oba. `generation_task(generated_with=…)` sprawdza to samo,
+zanim zapyta model. To zgodność ze słowem workera, nie dowód. Model, prompt i
+workflow są referencjami rozwiązywanymi przez rejestr, nie bajtami, i nie są
+raportowane. `just e2e-generate` ma ósmy punkt: wariant z kodem, którego worker
+nie trzyma, kończy się błędem i nic nie publikuje.
+
+### 31.4 Kalibracja poza jednym progiem
+
+Karta może trzymać metrykę frameworka wobec rubryki liczbowej (`pass_score`).
+Każdy wiersz raportu `external` niesie obok zgodności werdyktów:
+
+- `rank_agreement` — gamma Goodmana i Kruskala między liczbami metryki a ocenami
+  ludzi (obie strony obrócone tak, że więcej znaczy lepiej) z liczbą par;
+  wybrana zamiast tau, bo strona człowieka jest z założenia gruba i tau nie
+  dochodzi do jedynki dla metryki, która każde „tak" postawiła nad każdym „nie";
+- `fitted_pass_at` i `fitted_agreement` — próg na liczbach tej metryki, przy
+  którym werdykty najczęściej zgadzały się z ludźmi, najbliższy progu karty
+  wśród równych.
+
+Dopasowany próg jest liczony na tych samych elementach, więc zawyża; nic go nie
+stosuje, a panel podpisuje go jako dopasowany. Edytor kart pyta o próg człowieka,
+gdy rubryka jest liczbowa.
+
+### 31.5 Wersje i różnice kart
+
+`GET /evaluation-scorecards/{name}/versions` zwraca wszystkie wersje od
+najnowszej, `GET …/diff?from=&to=` metryki dodane, usunięte i zmienione, każde
+pole scorera po wskaźniku JSON i definicję metryki po obu stronach. Różnicę
+liczy serwer, bo kierunek, jednostka i agregacja są wyprowadzane i nie ma ich w
+żadnej wersji. W panelu wersje karty rozwijają się pod nią, dwie dowolne można
+porównać, a „Start a new version from this" wypełnia formularz scorerami tej
+wersji.
+
+### 31.6 C2 — Experiments
+
+Przypadek może nieść `usage`: czas odpowiedzi i tokeny wejścia i wyjścia, każde
+nieobecne, gdy nikt nie mierzył. `generation_task` mierzy czas każdej odpowiedzi
+i bierze tokeny policzone przez aplikację. Publikacja wyprowadza `usage` wyniku:
+percentyle opóźnienia na przypadek (p50, p90, p99, max) metodą najbliższej rangi
+i sumy tokenów, każde z liczbą przypadków, bez łączenia percentyli między
+wynikami. `GET /experiments` grupuje tysiąc najnowszych wyników po kontekście;
+`GET /experiments/{context_id}?baseline=` zwraca każdy wynik kontekstu z
+porównaniem do baseline'u według tej samej reguły co porównanie i obok nich
+podsumowanie runów z logu. Ekran Experiments zastępuje placeholder: liczebność,
+metryki z kolorowaną zmianą, opóźnienie i tokeny z pokryciem, czas całego runu z
+linkiem do Workflows, dwa zegary w dwóch kolumnach, powtórzenie wariantu jako
+osobny wiersz. Obserwacje produkcyjne nie są wierszami, bo trace nie nazywa
+jeszcze wariantu; nic nie jest wyceniane bez źródła ceny. `just e2e-generate` ma
+dziewiąty punkt.
+
+### 31.7 C3 — bramka CI i linie zatwierdzeń
+
+Każdy commit to nowy wariant, więc nowa para, a parę zatwierdzał admin z
+bundle'em — człowiek w każdym pipeline. Admin może teraz zatwierdzić **linię**:
+każdy wariant jednego eksperymentu w jednym kontekście. Wariant z linii jest
+zatwierdzany z nazwy przy starcie runu: rejestr składa bundle z deklaracji i
+plików przypiętych przez wariant, które editor wysłał do
+`PUT /evaluation-variant-artifacts` (adresowane skrótem), i zatwierdza parę z
+`approved_by` nazywającym linię i osobę, która wystartowała. Linia jest odmawiana
+dla dowodów producenta, dla kontekstu nad archiwum rozmów i przy starcie dla
+wariantu z modelem albo workflow. Werdykt jest serwera:
+`POST /evaluation-results/{id}/gate` trzyma porównanie do polityki (tolerancja
+na metrykę, metryki pominięte, przypadki krytyczne) i odpowiada `pass`,
+`regression`, `incomplete` albo `error`. `aiwatcher-gate` w SDK stage'uje,
+deklaruje, startuje, śledzi i pyta, kończy się kodem 0–3 i zapisuje commit,
+kartę i link do dowodów na wyjściu i w `GITHUB_STEP_SUMMARY`. Panel Approvals
+listuje, zatwierdza i wycofuje linie; `examples/ci-gate` to deterministyczny job.
+
+### 31.8 C4 — feedback → review → przypadek
+
+Propozycja nazywa dataset curation, do którego przypadek dołączy, cel (trace,
+span, sesja albo przypadek wyniku), pytanie, odpowiedź, powód i czyje to słowa
+(`written` albo `observed`). ID wynika z datasetu i celu, więc ponowna propozycja
+trafia do trwającego review. Każda akcja to rewizja tworzona raz: zapis
+oczekiwanej odpowiedzi (`ready`, edycja zatwierdzonej wraca do `ready`),
+zatwierdzenie (dla `observed` tylko admin), odrzucenie z powodem. Publikacja
+czyta bieżącą wersję datasetu, odmawia datasetu, którego wiersze nie są
+przypadkami, dopisuje każdy zatwierdzony przypadek jako `review-<id>` z
+oczekiwaną odpowiedzią ludzi, pisze kolejną wersję z `produced_by:
+evaluation-reviews/<dataset>` i dopiero potem oznacza propozycje. Opublikowany
+przypadek się nie zmienia. Archiwum rozmów nie jest źródłem. Panel Evaluation
+ma „Case review".
+
+### 31.9 Śmierć workera kroku podowego
+
+`just e2e-pod-death` (osobny skrypt korzystający z pomocników
+`e2e-pod-steps.py`, własny namespace `aiwatcher-pod-death`) uruchamia cztery
+etapy w podach, a `analyze` trzyma próbę 25 s. W trakcie kontener poda jest
+zabijany z zewnątrz albo pod kasowany natychmiast. Sprawdza, że próba 1 kończy
+się jako `infrastructure` z tym, co widział watch, w ciągu kilku sekund, a nie po
+wygaśnięciu leasa; że druga próba biegnie w nowym podzie i się kończy; że run
+kończy się `completed` z `persist`; że nie zostaje żaden Job, a każdy pod, który
+doszedł do końca, ma zapisany log. Na lokalnym klastrze OrbStack skasowany pod dał
+`BackoffLimitExceeded` po 3 s. Na silniku kontenerów tego hosta
+(`--runtime docker`) zabity kontener dał `Error (exit 137)` po 1 s.
+
+### 31.10 Odbiór
+
+`just check` zielony po commitach; `just query-check` (177 testów PHP, w tym 6
+nowych na proces potomny), `just scorers-check` (22), `just sdk-check` (491),
+`just chart-check` z nowymi wariantami egress sprawdzonymi przez kubeconform,
+testy panelu (293). Testy end-to-end, każdy na własnym serwerze:
+
+- `just e2e-generate` 9/9 — w tym wariant z kodem, którego worker nie trzyma,
+  i eksperyment z opóźnieniem i tokenami na 4 z 4 przypadków;
+- `just e2e-gate` 6/6 — linia zatwierdza baseline z bajtów wysłanych przez job,
+  a kolejne joby kończą się kodem 0 (te same odpowiedzi), 1 (średnia z 0,5 na
+  0,75, ale krytyczny przypadek Kenya utracony), 2 (brak odpowiedzi na jeden
+  przypadek) i 3 (eksperyment spoza linii, z nazwą trasy linii); podsumowanie
+  joba ma commit, kartę i link;
+- `just e2e-review` 6/6 — ponowna propozycja trafia do tego samego review,
+  publikacja bez zatwierdzenia jest odmawiana, zatwierdzony przypadek daje
+  wersję z 5 wierszami i `produced_by`, ponowna publikacja nie dodaje wersji,
+  kohorta z nowej wersji ma 5 przypadków, a opublikowany przypadek odmawia zmian;
+- `just e2e-pod-death` na klastrze i na silniku kontenerów (31.9).
+
+Flow w obrazie: 31.1. Po odbiorze usunięte obraz `aiwatcher-flow:c31`, kontener
+i korpus testowy; namespace testu skasował sam skrypt; na `:8080` i `:18080` nic
+nie nasłuchiwało przed i po.
+
+### 31.11 Co zostaje
+
+- **Flow**: jeden start PHP na zapytanie zarządzane; obraz musi mieć CLI `php`
+  obok FrankenPHP.
+- **Serwis scorerów**: model spoza klastra wymaga adresów IP w
+  `scorers.egress.rules`, a te się zmieniają; DNS jest otwarty do wszystkich
+  namespace'ów.
+- **`generated_with`** to słowo workera: zadanie, które przepisze przypięte
+  skróty, przejdzie. Model i prompt nie są sprawdzane — trace odpowiedzi ma
+  `prompt_version`, więc jest z czym je porównać, póki log trzyma trace.
+- **Kalibracja**: dopasowany próg jest liczony na tym samym zbiorze; nie ma
+  podziału zbioru kalibracyjnego ani przedziału dla gammy.
+- **Edytor kart**: start od wersji pomija `declared`, więc publikacja przypina
+  metrykę frameworka na nowo według bieżącego katalogu.
+- **C2**: `usage` mierzy producent; nagranie z C0 ma je tylko wtedy, gdy je
+  niesie. Obserwacje produkcyjne nie są wierszami (kontekst wariantu w trace z
+  B3), nie ma cen, indeks eksperymentów czyta tysiąc najnowszych wyników.
+- **C3**: linia nie obejmuje wariantów z modelem ani workflow; CLI odpytuje stan
+  runu co sekundę zamiast strumienia; przypadki krytyczne szukane są w pełnym
+  diffie przypadków obu wyników.
+- **C4**: treść wpisuje proponujący — z trace nic się nie wypełnia, bo trace nie
+  niesie treści; brak linku do propozycji z oceny przypadku; wiersze nie mają
+  kolumny `split`, więc przypadek z review trafia do każdej kohorty tej wersji.
+- **Pody**: utrata węzła i zabicie kontenera na klastrze, którego kontenerów nie
+  widzi silnik tego hosta, nie są sprawdzane osobno — tam test kasuje poda.
+- Dalej: etap D (alerty, zapis zespołowy, raporty) i B3 — kontekst wariantu w
+  obserwacjach.
