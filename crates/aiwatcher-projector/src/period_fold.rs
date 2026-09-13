@@ -1,34 +1,25 @@
 //! What variants were observed doing, folded period by period as the log is
-//! read — with a state of its own that survives a restart, and the one answer
-//! a window over them gets.
+//! read, with a state of its own that survives a restart — and the one answer a
+//! window over them gets (ADR_0030, amended).
 //!
-//! A snapshot of the read model could only write a period the read model still
-//! held whole, so a process resuming from a checkpoint (Laser, which does not
-//! replay its topic) left every period before it empty, and a run whose end
-//! arrived after its period was written was in none. This fold is a projection
-//! like the others instead: it reads each event once, in log order, keeps the
-//! runs in flight and the periods still open, and writes a period when the
-//! log's clock has passed it — at its own width, and rolled up into the hour and
-//! the day it lies in, so a week is read as seven records rather than two
-//! thousand. Its state is saved with the position it was folded through; a
-//! restart loads the one furthest along, the projector resumes from that
-//! position when it is behind the stored checkpoint, and every event at or
-//! before it is skipped — so no period goes unwritten and no event counts
-//! twice.
-//!
-//! The log's clock is the latest `min(occurred_at, ingested_at)` folded: a
-//! producer's clock bounded by the server's, so a skewed producer cannot close
-//! tomorrow's periods, and a replay closes them where the first reading did. A
-//! run that ends in a period already closed is counted in the oldest period
-//! still open and said to be late (`late_runs`); a run whose start the fold
-//! never saw is counted with no duration, and its period says it is incomplete.
+//! A projection like the others: it reads each event once, in log order, keeps
+//! the runs in flight and the periods still open, and writes a period when the
+//! log's clock — the latest `min(occurred_at, ingested_at)`, so a skewed
+//! producer closes nothing early — has passed it, rolled up into the hour and
+//! the day it lies in, so a week is read as a handful of records. Its state is
+//! saved with the position it was folded through; a restart loads the one
+//! furthest along, the projector resumes from that position when it is behind
+//! its checkpoint, and every event at or before it is skipped — so no period
+//! goes unwritten and no event counts twice. A run that ends in a period already
+//! closed is counted in the oldest one still open and said to be late; a run
+//! whose start the fold never saw is counted with no duration, and its period
+//! says it is incomplete.
 //!
 //! A window is answered here and nowhere else ([`PeriodOutput::observe`]):
 //! every period it reaches into, whole — written ones from the store, the rest
-//! from this fold's memory, a late run included the moment it ends — and the
-//! runs in flight. One source, so no run is counted twice or missed between
-//! two; the price is that counting starts at the beginning of the period the
-//! window's start falls in, which the answer says (`counted_from`).
+//! from this fold — and the runs in flight. One source, so no run is counted
+//! twice or missed between two; counting starts at the beginning of the period
+//! the window's start falls in, which the answer says (`counted_from`).
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

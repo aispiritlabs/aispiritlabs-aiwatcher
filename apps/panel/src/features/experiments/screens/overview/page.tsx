@@ -463,7 +463,7 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
                 observed.window_before_observations ? ', nothing observed before' : ''
               }`
             : null,
-          observed.late_runs > 0
+          (observed.late_runs ?? 0) > 0
             ? `${observed.late_runs} ended late and counted when they arrived`
             : null,
         ]
