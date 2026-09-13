@@ -43,3 +43,4 @@ Three parts, cheapest first:
 ## Log
 - 2026-09-12 10:40 — spec opened on `main` after AW-4's 2.7; investigation, spec and job written together with ADR_0031 (proposed), at the owner's ask for "an ADR and a plan"; nothing built
 - 2026-09-13 — Part A+B built (7.1, 7.2) and CI written (7.3); both host gates green on OrbStack; the CI half waits on a push
+- 2026-09-13 — Part A+B done: pod gates green in CI on Linux (process, docker) and on kind (nightly workflow, dispatched once)

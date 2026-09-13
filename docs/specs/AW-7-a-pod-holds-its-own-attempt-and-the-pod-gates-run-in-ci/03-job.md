@@ -113,7 +113,7 @@ Beyond what ADR_0031 decides:
     does not reach the Mac, so `host.docker.internal` stays the default there.
     `e2e-pod-death.py` shares both helpers. Checked with a stubbed `run` here,
     since `kind` is not installed on this machine; proven by `pods-cluster.yml`.
-- [ ] 7.3 **CI.**
+- [x] 7.3 **CI.**
   - `ci.yml` gains a `pods` job running `just e2e-processes` and
     `just e2e-docker`.
   - `pods-cluster.yml` runs `just e2e-pods` on a schedule and on demand.
@@ -121,8 +121,14 @@ Beyond what ADR_0031 decides:
   - The runner answers `OOMKilled` on cgroup v2. If it does not, that phase is an
     *Issue* in `04-tests.md`, not a skipped assertion.
   - Green on a pushed branch before this part is called done.
-  - Written, and not done: both workflows wait on a push and a manual dispatch
-    of `pods-cluster.yml`.
+  - Done, on `main` at `21e83c9`. CI run 34774132265 is green in every job,
+    `pods` included: the process gate, and the docker gate on a Linux engine
+    reaching `host.docker.internal` and answering `OOMKilled` twice. The
+    dispatched `pods-cluster.yml` run 34774145548 is green on kind: the image
+    loaded, the grant asked (six granted, four refused), the pods reporting to
+    the `kind` gateway `172.18.0.1`, every phase including the memory one. The
+    first push did not parse — `runner.temp` in a job's `env`, where that
+    context does not exist — and `TMPDIR` is now set by a step.
 
 ### Part C1 — `aiwatcher-auth`
 - [ ] 7.4 **The credential.**
@@ -267,10 +273,12 @@ Beyond what ADR_0031 decides:
   first. They are merged in order all the same.
 - **`OOMKilled` on a hosted runner.** If the runner's cgroup setup does not
   report it, the memory phase fails in CI and passes on a desktop. That goes in
-  as an *Issue* with the output, and the decision is the owner's.
+  as an *Issue* with the output, and the decision is the owner's. Did not
+  happen: both the docker engine and kind on `ubuntu-latest` report it.
 - **Split deployments gain a required secret.** The chart refuses without it. A
   release that sets no templates is not affected.
 
 ## Log
 - 2026-09-12 10:40 — job planned on `main`: A+B first (the host name, and the three gates in CI with kind for the cluster one), then C in six slices behind ADR_0031; ten further decisions made, the Docker argument list among them; nothing built
 - 2026-09-13 — 7.1 and 7.2 built: `--add-host=host.docker.internal:host-gateway` on every container and on the gate's probe; the gates load their image into kind and, on Linux, reach the runner by the `kind` network's gateway. `e2e-docker` (six phases, OOMKilled included) and `e2e-processes` pass on OrbStack. 7.3 written — a `pods` job in `ci.yml` and a nightly `pods-cluster.yml` on kind, both uploading the server log on failure — and waits on a push
+- 2026-09-13 — 7.3 done: `main` pushed at the owner's word; the first push broke both workflows' parsing (`runner.temp` in a job `env`), fixed in `21e83c9` and pushed; CI green in all 17 jobs including `pods`, and `pods-cluster.yml` dispatched and green on kind. Part A+B complete; C starts at 7.4
