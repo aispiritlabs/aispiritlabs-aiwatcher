@@ -979,11 +979,12 @@ judge's rule rather than a looser one:
 - **The card says what agreeing means.** `Scorer::External.calibration` names a
   rubric version, the metric's `pass_at` — a pass at it or on the side the
   catalog declared better — and, on named levels, the `pass_level` a person's
-  judgement passes at; a yes-or-no rubric passes on its better answer. A verdict
-  on each side, because a relevancy of 0.83 and "good" are on different scales
-  and only "passed" is a claim both make. Refused at publication: a metric or a
-  rubric with no better end, a bar outside the declared range, a level the
-  rubric lacks, a numeric rubric.
+  judgement passes at, or on a numeric rubric its `pass_score`; a yes-or-no
+  rubric passes on its better answer. A verdict on each side, because a
+  relevancy of 0.83 and "good" are on different scales and only "passed" is a
+  claim both make. Refused at publication: a metric or a rubric with no better
+  end, a bar outside the declared range, a level the rubric lacks, a score
+  outside its scale, and a bar of the wrong kind for the rubric.
 - **The run names the people, and the context pins them.** `external_calibration`
   on the declaration names a calibration set taken under that rubric — possibly
   the one a judge names too — and the context pins it as a `CalibrationPin` with
@@ -998,6 +999,17 @@ judge's rule rather than a looser one:
   verdicts matched, its Wilson interval, and the share of answered items they
   differed on. Publication refuses a calibrated context without it and a report
   against another set.
+- **Two readings beyond the bar, applied to nothing.** A verdict agreement says
+  nothing about a bar a little either side, so each row also carries
+  `rank_agreement` — Goodman and Kruskal's gamma between the metric's numbers
+  and the people's judgements, both turned so more is better, with the pairs it
+  was counted over — and `fitted_pass_at` with `fitted_agreement`: the metric's
+  number on this set whose verdicts would have matched most often, nearest the
+  card's own among equals. Gamma rather than a tau, because a person's side is
+  coarse by design and a tau stops short of one for a metric that put every yes
+  above every no. The fitted bar is found on the very items it is scored on, so
+  it flatters itself; nothing adopts it, and publishing a card with it is a new
+  context whose agreement a later set has to measure.
 - **It is still a model's word.** `reproducible` stays false; the warning now
   says where its agreement is measured instead of that nothing measured it.
 

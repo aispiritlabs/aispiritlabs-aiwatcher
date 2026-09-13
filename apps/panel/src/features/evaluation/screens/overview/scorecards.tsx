@@ -75,6 +75,8 @@ type Row = {
   calibrationRubric: string;
   passAt: string;
   calibrationLevel: string;
+  /** A numeric rubric's passing score, as typed. */
+  calibrationScore: string;
 };
 
 function blank(): Row {
@@ -100,6 +102,7 @@ function blank(): Row {
     calibrationRubric: '',
     passAt: '',
     calibrationLevel: '',
+    calibrationScore: '',
   };
 }
 
@@ -194,6 +197,14 @@ function specOf(row: Row, catalog: RecordedCatalog | null | undefined): ScorerSp
                 rubric: reference(row.calibrationRubric),
                 pass_at: number(row.passAt, `${metric}'s passing number`),
                 ...(row.calibrationLevel ? { pass_level: row.calibrationLevel } : {}),
+                ...(row.calibrationScore.trim()
+                  ? {
+                      pass_score: number(
+                        row.calibrationScore,
+                        `the score a person's judgement of ${metric} passes at`,
+                      ),
+                    }
+                  : {}),
               },
             }
           : {}),
@@ -668,7 +679,7 @@ function ScorerFields({
                       rubrics={rubrics}
                       value={row.calibrationRubric}
                       onChange={(calibrationRubric) =>
-                        onChange({ calibrationRubric, calibrationLevel: '' })
+                        onChange({ calibrationRubric, calibrationLevel: '', calibrationScore: '' })
                       }
                     />
                     <TextField
@@ -684,6 +695,10 @@ function ScorerFields({
                       value={row.calibrationLevel}
                       onChange={(calibrationLevel) => onChange({ calibrationLevel })}
                       none="its better answer"
+                      score={{
+                        value: row.calibrationScore,
+                        onChange: (calibrationScore) => onChange({ calibrationScore }),
+                      }}
                     />
                   </>
                 ) : null}
@@ -777,6 +792,7 @@ function LevelChoice({
   value,
   onChange,
   none,
+  score,
 }: {
   label: string;
   title: string;
@@ -784,6 +800,8 @@ function LevelChoice({
   value: string;
   onChange: (value: string) => void;
   none: string;
+  /** Where a numeric rubric passes, for a calibration; a judge's has no bar there. */
+  score?: { value: string; onChange: (value: string) => void };
 }) {
   const pinned = rubric ? reference(rubric) : undefined;
   const read = useQuery({
@@ -800,6 +818,17 @@ function LevelChoice({
     retry: false,
   });
   const scale = read.data?.rubric.scale;
+  if (scale?.kind === 'numeric' && score) {
+    const side = read.data?.rubric.direction === 'lower' ? 'or below' : 'or above';
+    return (
+      <TextField
+        label={label}
+        title={`${title} (${side}, ${scale.min} to ${scale.max})`}
+        value={score.value}
+        onChange={score.onChange}
+      />
+    );
+  }
   if (!scale || scale.kind !== 'ordinal') return null;
   return (
     <label className="flex flex-col gap-1">

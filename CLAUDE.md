@@ -1898,10 +1898,12 @@ the review.
   A metric a model graded carries `measured_by` with that model and reads as not
   reproducible. It is warned about as uncalibrated unless the card holds it
   against people — a rubric, the metric's `pass_at` and the rubric's
-  `pass_level` — when the run names a calibration set, the context pins it as
-  `external_calibration`, and the result carries `external`: how often the two
-  verdicts matched over every item, with the Wilson interval, as a judge's
-  agreement is counted. The service turns every framework's phoning home off
+  `pass_level` or `pass_score` — when the run names a calibration set, the
+  context pins it as `external_calibration`, and the result carries `external`:
+  how often the two verdicts matched over every item, with the Wilson interval,
+  as a judge's agreement is counted, beside how far the metric orders answers as
+  the people do and the bar these people would have supported — found on the
+  same items, so shown and never applied. The service turns every framework's phoning home off
   before importing it, wants a bearer token on both routes — off localhost it
   refuses to start without one — and in a cluster the chart generates that
   token and lets the pod reach DNS and its model alone.

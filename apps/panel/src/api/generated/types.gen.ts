@@ -3111,6 +3111,42 @@ export type ExportVersionSummary = {
 };
 
 /**
+ * How far a calibrated framework metric agreed with its people, beyond the
+ * verdicts at the card's bar.
+ *
+ * The verdict agreement is the one a result is held to, and it says nothing
+ * about a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric
+ * that ranks answers the other way round from the people. So two more
+ * readings ride beside it. Neither is applied to anything, and the fitted bar
+ * is found on the very items it is scored on, so it flatters itself —
+ * adopting it is publishing the card again, and a new context.
+ */
+export type ExternalAgreement = JudgeAgreement & {
+    /**
+     * How often, counted as `agreement` is.
+     */
+    fitted_agreement?: number | null;
+    /**
+     * The bar on the metric — one of the numbers it gave on this set — whose
+     * verdicts would have matched the people's most often, over every item;
+     * the nearest to the card's own `pass_at` among equals.
+     */
+    fitted_pass_at?: number | null;
+    /**
+     * Whether the metric orders answers as the people do, needing no bar:
+     * Goodman and Kruskal's gamma over the answered items, each side turned so
+     * more is better — one when every pair both sides told apart is ordered
+     * the same way, nought when the order says nothing, minus one when it is
+     * reversed. Absent when no pair was told apart on both sides.
+     */
+    rank_agreement?: number | null;
+    /**
+     * The pairs of items `rank_agreement` was counted over.
+     */
+    ranked_pairs?: number | null;
+};
+
+/**
  * Where a framework metric's number and a person's judgement become the same
  * kind of answer, so that the two can be counted as agreeing or not.
  *
@@ -3131,6 +3167,11 @@ export type ExternalCalibration = {
      * names none.
      */
     pass_level?: string | null;
+    /**
+     * The rubric's number at which a person's judgement passes, on a numeric
+     * rubric: at it, or on the side the rubric declared better.
+     */
+    pass_score?: number | null;
     /**
      * The rubric the people in a calibration set judged under.
      */
@@ -3176,7 +3217,7 @@ export type ExternalReport = {
      * One row per calibrated metric. Its `mean_absolute_difference` is over
      * the two verdicts, so it is the share of answered items they differed on.
      */
-    agreement: Array<JudgeAgreement>;
+    agreement: Array<ExternalAgreement>;
     calibration: VersionReference;
 };
 

@@ -981,10 +981,22 @@ async fn a_framework_metric_held_against_people_publishes_how_often_its_verdicts
         .expect("the agreement rides beside the numbers");
     assert_eq!(report.calibration.version, calibration.version);
     let relevancy = &report.agreement[0];
-    assert_eq!((relevancy.items, relevancy.answered), (2, 2));
     assert_eq!(
-        relevancy.agreement, 0.5,
+        (relevancy.verdicts.items, relevancy.verdicts.answered),
+        (2, 2)
+    );
+    assert_eq!(
+        relevancy.verdicts.agreement, 0.5,
         "it passed the dodge the person failed"
     );
-    assert!(relevancy.agreement_interval.is_some());
+    assert!(relevancy.verdicts.agreement_interval.is_some());
+    assert_eq!(
+        relevancy.rank_agreement, None,
+        "it gave both answers one number, so it ordered nothing"
+    );
+    assert_eq!(
+        (relevancy.fitted_pass_at, relevancy.fitted_agreement),
+        (Some(0.5), Some(0.5)),
+        "no bar on its numbers tells the two apart, and the card's own is nearest"
+    );
 }

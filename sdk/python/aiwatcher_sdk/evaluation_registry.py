@@ -177,14 +177,16 @@ class ExternalCalibration(TypedDict):
     """Where a framework metric's number and a person's judgement both pass.
 
     ``pass_at`` is the metric's bar, on the side its catalog says is better;
-    ``pass_level`` is the rubric's level for a rubric with named levels, and
-    absent for a yes-or-no rubric. A run of the card names the calibration set
-    as ``external_calibration``.
+    ``pass_level`` is the rubric's level for a rubric with named levels and
+    ``pass_score`` its number for a numeric rubric; a yes-or-no rubric names
+    neither. A run of the card names the calibration set as
+    ``external_calibration``.
     """
 
     rubric: VersionReference
     pass_at: float
     pass_level: NotRequired[str]
+    pass_score: NotRequired[float]
 
 
 class External(TypedDict):

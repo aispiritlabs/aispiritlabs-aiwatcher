@@ -17170,6 +17170,51 @@
           }
         }
       },
+      "ExternalAgreement": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JudgeAgreement"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "fitted_agreement": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "How often, counted as `agreement` is."
+              },
+              "fitted_pass_at": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "The bar on the metric — one of the numbers it gave on this set — whose\nverdicts would have matched the people's most often, over every item;\nthe nearest to the card's own `pass_at` among equals."
+              },
+              "rank_agreement": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "Whether the metric orders answers as the people do, needing no bar:\nGoodman and Kruskal's gamma over the answered items, each side turned so\nmore is better — one when every pair both sides told apart is ordered\nthe same way, nought when the order says nothing, minus one when it is\nreversed. Absent when no pair was told apart on both sides."
+              },
+              "ranked_pairs": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "The pairs of items `rank_agreement` was counted over.",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "How far a calibrated framework metric agreed with its people, beyond the\nverdicts at the card's bar.\n\nThe verdict agreement is the one a result is held to, and it says nothing\nabout a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric\nthat ranks answers the other way round from the people. So two more\nreadings ride beside it. Neither is applied to anything, and the fitted bar\nis found on the very items it is scored on, so it flatters itself —\nadopting it is publishing the card again, and a new context."
+      },
       "ExternalCalibration": {
         "type": "object",
         "description": "Where a framework metric's number and a person's judgement become the same\nkind of answer, so that the two can be counted as agreeing or not.\n\nA verdict on each side, because the two are on different scales: a\nrelevancy of 0.83 is not \"good\", but \"at 0.7 or more\" and \"good or better\"\nare both a pass. Part of the card, so a calibration against another bar is\nanother card version.",
@@ -17189,6 +17234,14 @@
               "null"
             ],
             "description": "The rubric's level at which a person's judgement passes, on a rubric\nwith named levels. A yes-or-no rubric passes on its better answer and\nnames none."
+          },
+          "pass_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The rubric's number at which a person's judgement passes, on a numeric\nrubric: at it, or on the side the rubric declared better."
           },
           "rubric": {
             "$ref": "#/components/schemas/VersionReference",
@@ -17290,7 +17343,7 @@
           "agreement": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/JudgeAgreement"
+              "$ref": "#/components/schemas/ExternalAgreement"
             },
             "description": "One row per calibrated metric. Its `mean_absolute_difference` is over\nthe two verdicts, so it is the share of answered items they differed on."
           },

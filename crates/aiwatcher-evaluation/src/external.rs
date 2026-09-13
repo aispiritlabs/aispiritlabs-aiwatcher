@@ -331,6 +331,10 @@ pub struct ExternalCalibration {
     /// names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pass_level: Option<String>,
+    /// The rubric's number at which a person's judgement passes, on a numeric
+    /// rubric: at it, or on the side the rubric declared better.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_score: Option<f64>,
 }
 
 impl ExternalCalibration {
@@ -339,6 +343,11 @@ impl ExternalCalibration {
         require(
             self.pass_at.is_finite(),
             &format!("{field}.pass_at"),
+            "must be a finite number",
+        )?;
+        require(
+            self.pass_score.is_none_or(f64::is_finite),
+            &format!("{field}.pass_score"),
             "must be a finite number",
         )?;
         match &self.pass_level {
@@ -373,27 +382,48 @@ impl ExternalCalibration {
             &format!("{field}.calibration.rubric"),
             "says neither end of its scale is better, so no judgement under it passes",
         )?;
-        match (&rubric.scale, &self.pass_level) {
-            (Scale::Ordinal { levels }, Some(level)) => require(
+        let invalid = |name: &str, reason: &str| {
+            Err(EvaluationError::Invalid {
+                field: format!("{field}.calibration.{name}"),
+                reason: reason.into(),
+            })
+        };
+        match (&rubric.scale, &self.pass_level, self.pass_score) {
+            (Scale::Ordinal { levels }, Some(level), None) => require(
                 levels.iter().any(|named| named == level),
                 &format!("{field}.calibration.pass_level"),
                 &format!("`{level}` is not one of the rubric's levels"),
             ),
-            (Scale::Ordinal { .. }, None) => Err(EvaluationError::Invalid {
-                field: format!("{field}.calibration.pass_level"),
-                reason: "a rubric with named levels needs the level a judgement passes at".into(),
-            }),
-            (Scale::Flag, None) => Ok(()),
-            (Scale::Flag, Some(_)) => Err(EvaluationError::Invalid {
-                field: format!("{field}.calibration.pass_level"),
-                reason: "a yes-or-no rubric passes on its better answer and names no level".into(),
-            }),
-            (Scale::Numeric { .. }, _) => Err(EvaluationError::Invalid {
-                field: format!("{field}.calibration.rubric"),
-                reason: "a numeric rubric names no level a person's judgement passes at; \
-                         calibrate against named levels or a yes-or-no rubric"
-                    .into(),
-            }),
+            (Scale::Ordinal { .. }, None, _) => invalid(
+                "pass_level",
+                "a rubric with named levels needs the level a judgement passes at",
+            ),
+            (Scale::Ordinal { .. }, Some(_), Some(_)) => invalid(
+                "pass_score",
+                "a rubric with named levels passes at a level and names no score",
+            ),
+            (Scale::Flag, None, None) => Ok(()),
+            (Scale::Flag, Some(_), _) => invalid(
+                "pass_level",
+                "a yes-or-no rubric passes on its better answer and names no level",
+            ),
+            (Scale::Flag, None, Some(_)) => invalid(
+                "pass_score",
+                "a yes-or-no rubric passes on its better answer and names no score",
+            ),
+            (Scale::Numeric { min, max }, None, Some(score)) => require(
+                (*min..=*max).contains(&score),
+                &format!("{field}.calibration.pass_score"),
+                &format!("lies outside the rubric's scale, {min} to {max}"),
+            ),
+            (Scale::Numeric { .. }, None, None) => invalid(
+                "pass_score",
+                "a numeric rubric needs the score a person's judgement passes at",
+            ),
+            (Scale::Numeric { .. }, Some(_), _) => invalid(
+                "pass_level",
+                "a numeric rubric has no named levels; name the score it passes at",
+            ),
         }
     }
 
@@ -423,9 +453,105 @@ impl ExternalCalibration {
                 };
                 Some(if passed { 1.0 } else { 0.0 })
             }
+            (Scale::Numeric { .. }, AssessmentValue::Number { value }) => {
+                let bar = self.pass_score?;
+                let passed = match rubric.direction {
+                    MetricDirection::Higher => *value >= bar,
+                    MetricDirection::Lower => *value <= bar,
+                    MetricDirection::None => return None,
+                };
+                Some(if passed { 1.0 } else { 0.0 })
+            }
             _ => None,
         }
     }
+
+    /// The metric's number and the person's, turned so that more is better on
+    /// both — what a ranking of the two compares.
+    fn ranked(
+        declared: &ExternalDeclaration,
+        rubric: &Rubric,
+        said: Option<f64>,
+        value: &AssessmentValue,
+    ) -> Option<(f64, f64)> {
+        let turned = |direction: MetricDirection, number: f64| match direction {
+            MetricDirection::Higher => Some(number),
+            MetricDirection::Lower => Some(-number),
+            MetricDirection::None => None,
+        };
+        Some((
+            turned(declared.direction, said?)?,
+            turned(
+                rubric.direction,
+                crate::judge::number(&rubric.scale, value)?,
+            )?,
+        ))
+    }
+}
+
+/// How far a calibrated framework metric agreed with its people, beyond the
+/// verdicts at the card's bar.
+///
+/// The verdict agreement is the one a result is held to, and it says nothing
+/// about a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric
+/// that ranks answers the other way round from the people. So two more
+/// readings ride beside it. Neither is applied to anything, and the fitted bar
+/// is found on the very items it is scored on, so it flatters itself —
+/// adopting it is publishing the card again, and a new context.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ExternalAgreement {
+    #[serde(flatten)]
+    pub verdicts: JudgeAgreement,
+    /// Whether the metric orders answers as the people do, needing no bar:
+    /// Goodman and Kruskal's gamma over the answered items, each side turned so
+    /// more is better — one when every pair both sides told apart is ordered
+    /// the same way, nought when the order says nothing, minus one when it is
+    /// reversed. Absent when no pair was told apart on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank_agreement: Option<f64>,
+    /// The pairs of items `rank_agreement` was counted over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranked_pairs: Option<usize>,
+    /// The bar on the metric — one of the numbers it gave on this set — whose
+    /// verdicts would have matched the people's most often, over every item;
+    /// the nearest to the card's own `pass_at` among equals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitted_pass_at: Option<f64>,
+    /// How often, counted as `agreement` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitted_agreement: Option<f64>,
+}
+
+/// Goodman and Kruskal's gamma over pairs: of the pairs of items both sides
+/// told apart, the share ordered the same way less the share ordered the other
+/// way — and how many such pairs there were. `None` when there were none.
+///
+/// Gamma rather than a tau, because a person's side is coarse by design: a
+/// yes-or-no rubric ties half of every pair, and a tau corrected for ties still
+/// stops short of one for a metric that put every yes above every no. Gamma
+/// reads that as one — what it is — and says over how many pairs.
+fn gamma(pairs: &[(f64, f64)]) -> Option<(f64, usize)> {
+    let (mut same, mut reversed) = (0_usize, 0_usize);
+    for (at, (x, y)) in pairs.iter().enumerate() {
+        for (other_x, other_y) in &pairs[at + 1..] {
+            let (dx, dy) = (x - other_x, y - other_y);
+            if dx.abs() <= 1e-12 || dy.abs() <= 1e-12 {
+                continue;
+            }
+            if (dx > 0.0) == (dy > 0.0) {
+                same += 1;
+            } else {
+                reversed += 1;
+            }
+        }
+    }
+    let told_apart = same + reversed;
+    (told_apart > 0).then(|| {
+        (
+            (same as f64 - reversed as f64) / told_apart as f64,
+            told_apart,
+        )
+    })
 }
 
 /// What a result whose framework metrics were calibrated carries beside its
@@ -435,7 +561,7 @@ pub struct ExternalReport {
     pub calibration: VersionReference,
     /// One row per calibrated metric. Its `mean_absolute_difference` is over
     /// the two verdicts, so it is the share of answered items they differed on.
-    pub agreement: Vec<JudgeAgreement>,
+    pub agreement: Vec<ExternalAgreement>,
 }
 
 /// Fold what a card's calibrated framework metrics said about a calibration
@@ -463,23 +589,65 @@ pub fn external_agreement(
         let Some(rubric) = rubrics.get(&calibrated.rubric) else {
             continue;
         };
-        agreement.push(crate::judge::counted(
-            &spec.metric,
-            &calibrated.rubric,
-            set.items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| item.rubric == calibrated.rubric)
-                .map(|(index, item)| {
+        let items: Vec<(Option<f64>, &AssessmentValue)> = set
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.rubric == calibrated.rubric)
+            .map(|(index, item)| {
+                (
+                    said.get(&(index, spec.metric.clone())).copied().flatten(),
+                    &item.value,
+                )
+            })
+            .collect();
+        let at = |bar: &ExternalCalibration| {
+            crate::judge::counted(
+                &spec.metric,
+                &calibrated.rubric,
+                items.iter().map(|(number, value)| {
                     (
-                        said.get(&(index, spec.metric.clone()))
-                            .copied()
-                            .flatten()
-                            .and_then(|value| calibrated.verdict(declared, value)),
-                        calibrated.judged(rubric, &item.value),
+                        number.and_then(|number| bar.verdict(declared, number)),
+                        bar.judged(rubric, value),
                     )
                 }),
-        ));
+            )
+        };
+        let verdicts = at(calibrated);
+        let ranked: Vec<(f64, f64)> = items
+            .iter()
+            .filter_map(|(number, value)| {
+                ExternalCalibration::ranked(declared, rubric, *number, value)
+            })
+            .collect();
+        let mut bars: Vec<f64> = items.iter().filter_map(|(number, _)| *number).collect();
+        bars.push(calibrated.pass_at);
+        bars.sort_by(f64::total_cmp);
+        bars.dedup();
+        let fitted = bars
+            .into_iter()
+            .map(|pass_at| {
+                let bar = ExternalCalibration {
+                    pass_at,
+                    ..calibrated.clone()
+                };
+                (pass_at, at(&bar).agreement)
+            })
+            .min_by(|(one, agreeing), (other, agreeing_other)| {
+                agreeing_other.total_cmp(agreeing).then(
+                    (one - calibrated.pass_at)
+                        .abs()
+                        .total_cmp(&(other - calibrated.pass_at).abs()),
+                )
+            });
+        let ranking = gamma(&ranked);
+        agreement.push(ExternalAgreement {
+            rank_agreement: ranking.map(|(gamma, _)| gamma),
+            ranked_pairs: ranking.map(|(_, pairs)| pairs),
+            fitted_pass_at: fitted.filter(|_| !items.is_empty()).map(|(bar, _)| bar),
+            fitted_agreement: fitted.filter(|_| !items.is_empty()).map(|(_, share)| share),
+            verdicts,
+        });
     }
     ExternalReport {
         calibration: calibration.clone(),
@@ -778,6 +946,14 @@ mod tests {
             },
             pass_at,
             pass_level: pass_level.map(str::to_owned),
+            pass_score: None,
+        }
+    }
+
+    fn scored_at(pass_at: f64, pass_score: f64) -> ExternalCalibration {
+        ExternalCalibration {
+            pass_score: Some(pass_score),
+            ..calibration(pass_at, None)
         }
     }
 
@@ -790,6 +966,10 @@ mod tests {
             MetricDirection::Higher,
         );
         let flag = rubric(Scale::Flag, MetricDirection::Higher);
+        let numeric = rubric(
+            Scale::Numeric { min: 1.0, max: 5.0 },
+            MetricDirection::Higher,
+        );
         let higher = graded(MetricDirection::Higher);
 
         assert!(
@@ -797,6 +977,7 @@ mod tests {
                 .check("s", &higher, &levels)
                 .is_ok()
         );
+        assert!(scored_at(0.7, 4.0).check("s", &higher, &numeric).is_ok());
         assert!(calibration(0.7, None).check("s", &higher, &flag).is_ok());
         for (refused, declared, rubric, why) in [
             (calibration(0.7, None), &higher, &levels, "pass_level"),
@@ -814,14 +995,22 @@ mod tests {
                 &flag,
                 "neither end",
             ),
+            (calibration(0.7, None), &higher, &numeric, "needs the score"),
             (
-                calibration(0.7, None),
+                scored_at(0.7, 7.0),
                 &higher,
-                &rubric(
-                    Scale::Numeric { min: 1.0, max: 5.0 },
-                    MetricDirection::Higher,
-                ),
-                "numeric",
+                &numeric,
+                "outside the rubric's scale",
+            ),
+            (scored_at(0.7, 3.0), &higher, &flag, "names no score"),
+            (
+                ExternalCalibration {
+                    pass_level: Some("good".into()),
+                    ..scored_at(0.7, 3.0)
+                },
+                &higher,
+                &levels,
+                "names no score",
             ),
         ] {
             let reason = refused
@@ -864,5 +1053,110 @@ mod tests {
             Some(0.0),
             "a yes on a rubric where yes is worse is a fail"
         );
+
+        let out_of_five = rubric(
+            Scale::Numeric { min: 1.0, max: 5.0 },
+            MetricDirection::Higher,
+        );
+        let number = |value: f64| AssessmentValue::Number { value };
+        assert_eq!(
+            scored_at(0.7, 4.0).judged(&out_of_five, &number(4.0)),
+            Some(1.0)
+        );
+        assert_eq!(
+            scored_at(0.7, 4.0).judged(&out_of_five, &number(3.5)),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn a_metric_held_against_scores_out_of_five_says_how_it_ranks_them_and_which_bar_they_support()
+    {
+        let rubric_ref = VersionReference {
+            name: "helpful".into(),
+            version: "r1".into(),
+        };
+        let card: Scorecard = serde_json::from_value(json!({
+            "name": "calibrated",
+            "scorers": [{
+                "metric": "relevancy", "answer_path": "/text",
+                "scorer": {
+                    "kind": "external", "adapter": "deepeval", "metric": "answer_relevancy",
+                    "declared": serde_json::to_value(graded(MetricDirection::Higher)).unwrap(),
+                    "calibration": {"rubric": rubric_ref, "pass_at": 0.9, "pass_score": 4.0}
+                }
+            }]
+        }))
+        .unwrap();
+        let rubrics = Rubrics::default().with(
+            &rubric_ref,
+            rubric(
+                Scale::Numeric { min: 1.0, max: 5.0 },
+                MetricDirection::Higher,
+            ),
+        );
+        // The people score two answers 5 and 4 and two 2 and 1; the metric
+        // orders all four as they do, and its card's bar of 0.9 passes one.
+        let people = [5.0, 4.0, 2.0, 1.0];
+        let numbers = [0.95, 0.7, 0.4, 0.2];
+        let set = CalibrationSet {
+            name: "people".into(),
+            result: rubric_ref.clone(),
+            items: people
+                .iter()
+                .enumerate()
+                .map(|(at, score)| crate::CalibrationItem {
+                    case_id: format!("case-{at}"),
+                    repetition_id: "measurement-1".into(),
+                    rubric: rubric_ref.clone(),
+                    value: AssessmentValue::Number { value: *score },
+                    author: "ada".into(),
+                    standing_id: format!("s{at}"),
+                    revision: 1,
+                })
+                .collect(),
+            from_archive: false,
+        };
+        let said = numbers
+            .iter()
+            .enumerate()
+            .map(|(at, number)| ((at, "relevancy".to_owned()), Some(*number)))
+            .collect();
+
+        let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
+        let relevancy = &report.agreement[0];
+        assert_eq!(
+            relevancy.verdicts.agreement, 0.75,
+            "0.7 failed a person's 4"
+        );
+        assert_eq!(
+            (relevancy.rank_agreement, relevancy.ranked_pairs),
+            (Some(1.0), Some(6))
+        );
+        assert_eq!(
+            (relevancy.fitted_pass_at, relevancy.fitted_agreement),
+            (Some(0.7), Some(1.0)),
+            "at 0.7 its verdicts are the people's on every item"
+        );
+    }
+
+    #[test]
+    fn a_ranking_is_one_for_the_people_s_order_minus_one_for_its_reverse_and_counts_its_pairs() {
+        let same = [(0.1, 1.0), (0.5, 2.0), (0.9, 3.0)];
+        let reversed = [(0.1, 3.0), (0.5, 2.0), (0.9, 1.0)];
+        assert_eq!(gamma(&same), Some((1.0, 3)));
+        assert_eq!(gamma(&reversed), Some((-1.0, 3)));
+        assert_eq!(
+            gamma(&[(0.1, 1.0), (0.9, 1.0)]),
+            None,
+            "people gave one answer"
+        );
+        assert_eq!(gamma(&[(0.1, 1.0)]), None);
+        // A yes-or-no rubric ties half the pairs. Every yes above every no is
+        // the people's order, and reads as one over the four pairs told apart.
+        let flagged = [(0.2, 0.0), (0.4, 0.0), (0.6, 1.0), (0.8, 1.0)];
+        assert_eq!(gamma(&flagged), Some((1.0, 4)));
+        let muddled = [(0.2, 0.0), (0.7, 0.0), (0.6, 1.0), (0.8, 1.0)];
+        assert_eq!(gamma(&muddled), Some((0.5, 4)));
     }
 }

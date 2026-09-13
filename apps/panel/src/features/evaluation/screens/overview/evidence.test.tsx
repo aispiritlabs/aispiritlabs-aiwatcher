@@ -413,6 +413,10 @@ it('shows how often a calibrated framework metric agreed with people, as two ver
                 agreement: 0.75,
                 agreement_interval: { low: 0.3, high: 0.95 },
                 mean_absolute_difference: 0.25,
+                rank_agreement: 0.5,
+                ranked_pairs: 4,
+                fitted_pass_at: 0.4,
+                fitted_agreement: 1,
               },
             ],
           },
@@ -461,4 +465,6 @@ it('shows how often a calibrated framework metric agreed with people, as two ver
   expect(screen.getByText('Verdicts differed')).toBeTruthy();
   expect(screen.getByText('30–95%')).toBeTruthy();
   expect(screen.getByText('25%')).toBeTruthy();
+  expect(screen.getByText('0.50 over 4 pairs')).toBeTruthy();
+  expect(screen.getByText('0.4 would agree 100% — fitted on these same items')).toBeTruthy();
 });

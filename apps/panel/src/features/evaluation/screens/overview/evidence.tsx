@@ -20,6 +20,7 @@ import type {
   DurableEvaluation,
   EvidenceCase,
   EvidenceState,
+  ExternalAgreement,
   JudgeAgreement,
   JudgeReport,
   ResultCounts,
@@ -494,7 +495,10 @@ function FrameworkNote({ evidence }: { evidence: DurableEvaluation }) {
             verdict on each side, compared item by item.
           </p>
           {evidence.external ? (
-            <AgreementTable rows={evidence.external.agreement} distance="share" />
+            <>
+              <AgreementTable rows={evidence.external.agreement} distance="share" />
+              <BeyondTheBar rows={evidence.external.agreement} />
+            </>
           ) : (
             <p className="mt-1 text-danger">
               This result carries no agreement with its calibration set.
@@ -551,6 +555,50 @@ function AgreementTable({
                 : distance === 'mean'
                   ? row.mean_absolute_difference.toFixed(3)
                   : `${Math.round(row.mean_absolute_difference * 100)}%`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * What a framework metric's calibration says beyond the verdicts at the card's bar.
+ *
+ * Both are the server's readings, drawn as given and coloured by nothing. The
+ * fitted bar was found on the very items it agrees with, so it is labelled as
+ * that; adopting it is publishing the card again, which is a new context.
+ */
+function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
+  if (rows.every((row) => row.rank_agreement == null && row.fitted_pass_at == null)) return null;
+  return (
+    <table className="mt-2 w-full text-left">
+      <thead className="text-muted-foreground">
+        <tr>
+          <th className="font-normal">Metric</th>
+          <th
+            className="font-normal"
+            title="Goodman and Kruskal's gamma: 1 is the people's order, −1 its reverse"
+          >
+            Orders answers as people do
+          </th>
+          <th className="font-normal">Bar these people support</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.metric}>
+            <td>{row.metric}</td>
+            <td>
+              {row.rank_agreement == null
+                ? 'no pair told apart on both sides'
+                : `${row.rank_agreement.toFixed(2)} over ${row.ranked_pairs ?? 0} pairs`}
+            </td>
+            <td>
+              {row.fitted_pass_at == null || row.fitted_agreement == null
+                ? '—'
+                : `${row.fitted_pass_at} would agree ${Math.round(row.fitted_agreement * 100)}% — fitted on these same items`}
             </td>
           </tr>
         ))}

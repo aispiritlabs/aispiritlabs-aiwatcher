@@ -68,7 +68,10 @@ function serving(catalog: { status: number; body: unknown }) {
       answer: {
         status: 200,
         body: {
-          rubrics: [{ name: 'helpful', question: 'Helps?', updated_at: 1, version: RUBRIC }],
+          rubrics: [
+            { name: 'helpful', question: 'Helps?', updated_at: 1, version: RUBRIC },
+            { name: 'stars', question: 'How good?', updated_at: 1, version: RUBRIC },
+          ],
         },
       },
     },
@@ -86,6 +89,24 @@ function serving(catalog: { status: number; body: unknown }) {
             question: 'Helps?',
             direction: 'higher',
             scale: { kind: 'ordinal', levels: ['poor', 'fair', 'good'] },
+          },
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-rubrics/stars',
+      answer: {
+        status: 200,
+        body: {
+          version: RUBRIC,
+          published_at: 1,
+          published_by: 'ada',
+          rubric: {
+            name: 'stars',
+            question: 'How good?',
+            direction: 'higher',
+            scale: { kind: 'numeric', min: 1, max: 5 },
           },
         },
       },
@@ -200,6 +221,36 @@ it("names a framework's metric from the catalog, with its parameters and people 
   });
   // What the metric is stays the server's word: nothing pinned is sent.
   expect(sent.scorers[0].scorer.declared).toBeUndefined();
+});
+
+it('holds a framework metric against scores out of five at the score a person passes at', async () => {
+  const server = serving({ status: 200, body: CATALOG });
+  render(withQueries(<Scorecards />));
+  await userEvent.type(await screen.findByLabelText('Card name'), 'framework');
+  await userEvent.type(screen.getByLabelText('Scorer 1 metric'), 'relevancy');
+  await userEvent.selectOptions(screen.getByLabelText('Scorer 1 kind'), 'external');
+  await userEvent.selectOptions(await screen.findByLabelText('Scorer 1 framework'), 'deepeval');
+  await userEvent.selectOptions(
+    screen.getByLabelText('Scorer 1 framework metric'),
+    'answer_relevancy',
+  );
+  await userEvent.click(screen.getByLabelText('Scorer 1 held against people'));
+  await userEvent.selectOptions(
+    screen.getByLabelText('Scorer 1 calibration rubric'),
+    `stars@${RUBRIC}`,
+  );
+  await userEvent.type(screen.getByLabelText('Scorer 1 passes at'), '0.6');
+  expect(await screen.findByText(/or above, 1 to 5/)).toBeTruthy();
+  await userEvent.type(screen.getByLabelText('Scorer 1 person passes at'), '4');
+  await userEvent.click(screen.getByRole('button', { name: 'Publish card' }));
+
+  await waitFor(() => expect(server.countOf('POST', '/evaluation-scorecards')).toBe(1));
+  const sent = server.calls.find((call) => call.method === 'POST')?.body as Record<string, any>;
+  expect(sent.scorers[0].scorer.calibration).toEqual({
+    rubric: { name: 'stars', version: RUBRIC },
+    pass_at: 0.6,
+    pass_score: 4,
+  });
 });
 
 it('says which variable is missing when no scorer service has described itself', async () => {
