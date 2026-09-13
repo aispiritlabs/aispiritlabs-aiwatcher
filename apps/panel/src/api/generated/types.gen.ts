@@ -9250,8 +9250,9 @@ export type VariantObservations = {
     call_ms?: null | DurationSummary;
     cost?: null | TokenCost;
     /**
-     * Where a window's counting starts: the beginning of the period its start
-     * falls in, which may be before it. Absent without a window.
+     * Where a window's counting starts: its own start, to the slice of a
+     * period — a second at five-minute periods — or later, where observations
+     * began later. Absent without a window.
      */
     counted_from?: string | null;
     duration_ms?: null | DurationSummary;
@@ -9270,7 +9271,7 @@ export type VariantObservations = {
     last_seen_at?: string | null;
     /**
      * Of `runs`, those whose end reached the log after the period they ended
-     * in had closed, counted in the period that was open when it did.
+     * in had closed — counted there all the same.
      */
     late_runs?: number;
     llm_calls: number;

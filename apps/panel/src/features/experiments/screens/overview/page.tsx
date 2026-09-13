@@ -413,11 +413,11 @@ function Row({
  *
  * What the calls cost is the server's, at the deployment's price table, and it
  * says when and where each price was read; calls no price covers are counted as
- * unpriced rather than as free. A window is counted in whole periods, so it
- * says where counting began — at most one period before the window's start, or
- * later where nothing was observed before — and how many runs ended late and
- * were counted when they arrived. Figures over periods are bucketed, and say
- * so.
+ * unpriced rather than as free. A window counts the runs that ended from its
+ * start on, where they ended, so it says where counting began — the window's
+ * start, or later where nothing was observed before — and how many runs reached
+ * the log after their period had closed. Figures over periods are bucketed,
+ * and say so.
  */
 function Observed({ observed }: { observed: VariantObservations | undefined }) {
   if (!observed || observed.runs === 0) {
@@ -459,12 +459,12 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
               }${observed.incomplete_periods > 0 ? `, ${observed.incomplete_periods} incomplete` : ''}`
             : null,
           observed.counted_from
-            ? `counted from ${observed.counted_from.slice(0, 16).replace('T', ' ')} UTC${
+            ? `counted from ${observed.counted_from.slice(0, 19).replace('T', ' ')} UTC${
                 observed.window_before_observations ? ', nothing observed before' : ''
               }`
             : null,
           (observed.late_runs ?? 0) > 0
-            ? `${observed.late_runs} ended late and counted when they arrived`
+            ? `${observed.late_runs} reached the log after their period closed`
             : null,
         ]
           .filter(Boolean)

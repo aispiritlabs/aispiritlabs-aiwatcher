@@ -11,10 +11,11 @@
 //! Two answers, never mixed. Without a window, the read model's, like
 //! [`crate::dimensions`]: every run it holds, timed exactly, and bounded by
 //! what it holds. With a window, the period fold's ([`crate::period_fold`]),
-//! wherever there is a store to write periods to: every period the window
-//! reaches into, whole, from the records written as the log passed them and
-//! from the fold's own memory past those — one source, so a run that ended
-//! late or was evicted from the read model is counted once. A period keeps its
+//! wherever there is a store to write periods to: the runs that ended from the
+//! window's start on, where they ended, from the records written as the log
+//! passed them and from the fold's own memory past those — one source, so a
+//! run that ended late or was evicted from the read model is counted once, and
+//! a period the window starts inside is read by its slices. A period keeps its
 //! durations as a histogram, so periods add up and still answer a percentile,
 //! within one bucket.
 
@@ -88,11 +89,12 @@ pub struct VariantObservations {
     /// vouch it held every run that ended in them.
     pub incomplete_periods: usize,
     /// Of `runs`, those whose end reached the log after the period they ended
-    /// in had closed, counted in the period that was open when it did.
+    /// in had closed — counted there all the same.
     #[serde(default)]
     pub late_runs: u64,
-    /// Where a window's counting starts: the beginning of the period its start
-    /// falls in, which may be before it. Absent without a window.
+    /// Where a window's counting starts: its own start, to the slice of a
+    /// period — a second at five-minute periods — or later, where observations
+    /// began later. Absent without a window.
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
@@ -141,7 +143,7 @@ impl DurationSummary {
 
 /// Durations in milliseconds, in buckets an eighth of a doubling wide: what a
 /// written period keeps, so periods add and still answer a percentile.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DurationHistogram {
     /// Bucket to how many durations fell in it. Bucket `b` holds durations
     /// below `2^((b+1)/8) − 1` milliseconds.
@@ -206,8 +208,17 @@ impl DurationHistogram {
 
 /// One variant's runs that ended in one period, as the fold counted them — the
 /// record written when the period closed, which outlives the read model.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+///
+/// Its figures are the runs whose end reached the log in time; `slices` holds
+/// the same runs by the slice of the period they ended in, which is how a
+/// window whose start falls inside the period counts only what ended after it;
+/// and `late` holds the runs that ended in an earlier period and reached the log
+/// after that one had closed, by the period they ended in — so a window counts
+/// a late run where it ended, never where it arrived. A slice or a late entry
+/// is a record of its own, without a variant.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ObservedPeriod {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub variant_id: String,
     /// The period, `[from, to)`, in Unix seconds.
     pub from: i64,
@@ -232,13 +243,25 @@ pub struct ObservedPeriod {
     pub first_seen_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<i64>,
-    /// Runs counted here whose end was dated in a period already written —
-    /// an end the log received after that period closed.
-    #[serde(default)]
+    /// Runs held in `late`.
+    #[serde(default, skip_serializing_if = "is_nought")]
     pub late_runs: u64,
     /// Whether the fold saw every run counted here from its start: one it
     /// did not is counted with no duration.
     pub complete: bool,
+    /// These runs by the slice of the period they ended in, keyed by the
+    /// slice's offset in seconds from `from`. Kept at a period's own width, not
+    /// in the hours and days it adds up to.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub slices: BTreeMap<u32, ObservedPeriod>,
+    /// Runs that ended in an earlier period and reached the log after it
+    /// closed, keyed by the start of the period they ended in.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub late: BTreeMap<i64, ObservedPeriod>,
+}
+
+fn is_nought(count: &u64) -> bool {
+    *count == 0
 }
 
 impl ObservedPeriod {
@@ -277,6 +300,81 @@ impl ObservedPeriod {
         self.last_seen_at = latest(self.last_seen_at, other.last_seen_at);
         self.late_runs += other.late_runs;
         self.complete &= other.complete;
+    }
+
+    /// Add another record's late runs to this one's, by the period each ended
+    /// in, slices and all — as the late runs of the periods inside an hour add
+    /// up to the hour's.
+    pub fn merge_late(&mut self, other: &Self) {
+        for (ended_in, late) in &other.late {
+            let into = self
+                .late
+                .entry(*ended_in)
+                .or_insert_with(|| ObservedPeriod {
+                    from: late.from,
+                    to: late.to,
+                    complete: true,
+                    ..ObservedPeriod::default()
+                });
+            into.merge(late);
+            for (offset, slice) in &late.slices {
+                into.slices
+                    .entry(*offset)
+                    .or_insert_with(|| ObservedPeriod {
+                        from: slice.from,
+                        to: slice.to,
+                        complete: true,
+                        ..ObservedPeriod::default()
+                    })
+                    .merge(slice);
+            }
+        }
+    }
+
+    /// What of this record a window counts that began at `since` in the
+    /// period starting at `edge`: everything, where the period starts at or
+    /// after the edge; the slices that end after `since`, where it is the edge
+    /// period; nothing before. The same rule reads each late entry by the
+    /// period it ended in. Each part comes back with whether it is late.
+    #[must_use]
+    pub fn counted_since(&self, edge: i64, since: i64) -> Vec<(ObservedPeriod, bool)> {
+        fn part(record: &ObservedPeriod, edge: i64, since: i64) -> Option<ObservedPeriod> {
+            if record.from > edge || since <= edge {
+                return (record.from >= edge).then(|| record.clone());
+            }
+            if record.from < edge {
+                return None;
+            }
+            let mut counted = ObservedPeriod {
+                from: record.from,
+                to: record.to,
+                complete: true,
+                ..ObservedPeriod::default()
+            };
+            for slice in record.slices.values().filter(|slice| slice.to > since) {
+                counted.merge(slice);
+            }
+            Some(counted)
+        }
+        let mut parts = Vec::new();
+        if let Some(on_time) = part(self, edge, since) {
+            let mut on_time = ObservedPeriod {
+                slices: BTreeMap::new(),
+                late: BTreeMap::new(),
+                late_runs: 0,
+                ..on_time
+            };
+            on_time.variant_id.clone_from(&self.variant_id);
+            parts.push((on_time, false));
+        }
+        for late in self.late.values() {
+            if let Some(mut counted) = part(late, edge, since) {
+                counted.slices = BTreeMap::new();
+                counted.variant_id.clone_from(&self.variant_id);
+                parts.push((counted, true));
+            }
+        }
+        parts
     }
 }
 
@@ -407,17 +505,36 @@ impl Accumulated {
     }
 }
 
-/// One variant's figures over a window, from the periods it reaches into:
-/// those written, and those the fold has not written yet — each counted once,
-/// because a period is in one or the other — with the runs in flight.
+/// What a window counted for one variant, before it is summed.
+#[derive(Clone, Debug, Default)]
+pub struct Counted {
+    /// Each part counted, with whether it came from a written period and
+    /// whether its runs were late.
+    pub parts: Vec<CountedPart>,
+    /// Written periods read.
+    pub periods: usize,
+    /// Runs in flight heard from in the window.
+    pub running: u64,
+    /// Where counting started.
+    pub counted_from: Option<i64>,
+    /// The window reaches back before the fold began observing.
+    pub before_observations: bool,
+}
+
+/// One part of a window's count.
+#[derive(Clone, Debug)]
+pub struct CountedPart {
+    pub record: ObservedPeriod,
+    pub written: bool,
+    pub late: bool,
+}
+
+/// One variant's figures over a window, from what it counted of the periods
+/// it reaches into — each run once, where it ended — with the runs in flight.
 #[must_use]
 pub fn from_periods(
     variant_id: &str,
-    written: &[ObservedPeriod],
-    unwritten: &[ObservedPeriod],
-    running: u64,
-    counted_from: Option<i64>,
-    window_before_observations: bool,
+    counted: &Counted,
     prices: Option<&ModelPrices>,
 ) -> VariantObservations {
     let mut total = ObservedPeriod {
@@ -425,17 +542,24 @@ pub fn from_periods(
         complete: true,
         ..ObservedPeriod::default()
     };
-    for period in written.iter().chain(unwritten) {
-        total.merge(period);
+    for part in &counted.parts {
+        total.merge(&part.record);
     }
-    let by_day = total.models_by_day.clone();
     let seconds = |at: Option<i64>| at.and_then(|at| OffsetDateTime::from_unix_timestamp(at).ok());
+    let runs_where = |keep: fn(&CountedPart) -> bool| -> u64 {
+        counted
+            .parts
+            .iter()
+            .filter(|part| keep(part))
+            .map(|part| part.record.runs)
+            .sum()
+    };
     VariantObservations {
         variant_id: variant_id.to_owned(),
         runs: total.runs,
         succeeded: total.succeeded,
         failed: total.failed,
-        running,
+        running: counted.running,
         measured_runs: total.measured_runs,
         duration_ms: total.run_ms.summary(),
         call_ms: total.call_ms.summary(),
@@ -445,7 +569,8 @@ pub fn from_periods(
         output_tokens: total.output_tokens,
         cost: prices.map(|table| {
             table.cost_by_day(
-                by_day
+                total
+                    .models_by_day
                     .iter()
                     .map(|(day, usage)| (day.as_str(), usage.as_slice())),
             )
@@ -453,16 +578,16 @@ pub fn from_periods(
         models: total.models,
         first_seen_at: seconds(total.first_seen_at),
         last_seen_at: seconds(total.last_seen_at),
-        periods: written.len(),
-        runs_from_periods: written.iter().map(|period| period.runs).sum(),
-        incomplete_periods: written
+        periods: counted.periods,
+        runs_from_periods: runs_where(|part| part.written),
+        incomplete_periods: counted
+            .parts
             .iter()
-            .chain(unwritten)
-            .filter(|period| !period.complete)
+            .filter(|part| !part.late && !part.record.complete)
             .count(),
-        late_runs: total.late_runs,
-        counted_from: seconds(counted_from),
-        window_before_observations,
+        late_runs: runs_where(|part| part.late),
+        counted_from: seconds(counted.counted_from),
+        window_before_observations: counted.before_observations,
     }
 }
 
@@ -793,20 +918,31 @@ mod tests {
                 .collect(),
         };
 
-        let row = from_periods(
-            "v1",
-            &written,
-            &unwritten,
-            4,
-            Some(day - 3_600),
-            false,
-            Some(&prices),
-        );
+        let counted = Counted {
+            parts: vec![
+                CountedPart {
+                    record: written[0].clone(),
+                    written: true,
+                    late: false,
+                },
+                CountedPart {
+                    record: unwritten[0].clone(),
+                    written: false,
+                    late: true,
+                },
+            ],
+            periods: 1,
+            running: 4,
+            counted_from: Some(day - 3_600),
+            before_observations: false,
+        };
+        let row = from_periods("v1", &counted, Some(&prices));
 
         assert_eq!((row.runs, row.running, row.late_runs), (3, 4, 1));
         assert_eq!(
             (row.periods, row.runs_from_periods, row.incomplete_periods),
-            (1, 2, 1)
+            (1, 2, 0),
+            "a late part is no period of its own"
         );
         let duration = row.duration_ms.expect("finished runs");
         assert!(duration.bucketed && duration.count == 3 && duration.max == 250);

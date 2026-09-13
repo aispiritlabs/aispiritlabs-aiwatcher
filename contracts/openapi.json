@@ -29368,7 +29368,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "Where a window's counting starts: the beginning of the period its start\nfalls in, which may be before it. Absent without a window."
+            "description": "Where a window's counting starts: its own start, to the slice of a\nperiod — a second at five-minute periods — or later, where observations\nbegan later. Absent without a window."
           },
           "duration_ms": {
             "oneOf": [
@@ -29413,7 +29413,7 @@
           "late_runs": {
             "type": "integer",
             "format": "int64",
-            "description": "Of `runs`, those whose end reached the log after the period they ended\nin had closed, counted in the period that was open when it did.",
+            "description": "Of `runs`, those whose end reached the log after the period they ended\nin had closed — counted there all the same.",
             "minimum": 0
           },
           "llm_calls": {

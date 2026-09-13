@@ -11,10 +11,14 @@
 //! nothing ended in is not written at all.
 //!
 //! The fold's own state is kept here too, under `fold/`, one object per
-//! position it was saved at: created, never overwritten, and the one furthest
-//! along is the one loaded — so two processes sharing a processor ID cannot
-//! set each other back, whichever saves last.
+//! position it was saved at: created, never overwritten, the last few kept, and
+//! the one furthest along that reads is the one loaded — so two processes
+//! sharing a processor ID cannot set each other back, whichever saves last. A
+//! marker also says where the fold was when the period closed, so a fold whose
+//! every saved state is gone starts again from the last period it wrote rather
+//! than from nothing.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -27,6 +31,24 @@ use crate::observations::ObservedPeriod;
 /// The prefix this module owns in the deployment's object store.
 pub const PREFIX: &str = "variant-observations/";
 
+/// How many saved states of one fold are kept.
+const GENERATIONS_KEPT: usize = 3;
+
+/// Where the fold was when it closed a period: enough to start again from
+/// there when no saved state is left.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoldAt {
+    /// The position of the last event folded when the period closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through: Option<u64>,
+    /// The first period the fold covered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub began: Option<i64>,
+    /// The width of its periods from each moment on.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub widths: BTreeMap<i64, i64>,
+}
+
 /// What says a period was written, and which variants it holds records for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Marker {
@@ -35,6 +57,8 @@ struct Marker {
     variants: Vec<String>,
     complete: bool,
     written_at: i64,
+    #[serde(default)]
+    fold: FoldAt,
 }
 
 /// Where closed periods are kept.
@@ -117,7 +141,7 @@ impl PeriodStore {
     }
 
     /// Save a projector's fold state under the position it was folded
-    /// through, then remove the states saved before it. A state already saved
+    /// through, then remove all but the few saved last. A state already saved
     /// at that position is the same fold of the same log, and is kept.
     ///
     /// # Errors
@@ -132,10 +156,17 @@ impl PeriodStore {
         let folder = fold_folder(processor_id);
         let key = format!("{folder}{through:020}.json");
         self.0.create(&key, encoded(fold)?).await?;
-        for entry in self.0.list(&folder).await? {
-            if entry.key < key {
-                self.0.delete(&entry.key).await?;
-            }
+        let mut saved: Vec<String> = self
+            .0
+            .list(&folder)
+            .await?
+            .into_iter()
+            .map(|entry| entry.key)
+            .filter(|saved| *saved <= key)
+            .collect();
+        saved.sort_unstable_by(|one, other| other.cmp(one));
+        for old in saved.iter().skip(GENERATIONS_KEPT) {
+            self.0.delete(old).await?;
         }
         Ok(())
     }
@@ -153,6 +184,7 @@ impl PeriodStore {
         from: i64,
         records: &[ObservedPeriod],
         now: i64,
+        fold: &FoldAt,
     ) -> Result<bool, PortError> {
         for record in records {
             self.0
@@ -171,10 +203,106 @@ impl PeriodStore {
                 .collect(),
             complete: records.iter().all(|record| record.complete),
             written_at: now,
+            fold: fold.clone(),
         };
         self.0
             .create(&marker_key(level, from), encoded(&marker)?)
             .await
+    }
+
+    /// The written period that ends last, and where the fold was when it
+    /// closed — what a fold with no saved state starts again from. Days and
+    /// hours are listed first, since there are few; their markers name the
+    /// widths the fold's own periods had, whose keys are listed next. A fold
+    /// that has written neither yet has written few periods, all listed.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure, or a marker that no longer reads.
+    pub async fn last_written(&self) -> Result<Option<(i64, i64, FoldAt)>, PortError> {
+        let root = format!("{PREFIX}periods/");
+        let mut last: Option<(i64, i64, i64)> = None;
+        let listed = |keys: Vec<String>, last: &mut Option<(i64, i64, i64)>| {
+            for key in keys {
+                let Some((level, from)) = key
+                    .strip_prefix(&root)
+                    .and_then(|rest| rest.strip_suffix("/period.json"))
+                    .and_then(|rest| rest.split_once('/'))
+                    .and_then(|(level, from)| level.parse::<i64>().ok().zip(from.parse().ok()))
+                else {
+                    continue;
+                };
+                let end = from + level;
+                if last.is_none_or(|(known, known_level, _)| {
+                    end > known || (end == known && level < known_level)
+                }) {
+                    *last = Some((end, level, from));
+                }
+            }
+        };
+        for level in [86_400, 3_600] {
+            let keys = self.keys(&format!("{root}{level:06}/")).await?;
+            listed(keys, &mut last);
+        }
+        match last {
+            Some((_, level, from)) => {
+                let widths = self
+                    .marker(level, from)
+                    .await?
+                    .map(|marker| marker.fold.widths);
+                let mut seen = std::collections::BTreeSet::new();
+                for width in widths.into_iter().flat_map(|widths| widths.into_values()) {
+                    if width < 3_600 && seen.insert(width) {
+                        let keys = self.keys(&format!("{root}{width:06}/")).await?;
+                        listed(keys, &mut last);
+                    }
+                }
+            }
+            None => {
+                let keys = self.keys(&root).await?;
+                listed(keys, &mut last);
+            }
+        }
+        let Some((_, level, from)) = last else {
+            return Ok(None);
+        };
+        Ok(self
+            .marker(level, from)
+            .await?
+            .map(|marker| (level, from, marker.fold)))
+    }
+
+    async fn keys(&self, prefix: &str) -> Result<Vec<String>, PortError> {
+        Ok(self
+            .0
+            .list(prefix)
+            .await?
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect())
+    }
+
+    async fn marker(&self, level: i64, from: i64) -> Result<Option<Marker>, PortError> {
+        let key = marker_key(level, from);
+        match self.0.get(&key).await? {
+            Some(bytes) => decoded(&key, &bytes).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Every record one written period holds, whatever its variant; none when
+    /// no such period was written.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure, or a record the marker names that is not
+    /// stored or no longer reads.
+    pub async fn records(&self, level: i64, from: i64) -> Result<Vec<ObservedPeriod>, PortError> {
+        let Some(marker) = self.marker(level, from).await? else {
+            return Ok(Vec::new());
+        };
+        let named: Vec<&str> = marker.variants.iter().map(String::as_str).collect();
+        Ok(self.period(level, from, &named).await?.unwrap_or_default())
     }
 
     /// The records one written period holds for these variants, or `None`
@@ -281,13 +409,13 @@ pub(crate) mod tests {
         assert!(store.period(3_600, hour, &["v1"]).await.unwrap().is_none());
         assert!(
             store
-                .write(3_600, hour, &[record("v1", hour, 4)], 1)
+                .write(3_600, hour, &[record("v1", hour, 4)], 1, &FoldAt::default())
                 .await
                 .unwrap()
         );
         assert!(
             !store
-                .write(3_600, hour, &[record("v1", hour, 9)], 2)
+                .write(3_600, hour, &[record("v1", hour, 9)], 2, &FoldAt::default())
                 .await
                 .unwrap(),
             "the first writer's period is the one kept"
@@ -312,6 +440,47 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn the_period_written_last_says_where_its_fold_was() {
+        let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
+        let hour = 1_789_300_800;
+        assert!(store.last_written().await.unwrap().is_none());
+        let at = |through: u64| FoldAt {
+            through: Some(through),
+            began: Some(hour),
+            widths: BTreeMap::from([(i64::MIN, 300)]),
+        };
+        store
+            .write(300, hour, &[record("v1", hour, 1)], 1, &at(10))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.last_written().await.unwrap().map(|(_, _, fold)| fold),
+            Some(at(10)),
+            "no hour yet: the periods themselves"
+        );
+        store
+            .write(3_600, hour, &[record("v1", hour, 4)], 2, &at(40))
+            .await
+            .unwrap();
+        store
+            .write(
+                300,
+                hour + 3_300,
+                &[record("v1", hour + 3_300, 1)],
+                3,
+                &at(38),
+            )
+            .await
+            .unwrap();
+        let (level, from, fold) = store.last_written().await.unwrap().expect("written");
+        assert_eq!(
+            (level, from - hour, fold.through),
+            (300, 3_300, Some(38)),
+            "the hour names the fold's width, whose periods are listed; the last ends with it"
+        );
+    }
+
+    #[tokio::test]
     async fn the_state_furthest_along_is_loaded_whichever_process_saved_last() {
         let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
         let ahead = crate::period_fold::PeriodFold::new(300);
@@ -323,5 +492,11 @@ pub(crate) mod tests {
         let loaded = store.load_fold("projector").await.unwrap().expect("saved");
         assert_eq!(loaded, ahead, "a process behind does not set the fold back");
         assert!(store.load_fold("another").await.unwrap().is_none());
+
+        for through in [1_100, 1_200, 1_300] {
+            store.save_fold("projector", through, &ahead).await.unwrap();
+        }
+        let kept = store.0.list(&fold_folder("projector")).await.unwrap().len();
+        assert_eq!(kept, GENERATIONS_KEPT, "the few saved last");
     }
 }
