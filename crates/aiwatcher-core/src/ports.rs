@@ -411,10 +411,10 @@ pub trait AttemptArtifacts: Send + Sync + std::fmt::Debug {
 
     /// Store rows as the caller spelled them, `spelled` being their JSON array.
     ///
-    /// For a table holding an integer wider than 64 bits
-    /// ([`crate::witness::spells_wide_integer`]): a parsed row holds one only as
-    /// the double it rounds to, so writing it back from [`Self::put_rows`] would
-    /// store a number nobody sent. The same refusals, and the same digest rule.
+    /// For a table holding an integer wider than 64 bits, or a decimal with more
+    /// digits than a double keeps ([`crate::witness::spells_inexact_number`]): a
+    /// parsed row holds one only as the double nearest it, so writing it back
+    /// from [`Self::put_rows`] would store a number nobody sent. The same refusals, and the same digest rule.
     async fn put_rows_as_spelled(&self, name: &str, spelled: String) -> PortResult<ArtifactRef>;
 
     /// Whether the bytes a reference names are actually there.

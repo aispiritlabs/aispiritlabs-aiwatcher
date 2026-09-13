@@ -164,13 +164,14 @@ pub fn canonical_text(text: &str) -> Option<String> {
     (reader.at == text.len()).then_some(spelled)
 }
 
-/// Whether a JSON text holds an integer a parsed [`Value`] cannot hold exactly:
-/// one wider than 64 bits. `false` for a text that is not JSON.
+/// Whether a JSON text holds a number a parsed [`Value`] cannot hold as it is
+/// written: an integer wider than 64 bits, or a decimal with more digits than
+/// the double nearest it keeps. `false` for a text that is not JSON.
 #[must_use]
-pub fn spells_wide_integer(text: &str) -> bool {
+pub fn spells_inexact_number(text: &str) -> bool {
     let mut reader = Reader::new(text);
     reader.space();
-    reader.value(0).is_some() && reader.wide
+    reader.value(0).is_some() && reader.inexact
 }
 
 /// What an answer read from its JSON text is compared with a reply as — the
@@ -188,8 +189,9 @@ pub fn answered_as_text(text: &str) -> Vec<String> {
 struct Reader<'a> {
     text: &'a str,
     at: usize,
-    /// Whether it has read an integer wider than 64 bits.
-    wide: bool,
+    /// Whether it has read a number a double or a 64-bit integer does not
+    /// hold as written.
+    inexact: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -200,7 +202,7 @@ impl<'a> Reader<'a> {
         Self {
             text,
             at: 0,
-            wide: false,
+            inexact: false,
         }
     }
 
@@ -316,6 +318,8 @@ impl<'a> Reader<'a> {
         let token = self.text.get(start..self.at)?;
         let parsed: serde_json::Number = serde_json::from_str(token).ok()?;
         if token.contains(['.', 'e', 'E']) {
+            self.inexact |= crate::exact::Decimal::parse(token)
+                != parsed.as_f64().and_then(crate::exact::Decimal::from_f64);
             return Some(number(&parsed));
         }
         if token.trim_start_matches('-') == "0" {
@@ -324,7 +328,7 @@ impl<'a> Reader<'a> {
         if parsed.is_i64() || parsed.is_u64() {
             return Some(parsed.to_string());
         }
-        self.wide = true;
+        self.inexact = true;
         Some(token.to_owned())
     }
 }
@@ -471,14 +475,19 @@ mod tests {
         ] {
             let parsed: Value = serde_json::from_str(text).expect("JSON");
             assert_eq!(canonical_text(text), Some(canonical(&parsed)), "{text}");
-            assert!(!spells_wide_integer(text), "{text}");
+            assert!(!spells_inexact_number(text), "{text}");
         }
         let wide = r#"{"id": 123456789012345678901234567890, "next": -18446744073709551617}"#;
         assert_eq!(
             canonical_text(wide).as_deref(),
             Some(r#"{"id":123456789012345678901234567890,"next":-18446744073709551617}"#)
         );
-        assert!(spells_wide_integer(wide));
+        assert!(spells_inexact_number(wide));
+        assert!(
+            spells_inexact_number(r#"{"ratio": 0.12345678901234567890}"#),
+            "more digits than a double keeps"
+        );
+        assert!(!spells_inexact_number(r#"{"ratio": 0.125, "big": 1e300}"#));
         assert_ne!(
             canonical_text("123456789012345678901234567890"),
             canonical_text("123456789012345678901234567891"),

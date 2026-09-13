@@ -18,6 +18,7 @@ pub mod comparability;
 pub mod context;
 pub mod envelope;
 pub mod error;
+pub mod exact;
 pub mod human_input;
 pub mod ids;
 pub mod ports;

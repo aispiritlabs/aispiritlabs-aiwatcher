@@ -487,12 +487,12 @@ async fn a_direction_edited_after_the_card_declared_it_is_not_admitted_as_the_ca
 async fn a_scorer_version_this_binary_does_not_implement_is_refused_naming_the_one_it_does() {
     let registry = store(cohort());
     let mut request = engine_scored(&registry, "from-the-future").await;
-    request.manifest.context.scorer.version = "2".into();
+    request.manifest.context.scorer.version = "3".into();
 
     let refused = registry
         .approve(&request.manifest, "operator", 100)
         .await
-        .expect_err("nothing here measured with version 2");
+        .expect_err("nothing here measured with version 3");
     let said = refused.to_string();
     assert!(said.contains("context.scorer.version"), "{said}");
     assert!(said.contains(SCORING_VERSION), "{said}");

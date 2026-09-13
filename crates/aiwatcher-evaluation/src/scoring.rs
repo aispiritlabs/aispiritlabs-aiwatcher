@@ -34,7 +34,7 @@ pub const SCORING_ENGINE: &str = "aiwatcher.scoring";
 /// rewritten scorer measures an unchanged declaration differently, so bump
 /// this whenever an existing scorer's answer changes for some input. Two
 /// results measured under different rules then compare as what they are.
-pub const SCORING_VERSION: &str = "1";
+pub const SCORING_VERSION: &str = "2";
 
 impl EvaluationContext {
     /// Whether this context was measured by the scorer vocabulary compiled
@@ -866,6 +866,31 @@ pub fn score_with(
     repetition_id: &str,
     judged: &Judged,
 ) -> Scored {
+    score_spelled(
+        card,
+        cohort,
+        answers,
+        repetition_id,
+        judged,
+        &BTreeMap::new(),
+    )
+}
+
+/// The same fold, with each answer's JSON as it was written, by its case.
+///
+/// A parsed answer holds an integer wider than 64 bits, or a decimal with more
+/// digits than a double keeps, as the double nearest it; a scorer comparing
+/// numbers reads the answer from `spelled` where it has one, so two numbers a
+/// double cannot tell apart are compared as two.
+#[must_use]
+pub fn score_spelled(
+    card: &Scorecard,
+    cohort: &BTreeMap<String, serde_json::Value>,
+    answers: &[RecordedAnswer],
+    repetition_id: &str,
+    judged: &Judged,
+    spelled: &BTreeMap<String, String>,
+) -> Scored {
     let mut found: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
     for answer in answers {
         if let Some((case_id, _)) = cohort.get_key_value(&answer.case_id) {
@@ -882,7 +907,7 @@ pub fn score_with(
             // One publication is one repetition, so two answers to one case
             // are two measurements this result has no way to tell apart.
             [] | [_, _, ..] => Err("the recording holds more than one answer for this case".into()),
-            [answer] => measure(card, answer, expected, judged),
+            [answer] => measure(card, answer, spelled.get(case_id), expected, judged),
         };
         let answer = answers.first();
         let trace_id = answer.and_then(|answer| answer.trace_id.clone());
@@ -934,9 +959,15 @@ pub fn score_with(
 fn measure(
     card: &Scorecard,
     answer: &RecordedAnswer,
+    spelled: Option<&String>,
     expected: &serde_json::Value,
     judged: &Judged,
 ) -> std::result::Result<BTreeMap<String, f64>, String> {
+    use aiwatcher_core::exact::ExactValue;
+    let exact_answer = spelled
+        .and_then(|text| ExactValue::parse(text))
+        .unwrap_or_else(|| ExactValue::from_value(&answer.answer));
+    let exact_expected = ExactValue::from_value(expected);
     let mut metrics = BTreeMap::new();
     for spec in &card.scorers {
         let asked_elsewhere = spec.scorer.rubric().is_some() || spec.scorer.external().is_some();
@@ -948,7 +979,7 @@ fn measure(
                 .get(&(answer.case_id.clone(), spec.metric.clone()))
                 .cloned()
                 .unwrap_or_else(|| spec.scorer.score(&answer.answer, expected)),
-            (false, Ok(_)) => spec.measure(&answer.answer, expected),
+            (false, Ok(_)) => spec.measure_exact(&exact_answer, &exact_expected),
         };
         match score {
             Score::Measured(value) => {
@@ -1398,6 +1429,37 @@ pub(crate) async fn stage(store: &Store, name: &str, bytes: Vec<u8>) -> Result<A
 
 /// The answers a declaration named, re-verified against the digest it named.
 pub(crate) async fn recorded(store: &Store, answers: &ArtifactRef) -> Result<RecordedAnswers> {
+    let bytes = recording_bytes(store, answers).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact))
+}
+
+/// Each answer of the same recording as its JSON spells it, by its case: what a
+/// scorer comparing numbers reads, where a parsed answer holds a double.
+pub(crate) async fn recorded_spelled(
+    store: &Store,
+    answers: &ArtifactRef,
+) -> Result<BTreeMap<String, String>> {
+    #[derive(Deserialize)]
+    struct Spelled {
+        answers: Vec<SpelledAnswer>,
+    }
+    #[derive(Deserialize)]
+    struct SpelledAnswer {
+        case_id: String,
+        answer: Box<serde_json::value::RawValue>,
+    }
+    let bytes = recording_bytes(store, answers).await?;
+    let spelled: Spelled = serde_json::from_slice(&bytes)
+        .map_err(|_| crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact))?;
+    Ok(spelled
+        .answers
+        .into_iter()
+        .map(|answer| (answer.case_id, answer.answer.get().to_owned()))
+        .collect())
+}
+
+async fn recording_bytes(store: &Store, answers: &ArtifactRef) -> Result<Vec<u8>> {
     let bytes = store
         .0
         .get(&store::recording(&answers.digest))
@@ -1410,8 +1472,7 @@ pub(crate) async fn recorded(store: &Store, answers: &ArtifactRef) -> Result<Rec
             crate::EvidenceState::CorruptArtifact,
         ));
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|_| crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact))
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -1848,5 +1909,37 @@ mod tests {
         )]));
         assert_eq!(answers[0].case_id, "turn-1");
         assert_eq!(answers[0].answer, json!({"answer": "hello"}));
+    }
+
+    #[test]
+    fn an_answer_spelled_with_more_digits_than_a_double_is_scored_on_every_one_of_them() {
+        let spelled = r#"{"answer": 123456789012345678901234567891}"#;
+        let parsed = RecordedAnswer {
+            case_id: "wide".into(),
+            answer: serde_json::from_str(spelled).expect("JSON"),
+            run_id: None,
+            trace_id: None,
+            span_id: None,
+            usage: None,
+        };
+        let cohort = BTreeMap::from([("wide".to_owned(), json!("123456789012345678901234567890"))]);
+        let card = card(Scorer::AbsoluteError {
+            unit: "items".into(),
+        });
+
+        let rounded = score(&card, &cohort, std::slice::from_ref(&parsed), "m");
+        assert_ne!(
+            rounded.cases[0].metrics["measured"], 1.0,
+            "parsed, the answer is a double, off by whatever rounding took from it"
+        );
+        let exact = score_spelled(
+            &card,
+            &cohort,
+            &[parsed],
+            "m",
+            &Judged::new(),
+            &BTreeMap::from([("wide".to_owned(), spelled.to_owned())]),
+        );
+        assert_eq!(exact.cases[0].metrics["measured"], 1.0);
     }
 }

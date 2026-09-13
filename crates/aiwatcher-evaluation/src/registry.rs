@@ -3327,6 +3327,25 @@ impl Registry {
         }
     }
 
+    /// The same answers as their JSON spells them, by case: empty for any but
+    /// a recording, whose bytes are kept as they were staged.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when a recording's bytes are gone or
+    /// are not what the declaration pinned.
+    pub async fn spelled_answers(
+        &self,
+        run: &crate::ScoringRun,
+    ) -> Result<BTreeMap<String, String>> {
+        match &run.answers {
+            crate::Answers::Recording(recording) => {
+                crate::scoring::recorded_spelled(&self.store, recording).await
+            }
+            crate::Answers::Archive(_) | crate::Answers::Generated(_) => Ok(BTreeMap::new()),
+        }
+    }
+
     /// Record one judgement. The caller is who filed it, always.
     ///
     /// # Errors

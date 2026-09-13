@@ -1045,10 +1045,11 @@ async fn write_output(
     let spelled = body.rows.get();
     let rows: Vec<Value> = serde_json::from_str(spelled)
         .map_err(|error| ApiError::BadRequest(format!("`rows` is not a list of rows: {error}")))?;
-    // A row parsed here holds an integer wider than 64 bits as the double it
-    // rounds to; a table holding one is stored as it was sent.
+    // A row parsed here holds an integer wider than 64 bits, or a decimal
+    // with more digits than a double keeps, as the double nearest it; a table
+    // holding one is stored as it was sent.
     let artifacts = artifacts(&state)?;
-    let stored = if aiwatcher_core::witness::spells_wide_integer(spelled) {
+    let stored = if aiwatcher_core::witness::spells_inexact_number(spelled) {
         artifacts
             .put_rows_as_spelled(&name, spelled.to_owned())
             .await

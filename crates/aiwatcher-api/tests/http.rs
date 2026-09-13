@@ -5842,7 +5842,7 @@ async fn a_workers_result_reaches_the_decider_and_starts_what_comes_next() {
 }
 
 #[tokio::test]
-async fn rows_holding_an_integer_wider_than_64_bits_are_stored_as_the_worker_spelled_them() {
+async fn rows_holding_a_number_a_double_would_round_are_stored_as_the_worker_spelled_them() {
     let fixture = Fixture::behind_a_proxy(false).await;
     fixture.seed_worker_run("exec-w41").await;
     let (_, claimed) = fixture
@@ -5867,6 +5867,14 @@ async fn rows_holding_an_integer_wider_than_64_bits_are_stored_as_the_worker_spe
     let (status, stored) = fixture.request(send(wide)).await;
     assert_eq!(status, StatusCode::OK, "{stored}");
     assert_eq!(stored["digest"], aiwatcher_jobs::digest(wide.as_bytes()));
+    let long = r#"[{"case_id": "c1", "answer": 0.12345678901234567890}]"#;
+    let (status, stored) = fixture.request(send(long)).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(
+        stored["digest"],
+        aiwatcher_jobs::digest(long.as_bytes()),
+        "and a decimal with more digits than a double keeps"
+    );
 
     let narrow = r#"[{"case_id": "c1", "answer": 42}]"#;
     let (status, stored) = fixture.request(send(narrow)).await;

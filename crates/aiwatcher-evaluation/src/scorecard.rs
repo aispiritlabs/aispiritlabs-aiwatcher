@@ -15,6 +15,7 @@
 //! comparison drawn from it, and which way is better is a fact about what the
 //! scorer counts rather than an opinion about it.
 
+use aiwatcher_core::exact::{Decimal, ExactValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,7 +37,9 @@ use crate::{
 pub enum Scorer {
     /// The answer is the expected one. Two strings are compared as text under
     /// the options below; anything else is compared as JSON, so an object with
-    /// its keys in another order still matches.
+    /// its keys in another order still matches — and every number by its value
+    /// as written, so `5` is `5.0` and two integers a double cannot tell apart
+    /// are two.
     ExactMatch {
         #[serde(default)]
         ignore_case: bool,
@@ -52,12 +55,16 @@ pub enum Scorer {
     /// scorecard's rather than the case's: it asks the same question of every
     /// answer, which is why it reads no expectation.
     RegexMatch { pattern: String },
-    /// The answer is a number near the expected number.
+    /// The answer is a number near the expected number. Each side is a JSON
+    /// number or a text that is nothing but one, read digit for digit: the
+    /// distance is exact, and so is the tolerance as the card writes it.
     NumericWithin { tolerance: f64 },
     /// How far the answer is from the expected number. A quantity rather than a
     /// verdict, so it is averaged rather than counted and lower is better — and
     /// it has a unit, which is the one part of a metric definition only the
     /// author can know: the scorer sees two numbers and never what they count.
+    /// Both sides are read as `numeric_within` reads them, and the distance
+    /// between them is exact until it is published as a double.
     AbsoluteError { unit: String },
     /// The answer said something it must not. Counted rather than avoided, so
     /// the metric means what its name says and lower is better.
@@ -339,42 +346,65 @@ impl Scorer {
     }
 
     pub(crate) fn score(&self, answer: &serde_json::Value, expected: &serde_json::Value) -> Score {
+        self.score_exact(
+            &ExactValue::from_value(answer),
+            &ExactValue::from_value(expected),
+        )
+    }
+
+    /// The same, with every number on either side as it was written.
+    pub(crate) fn score_exact(&self, answer: &ExactValue, expected: &ExactValue) -> Score {
         match self {
-            Self::ExactMatch { ignore_case, trim } => match (answer.as_str(), expected.as_str()) {
-                (Some(answer), Some(expected)) => {
-                    hit(fold(answer, *ignore_case, *trim) == fold(expected, *ignore_case, *trim))
+            Self::ExactMatch { ignore_case, trim } => {
+                match (answer.as_text(), expected.as_text()) {
+                    (Some(answer), Some(expected)) => {
+                        hit(fold(answer, *ignore_case, *trim)
+                            == fold(expected, *ignore_case, *trim))
+                    }
+                    _ => hit(answer == expected),
                 }
-                _ => hit(answer == expected),
-            },
-            Self::Contains { ignore_case } => match (answer.as_str(), expected.as_str()) {
+            }
+            Self::Contains { ignore_case } => match (answer.as_text(), expected.as_text()) {
                 (Some(answer), Some(expected)) => hit(fold(answer, *ignore_case, false)
                     .contains(&fold(expected, *ignore_case, false))),
                 _ => Score::Unscored("this scorer compares text and one side is not".into()),
             },
-            Self::RegexMatch { pattern } => match (regex::Regex::new(pattern), answer.as_str()) {
+            Self::RegexMatch { pattern } => match (regex::Regex::new(pattern), answer.as_text()) {
                 (Ok(pattern), Some(answer)) => hit(pattern.is_match(answer)),
                 (Ok(_), None) => {
                     Score::Unscored("this scorer reads text and the answer is not".into())
                 }
                 (Err(error), _) => Score::Unscored(error.to_string().replace('\n', " ")),
             },
-            Self::NumericWithin { tolerance } => match (answer.as_f64(), expected.as_f64()) {
-                (Some(answer), Some(expected)) => hit((answer - expected).abs() <= *tolerance),
-                _ => Score::Unscored("this scorer compares numbers and one side is not".into()),
-            },
-            Self::AbsoluteError { .. } => match (answer.as_f64(), expected.as_f64()) {
-                // Two finite numbers can still be an infinite distance apart,
-                // and a mean with one of those in it is not a number.
-                (Some(answer), Some(expected)) if (answer - expected).is_finite() => {
-                    Score::Measured((answer - expected).abs())
+            Self::NumericWithin { tolerance } => {
+                match (
+                    answer.number(),
+                    expected.number(),
+                    Decimal::from_f64(*tolerance),
+                ) {
+                    (Some(answer), Some(expected), Some(tolerance)) => {
+                        hit(answer.minus(&expected).abs() <= tolerance)
+                    }
+                    _ => Score::Unscored("this scorer compares numbers and one side is not".into()),
                 }
-                (Some(_), Some(_)) => Score::Unscored("the distance is not a finite number".into()),
+            }
+            Self::AbsoluteError { .. } => match (answer.number(), expected.number()) {
+                // Two numbers can still be further apart than a double holds,
+                // and a mean with one of those in it is not a number.
+                (Some(answer), Some(expected)) => {
+                    let distance = answer.minus(&expected).abs().to_f64();
+                    if distance.is_finite() {
+                        Score::Measured(distance)
+                    } else {
+                        Score::Unscored("the distance is not a finite number".into())
+                    }
+                }
                 _ => Score::Unscored("this scorer compares numbers and one side is not".into()),
             },
             Self::Forbidden {
                 text: phrase,
                 ignore_case,
-            } => match answer.as_str() {
+            } => match answer.as_text() {
                 Some(answer) => hit(fold(answer, *ignore_case, false).contains(&fold(
                     phrase,
                     *ignore_case,
@@ -529,10 +559,26 @@ impl ScorerSpec {
     /// What this scorer measured about one case.
     #[must_use]
     pub fn measure(&self, answer: &serde_json::Value, expected: &serde_json::Value) -> Score {
-        match self.sides(answer, expected) {
-            Ok((answer, expected)) => self.scorer.score(answer, expected),
-            Err(reason) => Score::Unscored(reason),
-        }
+        self.measure_exact(
+            &ExactValue::from_value(answer),
+            &ExactValue::from_value(expected),
+        )
+    }
+
+    /// The same, from sides whose numbers are as they were written — an
+    /// answer read from the JSON its generation wrote, say.
+    #[must_use]
+    pub fn measure_exact(&self, answer: &ExactValue, expected: &ExactValue) -> Score {
+        let Some(answer) = answer.pointer(&self.answer_path) else {
+            return Score::Unscored(format!("the answer has nothing at {}", self.answer_path));
+        };
+        let Some(expected) = expected.pointer(&self.expected_path) else {
+            return Score::Unscored(format!(
+                "the expected answer has nothing at {}",
+                self.expected_path
+            ));
+        };
+        self.scorer.score_exact(answer, expected)
     }
 
     /// The two values this scorer reads, or why one of them is not there.
@@ -1347,6 +1393,63 @@ mod tests {
             spec.measure(&json!({"a": 1, "b": 2}), &json!({"b": 2, "a": 1})),
             Score::Measured(1.0)
         );
+    }
+
+    #[test]
+    fn numbers_are_compared_as_written_and_a_distance_between_them_is_exact() {
+        let exact = |text: &str| ExactValue::parse(text).expect("JSON");
+        let equal = spec(
+            "exact",
+            Scorer::ExactMatch {
+                ignore_case: false,
+                trim: false,
+            },
+        );
+        let within = spec("near", Scorer::NumericWithin { tolerance: 0.1 });
+        let distance = spec(
+            "error",
+            Scorer::AbsoluteError {
+                unit: "items".into(),
+            },
+        );
+        let wide = exact("123456789012345678901234567890");
+        let next = exact("123456789012345678901234567891");
+
+        assert_eq!(
+            equal.measure(
+                &json!(123_456_789_012_345_678_901_234_567_890_f64),
+                &json!(123_456_789_012_345_678_901_234_567_891_f64)
+            ),
+            Score::Measured(1.0),
+            "parsed, both are the one double they round to"
+        );
+        assert_eq!(equal.measure_exact(&wide, &next), Score::Measured(0.0));
+        assert_eq!(equal.measure_exact(&wide, &wide), Score::Measured(1.0));
+        assert_eq!(
+            equal.measure(&json!({"n": 5}), &json!({"n": 5.0})),
+            Score::Measured(1.0),
+            "one value, however it is written"
+        );
+        assert_eq!(distance.measure_exact(&wide, &next), Score::Measured(1.0));
+        assert_eq!(
+            within.measure_exact(&exact("0.30000000000000001"), &exact("0.2")),
+            Score::Measured(0.0),
+            "a hundred-quadrillionth past the tolerance is past it"
+        );
+        assert_eq!(
+            within.measure(&json!(0.3), &json!(0.2)),
+            Score::Measured(1.0),
+            "and exactly at it is within it, as the card wrote it"
+        );
+        assert_eq!(
+            distance.measure(&json!(" 12 "), &json!("9.5")),
+            Score::Measured(2.5),
+            "a text that is nothing but a number is that number"
+        );
+        let Score::Unscored(reason) = distance.measure(&json!("12 items"), &json!(9)) else {
+            panic!("a text with words in it is not a number");
+        };
+        assert!(reason.contains("compares numbers"), "{reason}");
     }
 
     #[test]

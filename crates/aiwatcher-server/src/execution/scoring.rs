@@ -30,7 +30,7 @@ use aiwatcher_evaluation::{
     GENERATED_WITH, GENERATION_TRACES, GeneratedWith, GenerationTrace, JudgeFailure, JudgeModel,
     Judged, PublishEvaluation, RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin,
     StepSeen, TracedAnswer, TracedCall, TracedRun, VariantManifest, external_questions,
-    external_replies, questions, replies, score_with, trace_answers,
+    external_replies, questions, replies, score_spelled, trace_answers,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -180,7 +180,14 @@ impl ScoreExecutor {
         &self,
         command: &ActivityCommand,
         variant: &VariantManifest,
-    ) -> Result<(Vec<RecordedAnswer>, Option<GenerationTrace>), ActivityError> {
+    ) -> Result<
+        (
+            Vec<RecordedAnswer>,
+            Option<GenerationTrace>,
+            std::collections::BTreeMap<String, String>,
+        ),
+        ActivityError,
+    > {
         let Some(artifacts) = &self.artifacts else {
             return Err(ActivityError::user_code(
                 "this run's answers were generated, and this process holds no object store to \
@@ -232,6 +239,7 @@ impl ScoreExecutor {
             )));
         }
         let mut answers = read_answers(artifacts, input(GENERATED_ANSWERS)?).await?;
+        let spelled = spelled_answers(artifacts, input(GENERATED_ANSWERS)?).await?;
         // What the traces step found, when the plan has one: a run started
         // before it was part of the template has none, and says nothing.
         let traces = match command
@@ -278,7 +286,7 @@ impl ScoreExecutor {
             }
             None => None,
         };
-        Ok((answers, traces))
+        Ok((answers, traces, spelled))
     }
 
     /// The same executor, putting cases to this scorer service this many at a
@@ -365,7 +373,7 @@ impl ActivityExecutor for ScoreExecutor {
             .cohort_cases(&manifest, &subject)
             .await
             .map_err(refusal)?;
-        let (answers, traces) = match run.answers.generation() {
+        let (answers, traces, spelled) = match run.answers.generation() {
             Some(_) => self.generated(command, &run.variant).await?,
             None => (
                 evaluations
@@ -373,6 +381,7 @@ impl ActivityExecutor for ScoreExecutor {
                     .await
                     .map_err(refusal)?,
                 None,
+                evaluations.spelled_answers(run).await.map_err(refusal)?,
             ),
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -554,12 +563,13 @@ impl ActivityExecutor for ScoreExecutor {
         let _committing = context.stop.committing()?;
         let mut judged = judged;
         judged.extend(scored_elsewhere);
-        let scored = score_with(
+        let scored = score_spelled(
             &card.scorecard,
             &cohort.expected,
             &answers,
             &run.repetition_id,
             &judged,
+            &spelled,
         );
         let (status, measured, failed) = (
             scored.status,
@@ -723,8 +733,9 @@ async fn read_answers(
 }
 
 /// Each answer's JSON as the generation step wrote it, by its case: an integer
-/// wider than 64 bits is still every digit it was sent with here, where a
-/// parsed answer holds the double it rounds to.
+/// wider than 64 bits, or a decimal longer than a double keeps, is still every
+/// digit it was sent with here, where a parsed answer holds the double nearest
+/// it.
 async fn spelled_answers(
     artifacts: &Artifacts,
     written: &aiwatcher_core::ArtifactRef,
