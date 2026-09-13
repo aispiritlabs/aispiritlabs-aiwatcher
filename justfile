@@ -549,13 +549,15 @@ e2e-optimise:
 # three tokens — so a gateway in front of a stand-in provider is a second witness
 # to the model, the prompt, the question and the answer — taken out of a reasoned
 # reply the way the application said, rendered with a country cut out of the
-# question or out of a tool the gateway relayed, a label's word the variant pins,
-# or two replies in the pinned schema's shape — and an answer made around it, one
-# the model was told to say, one to a request rendered with a value the
-# application made, or a label nobody pinned, is not; a pinned workflow is held to
-# its shape, order and traversals; results and observations are priced from a
-# table with a history; and a window is the period fold's, journaled, across a
-# restart.
+# question or out of a tool the gateway relayed or the tool's host witnessed, a
+# label's word the variant pins, two replies in the pinned schema's shape or joined
+# in its words, or the answer most of three replies gave where the variant pins
+# choosing so — and an answer made around it, one the model was told to say, one
+# to a request rendered with a value the application made, a label nobody pinned,
+# or a reply chosen with no way pinned, is not; a pinned workflow is held to its
+# shape, order and traversals; results and observations are priced from a table
+# with a history; a window is the period fold's, journaled, across a restart; and
+# a run whose every event was dropped is counted as lost.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 

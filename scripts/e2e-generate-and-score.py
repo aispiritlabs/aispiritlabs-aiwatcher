@@ -149,8 +149,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
-from aiwatcher_sdk import AiwatcherClient  # noqa: E402
-from aiwatcher_sdk.gateway import Gateway, extracted  # noqa: E402
+from aiwatcher_sdk import CALLER_RUN_HEADER, AiwatcherClient, HttpTransport  # noqa: E402
+from aiwatcher_sdk.gateway import Gateway, ToolWitness, extracted  # noqa: E402
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
@@ -222,6 +222,9 @@ PROMPTS = {
     "labelled": "Answer this question in one word: {{ question }}",
     "labelled-loose": "Answer this question in one word: {{ question }}",
     "composed": "Answer this question in one word: {{ question }}",
+    "joined": "Answer this question in one word: {{ question }}",
+    "chosen": "Answer this question in one word: {{ question }}",
+    "chosen-loose": "Answer this question in one word: {{ question }}",
 }
 
 #: The label a model answers each capital with, and the way the labelled
@@ -244,6 +247,8 @@ TELEMETRY: list[AiwatcherClient] = []
 #: The gateways in front of the stand-in provider: one holding a witness's
 #: token, and one holding the application's own.
 GATEWAYS: dict[str, str] = {}
+#: The atlas's host witnessing its own calls, under the witness's token.
+WITNESSED_ATLAS: dict[str, Any] = {}
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -263,6 +268,10 @@ class Provider(BaseHTTPRequestHandler):
             said = next(label for label, capital in LABELS.items() if capital == said) + "."
         if body.get("user") == "country":
             said = country
+        if body.get("user") == "other":
+            # Another capital than the one asked about: a reply to choose against.
+            at = [name for name, _ in CAPITALS].index(country)
+            said = CAPITALS[(at + 1) % len(CAPITALS)][1]
         if body.get("user") == "explain":
             said = (
                 f"It is where the government of {country} sits.\n"
@@ -303,6 +312,24 @@ class Atlas(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class WitnessedAtlas(Atlas):
+    """The same atlas, witnessing each call where it runs rather than through a gateway."""
+
+    def do_POST(self) -> None:
+        raw = self.rfile.read(int(self.headers["content-length"]))
+        asked = json.loads(raw)
+        country = str(asked["question"]).removeprefix("What is the capital of ").removesuffix("?")
+        payload = json.dumps({"country": country}).encode()
+        witness: ToolWitness = WITNESSED_ATLAS["witness"]
+        with witness.call("atlas", asked, caller=self.headers.get(CALLER_RUN_HEADER)) as call:
+            call.answered(payload)
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
 def through_gateway(
     which: str,
     headers: dict[str, str],
@@ -333,6 +360,23 @@ def through_gateway(
     return reply
 
 
+class Dropping:
+    """A transport that loses every event of one run, as an outage would."""
+
+    def __init__(self, inner: HttpTransport, run_id: str) -> None:
+        self.inner = inner
+        self.run_id = run_id
+
+    def send(self, batch: list[dict[str, Any]]) -> None:
+        self.inner.send([event for event in batch if event["run_id"] != self.run_id])
+
+    def flush(self) -> None:
+        self.inner.flush()
+
+    def close(self) -> None:
+        self.inner.close()
+
+
 # ── The application, and the task a worker hosts. ────────────────────────────
 
 
@@ -351,6 +395,10 @@ def generation_of(which: str) -> bytes:
     config: dict[str, Any] = {"temperature": 0, "variant": which}
     if which == "labelled":
         config["answer_from"] = TAKING_LABELS
+    if which == "joined":
+        config["answer_joined"] = {"separator": ", "}
+    if which == "chosen":
+        config["answer_chosen"] = {"most_of": 3}
     return json.dumps(config).encode()
 
 
@@ -420,11 +468,15 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                 ):
                     cut_from = {"between": ["capital of ", "?"]}
                     found = ""
-                    if run.params.get("atlas"):
+                    looked_up = run.params.get("atlas") or run.params.get("witnessed_atlas")
+                    if looked_up:
                         # Which country, from the deployment's atlas, asked
-                        # through the gateway with the case's own question.
+                        # through the gateway with the case's own question —
+                        # or of the atlas itself, which witnesses its own calls.
                         atlas = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
-                            GATEWAYS["witness"] + "/tools/atlas",
+                            WITNESSED_ATLAS["url"]
+                            if run.params.get("witnessed_atlas")
+                            else GATEWAYS["witness"] + "/tools/atlas",
                             data=json.dumps({"question": question}).encode(),
                             method="POST",
                         )
@@ -437,7 +489,7 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         "Answer in one word."
                         if run.params.get("drift")
                         else version.render(country=named)
-                        if run.params.get("cut") or run.params.get("atlas")
+                        if run.params.get("cut") or looked_up
                         else version.render(question=question)
                     )
                     if run.params.get("around"):
@@ -468,7 +520,7 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                                 "country": {"from": "found", "take": {"json_pointer": "/country"}}
                             },
                         )
-                        if run.params.get("atlas")
+                        if looked_up
                         else llm.caller_body(
                             question=question,
                             country=named,
@@ -523,7 +575,24 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         completion_tokens=reply["usage"]["completion_tokens"],
                         model_version=reply["model"],
                     )
-                    if run.params.get("composed"):
+                    if run.params.get("chosen"):
+                        # The same question twice more, one answering about
+                        # somewhere else, and the answer most of the three gave.
+                        replies = [said]
+                        for otherwise in (False, True):
+                            with agent.llm(
+                                model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                            ) as again:
+                                asked_again = again.caller_body(question=question)
+                                if otherwise:
+                                    asked_again["user"] = "other"
+                                answered = through_gateway(
+                                    "witness", again.caller_headers(), system, question, asked_again
+                                )
+                                again.usage(model_version=answered["model"])
+                            replies.append(str(answered["choices"][0]["message"]["content"]))
+                        said = max(replies, key=replies.count)
+                    if run.params.get("composed") or run.params.get("joined"):
                         # A second witnessed call in the same stage, for the
                         # country, and an answer made of both replies.
                         with agent.llm(
@@ -535,10 +604,12 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                                 "witness", country_call.caller_headers(), system, question, second
                             )
                             country_call.usage(model_version=answered["model"])
-                        composed = {
-                            "capital": said,
-                            "country": str(answered["choices"][0]["message"]["content"]),
-                        }
+                        named_back = str(answered["choices"][0]["message"]["content"])
+                        composed = (
+                            {"capital": said, "country": named_back}
+                            if run.params.get("composed")
+                            else f"{said}, {named_back}"
+                        )
         if composed is not None:
             return Generated(composed, run_id=flow.correlation.run_id)
         return Generated(said, run_id=flow.correlation.run_id)
@@ -861,7 +932,16 @@ def main() -> int:
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     atlas = ThreadingHTTPServer(("127.0.0.1", 0), Atlas)
     threading.Thread(target=atlas.serve_forever, daemon=True).start()
-    gateways = [atlas]
+    witnessed_atlas = ThreadingHTTPServer(("127.0.0.1", 0), WitnessedAtlas)
+    threading.Thread(target=witnessed_atlas.serve_forever, daemon=True).start()
+    # The witness's own token, on the atlas's host: the gateway's key, so its
+    # digests are the ones a call the gateway relayed is rendered with.
+    WITNESSED_ATLAS["witness"] = ToolWitness(
+        AiwatcherClient(service="e2e-atlas", base_url=BASE, token=SERVING_SECRET),
+        credential=SERVING_SECRET,
+    )
+    WITNESSED_ATLAS["url"] = f"http://127.0.0.1:{witnessed_atlas.server_address[1]}/atlas"
+    gateways = [atlas, witnessed_atlas]
     for which, secret in (("witness", SERVING_SECRET), ("shared", APPLICATION_SECRET)):
         relay = Gateway(
             f"http://127.0.0.1:{provider.server_address[1]}",
@@ -1587,6 +1667,10 @@ def main() -> int:
             ("labelled", {"label": True}, "measurement-15"),
             ("labelled-loose", {"label": True}, "measurement-16"),
             ("composed", {"composed": True}, "measurement-17"),
+            ("joined", {"joined": True}, "measurement-18"),
+            ("chosen", {"chosen": True}, "measurement-19"),
+            ("chosen-loose", {"chosen": True}, "measurement-20"),
+            ("cut", {"witnessed_atlas": True}, "measurement-21"),
         ):
             declared = declare(
                 which,
@@ -1671,6 +1755,44 @@ def main() -> int:
             accounted["composed:composed"]["traces"],
         )
 
+        check(
+            26,
+            "two witnessed replies joined in the words the variant pins are an exchange on every "
+            "answer",
+            accounted["joined:joined"]["state"] == "completed"
+            and exchanged("joined:joined") == len(CAPITALS),
+            accounted["joined:joined"]["traces"],
+        )
+        loose = accounted["chosen-loose:chosen"]
+        check(
+            27,
+            "an answer most of three witnessed replies gave is an exchange where the variant pins "
+            "choosing by the most of three, and a choice the application made where it does not",
+            accounted["chosen:chosen"]["state"] == "completed"
+            and exchanged("chosen:chosen") == len(CAPITALS)
+            and loose["state"] == "completed"
+            and loose["traces"].get("witnessed_answer") == len(CAPITALS)
+            and exchanged("chosen-loose:chosen") == 0
+            and loose["traces"].get("chosen") == len(CAPITALS)
+            and loose["gate"].get("verdict") == "incomplete"
+            and any(
+                "chosen among replies" in reason for reason in loose["gate"].get("reasons", [])
+            ),
+            {
+                "pinned": accounted["chosen:chosen"]["traces"],
+                "loose": loose["traces"],
+                "gate": loose["gate"].get("reasons"),
+            },
+        )
+        check(
+            28,
+            "a country from an atlas the application called directly, witnessed on the atlas's "
+            "own host under the witness's credential, is an exchange on every answer",
+            accounted["cut:witnessed_atlas"]["state"] == "completed"
+            and exchanged("cut:witnessed_atlas") == len(CAPITALS),
+            accounted["cut:witnessed_atlas"]["traces"],
+        )
+
         # A restart with a period open: the fold's saved state carries it.
         before = AiwatcherClient(
             service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
@@ -1688,12 +1810,12 @@ def main() -> int:
         server.terminate()
         server.wait(timeout=30)
         server = serve(home / "server")
-        after = AiwatcherClient(
-            service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
-        )
-        # Past the period the three ended in, so these close it.
+        dropping = Dropping(HttpTransport(BASE, token=APPLICATION_SECRET), "after-restart-lost")
+        after = AiwatcherClient(service="e2e-capitals", transport=dropping, variant_id=variant_id)
+        # Past the period the three ended in, so these close it — with a run
+        # between them whose every event the transport dropped.
         time.sleep(7)
-        for request in range(2):
+        for request in ("0", "lost", "1"):
             with (
                 after.run(f"after-restart-{request}") as traced,
                 traced.agent("capitals") as agent,
@@ -1711,8 +1833,10 @@ def main() -> int:
             restarted = next(
                 (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
             )
-            if restarted.get("runs_from_periods") == served + 3 and restarted.get("runs") == (
-                served + 5
+            if (
+                restarted.get("runs_from_periods") == served + 3
+                and restarted.get("runs") == served + 5
+                and restarted.get("lost_runs") == 1
             ):
                 break
             time.sleep(1)
@@ -1726,7 +1850,7 @@ def main() -> int:
             "What is the capital" in json.dumps(event) for page in paged for event in page["events"]
         )
         check(
-            26,
+            29,
             "a restart that replays the log over the fold's saved state counts every run once, "
             "and the journal paged what the fold reads without a word said in a run",
             restarted.get("runs") == served + 5
@@ -1737,6 +1861,13 @@ def main() -> int:
                 **{key: restarted.get(key) for key in ("runs", "runs_from_periods", "periods")},
                 "journal_pages": len(pages),
             },
+        )
+        check(
+            30,
+            "a run whose every event its transport dropped is counted as lost, by the gap in its "
+            "client's count of the runs it opened, and in no other figure",
+            restarted.get("lost_runs") == 1 and restarted.get("runs") == served + 5,
+            {key: restarted.get(key) for key in ("runs", "lost_runs", "lost_events")},
         )
     finally:
         for relay in gateways:
