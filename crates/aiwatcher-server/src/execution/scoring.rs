@@ -1103,6 +1103,21 @@ impl ActivityExecutor for TracesExecutor {
             Some(pin) => self.pinned_shape(&approval, pin).await?,
             None => None,
         };
+        // A bound several edges share counts a cycle's rounds, so a declaration
+        // putting one on anything else pins a count nothing could keep.
+        if let (Some(pin), Some(problems)) = (
+            &declared.run.variant.workflow,
+            shape
+                .as_ref()
+                .map(aiwatcher_core::topology::Topology::misbounded)
+                .filter(|problems| !problems.is_empty()),
+        ) {
+            return Err(ActivityError::user_code(format!(
+                "the declaration of {} the variant pins bounds what is no cycle's way back — {}",
+                pin.name,
+                problems.join("; ")
+            )));
+        }
         // How the variant takes an answer out of a reply, where its generation
         // config says, and the shape an answer made of several replies has.
         let witnesses = if variant.prompt.is_some() {

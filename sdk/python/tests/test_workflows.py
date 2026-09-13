@@ -341,3 +341,37 @@ def test_each_client_numbers_the_events_it_sends_into_a_run_from_nought(
     }, "one client, one name"
     other = [event for event in transport.events if event["run_id"] == "another"]
     assert [event["sequence"] for event in other] == [0, 1]
+
+
+def test_a_shared_bound_on_anything_but_one_cycle_s_ways_back_is_refused_naming_it(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    nodes = ["write", "review", "publish", "draft", "check"]
+    edges = [
+        ("write", "review"),
+        ("review", "write"),
+        ("review", "publish"),
+        ("draft", "check"),
+        ("check", "draft"),
+    ]
+    with (
+        pytest.raises(ValueError, match="review to publish, which leads nowhere back"),
+        client.workflow(
+            "revise",
+            nodes=nodes,
+            edges=edges,
+            bounds=[{"edges": [("review", "write"), ("review", "publish")], "at_most": 3}],
+        ),
+    ):
+        pass
+    with (
+        pytest.raises(ValueError, match="separate cycles"),
+        client.workflow(
+            "revise",
+            nodes=nodes,
+            edges=edges,
+            bounds=[{"edges": [("review", "write"), ("check", "draft")], "at_most": 2}],
+        ),
+    ):
+        pass
+    assert not transport.of_type("workflow.declared"), "nothing declared a shape it cannot keep"

@@ -14,7 +14,9 @@
 //! many times at most a run may follow it (`at_most` on the edge), which bounds
 //! the rounds of a cycle through several nodes by the edge that leads back —
 //! and several edges may share one bound (`bounds`), which is how a cycle with
-//! more than one way back is held to its rounds whichever way each one took.
+//! more than one way back is held to its rounds whichever way each one took —
+//! which is all such a bound may hold, so one on anything but the ways back of
+//! one cycle is named ([`Topology::misbounded`]).
 //! Each changes what a run may do on the shape, so each is part of the digest;
 //! a declaration without any digests as it always did.
 
@@ -221,32 +223,35 @@ impl Topology {
         ))
     }
 
+    /// Every node each node reaches along the declared edges, itself included.
+    fn reaches(&self) -> BTreeMap<&str, BTreeSet<&str>> {
+        let mut next: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (from, to) in &self.edges {
+            next.entry(from.as_str()).or_default().push(to.as_str());
+        }
+        self.nodes
+            .iter()
+            .map(|start| {
+                let mut seen = BTreeSet::from([start.as_str()]);
+                let mut queue = vec![start.as_str()];
+                while let Some(node) = queue.pop() {
+                    for to in next.get(node).into_iter().flatten() {
+                        if seen.insert(*to) {
+                            queue.push(to);
+                        }
+                    }
+                }
+                (start.as_str(), seen)
+            })
+            .collect()
+    }
+
     /// Where a run may enter the shape: each set is a part nothing outside it
     /// leads into — a node no edge enters, or a cycle entered from nowhere
     /// else — and entering starts one of its nodes, once.
     #[must_use]
     pub fn entries(&self) -> Vec<BTreeSet<String>> {
-        let mut next: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-        for (from, to) in &self.edges {
-            next.entry(from.as_str()).or_default().push(to.as_str());
-        }
-        let reach = |start: &str| {
-            let mut seen = BTreeSet::from([start.to_owned()]);
-            let mut queue = vec![start];
-            while let Some(node) = queue.pop() {
-                for to in next.get(node).into_iter().flatten() {
-                    if seen.insert((*to).to_owned()) {
-                        queue.push(to);
-                    }
-                }
-            }
-            seen
-        };
-        let reaches: BTreeMap<&str, BTreeSet<String>> = self
-            .nodes
-            .iter()
-            .map(|node| (node.as_str(), reach(node)))
-            .collect();
+        let reaches = self.reaches();
         let mut placed = BTreeSet::new();
         let mut entries = Vec::new();
         for node in &self.nodes {
@@ -257,8 +262,8 @@ impl Topology {
                 .nodes
                 .iter()
                 .filter(|other| {
-                    reaches[node.as_str()].contains(*other)
-                        && reaches[other.as_str()].contains(node)
+                    reaches[node.as_str()].contains(other.as_str())
+                        && reaches[other.as_str()].contains(node.as_str())
                 })
                 .cloned()
                 .collect();
@@ -272,6 +277,65 @@ impl Topology {
             }
         }
         entries
+    }
+
+    /// Each bound several edges share that is not on the ways back of one
+    /// cycle, in words. A shared bound counts a cycle's rounds whichever way
+    /// back each took, so every edge under it has to lead back to where it
+    /// left — its target reaches its source — and all of them round one part
+    /// of the shape: an edge that leads nowhere back is followed once per
+    /// completion of its source and goes round nothing, and edges of two
+    /// separate cycles are the rounds of neither. Empty when every shared
+    /// bound is on one cycle's ways back; a bound of one edge is that edge's
+    /// own `at_most` and is not asked.
+    #[must_use]
+    pub fn misbounded(&self) -> Vec<String> {
+        let reaches = self.reaches();
+        let spelled = |edges: &mut dyn Iterator<Item = &(String, String)>| {
+            edges
+                .map(|(from, to)| format!("{from} to {to}"))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        };
+        let mut said = Vec::new();
+        for (edges, at_most) in &self.bounds {
+            let nowhere_back: Vec<&(String, String)> = edges
+                .iter()
+                .filter(|(from, to)| {
+                    !reaches
+                        .get(to.as_str())
+                        .is_some_and(|reached| reached.contains(from.as_str()))
+                })
+                .collect();
+            if !nowhere_back.is_empty() {
+                said.push(format!(
+                    "the bound of at most {at_most} that {} share is on {}, which leads nowhere \
+                     back",
+                    spelled(&mut edges.iter()),
+                    spelled(&mut nowhere_back.into_iter())
+                ));
+                continue;
+            }
+            // The part an edge rounds: the nodes its source reaches and that
+            // reach it, named by the first of them.
+            let parts: BTreeSet<&str> = edges
+                .iter()
+                .filter_map(|(from, _)| {
+                    self.nodes.iter().map(String::as_str).find(|node| {
+                        reaches[from.as_str()].contains(node)
+                            && reaches[node].contains(from.as_str())
+                    })
+                })
+                .collect();
+            if parts.len() > 1 {
+                said.push(format!(
+                    "the bound of at most {at_most} that {} share is on the ways back of separate \
+                     cycles, which are the rounds of neither",
+                    spelled(&mut edges.iter())
+                ));
+            }
+        }
+        said
     }
 }
 
@@ -426,6 +490,45 @@ mod tests {
         assert_eq!(
             entries[0],
             BTreeSet::from(["executor".to_owned(), "planner".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_shared_bound_holds_only_where_every_edge_under_it_leads_back_round_one_cycle() {
+        let two_ways_back = json!({
+            "nodes": ["write", "review", "fix", "publish", "draft", "check"],
+            "edges": [
+                ["write", "review"], ["review", "write"], ["review", "fix"], ["fix", "review"],
+                ["review", "publish"], ["draft", "check"], ["check", "draft"]
+            ],
+        });
+        let bounded = |bounds: serde_json::Value| {
+            let mut declaration = two_ways_back.clone();
+            declaration["bounds"] = bounds;
+            Topology::read(&declaration).expect("a shape").misbounded()
+        };
+        assert!(
+            bounded(json!([{"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}]))
+                .is_empty(),
+            "two ways back round one cycle"
+        );
+        assert!(
+            bounded(json!([{"edges": [["review", "publish"]], "at_most": 1}])).is_empty(),
+            "a bound of one edge is that edge's own"
+        );
+        assert_eq!(
+            bounded(json!([{"edges": [["review", "write"], ["review", "publish"]], "at_most": 3}])),
+            [
+                "the bound of at most 3 that review to publish and review to write share is on \
+              review to publish, which leads nowhere back"
+            ]
+        );
+        assert_eq!(
+            bounded(json!([{"edges": [["review", "write"], ["check", "draft"]], "at_most": 2}])),
+            [
+                "the bound of at most 2 that check to draft and review to write share is on the \
+              ways back of separate cycles, which are the rounds of neither"
+            ]
         );
     }
 
