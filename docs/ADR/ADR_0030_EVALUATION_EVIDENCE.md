@@ -15,7 +15,9 @@
   what a witness relayed, how often a node runs, a price history, and a window
   answered by the period fold alone; and an answer taken out of its reply, a
   request holding only the prompt, a window to the second, and a fold that does
-  not start over
+  not start over; and values accounted for, steps to take an answer out,
+  integers digit for digit, a log that no longer holds what a fold reads, and
+  every width sliced by the second
 - **Date**: 2026-09-11
 
 ## Context
@@ -1404,3 +1406,62 @@ that period lay in back from the store, and marks the period it resumed in
 incomplete — runs that had ended in periods not yet written are the gap. A
 price is read for each call on the day it ended, so a run across midnight pays
 both days.
+
+## Amendment (2026-09-13, further): values accounted for, steps to take an answer out, integers digit for digit, a log that no longer holds what a fold reads, and every width sliced by the second
+
+Five limits of the amendment above.
+
+**A value the application made witnesses nothing.** A request that is nothing
+but the pinned template rendered could still carry an answer obtained elsewhere
+inside a value it was rendered with. The gateway now also digests each value as
+a reply's digest is made (`aiwatcher.witness.rendered`, ADR_0001 amended), and a
+call counts towards an exchange only when every value is accounted for: a part
+of the case's input — the input itself or anything inside it — or the reply of
+another call of the run that is accounted for in turn. Calls are added once all
+their values are, until none is left to add, so a chain feeding a model's reply
+into the next call counts from where the input went in, and two calls rendered
+only with each other's replies count for nothing. The cost is stated: a value
+the application derives from the input — a part of a string, a reformatting —
+is its own word and breaks the exchange, so an application passes the input's
+fields as they are. What a tool returns is not accounted for either.
+
+**An answer is taken out with steps, not with a pattern.** `answer_from` may be
+one step, a list of steps each reading what the one before took, or
+alternatives of which the first to find something is taken. The steps are a
+JSON pointer, text between two markers (either may be absent), text after a
+marker's last occurrence, one non-blank line, the body of a fenced code block,
+stripping characters, lower-casing, and reading a number to spell canonically.
+Each reads the text once and none runs a pattern a caller wrote; the
+application takes its answer with the same function the gateway does
+(`aiwatcher_sdk.gateway.extracted`). A transform with knowledge of its own — a
+label mapped to a word, an answer combined from several replies — is still the
+application's word.
+
+**An integer is compared digit for digit.** Canonical JSON spells an integer
+exactly however wide, in Python and in Rust. A parsed row holds an integer wider
+than 64 bits only as the double it rounds to, so the worker's output route
+stores a table holding one as it was sent, and the traces step compares each
+answer from the JSON the generation step wrote. A scorer comparing such an
+answer with an expectation still reads both parsed.
+
+**A log that no longer holds what the fold reads says so.** The fold needs the
+log from the position its saved state reached, and after every state is lost
+from the position the last period written names. On a log that numbers every
+event (ADR_0002, amended), a position further on than the one after the last
+the fold read is events it was never given — retention passed them, or a record
+there could not be read: the fold writes down the
+positions and the span of time they may have lain in, from the log's clock
+before them to the first event after, under `gaps/`, marks every period that
+span reaches incomplete, and every window over the span returns it as `missed`
+with the number of events. The runs are not recovered — nothing kept them — and
+a log that does not number every event reports none.
+
+**Every width is sliced by the second.** A period keeps its runs by the second
+they ended in, whatever its width: an hour-wide period holds as many slices as
+twelve five-minute periods, so the same span costs the same. A period written
+before keeps its wider slices, and a window starting inside one says it counted
+from where that slice began.
+
+**A cycle is bounded by its way back.** An edge may declare `at_most`, bounding
+how often a run follows it — the rounds of a cycle through several nodes
+(ADR_0012, amended).

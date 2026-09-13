@@ -296,9 +296,18 @@ A node may also declare `"at_most": n`: a run may start it that many times,
 retries included — the bound a declared loop and a repeating node otherwise
 lack. It is part of the digest only where declared.
 
+An edge may declare `"at_most": n` too (`{"from": "review", "to": "write",
+"at_most": 2}`): a run may follow it that many times, which bounds the rounds of
+a cycle through several nodes by the edge that leads back. Following an edge is
+a start of its target that a completion of its source led to and that did not
+fail and give its turn back, so a retry is not another round. A start uses a
+turn from an unbounded edge before one from a bounded edge, and of bounded ones
+the edge with the most left, so an edge is counted only for a start nothing else
+led to. Also part of the digest only where declared.
+
 ### What would make this wrong
 
-A bound counts starts of one node, not rounds of a cycle through several: a loop
-of two nodes is bounded by bounding either. The fold keeps 256 steps a run; a
-run that took more is counted as unseen on the workflow rather than checked in
+A bound on an edge counts rounds of the cycles through that edge; a cycle with
+two ways back is bounded only by bounding both. The fold keeps 256 steps a run;
+a run that took more is counted as unseen on the workflow rather than checked in
 part.

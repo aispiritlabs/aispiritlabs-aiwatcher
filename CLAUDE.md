@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, reasoned or made around it — scored, compared, observed, priced, and restarted
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned or made around it — scored, compared, observed, priced, and restarted
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -742,11 +742,16 @@ names (`Aiwatcher-Prompt`) — found exactly, rendered with the values the
 caller sends in the body field it removes before the provider sees the request
 (`LlmCall.caller_body`), or by the template's literal parts — and whether the
 request held nothing else. The same field may say how the caller takes its
-answer out of the reply (a JSON pointer, or the text after a marker), which the
-gateway takes the same way. It is the telemetry
+answer out of the reply — steps from a closed vocabulary (a JSON pointer, text
+between markers, a line, a fenced block, stripped, lower-cased, a number), in
+turn or as alternatives, and never a pattern a caller wrote — which the gateway
+takes the same way, with the function the caller takes it with
+(`gateway.extracted`). It is the telemetry
 client's half — the standard library and nothing else — and it publishes neither
 the request nor the reply: only keyed digests of each message, of the values it
-found rendered and of each reply, under a key derived from its own credential,
+found rendered — again as a reply's are made, so a value that is what a model
+already replied reads as that reply — and of each reply, under a key derived
+from its own credential,
 which the deployment can test an answer and a case's input against and a reader
 of the log cannot test a guess against (`aiwatcher_core::witness`, byte for
 byte). It posts the witness before the reply ends, because the caller reads to
@@ -910,7 +915,8 @@ there.
   projector's period fold's — the runs that ended from the window's start on,
   where they ended, written or still held — which the column says with where
   counting began, how many runs came from written periods and reached the log
-  late, and that the percentiles are bucketed. What calls cost is the server's, at the deployment's price
+  late, what the log no longer held when the fold came to it, and that the
+  percentiles are bucketed. What calls cost is the server's, at the deployment's price
   table, each call at the price in force on its day — a variant's observed calls
   and each row's cases, by the models their usage names — drawn with the day and
   the model each price was read for, the calls priced before any price was read,
@@ -1031,7 +1037,9 @@ the review.
 - **Never accept an artifact reference a worker described rather than wrote.**
   Rows go through the attempt's own `outputs/{name}` route, which digests what
   it stored — the prompt registry's rule — and the result route checks every
-  reported output exists before it settles. A completed step pointing at an
+  reported output exists before it settles. A table holding an integer wider
+  than 64 bits is stored as it was sent, since a parsed row holds one only as
+  the double it rounds to. A completed step pointing at an
   object that 404s is the one failure nothing downstream catches.
 - **Never presign a bucket to a process outside the cluster.** A worker runs on
   somebody's laptop, and a presigned URL is a bearer credential for a store that
@@ -2089,14 +2097,18 @@ the review.
   whether an answer is, word for word, a reply it relayed — or what the caller
   said it would take out of one — and whether the request held the case's
   input; one call doing both for a request that was nothing but the pinned
-  prompt and its values, the answer not among them, is an exchange, which an
-  application answering around the gateway or telling the model what to say
-  cannot show, and `require_witnessed_answer` requires one per answer. A run's
+  prompt, the answer not in it, rendered with values each of which is the
+  case's input or a part of it or the reply of another call so made, is an
+  exchange, which an application answering around the gateway, telling the
+  model what to say or handing it a value it made cannot show, and
+  `require_witnessed_answer` requires one per answer; an answer is compared
+  from the JSON the generation wrote, so an integer digit for digit. A run's
   steps are held to the order the pinned declaration leads and to how often: a
   node starts once per completion leading into it, a failed start gives its turn
   back, a declared loop goes round as often as it completes, a node declared
-  `repeats` runs once per item, and one declared `at_most` starts no more than
-  that. Not over the conversation
+  `repeats` runs once per item, one declared `at_most` starts no more than
+  that, and an edge declared `at_most` is followed no more than that — the
+  rounds of a cycle through it, a retry not counted. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2197,8 +2209,12 @@ the review.
   checkpoint back, and stays the fold's to read until it is written. A run
   ending in a closed period is held in the oldest open one by the period it
   ended in, never dropped and never counted where it arrived, and a period keeps
-  its runs in slices by when they ended. A width configured anew takes over at
-  the next hour, so two widths never cover one span.
+  its runs by the second they ended in, whatever its width. A width configured
+  anew takes over at the next hour, so two widths never cover one span. On a
+  log that numbers every event, a position the log no longer holds when the
+  fold comes to it is written down with the span of time it may have lain in,
+  the periods it reaches say they are incomplete, and a window over it says how
+  many events it may be short of — a gap nothing can refill, never a silence.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start
@@ -2865,7 +2881,9 @@ the review.
   a context name must not be the only thing between a keystroke and production.
 - **Never raise `AIWATCHER_LASER_PARTITIONS` above 1** without replacing the
   scalar `Checkpoint` with a per-partition cursor. A scalar has no total order
-  across partitions, so live-stream resume would silently skip events.
+  across partitions, so live-stream resume would silently skip events — and
+  positions would stop being contiguous, which is what lets the period fold
+  tell events retention removed from events that never were.
 - **Never switch the Laser consumer to an automatic `CommitPolicy`.** The
   pipeline commits only after a durable write; an automatic policy would move
   the offset past events that were never stored. The cost is that the broker

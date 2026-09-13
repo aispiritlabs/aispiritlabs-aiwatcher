@@ -146,3 +146,14 @@ the scalar checkpoint is the thing that has to change first — not the adapter.
 And if the port is never used for anything but Laser and the write-ahead log,
 `adapters::broker` is indirection with no second implementation to justify it
 and should be deleted rather than maintained.
+
+## Amendment 2026-09-13: a log says whether it numbers every event
+
+`MessageSource::positions_are_contiguous` says whether every event's
+`global_position` is one after the event before it. The write-ahead log, the
+memory bus and Laser's single partition say yes — a broker removing old records
+by retention does not renumber the rest — and the generic broker adapter, whose
+positions are provisional, keeps the default no. A consumer that knows its
+positions are contiguous reads a jump as events it was never given: retention
+passed them, or Laser skipped a record it could not decode. The projector's
+period fold writes such a jump down (ADR_0030, amended); nothing else reads it.

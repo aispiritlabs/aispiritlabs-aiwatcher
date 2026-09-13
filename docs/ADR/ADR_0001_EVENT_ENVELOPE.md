@@ -326,3 +326,13 @@ beside `aiwatcher.prompt.verified`: whether the host that saw the request found
 its text to be nothing but the named template rendered and the values it was
 rendered with. A gateway's word like the other two, and only under its
 credential.
+
+## Amendment 2026-09-13, further: the values a template was rendered with
+
+`llm.*` data may carry `rendered_digests`, recorded as
+`aiwatcher.witness.rendered`: a witness's keyed digest of each value the named
+template was found rendered with, made under the side a reply's digest is made
+under. So a value that is what a model already replied reads, to a deployment
+holding the key, as that reply, and one that is a case's input as that input;
+one the application made reads as neither. The assembler keeps only
+digest-shaped values, as it does for the other two lists.
