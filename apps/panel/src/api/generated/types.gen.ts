@@ -3836,9 +3836,11 @@ export type GenerationTrace = {
      */
     witnessed_answer?: number | null;
     /**
-     * Answers one witnessed call relayed as its reply to a request that was
-     * nothing but the pinned prompt, rendered with their case's input or with
-     * what a call so made had replied; absent when the variant pins no prompt.
+     * Answers a witnessed call relayed as its reply — or, part by part in the
+     * pinned response schema's shape, several calls — to a request that was
+     * nothing but the pinned prompt, rendered with values each accounted for
+     * ([`TracedAnswer::witnessed_exchange`]); absent when the variant pins no
+     * prompt.
      */
     witnessed_exchange?: number | null;
     /**

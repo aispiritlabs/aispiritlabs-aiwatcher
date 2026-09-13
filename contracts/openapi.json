@@ -19482,7 +19482,7 @@
               "integer",
               "null"
             ],
-            "description": "Answers one witnessed call relayed as its reply to a request that was\nnothing but the pinned prompt, rendered with their case's input or with\nwhat a call so made had replied; absent when the variant pins no prompt.",
+            "description": "Answers a witnessed call relayed as its reply — or, part by part in the\npinned response schema's shape, several calls — to a request that was\nnothing but the pinned prompt, rendered with values each accounted for\n([`TracedAnswer::witnessed_exchange`]); absent when the variant pins no\nprompt.",
             "minimum": 0
           },
           "witnessed_input": {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 import urllib.request
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,7 @@ from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, Aiwat
 from aiwatcher_sdk.api import ApiError
 from aiwatcher_sdk.gateway import (
     Gateway,
+    Relayed,
     canonical,
     extracted,
     holds_template,
@@ -229,6 +231,10 @@ def test_a_digest_is_the_bytes_the_deployment_computes() -> None:
         witness_digest(key, "asked", "What is the capital of Peru?")
         == "8f3cf1564557884b7b44e9bf0077f300"
     )
+    assert (
+        witness_digest(key, "taking", canonical({"map": {"A": "Lima"}}))
+        == "3b1d627f22d3a4b86fcd29126042cd6e"
+    )
 
 
 def test_what_was_asked_and_replied_is_published_as_keyed_digests_and_the_field_goes_no_further(
@@ -441,3 +447,200 @@ def test_an_answer_taken_out_of_the_reply_is_digested_and_extra_words_in_the_req
     ], "each value, made as a reply's digest is, so one a model replied reads as that reply"
     assert (honest["prompt_exact"], padded["prompt_exact"]) == (True, False)
     assert padded["prompt_verified"] is True, "the pinned prompt is still there"
+
+
+def test_a_value_cut_out_of_another_is_published_beside_it_and_only_in_steps_the_gateway_repeats(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    variables = {"country": "Peru", "question": "What is the capital of Peru?"}
+    for derived in (
+        {"country": {"from": "question", "take": {"between": ["capital of ", "?"]}}},
+        {"country": {"from": "question", "take": {"between": ["the ", " of"]}}},
+        {
+            "country": {
+                "from": "question",
+                "take": {"map": {"What is the capital of Peru?": "Peru"}},
+            }
+        },
+    ):
+        ask(
+            base,
+            {
+                "model": "capitals",
+                "messages": messages("Answer the question about Peru in one word."),
+                GATEWAY_FIELD: {"variables": variables, "derived": derived},
+            },
+            {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"},
+        )
+
+    cut, other, mapped = completed(recording)
+    assert cut["derived_digests"] == [
+        witness_digest(KEY, "replied", "Peru")
+        + ":"
+        + witness_digest(KEY, "replied", "What is the capital of Peru?")
+    ]
+    assert cut["prompt_exact"] is True
+    assert "derived_digests" not in other, "taken that way the question gives another text"
+    assert "derived_digests" not in mapped, "a map says what the question never did"
+
+
+class Labelling(Provider):
+    """A provider whose model answers with a label."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["content-length"]))
+        payload = json.dumps(
+            {"model": "labels", "choices": [{"message": {"role": "assistant", "content": " B "}}]}
+        ).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def test_what_a_map_took_out_of_a_reply_is_published_apart_with_the_rule_that_took_it() -> None:
+    provider = ThreadingHTTPServer(("127.0.0.1", 0), Labelling)
+    recording = Recording()
+    relay = Gateway(
+        running(provider),
+        AiwatcherClient(service="gateway", transport=recording),
+        prompts=Prompts(),
+        credential="gateway-secret",
+    )
+    server = relay.server(port=0)
+    rule = {"steps": [{"strip": "."}, {"map": {"A": "Quito", "B": "Lima"}}]}
+    try:
+        ask(
+            running(server),
+            {
+                "model": "capitals",
+                "messages": messages("Answer the question about Peru in one word."),
+                GATEWAY_FIELD: {"variables": {"country": "Peru"}, "answer_from": rule},
+            },
+            {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"},
+        )
+    finally:
+        server.shutdown()
+        provider.shutdown()
+
+    assert extracted(" B ", rule) == "Lima"
+    [data] = completed(recording)
+    assert data["taken_digests"] == [witness_digest(KEY, "replied", "Lima")]
+    assert witness_digest(KEY, "replied", "Lima") not in data["replied_digests"], (
+        "what the label stands for is not the model's word alone"
+    )
+    assert data["taking_digest"] == witness_digest(KEY, "taking", canonical(rule))
+    assert "Lima" not in json.dumps(recording.events)
+
+
+class Search(BaseHTTPRequestHandler):
+    """A tool the deployment runs."""
+
+    seen: ClassVar[list[dict[str, Any]]] = []
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+    def do_POST(self) -> None:
+        Search.seen.append(
+            {
+                "authorization": self.headers.get("authorization"),
+                "body": json.loads(self.rfile.read(int(self.headers["content-length"]))),
+            }
+        )
+        payload = b'{"capital": "Lima", "population": 10}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def test_a_tool_is_relayed_to_the_url_the_deployment_named_and_witnessed_by_digests() -> None:
+    Search.seen = []
+    tool = ThreadingHTTPServer(("127.0.0.1", 0), Search)
+    recording = Recording()
+    relay = Gateway(
+        "http://127.0.0.1:9",
+        AiwatcherClient(service="gateway", transport=recording),
+        credential="gateway-secret",
+        tools={"search": running(tool) + "/search"},
+        tool_tokens={"search": "search-key"},
+    )
+    server = relay.server(port=0)
+    base = running(server)
+
+    def call(name: str) -> tuple[int, bytes]:
+        request = urllib.request.Request(  # noqa: S310 — the test's own gateway
+            f"{base}/tools/{name}", data=b'{"query": "Peru", "limit": 3}', method="POST"
+        )
+        request.add_header(CALLER_RUN_HEADER, "app-run")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+
+    try:
+        status, body = call("search")
+        missing = call("elsewhere")
+    finally:
+        server.shutdown()
+        tool.shutdown()
+
+    assert (status, json.loads(body)) == (200, {"capital": "Lima", "population": 10})
+    assert missing[0] == 404, "only the tools the deployment named"
+    assert Search.seen == [
+        {"authorization": "Bearer search-key", "body": {"query": "Peru", "limit": 3}}
+    ]
+    started = [event for event in recording.events if event["event_type"] == "run.started"]
+    assert started[0]["data"] == {"caller_run_id": "app-run"}
+    [done] = [
+        event["data"] for event in recording.events if event["event_type"] == "tool.completed"
+    ]
+    assert done["tool_name"] == "search"
+    assert done["arguments_digests"] == [
+        witness_digest(KEY, "replied", "Peru"),
+        witness_digest(KEY, "replied", "3"),
+    ]
+    assert done["returned_digests"] == [
+        witness_digest(KEY, "replied", '{"capital": "Lima", "population": 10}'),
+        witness_digest(KEY, "replied", '{"capital":"Lima","population":10}'),
+    ]
+    told = json.dumps(recording.events)
+    assert "Peru" not in told and "Lima" not in told
+
+
+def test_the_arguments_of_a_tool_call_a_model_replied_are_digested_as_what_it_replied() -> None:
+    relay = Gateway(
+        "http://127.0.0.1:9",
+        AiwatcherClient(service="gateway", transport=Recording()),
+        credential="gateway-secret",
+    )
+    whole = Relayed()
+    whole.read(
+        {
+            "choices": [
+                {"message": {"tool_calls": [{"function": {"arguments": '{"query": "Peru"}'}}]}}
+            ]
+        }
+    )
+    streamed = Relayed()
+    for piece in ('{"query"', ': "Peru"}'):
+        streamed.read(
+            {
+                "choices": [
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": piece}}]}}
+                ]
+            },
+            streamed=True,
+        )
+
+    for relayed in (whole, streamed):
+        assert relay.digests_replied(relayed) == [
+            witness_digest(KEY, "replied", '{"query": "Peru"}'),
+            witness_digest(KEY, "replied", '{"query":"Peru"}'),
+            witness_digest(KEY, "replied", "Peru"),
+        ]

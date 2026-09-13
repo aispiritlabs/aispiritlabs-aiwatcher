@@ -553,7 +553,7 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   expect(
     screen.getByText(/2 of 2 had a witnessed request holding their case's input/),
   ).toBeTruthy();
-  expect(screen.getByText(/1 of 2 were one witnessed call's reply/)).toBeTruthy();
+  expect(screen.getByText(/1 of 2 were a witnessed call's reply/)).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();
   expect(screen.getByText(/support-model-q4 \(2 answers\) — compared with nothing/)).toBeTruthy();

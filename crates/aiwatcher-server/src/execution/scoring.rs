@@ -846,6 +846,7 @@ impl TracesExecutor {
                 continue;
             }
             let served_for_it = servers.iter().flat_map(traced_calls).collect();
+            let tools_served_for_it = servers.iter().flat_map(traced_tools).collect();
             let summary = detail.summary;
             runs.insert(
                 (*run_id).to_owned(),
@@ -871,10 +872,37 @@ impl TracesExecutor {
                         .collect(),
                     node_steps_dropped: summary.node_steps_dropped,
                     served_for_it,
+                    tools_served_for_it,
                 },
             );
         }
         runs
+    }
+
+    /// A file the variant pins, read as JSON from the pair's bundle under its
+    /// digest; `None` where the bundle holds none, or it is not JSON.
+    async fn pinned_json(
+        &self,
+        approval_id: &str,
+        pinned: &aiwatcher_core::ArtifactRef,
+    ) -> Result<Option<serde_json::Value>, ActivityError> {
+        let Some(bundles) = &self.bundles else {
+            return Ok(None);
+        };
+        let Some(bytes) = bundles
+            .member(approval_id, &pinned.name)
+            .await
+            .map_err(refusal)?
+        else {
+            return Ok(None);
+        };
+        if hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)) != pinned.digest {
+            return Err(ActivityError::user_code(format!(
+                "the {} this pair's bundle holds is not the file the variant pins",
+                pinned.name
+            )));
+        }
+        Ok(serde_json::from_slice(&bytes).ok())
     }
 
     /// The shape of the workflow the variant pins, from the declaration the
@@ -968,6 +996,39 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             asked: list(span, own::witness::ASKED),
             replied: list(span, own::witness::REPLIED),
             rendered: list(span, own::witness::RENDERED),
+            derived: list(span, own::witness::DERIVED)
+                .iter()
+                .filter_map(|pair| pair.split_once(':'))
+                .map(|(value, source)| (value.to_owned(), source.to_owned()))
+                .collect(),
+            taken: list(span, own::witness::TAKEN),
+            taking: text(span, own::witness::TAKING),
+        })
+        .collect()
+}
+
+/// The tool calls a run's spans say a witness relayed.
+fn traced_tools(detail: &aiwatcher_projector::RunDetail) -> Vec<aiwatcher_evaluation::TracedTool> {
+    use aiwatcher_core::attrs::{aiwatcher as own, genai};
+    let text = |span: &aiwatcher_core::ports::CompletedSpan, key: &str| {
+        span.attributes
+            .iter()
+            .find_map(|(name, value)| match value {
+                aiwatcher_core::ports::AttrValue::Str(text) if name == key => Some(text.clone()),
+                _ => None,
+            })
+    };
+    detail
+        .spans
+        .iter()
+        .filter(|span| {
+            text(span, genai::OPERATION_NAME).as_deref() == Some(genai::operation::EXECUTE_TOOL)
+        })
+        .map(|span| aiwatcher_evaluation::TracedTool {
+            name: text(span, genai::TOOL_NAME),
+            published_by: text(span, own::source::PUBLISHED_BY),
+            arguments: list(span, own::witness::ARGUMENTS),
+            returned: list(span, own::witness::RETURNED),
         })
         .collect()
 }
@@ -1035,14 +1096,28 @@ impl ActivityExecutor for TracesExecutor {
                 () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
             }
         };
+        let approval =
+            aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id())
+                .map_err(refusal)?;
         let shape = match &declared.run.variant.workflow {
-            Some(pin) => {
-                let approval =
-                    aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id())
-                        .map_err(refusal)?;
-                self.pinned_shape(&approval, pin).await?
-            }
+            Some(pin) => self.pinned_shape(&approval, pin).await?,
             None => None,
+        };
+        // How the variant takes an answer out of a reply, where its generation
+        // config says, and the shape an answer made of several replies has.
+        let witnesses = if variant.prompt.is_some() {
+            let taking = self
+                .pinned_json(&approval, &variant.generation_config)
+                .await?
+                .and_then(|config| config.get("answer_from").cloned())
+                .filter(serde_json::Value::is_object);
+            let shaped = match &variant.response_schema {
+                Some(schema) => self.pinned_json(&approval, schema).await?,
+                None => None,
+            };
+            witnesses.pinned(taking, shaped)
+        } else {
+            witnesses
         };
         let rows = trace_answers(
             &declared.run.variant,

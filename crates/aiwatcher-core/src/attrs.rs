@@ -115,6 +115,19 @@ pub mod aiwatcher {
         /// as that reply, and one the application made reads as neither it nor
         /// the case's input.
         pub const RENDERED: &str = "aiwatcher.witness.rendered";
+        /// Each value the caller took out of another of its values in steps
+        /// the witness repeated, as `value:source` — so a value cut out of the
+        /// case's input is accounted as that input.
+        pub const DERIVED: &str = "aiwatcher.witness.derived";
+        /// What a way of taking an answer that knows more than the reply — a
+        /// label's word — took out of each reply, digested as a reply is.
+        pub const TAKEN: &str = "aiwatcher.witness.taken";
+        /// The digest of the way the caller said it takes its answer out.
+        pub const TAKING: &str = "aiwatcher.witness.taking";
+        /// On a tool call a witness relayed: each part of its arguments, and
+        /// what the tool returned, digested as a reply is.
+        pub const ARGUMENTS: &str = "aiwatcher.witness.arguments";
+        pub const RETURNED: &str = "aiwatcher.witness.returned";
     }
 
     pub mod source {

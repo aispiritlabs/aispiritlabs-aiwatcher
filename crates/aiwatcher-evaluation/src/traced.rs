@@ -56,6 +56,26 @@ pub struct TracedCall {
     /// The same witness's digests of each value the named template was found
     /// rendered with, made as a reply's are.
     pub rendered: Vec<String>,
+    /// Values the caller took out of another of its values in steps the
+    /// witness repeated: each value's digest and the digest of the one it came
+    /// out of.
+    pub derived: Vec<(String, String)>,
+    /// What a way of taking an answer that knows more than the reply took out
+    /// of each reply, and the digest of that way ([`aiwatcher_core::witness::Said::Taking`]).
+    pub taken: Vec<String>,
+    pub taking: Option<String>,
+}
+
+/// One tool call a witness relayed for a run, as its span says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TracedTool {
+    pub name: Option<String>,
+    /// The credential both ends of the call's span were published under.
+    pub published_by: Option<String>,
+    /// The witness's digests of each part of the call's arguments, and of what
+    /// the tool returned, made as a reply's are.
+    pub arguments: Vec<String>,
+    pub returned: Vec<String>,
 }
 
 /// Who may witness a generated answer, the key each one's digests of a call's
@@ -67,6 +87,12 @@ pub struct Witnesses {
     keys: BTreeMap<String, [u8; 32]>,
     inputs: BTreeMap<String, serde_json::Value>,
     spelled: BTreeMap<String, String>,
+    /// How the variant pins taking an answer out of a reply, where its
+    /// generation config says.
+    taking: Option<serde_json::Value>,
+    /// The response schema the variant pins, which names the parts an answer
+    /// made of several replies may have.
+    shaped: Option<serde_json::Value>,
 }
 
 impl std::fmt::Debug for Witnesses {
@@ -115,6 +141,38 @@ impl Witnesses {
         self
     }
 
+    /// How the variant's generation config says an answer is taken out of a
+    /// reply (`answer_from`), and the response schema it pins: a way that
+    /// knows more than the reply counts only where it is this one, and an
+    /// answer made of several replies only in the shape this names.
+    #[must_use]
+    pub fn pinned(
+        mut self,
+        taking: Option<serde_json::Value>,
+        shaped: Option<serde_json::Value>,
+    ) -> Self {
+        self.taking = taking;
+        self.shaped = shaped;
+        self
+    }
+
+    /// What a call replied, as a witness under `key` says: its replies, and
+    /// what a way of taking that knows more than them took, where that way is
+    /// the one the variant pins.
+    fn replies_of<'a>(
+        &self,
+        call: &'a TracedCall,
+        key: &[u8; 32],
+    ) -> impl Iterator<Item = &'a String> {
+        use aiwatcher_core::witness::{Said, canonical, digest};
+        let pinned = self.taking.as_ref().is_some_and(|rule| {
+            call.taking.as_deref() == Some(digest(key, Said::Taking, &canonical(rule)).as_str())
+        });
+        call.replied
+            .iter()
+            .chain(call.taken.iter().filter(move |_| pinned))
+    }
+
     /// The texts an answer is compared with a witness's digests as: from its
     /// JSON as the generation step spelled it, where that was kept, so every
     /// integer is compared digit for digit.
@@ -160,6 +218,8 @@ pub struct TracedRun {
     /// Calls other runs say they served for this one: a serving host's run
     /// naming it as the caller, each call with its own publisher.
     pub served_for_it: Vec<TracedCall>,
+    /// Tool calls such runs say they relayed for this one.
+    pub tools_served_for_it: Vec<TracedTool>,
 }
 
 /// One step of a workflow node, as a run's log holds it.
@@ -216,9 +276,15 @@ pub struct TracedAnswer {
     pub witnessed_input: Option<bool>,
     /// One such call did all of it at once: it relayed this answer as its
     /// reply, to a request that was nothing but the pinned prompt rendered —
-    /// the answer not in it — with values that are each the case's input or a
-    /// part of it, or the reply of another call so made. Absent when the
-    /// variant pins no prompt, which is what says what a request should hold.
+    /// the answer not in it — with values each accounted for: the case's input
+    /// or a part of it, the reply of another call so made, what a tool a
+    /// witness relayed returned to arguments so accounted for, or a value taken
+    /// out of one of those in steps the witness repeated. A reply taken by a
+    /// rule that knows more than it — a label's word — counts where the
+    /// variant's generation config pins that rule, and an answer made of
+    /// several replies counts where each part the pinned response schema names
+    /// is such a reply. Absent when the variant pins no prompt, which is what
+    /// says what a request should hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_exchange: Option<bool>,
     /// The credentials whose runs witnessed it, each once.
@@ -306,9 +372,11 @@ pub struct GenerationTrace {
     /// absent when the variant pins neither a model nor a prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_input: Option<usize>,
-    /// Answers one witnessed call relayed as its reply to a request that was
-    /// nothing but the pinned prompt, rendered with their case's input or with
-    /// what a call so made had replied; absent when the variant pins no prompt.
+    /// Answers a witnessed call relayed as its reply — or, part by part in the
+    /// pinned response schema's shape, several calls — to a request that was
+    /// nothing but the pinned prompt, rendered with values each accounted for
+    /// ([`TracedAnswer::witnessed_exchange`]); absent when the variant pins no
+    /// prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_exchange: Option<usize>,
     /// Answers whose serving runs were published under their own run's
@@ -480,10 +548,12 @@ impl GenerationTrace {
             && on < self.answers
         {
             said.push(format!(
-                "{} of {} answers had no one witnessed call relaying them as its reply to a \
-                 request that was nothing but the pinned prompt, rendered with their case's input \
-                 or with what a call so made had replied — words beside those, or a value the \
-                 application made, such as an answer to repeat, witness nothing",
+                "{} of {} answers had no witnessed call relaying them — or each part the pinned \
+                 response schema names — as its reply to a request that was nothing but the \
+                 pinned prompt, rendered with their case's input, a reply or a tool's result \
+                 relayed for a call so made, or a value taken out of one of those in steps the \
+                 witness repeated — words beside those, a label's word the variant does not pin, \
+                 or a value the application made, such as an answer to repeat, witness nothing",
                 self.answers - on,
                 self.answers
             ));
@@ -754,11 +824,13 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
 
 /// Which of the calls a run's witnesses served for it were made of nothing the
 /// application added: on the pinned prompt, found to be nothing but its
-/// template rendered, with every value it was rendered with a part of the
-/// case's input or a reply of another such call. Found by adding a call once
-/// all its values are accounted for, until none is left to add — so a chain of
-/// calls feeding each other's replies on is counted, and two calls whose
-/// values are only each other's replies are not.
+/// template rendered, with every value it was rendered with accounted for — a
+/// part of the case's input, a reply of another such call, what a tool a
+/// witness relayed returned to arguments so accounted for, or a value taken out
+/// of one of those in steps the witness repeated. Found by adding a call or a
+/// tool once all it was made of is accounted for, until none is left to add —
+/// so a chain of calls and tools feeding each other on is counted, and two
+/// calls whose values are only each other's replies are not.
 fn grounded_calls(
     run: &TracedRun,
     variant: &VariantManifest,
@@ -767,58 +839,131 @@ fn grounded_calls(
 ) -> Vec<bool> {
     use aiwatcher_core::witness::{Said, carried_as, digest};
     let calls = &run.served_for_it;
+    let tools = &run.tools_served_for_it;
     let mut grounded = vec![false; calls.len()];
     let (Some(pin), Some(input)) = (&variant.prompt, input) else {
         return grounded;
     };
-    let carried = carried_as(input);
-    let from_input: Vec<Option<std::collections::BTreeSet<String>>> = calls
+    let witness_key = |published_by: Option<&str>| {
+        let witness = published_by?;
+        let admitted = run
+            .published_by
+            .as_deref()
+            .is_some_and(|publisher| publisher != witness)
+            && witnesses.admits(witness);
+        witnesses.keys.get(witness).filter(|_| admitted)
+    };
+    let call_keys: Vec<Option<&[u8; 32]>> = calls
         .iter()
         .map(|call| {
-            let witness = call.published_by.as_deref()?;
-            let admitted = run
-                .published_by
-                .as_deref()
-                .is_some_and(|publisher| publisher != witness)
-                && witnesses.admits(witness);
             let made_of_the_prompt = call.prompt_name.as_deref() == Some(pin.name.as_str())
                 && call.prompt_version.as_deref() == Some(pin.version.as_str())
                 && call.prompt_verified == Some(true)
                 && call.prompt_exact == Some(true)
                 && !call.rendered.is_empty();
-            let key = witnesses
-                .keys
-                .get(witness)
-                .filter(|_| admitted && made_of_the_prompt)?;
-            Some(
-                carried
-                    .iter()
-                    .map(|text| digest(key, Said::Replied, text))
-                    .collect(),
-            )
+            witness_key(call.published_by.as_deref()).filter(|_| made_of_the_prompt)
         })
         .collect();
+    let tool_keys: Vec<Option<&[u8; 32]>> = tools
+        .iter()
+        .map(|tool| witness_key(tool.published_by.as_deref()))
+        .collect();
+    let carried = carried_as(input);
+    let mut accounted: std::collections::BTreeSet<String> = call_keys
+        .iter()
+        .chain(&tool_keys)
+        .flatten()
+        .flat_map(|key| carried.iter().map(|text| digest(key, Said::Replied, text)))
+        .collect();
+    let mut grounded_tools = vec![false; tools.len()];
     loop {
         let mut added = false;
         for (at, call) in calls.iter().enumerate() {
-            let Some(from_input) = from_input[at].as_ref().filter(|_| !grounded[at]) else {
+            let Some(key) = call_keys[at].filter(|_| !grounded[at]) else {
                 continue;
             };
-            let accounted = call.rendered.iter().all(|value| {
-                from_input.contains(value)
-                    || calls.iter().enumerate().any(|(other, earlier)| {
-                        other != at && grounded[other] && earlier.replied.contains(value)
-                    })
-            });
-            if accounted {
+            let mut known: std::collections::BTreeSet<&str> =
+                accounted.iter().map(String::as_str).collect();
+            // A value taken out of an accounted value is accounted, and so on
+            // down a chain of them.
+            while let Some((value, _)) = call.derived.iter().find(|(value, source)| {
+                known.contains(source.as_str()) && !known.contains(value.as_str())
+            }) {
+                known.insert(value);
+            }
+            if call
+                .rendered
+                .iter()
+                .all(|value| known.contains(value.as_str()))
+            {
                 grounded[at] = true;
                 added = true;
+                accounted.extend(witnesses.replies_of(call, key).cloned());
+            }
+        }
+        for (at, tool) in tools.iter().enumerate() {
+            if grounded_tools[at] || tool_keys[at].is_none() {
+                continue;
+            }
+            if tool.arguments.iter().all(|part| accounted.contains(part)) {
+                grounded_tools[at] = true;
+                added = true;
+                accounted.extend(tool.returned.iter().cloned());
             }
         }
         if !added {
             return grounded;
         }
     }
+}
+
+/// The parts of an answer made of several replies, each as a reply is compared
+/// — text as itself, a number or a flag as its canonical JSON — where every key
+/// it uses is one the pinned response schema names at that place. `None` for an
+/// answer that is not an object or a list, or uses a key the schema does not
+/// name.
+fn parts_by_schema(
+    answer: &aiwatcher_core::exact::ExactValue,
+    schema: &serde_json::Value,
+) -> Option<Vec<String>> {
+    use aiwatcher_core::exact::ExactValue;
+    fn walk(value: &ExactValue, schema: &serde_json::Value, into: &mut Vec<String>) -> bool {
+        match value {
+            ExactValue::Object(fields) => {
+                let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+                    return false;
+                };
+                fields.iter().all(|(key, field)| {
+                    properties
+                        .get(key)
+                        .is_some_and(|inner| walk(field, inner, into))
+                })
+            }
+            ExactValue::Array(items) => schema
+                .get("items")
+                .is_some_and(|inner| items.iter().all(|item| walk(item, inner, into))),
+            ExactValue::Text(text) => {
+                if !text.trim().is_empty() {
+                    into.push(text.clone());
+                }
+                true
+            }
+            ExactValue::Number(number) => {
+                into.push(aiwatcher_core::witness::exact_number(number));
+                true
+            }
+            ExactValue::Bool(flag) => {
+                into.push(flag.to_string());
+                true
+            }
+            ExactValue::Null => true,
+        }
+    }
+    if !matches!(answer, ExactValue::Object(_) | ExactValue::Array(_)) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    (walk(answer, schema, &mut parts) && !parts.is_empty()).then_some(parts)
 }
 
 /// Hold each generated answer to the run it names.
@@ -972,7 +1117,8 @@ pub fn trace_answers(
                             .any(|text| digests.contains(&digest(key, said, text)))
                     };
                     let answered = witnesses.answered_as(answer);
-                    let replied = holds(&call.replied, Said::Replied, answered.clone());
+                    let replies: Vec<String> = witnesses.replies_of(call, key).cloned().collect();
+                    let replied = holds(&replies, Said::Replied, answered.clone());
                     let input = witnesses
                         .inputs
                         .get(&answer.case_id)
@@ -1029,6 +1175,42 @@ pub fn trace_answers(
                 }
                 if vouched && !row.witnessed_by.iter().any(|named| named == witness) {
                     row.witnessed_by.push(witness.to_owned());
+                }
+            }
+            // An answer made of several replies, in the shape the variant pins:
+            // an exchange when each part is one, each from a call so made that
+            // did not hold it in its request.
+            if row.witnessed_exchange == Some(false)
+                && let Some(parts) = witnesses.shaped.as_ref().and_then(|schema| {
+                    let exact = witnesses
+                        .spelled
+                        .get(&answer.case_id)
+                        .and_then(|text| aiwatcher_core::exact::ExactValue::parse(text))
+                        .unwrap_or_else(|| {
+                            aiwatcher_core::exact::ExactValue::from_value(&answer.answer)
+                        });
+                    parts_by_schema(&exact, schema)
+                })
+            {
+                use aiwatcher_core::witness::{Said, digest};
+                let exchanged = |part: &String| {
+                    run.served_for_it.iter().enumerate().any(|(at, call)| {
+                        let Some(key) = call
+                            .published_by
+                            .as_deref()
+                            .and_then(|witness| witnesses.keys.get(witness))
+                            .filter(|_| grounded[at])
+                        else {
+                            return false;
+                        };
+                        witnesses
+                            .replies_of(call, key)
+                            .any(|reply| *reply == digest(key, Said::Replied, part))
+                            && !call.asked.contains(&digest(key, Said::Asked, part))
+                    })
+                };
+                if parts.iter().all(exchanged) {
+                    row.witnessed_exchange = Some(true);
                 }
             }
             if let Some(pinned) = &variant.workflow
@@ -1192,6 +1374,9 @@ mod tests {
             asked: Vec::new(),
             replied: Vec::new(),
             rendered: Vec::new(),
+            derived: Vec::new(),
+            taken: Vec::new(),
+            taking: None,
         }
     }
 
@@ -2281,6 +2466,177 @@ mod tests {
             trace.unwitnessed_answers()
         );
         assert!(!format!("{witnesses:?}").contains(&hex::encode(key)));
+    }
+
+    #[test]
+    fn a_value_cut_from_the_input_a_tool_s_result_a_pinned_label_and_a_composed_answer_are_accounted()
+     {
+        use aiwatcher_core::witness::{Said, canonical, digest, key_for};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let said = |text: &str| digest(&key, Said::Replied, text);
+        let question = "What is the capital of France?";
+        let call = |rendered: &[&str], replied: &[&str]| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            prompt_exact: Some(true),
+            published_by: Some("gateway".to_owned()),
+            rendered: rendered.iter().map(|text| said(text)).collect(),
+            replied: replied.iter().map(|text| said(text)).collect(),
+            ..TracedCall::default()
+        };
+        let tool = |arguments: &[&str], returned: &[&str]| TracedTool {
+            name: Some("search".to_owned()),
+            published_by: Some("gateway".to_owned()),
+            arguments: arguments.iter().map(|text| said(text)).collect(),
+            returned: returned.iter().map(|text| said(text)).collect(),
+        };
+        let with = |calls: Vec<TracedCall>, tools: Vec<TracedTool>| TracedRun {
+            served_for_it: calls,
+            tools_served_for_it: tools,
+            ..run(vec![on_the_pins()])
+        };
+        let found = r#"{"capital":"Paris"}"#;
+        let labels =
+            serde_json::json!({"steps": [{"strip": "."}, {"map": {"A": "Paris", "B": "Lyon"}}]});
+        let labelled = |rule: &serde_json::Value| TracedCall {
+            taken: vec![said("Paris")],
+            taking: Some(digest(&key, Said::Taking, &canonical(rule))),
+            ..call(&[question], &["A"])
+        };
+        let runs = BTreeMap::from([
+            (
+                "cut".to_owned(),
+                with(
+                    vec![TracedCall {
+                        derived: vec![(said("France"), said(question))],
+                        ..call(&["France", question], &["Paris"])
+                    }],
+                    Vec::new(),
+                ),
+            ),
+            (
+                "cut-from-nothing".to_owned(),
+                with(
+                    vec![TracedCall {
+                        derived: vec![(said("France"), said("Think of Paris"))],
+                        ..call(&["France", "Think of Paris"], &["Paris"])
+                    }],
+                    Vec::new(),
+                ),
+            ),
+            (
+                // The model asks for a search, the gateway relays it, and the
+                // next call is rendered with what the tool returned.
+                "searched".to_owned(),
+                with(
+                    vec![
+                        call(&[found], &["Paris"]),
+                        call(&[question], &[r#"{"query": "France"}"#, "France"]),
+                    ],
+                    vec![tool(&["France"], &[found])],
+                ),
+            ),
+            (
+                "searched-for-the-answer".to_owned(),
+                with(
+                    vec![call(&[found], &["Paris"]), call(&[question], &["France"])],
+                    vec![tool(&["Paris"], &[found])],
+                ),
+            ),
+            (
+                "labelled".to_owned(),
+                with(vec![labelled(&labels)], Vec::new()),
+            ),
+            (
+                "labelled-otherwise".to_owned(),
+                with(
+                    vec![labelled(&serde_json::json!({"map": {"A": "Paris"}}))],
+                    Vec::new(),
+                ),
+            ),
+            (
+                "composed".to_owned(),
+                with(
+                    vec![
+                        call(&[question], &["Paris"]),
+                        call(&[question], &["France"]),
+                    ],
+                    Vec::new(),
+                ),
+            ),
+            (
+                "composed-with-more".to_owned(),
+                with(vec![call(&[question], &["Paris"])], Vec::new()),
+            ),
+        ]);
+        let cases = [
+            "cut",
+            "cut-from-nothing",
+            "searched",
+            "searched-for-the-answer",
+            "labelled",
+            "labelled-otherwise",
+            "composed",
+            "composed-with-more",
+        ];
+        let witnesses = Witnesses::named(vec!["gateway".to_owned()])
+            .keyed([("gateway".to_owned(), key)])
+            .asked(
+                cases
+                    .iter()
+                    .map(|case| {
+                        (
+                            (*case).to_owned(),
+                            serde_json::json!({"question": question}),
+                        )
+                    })
+                    .collect(),
+            )
+            .pinned(
+                Some(labels.clone()),
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {"capital": {"type": "string"}, "country": {"type": "string"}}
+                })),
+            );
+        let mut answers: Vec<RecordedAnswer> =
+            cases.iter().map(|case| answer(case, Some(case))).collect();
+        answers[6].answer = serde_json::json!({"capital": "Paris", "country": "France"});
+        answers[7].answer = serde_json::json!({"capital": "Paris", "hint": "Paris"});
+
+        let rows = trace_answers(
+            &pins, "variant", "answers", &answers, &runs, None, &witnesses,
+        )
+        .expect("nothing contradicts the pins");
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.case_id.as_str(), row.witnessed_exchange))
+                .collect::<Vec<_>>(),
+            [
+                ("cut", Some(true)),
+                ("cut-from-nothing", Some(false)),
+                ("searched", Some(true)),
+                ("searched-for-the-answer", Some(false)),
+                ("labelled", Some(true)),
+                ("labelled-otherwise", Some(false)),
+                ("composed", Some(true)),
+                ("composed-with-more", Some(false)),
+            ],
+            "a value taken out of the input, a tool's result for arguments the model gave, a \
+             label's word the variant pins, and parts the pinned schema names are accounted; \
+             a source nobody gave, arguments the application made, a rule the variant does not \
+             pin and a part the schema does not name are not"
+        );
+        assert_eq!(
+            rows[5].witnessed_answer,
+            Some(false),
+            "a label's word under a rule nobody pinned is not the model's reply"
+        );
     }
 
     #[test]

@@ -214,6 +214,23 @@ impl Decimal {
         Self::stripped(negative, &mut digits, exponent).unwrap_or_else(Self::zero)
     }
 
+    /// Its digits, where it is a whole number: `None` for one with a fraction.
+    #[must_use]
+    pub fn integer_text(&self) -> Option<String> {
+        if self.exponent < 0 {
+            return None;
+        }
+        if self.digits.is_empty() {
+            return Some("0".to_owned());
+        }
+        let digits: String = self.digits.iter().map(|d| char::from(b'0' + d)).collect();
+        Some(format!(
+            "{}{digits}{}",
+            if self.negative { "-" } else { "" },
+            "0".repeat(usize::try_from(self.exponent).unwrap_or(0))
+        ))
+    }
+
     /// The nearest double, which is what a published metric is.
     #[must_use]
     pub fn to_f64(&self) -> f64 {
@@ -541,6 +558,9 @@ mod tests {
         assert_eq!(number("0.1").minus(&number("0.3")), number("-0.2"));
         assert_eq!(number("5").minus(&number("5.0")), number("0"));
         assert_eq!(number("-1e-3").minus(&number("2e2")), number("-200.001"));
+        assert_eq!(number("12e2").integer_text().as_deref(), Some("1200"));
+        assert_eq!(number("-0.0").integer_text().as_deref(), Some("0"));
+        assert_eq!(number("1.5").integer_text(), None);
     }
 
     #[test]

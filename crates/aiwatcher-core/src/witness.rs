@@ -29,6 +29,8 @@ pub enum Said {
     Asked,
     /// In a reply.
     Replied,
+    /// How the caller takes its answer out of a reply: the rule, canonical.
+    Taking,
 }
 
 impl Said {
@@ -36,6 +38,7 @@ impl Said {
         match self {
             Self::Asked => b"asked",
             Self::Replied => b"replied",
+            Self::Taking => b"taking",
         }
     }
 }
@@ -333,6 +336,15 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// A number as [`number`] spells it, from its exact value: an integer digit for
+/// digit however wide, and anything else as the double nearest it.
+#[must_use]
+pub fn exact_number(value: &crate::exact::Decimal) -> String {
+    value.integer_text().unwrap_or_else(|| {
+        serde_json::Number::from_f64(value.to_f64()).map_or_else(|| "0".to_owned(), |n| number(&n))
+    })
+}
+
 /// The texts an answer is compared with a reply as: itself, where it is text;
 /// its canonical JSON, where it is not.
 #[must_use]
@@ -412,6 +424,14 @@ mod tests {
             digest(&key, Said::Asked, "Lima"),
             digest(&key, Said::Replied, "Lima"),
             "a side is part of what is digested"
+        );
+        assert_eq!(
+            digest(
+                &key,
+                Said::Taking,
+                &canonical(&json!({"map": {"A": "Lima"}}))
+            ),
+            "3b1d627f22d3a4b86fcd29126042cd6e"
         );
     }
 

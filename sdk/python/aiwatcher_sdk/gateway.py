@@ -25,6 +25,13 @@ a case's input was in the request, while a reader of the log cannot test a
 guess against a one-word answer. Holding the
 provider's key itself, so the application holds none, is what makes a call the
 gateway did not see a call the application could not make.
+
+It relays the deployment's tools the same way (``--tool search=https://…``):
+``POST /tools/search`` with the call's arguments is sent to the URL the
+deployment named — never one a caller names — and the gateway publishes keyed
+digests of the arguments and of what the tool returned, so a value a later
+request renders that is a tool's result, relayed here, is the tool's word
+rather than the application's.
 """
 
 from __future__ import annotations
@@ -59,6 +66,7 @@ __all__ = [
     "canonical_number",
     "extracted",
     "holds_template",
+    "knows_more_than_the_reply",
     "main",
     "witness_digest",
     "witness_key",
@@ -72,6 +80,8 @@ MAX_BODY_BYTES = 8 * 1024 * 1024
 WITNESS_KEY_LABEL = b"aiwatcher.witness.v1"
 #: How many digests of one side of a call are published.
 MOST_DIGESTS = 64
+#: How many labels one ``map`` step may hold.
+MOST_MAPPED = 256
 #: A reply longer than this is relayed and not digested.
 MOST_REPLY_CHARS = 1024 * 1024
 #: The characters Rust's ``str::trim`` removes: Unicode's White_Space, which is
@@ -88,7 +98,8 @@ def witness_key(secret: str) -> bytes:
 
 
 def witness_digest(key: bytes, said: str, text: str) -> str:
-    """The digest of one text on one side of a call — ``said`` is ``asked`` or ``replied``."""
+    """The digest of one text on one side of a call — ``said`` is ``asked``,
+    ``replied``, or ``taking`` for how a caller takes its answer out."""
     message = said.encode() + b"\0" + text.strip(_WHITE_SPACE).encode()
     return hmac.new(key, message, hashlib.sha256).hexdigest()[:32]
 
@@ -179,7 +190,12 @@ def extracted(text: str, rule: Mapping[str, Any]) -> str | None:
       both ends;
     * ``{"lower": true}`` lower-cases the text;
     * ``{"number": true}`` reads the text as a JSON number and spells it as
-      :func:`canonical_number` does.
+      :func:`canonical_number` does;
+    * ``{"map": {"A": "Paris", "B": "Lima"}}`` takes the word a label stands for
+      — the text, stripped, as one of the labels. What a label means is known
+      somewhere other than the reply, so what a rule holding one takes is its
+      author's word as much as the model's (:func:`knows_more_than_the_reply`),
+      and it witnesses an answer only where the variant pins that rule.
 
     ``None`` when a rule is none of those, or a step finds nothing. Nothing here
     runs a pattern a caller wrote: each step reads the text once. An application
@@ -210,6 +226,29 @@ def _taken(text: str, rule: Any, depth: int) -> str | None:
         return read
     step = _STEPS.get(str(kind))
     return None if step is None else step(text, argument)
+
+
+def knows_more_than_the_reply(rule: Any, depth: int = 0) -> bool:
+    """Whether a rule holds a step whose result is not all in the text it reads — a ``map``."""
+    if not isinstance(rule, Mapping) or depth > MOST_NESTING:
+        return False
+    for kind, argument in rule.items():
+        if kind == "map":
+            return True
+        if (
+            kind in ("steps", "first_of")
+            and isinstance(argument, list)
+            and any(knows_more_than_the_reply(step, depth + 1) for step in argument)
+        ):
+            return True
+    return False
+
+
+def _map(text: str, table: Any) -> str | None:
+    if not isinstance(table, Mapping) or not 0 < len(table) <= MOST_MAPPED:
+        return None
+    word = table.get(text.strip(_WHITE_SPACE))
+    return word if isinstance(word, str) else None
 
 
 def _json_pointer(text: str, pointer: Any) -> str | None:
@@ -322,6 +361,7 @@ _STEPS: dict[str, Any] = {
     "strip": _strip,
     "lower": _lower,
     "number": _number,
+    "map": _map,
 }
 
 
@@ -346,6 +386,9 @@ class Told:
     variables: Mapping[str, Any] | None = None
     #: How the caller takes its answer out of the reply — see :func:`extracted`.
     answer_from: Mapping[str, Any] | None = None
+    #: Values the caller took out of another of its values, by name:
+    #: ``{"country": {"from": "question", "take": {"between": [...]}}}``.
+    derived: Mapping[str, Any] | None = None
 
     @classmethod
     def read(cls, field: Any) -> Told:
@@ -353,9 +396,11 @@ class Told:
             return cls()
         variables = field.get("variables")
         answer_from = field.get("answer_from")
+        derived = field.get("derived")
         return cls(
             variables=variables if isinstance(variables, Mapping) else None,
             answer_from=answer_from if isinstance(answer_from, Mapping) else None,
+            derived=derived if isinstance(derived, Mapping) else None,
         )
 
 
@@ -432,15 +477,32 @@ def _holds_only(template: str, variables: Mapping[str, Any], texts: Sequence[str
     return not rest.strip(_WHITE_SPACE)
 
 
+def _as_text(value: Any) -> str:
+    return value if isinstance(value, str) else canonical(value)
+
+
 def _values(variables: Mapping[str, Any]) -> list[str]:
     """Each distinct non-blank value, as text: itself where it is text, its
     canonical JSON where it is not."""
     texts: list[str] = []
     for value in variables.values():
-        text = value if isinstance(value, str) else canonical(value)
+        text = _as_text(value)
         if text.strip(_WHITE_SPACE) and text not in texts:
             texts.append(text)
     return texts
+
+
+def _leaves(value: Any) -> list[str]:
+    """Each non-blank text inside a JSON value, and each number and flag as
+    its canonical JSON — what a value's parts are compared as."""
+    if isinstance(value, Mapping):
+        return [leaf for field in value.values() for leaf in _leaves(field)]
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _leaves(item)]
+    if value is None:
+        return []
+    text = _as_text(value)
+    return [text] if text.strip(_WHITE_SPACE) else []
 
 
 def _digested(key: bytes, said: str, texts: Sequence[str]) -> list[str]:
@@ -479,6 +541,8 @@ class Relayed:
     cached_tokens: int | None = None
     #: Each choice's text, by its index, as far as it has arrived.
     replies: dict[int, str] | None = None
+    #: Each tool call's arguments, by its choice and its own index.
+    tool_arguments: dict[tuple[int, int], str] | None = None
 
     def read(self, body: Mapping[str, Any], *, streamed: bool = False) -> None:
         if isinstance(body.get("model"), str):
@@ -497,6 +561,8 @@ class Relayed:
                 if isinstance(index, int) and text:
                     joined = replies.get(index, "") + text
                     replies[index] = joined[: MOST_REPLY_CHARS + 1]
+                if isinstance(index, int) and isinstance(part, Mapping):
+                    self._read_tool_calls(index, part.get("tool_calls"))
             self.replies = replies
         usage = body.get("usage")
         if isinstance(usage, Mapping):
@@ -509,6 +575,22 @@ class Relayed:
             details = usage.get("prompt_tokens_details")
             if isinstance(details, Mapping) and isinstance(details.get("cached_tokens"), int):
                 self.cached_tokens = details["cached_tokens"]
+
+    def _read_tool_calls(self, choice: int, calls: Any) -> None:
+        """The arguments of each tool call a choice holds, joined as a stream sends them."""
+        if not isinstance(calls, list):
+            return
+        held = self.tool_arguments if self.tool_arguments is not None else {}
+        for position, call in enumerate(calls):
+            if not isinstance(call, Mapping):
+                continue
+            index = call.get("index", position)
+            function = call.get("function")
+            arguments = function.get("arguments") if isinstance(function, Mapping) else None
+            if isinstance(index, int) and isinstance(arguments, str):
+                joined = held.get((choice, index), "") + arguments
+                held[(choice, index)] = joined[: MOST_REPLY_CHARS + 1]
+        self.tool_arguments = held
 
 
 class Gateway:
@@ -524,11 +606,17 @@ class Gateway:
         token: str | None = None,
         credential: str | None = None,
         timeout: float = 120.0,
+        tools: Mapping[str, str] | None = None,
+        tool_tokens: Mapping[str, str] | None = None,
     ) -> None:
         """``credential`` is the token ``telemetry`` publishes with: the witness
         key its digests are made under is derived from it, and without one the
-        gateway publishes no digests.
+        gateway publishes no digests. ``tools`` names the URL each tool the
+        deployment relays is posted to, and ``tool_tokens`` the bearer token any
+        of them needs, so the application holds none.
         """
+        self.tools = dict(tools or {})
+        self.tool_tokens = dict(tool_tokens or {})
         self.upstream = upstream.rstrip("/")
         self.telemetry = telemetry
         self.prompts = prompts
@@ -627,19 +715,55 @@ class Gateway:
             return []
         return _digested(self.key, "replied", _values(variables))
 
+    def digests_derived(
+        self, variables: Mapping[str, Any] | None, derived: Mapping[str, Any] | None
+    ) -> list[str]:
+        """For each value the caller says it took out of another of its values,
+        and that this gateway takes out of it the same way, the value's digest
+        and the other's, as ``value:source`` — so a value the application only
+        cut out of the case's input is accounted as that input. A way of taking
+        that knows more than the text it reads (a ``map``) derives nothing."""
+        if self.key is None or not variables or not derived:
+            return []
+        pairs: list[str] = []
+        for name, spec in derived.items():
+            if not isinstance(spec, Mapping) or name not in variables:
+                continue
+            source, take = spec.get("from"), spec.get("take")
+            if not isinstance(source, str) or source not in variables or source == name:
+                continue
+            if not isinstance(take, Mapping) or knows_more_than_the_reply(take):
+                continue
+            value = _as_text(variables[name])
+            took = extracted(_as_text(variables[source]), take)
+            if took is None or took.strip(_WHITE_SPACE) != value.strip(_WHITE_SPACE):
+                continue
+            pair = (
+                f"{witness_digest(self.key, 'replied', value)}:"
+                f"{witness_digest(self.key, 'replied', _as_text(variables[source]))}"
+            )
+            if pair not in pairs:
+                pairs.append(pair)
+            if len(pairs) == MOST_DIGESTS:
+                break
+        return pairs
+
     def digests_replied(
         self, relayed: Relayed, answer_from: Mapping[str, Any] | None = None
     ) -> list[str]:
         """Keyed digests of each reply — as text, where it is JSON as its
-        canonical form, and as what the caller said it takes out of it
-        (``answer_from``), taken here — which is how an answer is compared."""
-        if self.key is None or not relayed.replies:
+        canonical form, as what the caller said it takes out of it
+        (``answer_from``), taken here, unless taking it needs more than the reply
+        (:meth:`digests_taken`) — which is how an answer is compared; and of the
+        arguments of each tool call it holds, whole and by their parts."""
+        if self.key is None or not (relayed.replies or relayed.tool_arguments):
             return []
         texts: list[str] = []
-        for text in relayed.replies.values():
+        closed = answer_from is not None and not knows_more_than_the_reply(answer_from)
+        for text in (relayed.replies or {}).values():
             if len(text) > MOST_REPLY_CHARS:
                 continue
-            if answer_from is not None:
+            if closed and answer_from is not None:
                 taken = extracted(text, answer_from)
                 if taken is not None and taken.strip(_WHITE_SPACE):
                     texts.append(taken)
@@ -648,7 +772,36 @@ class Gateway:
                 parsed = json.loads(text)
                 if isinstance(parsed, (dict, list)):
                     texts.append(canonical(parsed))
+        for arguments in (relayed.tool_arguments or {}).values():
+            if len(arguments) > MOST_REPLY_CHARS:
+                continue
+            texts.append(arguments)
+            with contextlib.suppress(ValueError):
+                parsed = json.loads(arguments)
+                texts.append(canonical(parsed))
+                texts.extend(_leaves(parsed))
         return _digested(self.key, "replied", texts)
+
+    def digests_taken(
+        self, relayed: Relayed, answer_from: Mapping[str, Any] | None
+    ) -> tuple[list[str], str | None]:
+        """What a rule that knows more than the reply took out of each reply,
+        digested as a reply is, and the digest of the rule itself — which the
+        deployment compares with the rule the variant pins before it counts
+        either."""
+        if self.key is None or answer_from is None:
+            return [], None
+        taking = witness_digest(self.key, "taking", canonical(answer_from))
+        if not knows_more_than_the_reply(answer_from):
+            return [], taking
+        texts: list[str] = []
+        for text in (relayed.replies or {}).values():
+            if len(text) > MOST_REPLY_CHARS:
+                continue
+            taken = extracted(text, answer_from)
+            if taken is not None and taken.strip(_WHITE_SPACE):
+                texts.append(taken)
+        return _digested(self.key, "replied", texts), taking
 
     # ── Relaying ─────────────────────────────────────────────────────────
 
@@ -698,6 +851,7 @@ class Gateway:
         asked: Sequence[str] = (),
         answer_from: Mapping[str, Any] | None = None,
         rendered: Sequence[str] = (),
+        derived: Sequence[str] = (),
     ) -> None:
         """One call, as the gateway saw it — with nothing that was said in it."""
         request: dict[str, Any] = {"provider": "aiwatcher-gateway"}
@@ -723,9 +877,16 @@ class Gateway:
                 outcome["asked_digests"] = list(asked)
             if rendered:
                 outcome["rendered_digests"] = list(rendered)
+            if derived:
+                outcome["derived_digests"] = list(derived)
             replied = self.digests_replied(relayed, answer_from)
             if replied:
                 outcome["replied_digests"] = replied
+            taken, taking = self.digests_taken(relayed, answer_from)
+            if taken:
+                outcome["taken_digests"] = taken
+            if taking:
+                outcome["taking_digest"] = taking
             call.usage(
                 prompt_tokens=relayed.prompt_tokens,
                 completion_tokens=relayed.completion_tokens,
@@ -734,6 +895,65 @@ class Gateway:
             )
         # Posted before the reply ends: the caller reads to the connection's
         # close, so its call cannot end before the witness is on the log.
+        with contextlib.suppress(Exception):
+            self.telemetry.flush()
+
+    def forward_tool(self, name: str, body: bytes) -> tuple[int, str, bytes]:
+        """Post a tool call to the URL the deployment named for it; the reply whole."""
+        request = urllib.request.Request(  # noqa: S310 — the deployment's own tool
+            self.tools[name], data=body, method="POST"
+        )
+        request.add_header("content-type", "application/json")
+        if token := self.tool_tokens.get(name):
+            request.add_header("authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+                content_type = response.headers.get("content-type", "application/json")
+                return response.status, content_type, response.read(MAX_BODY_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            return (
+                error.code,
+                error.headers.get("content-type", "application/json"),
+                error.read(MAX_BODY_BYTES + 1),
+            )
+
+    def report_tool(
+        self,
+        *,
+        caller: str | None,
+        name: str,
+        arguments: Any,
+        returned: bytes,
+        status: int,
+        started: float,
+    ) -> None:
+        """One tool call, as the gateway relayed it: keyed digests of each part
+        of its arguments and of what it returned, and nothing said in either."""
+        with (
+            contextlib.suppress(Exception),
+            self.telemetry.run(f"gateway-{uuid.uuid4().hex}", caller_run_id=caller) as run,
+            run.agent("gateway") as agent,
+        ):
+            # Its start and its end together, once the tool has answered: what
+            # it returned is only known then, and the start would say nothing.
+            call = {"call_id": uuid.uuid4().hex, "tool_name": name}
+            self.telemetry.emit("tool.started", agent.correlation, call)
+            outcome: dict[str, Any] = {
+                **call,
+                "status_code": status,
+                "outcome": "succeeded" if status < 400 else "failed",
+            }
+            if self.key is not None:
+                outcome["arguments_digests"] = _digested(self.key, "replied", _leaves(arguments))
+                texts: list[str] = []
+                if len(returned) <= MAX_BODY_BYTES and status < 400:
+                    text = returned.decode("utf-8", errors="replace")
+                    texts.append(text)
+                    with contextlib.suppress(ValueError):
+                        texts.append(canonical(json.loads(text)))
+                outcome["returned_digests"] = _digested(self.key, "replied", texts)
+            outcome["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+            self.telemetry.emit("tool.completed", agent.correlation, outcome)
         with contextlib.suppress(Exception):
             self.telemetry.flush()
 
@@ -758,10 +978,47 @@ class Gateway:
                     return
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
+            def relay_tool(self, name: str) -> None:
+                if name not in gateway.tools:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": f"no tool named {name!r}"})
+                    return
+                length = int(self.headers.get("content-length") or 0)
+                if length > MAX_BODY_BYTES:
+                    self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "too large"})
+                    return
+                raw = self.rfile.read(length)
+                try:
+                    arguments = json.loads(raw or b"{}")
+                except json.JSONDecodeError:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"error": "the body is not JSON"})
+                    return
+                started = time.monotonic()
+                try:
+                    status, content_type, returned = gateway.forward_tool(name, raw or b"{}")
+                except (urllib.error.URLError, TimeoutError) as error:
+                    self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"the tool: {error}"})
+                    return
+                gateway.report_tool(
+                    caller=self.headers.get(CALLER_RUN_HEADER),
+                    name=name,
+                    arguments=arguments,
+                    returned=returned,
+                    status=status,
+                    started=started,
+                )
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(returned)))
+                self.end_headers()
+                self.wfile.write(returned)
+
             def do_POST(self) -> None:
                 authorization = self.headers.get("authorization")
                 if not gateway.authorised(authorization):
                     self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "a bearer token is required"})
+                    return
+                if self.path.startswith("/tools/"):
+                    self.relay_tool(self.path.removeprefix("/tools/"))
                     return
                 if not self.path.startswith("/v1/"):
                     self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -826,6 +1083,9 @@ class Gateway:
                     rendered=gateway.digests_rendered(told.variables)
                     if prompt is not None and prompt.rendered
                     else (),
+                    derived=gateway.digests_derived(told.variables, told.derived)
+                    if prompt is not None and prompt.rendered
+                    else (),
                 )
 
         return Handler
@@ -862,6 +1122,10 @@ def _read_events(chunk: bytes, held: bytearray, relayed: Relayed) -> None:
                 relayed.read(event, streamed=True)
 
 
+def _env_name(tool: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "_", tool).upper()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     from aiwatcher_sdk.prompts import PromptRegistry
 
@@ -878,7 +1142,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="AIWATCHER_GATEWAY_TOKEN",
         help="the variable holding the bearer token callers present; required off localhost",
     )
+    parser.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME=URL",
+        help="a tool relayed at /tools/NAME to URL; its bearer token, if it needs one, "
+        "in AIWATCHER_GATEWAY_TOOL_TOKEN_<NAME>",
+    )
     args = parser.parse_args(argv)
+    tools: dict[str, str] = {}
+    for named in args.tool:
+        name, _, url = named.partition("=")
+        if not name or not url.startswith(("http://", "https://")):
+            parser.error(f"--tool takes NAME=URL, not {named!r}")
+        tools[name] = url
+    tool_tokens = {
+        name: token
+        for name in tools
+        if (token := os.environ.get(f"AIWATCHER_GATEWAY_TOOL_TOKEN_{_env_name(name)}"))
+    }
     host, _, port = args.listen.rpartition(":")
     token = os.environ.get(args.token_env) or None
     if token is None and host not in ("127.0.0.1", "localhost", "::1"):
@@ -894,6 +1177,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         upstream_token=os.environ.get(args.upstream_token_env) or None,
         token=token,
         credential=credential,
+        tools=tools,
+        tool_tokens=tool_tokens,
     )
     server = gateway.server(host or "127.0.0.1", int(port))
     try:

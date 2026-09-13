@@ -376,6 +376,24 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
                 "asked_digests": [digest, "What is the capital of Peru?"],
                 "replied_digests": [digest],
                 "rendered_digests": [digest, 7],
+                "derived_digests": [format!("{digest}:{digest}"), digest, "Peru:France"],
+                "taken_digests": [digest, "Lima"],
+                "taking_digest": digest,
+            }),
+        ),
+        run.after(5).emit(
+            EventType::ToolStarted,
+            Some("gateway"),
+            json!({ "call_id": "t", "tool_name": "search" }),
+        ),
+        run.after(5).emit(
+            EventType::ToolCompleted,
+            Some("gateway"),
+            json!({
+                "call_id": "t",
+                "tool_name": "search",
+                "arguments_digests": [digest, "Peru"],
+                "returned_digests": [digest],
             }),
         ),
     ];
@@ -400,6 +418,42 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
     );
     assert_eq!(
         list("aiwatcher.witness.rendered"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+    assert_eq!(
+        list("aiwatcher.witness.derived"),
+        Some(AttrValue::StrList(vec![format!("{digest}:{digest}")])),
+        "a pair of digests, and nothing else"
+    );
+    assert_eq!(
+        list("aiwatcher.witness.taken"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+    assert_eq!(
+        list("aiwatcher.witness.taking"),
+        Some(AttrValue::Str(digest.to_owned()))
+    );
+    let tool = assembled
+        .spans
+        .iter()
+        .find(|span| {
+            span.attributes.iter().any(|(name, value)| {
+                name == "gen_ai.tool.name" && *value == AttrValue::Str("search".into())
+            })
+        })
+        .expect("the tool's span");
+    let on_tool = |key: &str| {
+        tool.attributes
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(
+        on_tool("aiwatcher.witness.arguments"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+    assert_eq!(
+        on_tool("aiwatcher.witness.returned"),
         Some(AttrValue::StrList(vec![digest.to_owned()]))
     );
 }

@@ -653,6 +653,27 @@ fn request_attributes(event: &RecordedEvent) -> Vec<Attr> {
     out
 }
 
+/// A keyed digest as a witness writes one: 32 hex characters.
+fn is_digest(text: &str) -> bool {
+    text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A payload's list of digests, each as `keep` says one is spelled, and never
+/// more than a witness keeps.
+fn digests_of(event: &RecordedEvent, key: &str, keep: impl Fn(&str) -> bool) -> Vec<String> {
+    event
+        .data
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|digest| keep(digest))
+        .take(aiwatcher_core::witness::MOST_DIGESTS)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Attributes read off the end event's payload.
 fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
     let mut out = Vec::new();
@@ -712,11 +733,36 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
                     out.push((attribute.to_owned(), AttrValue::StrList(digests)));
                 }
             }
+            let pairs = digests_of(event, "derived_digests", |pair| {
+                pair.split_once(':')
+                    .is_some_and(|(value, source)| is_digest(value) && is_digest(source))
+            });
+            if !pairs.is_empty() {
+                out.push((own::witness::DERIVED.to_owned(), AttrValue::StrList(pairs)));
+            }
+            let taken = digests_of(event, "taken_digests", is_digest);
+            if !taken.is_empty() {
+                out.push((own::witness::TAKEN.to_owned(), AttrValue::StrList(taken)));
+            }
+            if let Some(taking) = event.data_str("taking_digest").filter(|d| is_digest(d)) {
+                out.push(attr(own::witness::TAKING, taking));
+            }
             out.extend(request_attributes(event));
         }
         Subject::Tool => {
             push_str(genai::TOOL_NAME, event.data_str("tool_name"));
             push_str(genai::TOOL_CALL_ID, event.data_str("call_id"));
+            // A witness's digests of a tool call it relayed: of the arguments'
+            // parts and of what came back.
+            for (key, attribute) in [
+                ("arguments_digests", own::witness::ARGUMENTS),
+                ("returned_digests", own::witness::RETURNED),
+            ] {
+                let digests = digests_of(event, key, is_digest);
+                if !digests.is_empty() {
+                    out.push((attribute.to_owned(), AttrValue::StrList(digests)));
+                }
+            }
         }
         Subject::Agent => {
             push_str(genai::AGENT_NAME, event.data_str("agent_name"));

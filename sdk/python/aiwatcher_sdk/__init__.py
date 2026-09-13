@@ -1255,7 +1255,11 @@ class LlmCall(Scope):
         return headers
 
     def caller_body(
-        self, *, answer_from: Mapping[str, Any] | None = None, **variables: object
+        self,
+        *,
+        answer_from: Mapping[str, Any] | None = None,
+        derived: Mapping[str, Mapping[str, Any]] | None = None,
+        **variables: object,
     ) -> dict[str, Any]:
         """The body field a gateway reads about this call, beside :meth:`caller_headers`.
 
@@ -1268,9 +1272,12 @@ class LlmCall(Scope):
         values where it found them rendered, and of the reply. So a case's input
         among them and an answer that is the reply are a witness's word, and
         none of it reaches the log as words. A value counts towards a witnessed
-        exchange only when it is the case's input or a part of it, or what a
-        call so made already replied: pass those as they are, since a value the
-        application derived, reformatted or added is its own word.
+        exchange when it is the case's input or a part of it, what a call so made
+        already replied, or what a tool the gateway relayed returned — pass those
+        as they are — or when it was taken out of such a value in closed steps
+        the gateway repeats: ``derived={"country": {"from": "question", "take":
+        {"between": ["capital of ", "?"]}}}`` beside both values. A value the
+        application reformatted any other way, or added, is its own word.
 
         ``answer_from`` says how the application takes its answer out of the
         reply, when it is not the reply itself — one step such as
@@ -1279,11 +1286,16 @@ class LlmCall(Scope):
         {"json_pointer": "/label"}]}``) or the first that finds something
         (``{"first_of": [...]}``); :func:`aiwatcher_sdk.gateway.extracted` lists
         every step and takes an answer exactly as the gateway will, so an answer
-        read out of a reply with it is witnessed as that reply's.
+        read out of a reply with it is witnessed as that reply's. A ``map`` from
+        a label to the word it stands for knows more than the reply does, so it
+        witnesses an answer only where the variant's generation config pins this
+        same ``answer_from``.
         """
         told: dict[str, Any] = {"variables": dict(variables)}
         if answer_from is not None:
             told["answer_from"] = dict(answer_from)
+        if derived:
+            told["derived"] = {name: dict(spec) for name, spec in derived.items()}
         return {GATEWAY_FIELD: told}
 
     def first_token(self) -> None:
