@@ -7,6 +7,7 @@ mod assessment;
 mod cohort;
 mod comparison;
 mod context;
+mod experiment;
 mod external;
 mod judge;
 mod manifest;
@@ -35,6 +36,7 @@ pub use comparison::{
     CaseChange, CaseDiffPage, CaseFilter, CaseOutcome, DiffQuery, EvidenceCaseDelta,
     EvidenceComparison, EvidenceMetricDelta,
 };
+pub use experiment::{Experiment, ExperimentEntry, ExperimentIndex, ExperimentRow, RowComparison};
 pub use registry::{
     CollectionReport, PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority,
     SourceEvidence,

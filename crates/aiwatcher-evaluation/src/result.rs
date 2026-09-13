@@ -35,6 +35,104 @@ pub struct CaseMeasurement {
     pub error: Option<String>,
     pub trace_id: Option<String>,
     pub span_id: Option<String>,
+    /// What answering it took, as the producer measured it. Absent from every
+    /// case nobody measured, so no shard written before it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<CaseUsage>,
+}
+
+/// What making one case's answer took: the time the application spent on it
+/// and the tokens its model calls counted, each absent where nobody measured
+/// it — which is never zero.
+///
+/// The producer's measurement, like its answer. The trace the case names is
+/// where the same calls were observed, for as long as the log keeps them;
+/// this outlives it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CaseUsage {
+    /// One case's answer, end to end in the application: one inference, or
+    /// the several a case made. Never the whole run's time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+/// What a result's answers took, over its own cases, derived when it is
+/// published.
+///
+/// Each figure says how many cases it was counted over, because a latency
+/// from three cases of forty is not the variant's latency. Percentiles are of
+/// this result's cases and are never combined with another result's: a mean
+/// of two p90s is not a p90 of anything.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ResultUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<LatencySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<TokenSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<TokenSummary>,
+}
+
+/// One result's per-case latency, by nearest rank.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LatencySummary {
+    pub cases: usize,
+    pub p50: f64,
+    pub p90: f64,
+    pub p99: f64,
+    pub max: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TokenSummary {
+    pub cases: usize,
+    pub total: u64,
+}
+
+impl ResultUsage {
+    /// What `cases` reported, or `None` when no case reported anything.
+    #[must_use]
+    pub fn of(cases: &[CaseMeasurement]) -> Option<Self> {
+        let mut latencies: Vec<f64> = cases
+            .iter()
+            .filter_map(|case| case.usage.as_ref()?.latency_ms)
+            .collect();
+        latencies.sort_by(f64::total_cmp);
+        let rank = |quantile: f64| {
+            let at = ((quantile * latencies.len() as f64).ceil() as usize).max(1) - 1;
+            latencies[at.min(latencies.len() - 1)]
+        };
+        let tokens = |side: fn(&CaseUsage) -> Option<u64>| {
+            let counted: Vec<u64> = cases
+                .iter()
+                .filter_map(|case| side(case.usage.as_ref()?))
+                .collect();
+            (!counted.is_empty()).then(|| TokenSummary {
+                cases: counted.len(),
+                total: counted.iter().sum(),
+            })
+        };
+        let usage = Self {
+            latency_ms: (!latencies.is_empty()).then(|| LatencySummary {
+                cases: latencies.len(),
+                p50: rank(0.5),
+                p90: rank(0.9),
+                p99: rank(0.99),
+                max: latencies[latencies.len() - 1],
+            }),
+            input_tokens: tokens(|usage| usage.input_tokens),
+            output_tokens: tokens(|usage| usage.output_tokens),
+        };
+        (usage.latency_ms.is_some()
+            || usage.input_tokens.is_some()
+            || usage.output_tokens.is_some())
+        .then_some(usage)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -90,6 +188,9 @@ pub struct DurableEvaluation {
     pub judge: Option<crate::JudgeReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<crate::ExternalReport>,
+    /// What its answers took, over the cases that reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ResultUsage>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -152,4 +253,63 @@ pub struct DurablePage {
     /// whose worker has never run. It is not "nothing to do".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention: Option<RetentionReport>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(at: usize, usage: Option<CaseUsage>) -> CaseMeasurement {
+        CaseMeasurement {
+            case_id: format!("case-{at}"),
+            repetition_id: "measurement-1".into(),
+            actual: Some(serde_json::json!("an answer")),
+            metrics: BTreeMap::new(),
+            error: None,
+            trace_id: None,
+            span_id: None,
+            usage,
+        }
+    }
+
+    #[test]
+    fn a_result_s_usage_is_its_own_cases_by_nearest_rank_and_says_how_many_reported() {
+        let mut cases: Vec<CaseMeasurement> = (1..=10)
+            .map(|at| {
+                case(
+                    at,
+                    Some(CaseUsage {
+                        latency_ms: Some(at as f64 * 100.0),
+                        input_tokens: (at <= 3).then_some(10),
+                        output_tokens: None,
+                    }),
+                )
+            })
+            .collect();
+        cases.push(case(11, None));
+
+        let usage = ResultUsage::of(&cases).expect("ten cases reported");
+        assert_eq!(
+            usage.latency_ms,
+            Some(LatencySummary {
+                cases: 10,
+                p50: 500.0,
+                p90: 900.0,
+                p99: 1000.0,
+                max: 1000.0,
+            })
+        );
+        assert_eq!(
+            usage.input_tokens,
+            Some(TokenSummary {
+                cases: 3,
+                total: 30
+            })
+        );
+        assert_eq!(
+            usage.output_tokens, None,
+            "nobody counted, which is not zero"
+        );
+        assert_eq!(ResultUsage::of(&[case(1, None)]), None);
+    }
 }

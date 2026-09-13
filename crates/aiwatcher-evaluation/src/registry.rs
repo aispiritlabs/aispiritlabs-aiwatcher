@@ -74,6 +74,9 @@ pub struct SourceEvidence {
     pub earlier_bundle_digest: Option<String>,
 }
 
+/// How many of the newest results an experiment reading walks.
+pub const EXPERIMENT_WALK: usize = 1_000;
+
 /// One catalogue row, as published.
 ///
 /// `retired` is written *before* the tombstone, so the only half of a crash a
@@ -99,6 +102,7 @@ fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
         reproducible: true,
         judge: None,
         external: None,
+        usage: None,
     }
 }
 
@@ -258,6 +262,9 @@ struct Metadata {
     judge: Option<crate::JudgeReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external: Option<crate::ExternalReport>,
+    /// Derived from the cases at publication; absent when none reported any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<crate::ResultUsage>,
 }
 
 impl Registry {
@@ -682,6 +689,7 @@ impl Registry {
             shards,
             judge: request.judge.clone(),
             external: request.external.clone(),
+            usage: crate::ResultUsage::of(&request.cases),
         };
         require(
             bytes.saturating_add(canonical(&metadata)?.len()) <= self.config.max_bytes,
@@ -1036,6 +1044,7 @@ impl Registry {
                     });
                 result.judge = metadata.judge.clone();
                 result.external = metadata.external.clone();
+                result.usage = metadata.usage.clone();
                 return Ok((result, Some(metadata)));
             }
             Err(EvaluationError::Unavailable(state)) => {
@@ -1323,6 +1332,128 @@ impl Registry {
         })
     }
 
+    /// The contexts results were published in, newest first, from at most
+    /// [`EXPERIMENT_WALK`] of the newest results.
+    ///
+    /// Grouped from the index receipts, which name the context and the
+    /// variant, so only one header per context is read — for what it
+    /// measures.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn experiments(&self, subject: &str, now: i64) -> Result<crate::ExperimentIndex> {
+        let mut entries = self.store.0.list(store::INDEX).await?;
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        let truncated = entries.len() > EXPERIMENT_WALK;
+        let mut grouped: Vec<(String, Vec<IndexEntry>)> = Vec::new();
+        for entry in entries.iter().take(EXPERIMENT_WALK) {
+            let Some(indexed) = self.store.read::<IndexEntry>(&entry.key).await? else {
+                continue;
+            };
+            match grouped
+                .iter_mut()
+                .find(|(context, _)| *context == indexed.receipt.context_id)
+            {
+                Some((_, results)) => results.push(indexed),
+                None => grouped.push((indexed.receipt.context_id.clone(), vec![indexed])),
+            }
+        }
+        let mut sources = Sources::default();
+        let mut experiments = Vec::with_capacity(grouped.len());
+        for (context_id, results) in grouped {
+            let mut described = None;
+            for indexed in results.iter().filter(|indexed| indexed.retired.is_none()) {
+                let (detail, _) = self
+                    .read_committed(indexed.receipt.clone(), subject, now, &mut sources)
+                    .await?;
+                if let Some(manifest) = detail.manifest {
+                    described = Some(manifest.context);
+                    break;
+                }
+            }
+            let variants: BTreeSet<&str> = results
+                .iter()
+                .map(|indexed| indexed.receipt.variant_id.as_str())
+                .collect();
+            experiments.push(crate::ExperimentEntry {
+                context_id,
+                results: results.len(),
+                variants: variants.len(),
+                latest_committed_at: results
+                    .iter()
+                    .map(|indexed| indexed.receipt.committed_at)
+                    .max()
+                    .unwrap_or_default(),
+                suite: described.as_ref().map(|context| context.suite.clone()),
+                dataset: described.as_ref().map(|context| context.dataset.clone()),
+                split: described.as_ref().map(|context| context.split.clone()),
+                case_count: described.as_ref().map(|context| context.case_count),
+            });
+        }
+        Ok(crate::ExperimentIndex {
+            experiments,
+            truncated,
+        })
+    }
+
+    /// Every result in one context, newest first, each compared to the
+    /// baseline when one is named. `None` when nothing was published in it,
+    /// or the baseline is not one of its results.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn experiment(
+        &self,
+        context_id: &str,
+        baseline: Option<&str>,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<crate::Experiment>> {
+        let mut results = Vec::new();
+        let mut cursor = None;
+        let truncated = loop {
+            let page = self
+                .list(cursor.as_deref(), 200, None, Some(context_id), subject, now)
+                .await?;
+            results.extend(page.evaluations);
+            match page.next_cursor {
+                Some(next) if results.len() < EXPERIMENT_WALK => cursor = Some(next),
+                Some(_) => break true,
+                None => break false,
+            }
+        };
+        if results.is_empty() {
+            return Ok(None);
+        }
+        let chosen = match baseline {
+            Some(id) => match results
+                .iter()
+                .find(|result| result.receipt.evaluation_id == id)
+            {
+                Some(found) => Some(found.clone()),
+                None => return Ok(None),
+            },
+            None => None,
+        };
+        let metrics = results
+            .iter()
+            .find_map(|result| result.manifest.as_ref())
+            .map(|manifest| manifest.context.metrics.clone())
+            .unwrap_or_default();
+        Ok(Some(crate::Experiment {
+            context_id: context_id.to_owned(),
+            metrics,
+            baseline: baseline.map(str::to_owned),
+            rows: results
+                .into_iter()
+                .map(|result| crate::ExperimentRow::of(result, chosen.as_ref()))
+                .collect(),
+            truncated,
+        }))
+    }
+
     /// What the last retention pass did. `None` means none has ever finished.
     pub async fn retention(&self) -> Result<Option<RetentionReport>> {
         self.store.read(store::RETENTION).await
@@ -1569,6 +1700,14 @@ fn validate(request: &PublishEvaluation, source: &SourceEvidence) -> Result<Resu
             case.span_id.is_none() || case.trace_id.is_some(),
             "span_id",
             "requires trace_id",
+        )?;
+        require(
+            case.usage
+                .as_ref()
+                .and_then(|usage| usage.latency_ms)
+                .is_none_or(|latency| latency.is_finite() && latency >= 0.0),
+            "case.usage.latency_ms",
+            "must be a finite number of milliseconds, nought or more",
         )?;
         if let Some(error) = &case.error {
             text(error, "case.error")?;

@@ -33,6 +33,7 @@ pub mod definitions;
 pub mod error;
 pub mod evaluations;
 pub mod executions;
+pub mod experiments;
 pub mod health;
 pub mod imports;
 pub mod ingest;

@@ -533,7 +533,7 @@ function Lineage({
           {variants.length ? (
             <div className="mt-2 flex flex-wrap gap-1">
               {variants.map((variant) => (
-                <Link key={variant} to="/experiments" search={{ dataset: reference, variant }}>
+                <Link key={variant} to="/experiments">
                   <Badge tone="warning">{variant}</Badge>
                 </Link>
               ))}

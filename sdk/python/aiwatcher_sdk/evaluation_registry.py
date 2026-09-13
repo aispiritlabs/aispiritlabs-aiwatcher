@@ -239,11 +239,20 @@ class Scorecard(TypedDict):
     description: NotRequired[str]
 
 
+class CaseUsage(TypedDict, total=False):
+    """What answering one case took, as the producer measured it; absent is not zero."""
+
+    latency_ms: float
+    input_tokens: int
+    output_tokens: int
+
+
 class RecordedAnswer(TypedDict):
     case_id: str
     answer: Any
     trace_id: NotRequired[str]
     span_id: NotRequired[str]
+    usage: NotRequired[CaseUsage]
 
 
 class Cohort(TypedDict):
@@ -352,6 +361,7 @@ class CaseMeasurement(TypedDict):
     error: str | None
     trace_id: str | None
     span_id: str | None
+    usage: NotRequired[CaseUsage]
 
 
 class EvaluationRegistry:
@@ -545,6 +555,48 @@ class EvaluationRegistry:
                 "GET",
                 "/api/v1/evaluation-scorecards/" + quote(name, safe=""),
                 params={"version": version},
+            )
+        )
+
+    def get_scorecard_versions(self, name: str) -> dict[str, Any]:
+        """Every version of one card, newest first."""
+        return self._object(
+            self._transport.send(
+                "GET", "/api/v1/evaluation-scorecards/" + quote(name, safe="") + "/versions"
+            )
+        )
+
+    def get_scorecard_diff(
+        self, name: str, *, from_version: str, to_version: str
+    ) -> dict[str, Any]:
+        """What changed between two versions of a card, as the server derived it."""
+        return self._object(
+            self._transport.send(
+                "GET",
+                "/api/v1/evaluation-scorecards/" + quote(name, safe="") + "/diff",
+                params={"from": from_version, "to": to_version},
+            )
+        )
+
+    def get_comparison(self, evaluation_id: str, *, baseline: str) -> dict[str, Any]:
+        """One result against a baseline, and whether the two may be subtracted."""
+        return self._object(
+            self._transport.send(
+                "GET", self._path(evaluation_id) + "/comparison", params={"baseline": baseline}
+            )
+        )
+
+    def get_experiments(self) -> dict[str, Any]:
+        """The contexts results were published in, newest first."""
+        return self._object(self._transport.send("GET", "/api/v1/experiments"))
+
+    def get_experiment(self, context_id: str, *, baseline: str | None = None) -> dict[str, Any]:
+        """Every result in one context, each against ``baseline`` when one is named."""
+        return self._object(
+            self._transport.send(
+                "GET",
+                "/api/v1/experiments/" + quote(context_id, safe=""),
+                params={"baseline": baseline},
             )
         )
 

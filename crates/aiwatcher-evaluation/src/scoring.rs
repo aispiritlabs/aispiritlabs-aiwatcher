@@ -89,6 +89,9 @@ pub struct RecordedAnswer {
     pub trace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span_id: Option<String>,
+    /// What making the answer took, carried into the case as it was measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::CaseUsage>,
 }
 
 /// The shape of the artifact a scoring run reads.
@@ -291,6 +294,7 @@ pub fn archived(cohort: &BTreeMap<String, serde_json::Value>) -> Vec<RecordedAns
             answer: response.clone(),
             trace_id: None,
             span_id: None,
+            usage: None,
         })
         .collect()
 }
@@ -885,6 +889,12 @@ pub fn score_with(
                 .as_ref()
                 .and_then(|_| answer.and_then(|answer| answer.span_id.clone())),
             trace_id,
+            // Only the one answer a case is scored from: a case answered twice
+            // is not scored, and neither answer's cost is the case's.
+            usage: match answers.as_slice() {
+                [answer] => answer.usage.clone(),
+                _ => None,
+            },
         });
         if cases.last().is_some_and(|case| case.error.is_some()) {
             failed += 1;

@@ -865,6 +865,15 @@ what runs a real graph.
   Stage-and-admit wait for somebody to acknowledge them — here and in the
   Approvals panel, which reads `reads_archive` and `measured_by` off the chosen
   manifest and works nothing out.
+- `experiments` sets the variants measured on one pinned context side by side,
+  and every figure on it is the server's: `GET /api/v1/experiments` groups the
+  published results by context, and `GET /api/v1/experiments/{context_id}`
+  answers the rows with each compared to the `?baseline=` in the URL through the
+  comparison's own rule. Two clocks, two columns: a case's latency and tokens
+  are the evidence's `usage`, measured by the producer and summarised per result
+  at publication, while a run's duration is the log fold's, for as long as the
+  log keeps it. A variant measured twice is two rows, because a mean of two p90s
+  is no p90, and nothing is priced until a price has a source.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a

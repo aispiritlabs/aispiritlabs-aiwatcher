@@ -62,6 +62,7 @@ async fn pin(fixture: &mut Fixture, owner: &Annotations) -> Value {
             error: None,
             trace_id: None,
             span_id: None,
+            usage: None,
         })
         .collect();
     let original = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

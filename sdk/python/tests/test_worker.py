@@ -970,7 +970,7 @@ def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once
     def answer(case: Case, run: Generation) -> Any:
         seen.append((case.case_id, case.input, run.variant["experiment_id"]))
         if case.case_id == "case-2":
-            return Generated({"text": "four"}, trace_id="ab" * 16)
+            return Generated({"text": "four"}, trace_id="ab" * 16, output_tokens=1)
         if case.case_id == "case-3":
             return Declined("the application would not say")
         return {"text": f"answer to {case.input}"}
@@ -998,10 +998,15 @@ def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once
         ("case-2", {"question": "2+2"}, "candidate"),
         ("case-3", {"question": "secret"}, "candidate"),
     ]
-    assert api.artifacts["answers"] == [
+    answers = api.artifacts["answers"]
+    latencies = [row.pop("usage") for row in answers]
+    assert answers == [
         {"case_id": "case-1", "answer": {"text": "answer to {'question': 'capital'}"}},
         {"case_id": "case-2", "answer": {"text": "four"}, "trace_id": "ab" * 16},
     ]
+    assert all(isinstance(usage["latency_ms"], float) for usage in latencies)
+    assert latencies[1]["output_tokens"] == 1
+    assert "input_tokens" not in latencies[0], "an application that counted nothing says nothing"
     assert api.artifacts["generated_with"] == [
         {
             "code": sha256(CODE).hexdigest(),

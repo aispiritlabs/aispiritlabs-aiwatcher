@@ -1059,6 +1059,7 @@ export type CaseMeasurement = {
     repetition_id: string;
     span_id?: string | null;
     trace_id?: string | null;
+    usage?: null | CaseUsage;
 };
 
 /**
@@ -1112,6 +1113,25 @@ export const CaseSide = {
  * What part of a case a metric reads.
  */
 export type CaseSide = typeof CaseSide[keyof typeof CaseSide];
+
+/**
+ * What making one case's answer took: the time the application spent on it
+ * and the tokens its model calls counted, each absent where nobody measured
+ * it — which is never zero.
+ *
+ * The producer's measurement, like its answer. The trace the case names is
+ * where the same calls were observed, for as long as the log keeps them;
+ * this outlives it.
+ */
+export type CaseUsage = {
+    input_tokens?: number | null;
+    /**
+     * One case's answer, end to end in the application: one inference, or
+     * the several a case made. Never the whole run's time.
+     */
+    latency_ms?: number | null;
+    output_tokens?: number | null;
+};
 
 /**
  * One artifact as the catalog holds it: the pointer, who made it, and what it
@@ -2078,6 +2098,7 @@ export type DurableEvaluation = {
     reproducible: boolean;
     state: EvidenceState;
     status?: null | ResultStatus;
+    usage?: null | ResultUsage;
 };
 
 export type DurablePage = {
@@ -2839,6 +2860,86 @@ export type ExecutionTimers = {
      * here is still going to happen.
      */
     timers: Array<Timer>;
+};
+
+/**
+ * One context's results, with each compared to the baseline when one is
+ * chosen.
+ */
+export type Experiment = {
+    baseline?: string | null;
+    context_id: string;
+    /**
+     * What each metric is, from the context every row shares.
+     */
+    metrics: Array<MetricDefinition>;
+    /**
+     * Newest first.
+     */
+    rows: Array<ExperimentRow>;
+    /**
+     * More results in this context than one reading walks.
+     */
+    truncated: boolean;
+};
+
+export type ExperimentEntry = {
+    case_count?: number | null;
+    context_id: string;
+    dataset?: null | DatasetReference;
+    latest_committed_at: number;
+    /**
+     * Results published in it, among those read.
+     */
+    results: number;
+    split?: string | null;
+    suite?: null | VersionReference;
+    /**
+     * How many different variants they measured.
+     */
+    variants: number;
+};
+
+/**
+ * The contexts results were published in, newest first.
+ */
+export type ExperimentIndex = {
+    experiments: Array<ExperimentEntry>;
+    /**
+     * More results were published than one reading walks; the oldest
+     * contexts may be missing.
+     */
+    truncated: boolean;
+};
+
+export type ExperimentRow = {
+    committed_at: number;
+    comparison?: null | RowComparison;
+    counts?: null | ResultCounts;
+    evaluation_id: string;
+    metrics: {
+        [key: string]: number;
+    };
+    origin?: null | EvaluationOrigin;
+    reproducible: boolean;
+    state: EvidenceState;
+    status?: null | ResultStatus;
+    usage?: null | ResultUsage;
+    variant?: null | VariantManifest;
+    variant_id: string;
+};
+
+/**
+ * One experiment, and the runs its results were measured by.
+ */
+export type ExperimentView = {
+    /**
+     * The managed runs the rows name, as the log folded them. A run the log
+     * no longer holds is absent, and its row keeps everything the evidence
+     * says.
+     */
+    executions: Array<ExecutionSummary>;
+    experiment: Experiment;
 };
 
 export type ExportCounts = {
@@ -4353,6 +4454,17 @@ export type Latency = {
      * Per tool call.
      */
     tool: Percentiles;
+};
+
+/**
+ * One result's per-case latency, by nearest rank.
+ */
+export type LatencySummary = {
+    cases: number;
+    max: number;
+    p50: number;
+    p90: number;
+    p99: number;
 };
 
 /**
@@ -6155,6 +6267,21 @@ export const ResultStatus = {
 export type ResultStatus = typeof ResultStatus[keyof typeof ResultStatus];
 
 /**
+ * What a result's answers took, over its own cases, derived when it is
+ * published.
+ *
+ * Each figure says how many cases it was counted over, because a latency
+ * from three cases of forty is not the variant's latency. Percentiles are of
+ * this result's cases and are never combined with another result's: a mean
+ * of two p90s is not a p90 of anything.
+ */
+export type ResultUsage = {
+    input_tokens?: null | TokenSummary;
+    latency_ms?: null | LatencySummary;
+    output_tokens?: null | TokenSummary;
+};
+
+/**
  * How long the content may be held, on a clock of its own.
  *
  * Deliberately unrelated to the event log's retention. The log holds
@@ -6392,6 +6519,17 @@ export const Role = {
  * author something that outlives the log, or ask another system to run work.
  */
 export type Role = typeof Role[keyof typeof Role];
+
+/**
+ * `comparison::compare`'s answer for a row, without the two headers.
+ */
+export type RowComparison = {
+    comparability: Comparability;
+    judged: boolean;
+    metrics: Array<EvidenceMetricDelta>;
+    reasons: Array<string>;
+    same_variant: boolean;
+};
 
 /**
  * What happened to one row.
@@ -8191,6 +8329,11 @@ export type TimerBody = {
      * timeout it already handled is doing the ordinary thing.
      */
     cancel: CancelTimerBody;
+};
+
+export type TokenSummary = {
+    cases: number;
+    total: number;
 };
 
 export type ToolBreakdown = {
@@ -12163,6 +12306,52 @@ export type ExecutionTimersResponses = {
 };
 
 export type ExecutionTimersResponse = ExecutionTimersResponses[keyof ExecutionTimersResponses];
+
+export type ListExperimentsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/experiments';
+};
+
+export type ListExperimentsErrors = {
+    501: ErrorBody;
+};
+
+export type ListExperimentsError = ListExperimentsErrors[keyof ListExperimentsErrors];
+
+export type ListExperimentsResponses = {
+    200: ExperimentIndex;
+};
+
+export type ListExperimentsResponse = ListExperimentsResponses[keyof ListExperimentsResponses];
+
+export type GetExperimentData = {
+    body?: never;
+    path: {
+        context_id: string;
+    };
+    query?: {
+        /**
+         * A result in this context every other row is compared with.
+         */
+        baseline?: string | null;
+    };
+    url: '/api/v1/experiments/{context_id}';
+};
+
+export type GetExperimentErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetExperimentError = GetExperimentErrors[keyof GetExperimentErrors];
+
+export type GetExperimentResponses = {
+    200: ExperimentView;
+};
+
+export type GetExperimentResponse = GetExperimentResponses[keyof GetExperimentResponses];
 
 export type LiveWebsocketData = {
     body?: never;

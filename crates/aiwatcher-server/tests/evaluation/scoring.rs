@@ -68,6 +68,7 @@ fn said(case_id: &str, text: &str) -> RecordedAnswer {
         answer: json!({ "text": text }),
         trace_id: None,
         span_id: None,
+        usage: None,
     }
 }
 
@@ -204,6 +205,7 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
         answer: json!({ "minutes": minutes }),
         trace_id: None,
         span_id: None,
+        usage: None,
     };
     let scored = score(
         &card,

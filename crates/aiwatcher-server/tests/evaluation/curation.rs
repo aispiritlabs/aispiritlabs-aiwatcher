@@ -416,6 +416,7 @@ async fn a_cohort_derived_from_a_curation_version_is_admitted_and_measured_with_
             answer: case["expected"].clone(),
             trace_id: None,
             span_id: None,
+            usage: None,
         })
         .collect();
     let recording = registry

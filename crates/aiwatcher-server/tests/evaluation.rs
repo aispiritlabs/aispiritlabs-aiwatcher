@@ -26,6 +26,9 @@ mod scoring;
 #[path = "evaluation/judge.rs"]
 mod judge;
 
+#[path = "evaluation/experiments.rs"]
+mod experiments;
+
 #[path = "evaluation/external.rs"]
 mod external;
 
@@ -151,6 +154,7 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
                 error: None,
                 trace_id: None,
                 span_id: None,
+                usage: None,
             })
             .collect(),
         manifest,

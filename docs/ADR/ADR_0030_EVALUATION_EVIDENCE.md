@@ -1044,3 +1044,20 @@ reads the rows it wrote from its own input. What makes the answers honest:
 
 A baseline and a candidate are two declarations that differ in their variant and
 evaluation ID alone, so their contexts match and the comparison above applies.
+
+**A result says what its answers took, and an experiment is a context's results
+side by side.** C2 needs quality, sample size, errors, time and tokens per
+variant, and a trace outlives none of the evidence. So a case carries `usage` —
+latency in milliseconds and input and output tokens, each absent where nobody
+measured it — as the producer measured it; `generation_task` times each answer
+and takes the tokens the application counted. Publication derives `usage` into
+the header: per-case latency by nearest rank (p50, p90, p99, max) and token
+totals, each with the number of cases it was counted over, so coverage is a
+fact on the row. A percentile is of one result's cases and is never combined
+with another's. `GET /experiments` groups the newest thousand results by
+context; `GET /experiments/{context_id}` returns every result in it, each
+compared with the named baseline through `comparison::compare`, beside the log
+fold's summary of each managed run behind them — the whole run's duration, kept
+apart from a case's latency, and absent once the log no longer holds the run.
+Production observations are not rows: a trace does not yet name the variant
+that produced it. Nothing is priced without a price source.

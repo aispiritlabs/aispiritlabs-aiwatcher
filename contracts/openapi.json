@@ -8073,6 +8073,100 @@
         }
       }
     },
+    "/api/v1/experiments": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "The contexts results were published in, newest first — each an experiment:\nwhat it measures, how many results and how many variants.",
+        "operationId": "list_experiments",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentIndex"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/experiments/{context_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every result published in one context, newest first, compared with the\nbaseline when one is named — and the whole-run timing of each managed run\nbehind them.",
+        "operationId": "get_experiment",
+        "parameters": [
+          {
+            "name": "context_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "A result in this context every other row is compared with.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/live": {
       "get": {
         "tags": [
@@ -13169,6 +13263,17 @@
               "string",
               "null"
             ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseUsage",
+                "description": "What answering it took, as the producer measured it. Absent from every\ncase nobody measured, so no shard written before it moves."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -13241,6 +13346,37 @@
           "answer",
           "expected"
         ]
+      },
+      "CaseUsage": {
+        "type": "object",
+        "description": "What making one case's answer took: the time the application spent on it\nand the tokens its model calls counted, each absent where nobody measured\nit — which is never zero.\n\nThe producer's measurement, like its answer. The trace the case names is\nwhere the same calls were observed, for as long as the log keeps them;\nthis outlives it.",
+        "properties": {
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "One case's answer, end to end in the application: one inference, or\nthe several a case made. Never the whole run's time."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "CatalogedArtifact": {
         "type": "object",
@@ -14971,6 +15107,17 @@
                 "$ref": "#/components/schemas/ResultStatus"
               }
             ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultUsage",
+                "description": "What its answers took, over the cases that reported it."
+              }
+            ]
           }
         }
       },
@@ -16647,6 +16794,248 @@
               "$ref": "#/components/schemas/Timer"
             },
             "description": "Soonest first. A fired or cancelled timer is not a row, so everything\nhere is still going to happen."
+          }
+        }
+      },
+      "Experiment": {
+        "type": "object",
+        "description": "One context's results, with each compared to the baseline when one is\nchosen.",
+        "required": [
+          "context_id",
+          "metrics",
+          "rows",
+          "truncated"
+        ],
+        "properties": {
+          "baseline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricDefinition"
+            },
+            "description": "What each metric is, from the context every row shares."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExperimentRow"
+            },
+            "description": "Newest first."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More results in this context than one reading walks."
+          }
+        }
+      },
+      "ExperimentEntry": {
+        "type": "object",
+        "required": [
+          "context_id",
+          "results",
+          "variants",
+          "latest_committed_at"
+        ],
+        "properties": {
+          "case_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "dataset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DatasetReference"
+              }
+            ]
+          },
+          "latest_committed_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "results": {
+            "type": "integer",
+            "description": "Results published in it, among those read.",
+            "minimum": 0
+          },
+          "split": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suite": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference",
+                "description": "What it measures, from its newest readable result; absent when none\ncould be read."
+              }
+            ]
+          },
+          "variants": {
+            "type": "integer",
+            "description": "How many different variants they measured.",
+            "minimum": 0
+          }
+        }
+      },
+      "ExperimentIndex": {
+        "type": "object",
+        "description": "The contexts results were published in, newest first.",
+        "required": [
+          "experiments",
+          "truncated"
+        ],
+        "properties": {
+          "experiments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExperimentEntry"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More results were published than one reading walks; the oldest\ncontexts may be missing."
+          }
+        }
+      },
+      "ExperimentRow": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "variant_id",
+          "state",
+          "committed_at",
+          "metrics",
+          "reproducible"
+        ],
+        "properties": {
+          "committed_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "comparison": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RowComparison",
+                "description": "Against the baseline; absent on the baseline itself and when none was\nchosen."
+              }
+            ]
+          },
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultCounts"
+              }
+            ]
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvaluationOrigin"
+              }
+            ]
+          },
+          "reproducible": {
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/EvidenceState"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultStatus"
+              }
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultUsage"
+              }
+            ]
+          },
+          "variant": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VariantManifest"
+              }
+            ]
+          },
+          "variant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ExperimentView": {
+        "type": "object",
+        "description": "One experiment, and the runs its results were measured by.",
+        "required": [
+          "experiment",
+          "executions"
+        ],
+        "properties": {
+          "executions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionSummary"
+            },
+            "description": "The managed runs the rows name, as the log folded them. A run the log\nno longer holds is absent, and its row keeps everything the evidence\nsays."
+          },
+          "experiment": {
+            "$ref": "#/components/schemas/Experiment"
           }
         }
       },
@@ -19364,6 +19753,39 @@
           "tool": {
             "$ref": "#/components/schemas/Percentiles",
             "description": "Per tool call."
+          }
+        }
+      },
+      "LatencySummary": {
+        "type": "object",
+        "description": "One result's per-case latency, by nearest rank.",
+        "required": [
+          "cases",
+          "p50",
+          "p90",
+          "p99",
+          "max"
+        ],
+        "properties": {
+          "cases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max": {
+            "type": "number",
+            "format": "double"
+          },
+          "p50": {
+            "type": "number",
+            "format": "double"
+          },
+          "p90": {
+            "type": "number",
+            "format": "double"
+          },
+          "p99": {
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -22698,6 +23120,42 @@
           "partial"
         ]
       },
+      "ResultUsage": {
+        "type": "object",
+        "description": "What a result's answers took, over its own cases, derived when it is\npublished.\n\nEach figure says how many cases it was counted over, because a latency\nfrom three cases of forty is not the variant's latency. Percentiles are of\nthis result's cases and are never combined with another result's: a mean\nof two p90s is not a p90 of anything.",
+        "properties": {
+          "input_tokens": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TokenSummary"
+              }
+            ]
+          },
+          "latency_ms": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LatencySummary"
+              }
+            ]
+          },
+          "output_tokens": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TokenSummary"
+              }
+            ]
+          }
+        }
+      },
       "RetentionPolicy": {
         "type": "object",
         "description": "How long the content may be held, on a clock of its own.\n\nDeliberately unrelated to the event log's retention. The log holds\noperational fields and is sized for a volume; this holds somebody's words\nand is bounded by what they were told. Tying them together would mean\nraising the log's retention silently extends a consent nobody re-asked for.",
@@ -22973,6 +23431,40 @@
           "editor",
           "admin"
         ]
+      },
+      "RowComparison": {
+        "type": "object",
+        "description": "`comparison::compare`'s answer for a row, without the two headers.",
+        "required": [
+          "comparability",
+          "reasons",
+          "same_variant",
+          "judged",
+          "metrics"
+        ],
+        "properties": {
+          "comparability": {
+            "$ref": "#/components/schemas/Comparability"
+          },
+          "judged": {
+            "type": "boolean"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceMetricDelta"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "same_variant": {
+            "type": "boolean"
+          }
+        }
       },
       "RowOutcome": {
         "oneOf": [
@@ -26299,6 +26791,24 @@
           }
         ],
         "description": "One thing to do to this execution's timers.\n\nA tagged pair rather than a struct with a `cancel` flag, because the two\ncarry different fields and a body that could name a `due_at` while\ncancelling would be a shape with a meaningless half."
+      },
+      "TokenSummary": {
+        "type": "object",
+        "required": [
+          "cases",
+          "total"
+        ],
+        "properties": {
+          "cases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "ToolBreakdown": {
         "type": "object",

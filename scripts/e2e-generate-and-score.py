@@ -37,6 +37,9 @@ What it checks:
 7. starting a declaration again lands on the run it started, not a second one;
 8. a variant pinning code the worker does not hold fails before a case is
    answered, naming both digests, and publishes nothing.
+9. the experiment over that context sets the variants side by side: the
+   candidate against the baseline, each with per-case latency and tokens over
+   every case, and the whole run's duration from the log.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -147,7 +150,10 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     said = application(text, country, capital)
     # The trace this answer was made in, derived as the SDK derives a run's.
     trace = hashlib.sha256(f"{run.evaluation_id}/{case.case_id}".encode()).hexdigest()[:32]
-    return Generated(said, trace_id=trace)
+    # What a model would have counted: the question in, the words out.
+    return Generated(
+        said, trace_id=trace, input_tokens=len(question.split()), output_tokens=len(said.split())
+    )
 
 
 # ── The server. ──────────────────────────────────────────────────────────────
@@ -542,6 +548,26 @@ def main() -> int:
             and held in told
             and published == 404,
             {"state": stale["execution"]["state"]["state_type"], "result": published},
+        )
+
+        context_id = results["candidate"]["receipt"]["context_id"]
+        viewed = ok(
+            *call("GET", f"/api/v1/experiments/{context_id}?baseline=capitals-baseline")[:2],
+            "reading the experiment",
+        )
+        rows = {row["evaluation_id"]: row for row in viewed["experiment"]["rows"]}
+        candidate = rows.get("capitals-candidate", {})
+        usage = candidate.get("usage") or {}
+        timed = {execution["workflow_run_id"] for execution in viewed["executions"]}
+        check(
+            9,
+            "the experiment sets the variants side by side with what their answers took",
+            {"capitals-baseline", "capitals-candidate"} <= set(rows)
+            and (candidate.get("comparison") or {}).get("comparability") == "comparable"
+            and (usage.get("latency_ms") or {}).get("cases") == len(CAPITALS)
+            and (usage.get("output_tokens") or {}).get("cases") == len(CAPITALS)
+            and started["candidate"]["execution"]["execution_id"] in timed,
+            {"rows": sorted(rows), "usage": usage, "timed": len(timed)},
         )
     finally:
         worker.stop()

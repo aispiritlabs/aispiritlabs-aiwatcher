@@ -18,6 +18,7 @@ generates with, which is held to the variant's pins.
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -58,11 +59,18 @@ class Generation:
 
 @dataclass(frozen=True)
 class Generated:
-    """An answer, and the trace of making it, for a result that links to it."""
+    """An answer, the trace of making it, and the tokens it cost.
+
+    The tokens are the application's count, since only it saw its model's
+    reply; left ``None`` they are not counted, which is never zero. How long
+    the answer took is measured here, around the call that made it.
+    """
 
     answer: JsonValue
     trace_id: str | None = None
     span_id: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -192,7 +200,9 @@ def generation_task(
             for row in context.read_artifact(CASES):
                 context.raise_if_cancelled()
                 case = Case(case_id=cast(str, row["case_id"]), input=row.get("input"))
+                started = time.monotonic()
                 produced = answering(case, run)
+                took = (time.monotonic() - started) * 1000
                 if isinstance(produced, Declined):
                     continue
                 answered = produced if isinstance(produced, Generated) else Generated(produced)
@@ -201,6 +211,12 @@ def generation_task(
                     written["trace_id"] = answered.trace_id
                 if answered.span_id is not None:
                     written["span_id"] = answered.span_id
+                usage: JsonObject = {"latency_ms": round(took, 3)}
+                if answered.input_tokens is not None:
+                    usage["input_tokens"] = answered.input_tokens
+                if answered.output_tokens is not None:
+                    usage["output_tokens"] = answered.output_tokens
+                written["usage"] = usage
                 rows.append(written)
             context.write_artifact(ANSWERS, rows)
             context.write_artifact(GENERATED_WITH, [held.row()])
