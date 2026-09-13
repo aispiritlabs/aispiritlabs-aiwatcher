@@ -23511,6 +23511,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ScoreEvaluationSpec",
+                "description": "What each case of a scoring run's cohort asked, handed to the worker\nthat generates its answers — and nothing it expected, which a generator\nmust never see. A kind of its own because it reads the cohort under the\npair's admission, which is the serve role's registry, and writes rows a\nworker reads."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "evaluation_cases"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "What each case of a scoring run's cohort asked, handed to the worker\nthat generates its answers — and nothing it expected, which a generator\nmust never see. A kind of its own because it reads the cohort under the\npair's admission, which is the serve role's registry, and writes rows a\nworker reads."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/HumanInputSpec",
                 "description": "Nobody runs it. It waits for somebody to answer."
               },
@@ -23548,6 +23571,7 @@
           "score_evaluation",
           "judge_evaluation",
           "external_evaluation",
+          "evaluation_cases",
           "human_input"
         ]
       },
@@ -24553,6 +24577,10 @@
           {
             "$ref": "#/components/schemas/ScoringArchive",
             "description": "What the conversation archive says was answered: each case of a\nconversation cohort is an assistant turn, and its answer is that turn's\nresponse. Read through the archive's owner under the approval that\nadmitted the pair, sealed like every result from that source, and never\nstaged anywhere in the clear."
+          },
+          {
+            "$ref": "#/components/schemas/ScoringGenerated",
+            "description": "What the variant answers now: a worker task is handed each case's\ninput and writes an answer per case, which the run then scores. The\ntemplate of C1, and the one source whose answers did not exist when the\nrun was declared — pinned instead by the attempt that produced them."
           }
         ],
         "description": "Where a run's answers are read from.\n\nOn the wire a recording is the artifact reference it always was — so a\ndeclaration written before the archive was a source keeps its content\naddress — and the archive is the one word `\"archive\"`.\n\nBoth names carry the scoring run they belong to in the contract: a gate's\nanswers and the conversation archive are other domains' words."
@@ -24563,6 +24591,42 @@
         "enum": [
           "archive"
         ]
+      },
+      "ScoringGenerated": {
+        "type": "object",
+        "description": "Answers a worker generates, on the wire as `{\"generated_by\": {…}}`.",
+        "required": [
+          "generated_by"
+        ],
+        "properties": {
+          "generated_by": {
+            "$ref": "#/components/schemas/ScoringGeneration"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScoringGeneration": {
+        "type": "object",
+        "description": "The worker task that generates a run's answers.\n\nNamed like any registered workflow's step — a task a worker registered and\nthe queue it claims from — and never code: the application is the worker's,\nand aiwatcher hands it inputs and reads what it wrote. What it runs is the\nvariant's to say, so the task is told the variant manifest it is measured\nas, and nothing the cohort expected.",
+        "required": [
+          "task",
+          "queue"
+        ],
+        "properties": {
+          "params": {
+            "type": "object",
+            "description": "Handed to the task beside the variant. Part of the declaration, so two\nruns told different things are two runs."
+          },
+          "queue": {
+            "type": "string",
+            "description": "The queue a worker claims it from; its token has to name it."
+          },
+          "task": {
+            "type": "string",
+            "description": "`name@version`, as the worker registered it."
+          }
+        },
+        "additionalProperties": false
       },
       "ScoringRun": {
         "type": "object",

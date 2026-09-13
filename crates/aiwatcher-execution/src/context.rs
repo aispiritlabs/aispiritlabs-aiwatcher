@@ -230,6 +230,7 @@ fn allowed_for(
         | RuntimeKind::ScoreEvaluation
         | RuntimeKind::JudgeEvaluation
         | RuntimeKind::ExternalEvaluation
+        | RuntimeKind::EvaluationCases
         | RuntimeKind::HumanInput => Vec::new(),
     };
 

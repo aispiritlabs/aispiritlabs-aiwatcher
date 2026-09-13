@@ -535,6 +535,12 @@ e2e-processes *args:
 e2e-optimise:
     ./scripts/e2e-optimise-prompt.py
 
+# A baseline and a candidate generate their answers on a worker and are scored
+# on one derived cohort, then compared (FTI C1): cases → generate → score, twice,
+# against a server of its own.
+e2e-generate:
+    ./scripts/e2e-generate-and-score.py
+
 # One turn of a composed graph, drawn against the shape it declared: the two
 # searchers the router passed over stay `Pending`, the hand-offs are messages
 # between agents, and an agent's span nests under its node though its tracer

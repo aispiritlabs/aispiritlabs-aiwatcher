@@ -29,6 +29,9 @@ mod judge;
 #[path = "evaluation/external.rs"]
 mod external;
 
+#[path = "evaluation/generation.rs"]
+mod generation;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 

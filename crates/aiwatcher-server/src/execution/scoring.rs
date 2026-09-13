@@ -27,8 +27,8 @@ use std::sync::Arc;
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
     DatasetKind, EvaluationError, EvidenceState, ExternalScorers, JudgeFailure, JudgeModel, Judged,
-    PublishEvaluation, Registry as Evaluations, ScorerFailure, StepOrigin, external_questions,
-    external_replies, questions, replies, score_with,
+    PublishEvaluation, RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin,
+    external_questions, external_replies, questions, replies, score_with,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -37,19 +37,35 @@ use aiwatcher_execution::{
 use async_trait::async_trait;
 use serde_json::json;
 
+use super::artifacts::Artifacts;
+
 /// The scoring executor, if this deployment has an evaluation registry.
 ///
 /// No registry means no executor, which means a `score_evaluation` attempt is
 /// never claimed here — the same shape as the publisher's missing dataset
 /// registry, and the same consequence: the work waits rather than failing.
 #[must_use]
-pub fn executors(state: &AppState) -> ExecutorRegistry {
+pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorRegistry {
     let registry = ExecutorRegistry::new();
     let Some(evaluations) = state.evaluations.as_ref() else {
         return registry;
     };
     tracing::info!("the serve role scores recorded answers");
-    registry.with(Arc::new(ScoreExecutor::new(Arc::clone(evaluations))))
+    let mut scoring = ScoreExecutor::new(Arc::clone(evaluations));
+    if let Some(artifacts) = artifacts {
+        scoring = scoring.reading_from(artifacts.clone());
+    }
+    let registry = registry.with(Arc::new(scoring));
+    // A run whose answers a worker generates starts by handing it the cases,
+    // which needs somewhere to put them. No object store, no such step here —
+    // it waits for a process that has one.
+    match artifacts {
+        Some(artifacts) => registry.with(Arc::new(CasesExecutor {
+            evaluations: Arc::clone(evaluations),
+            artifacts: artifacts.clone(),
+        })),
+        None => registry,
+    }
 }
 
 /// The judging executor, if this deployment has a registry and a judge.
@@ -57,7 +73,11 @@ pub fn executors(state: &AppState) -> ExecutorRegistry {
 /// Either missing registers nothing, so a `judge_evaluation` attempt waits for
 /// a process that holds both rather than failing in one that holds neither.
 #[must_use]
-pub fn judged(state: &AppState, config: &crate::config::Config) -> ExecutorRegistry {
+pub fn judged(
+    state: &AppState,
+    config: &crate::config::Config,
+    artifacts: Option<&Artifacts>,
+) -> ExecutorRegistry {
     let registry = ExecutorRegistry::new();
     let Some(evaluations) = state.evaluations.as_ref() else {
         return registry;
@@ -71,10 +91,12 @@ pub fn judged(state: &AppState, config: &crate::config::Config) -> ExecutorRegis
         }
     };
     tracing::info!(provider = judge.provider(), "the work role asks a judge");
-    registry.with(Arc::new(
-        ScoreExecutor::new(Arc::clone(evaluations))
-            .judged_by(Arc::new(judge), config.judge_concurrency),
-    ))
+    let mut executor = ScoreExecutor::new(Arc::clone(evaluations))
+        .judged_by(Arc::new(judge), config.judge_concurrency);
+    if let Some(artifacts) = artifacts {
+        executor = executor.reading_from(artifacts.clone());
+    }
+    registry.with(Arc::new(executor))
 }
 
 /// The executor for runs whose card asks a scorer service, if this deployment
@@ -84,6 +106,7 @@ pub fn external(
     state: &AppState,
     config: &crate::config::Config,
     scorers: Option<&Arc<dyn ExternalScorers>>,
+    artifacts: Option<&Artifacts>,
 ) -> ExecutorRegistry {
     let registry = ExecutorRegistry::new();
     let (Some(evaluations), Some(scorers)) = (state.evaluations.as_ref(), scorers) else {
@@ -91,6 +114,9 @@ pub fn external(
     };
     let mut executor = ScoreExecutor::new(Arc::clone(evaluations))
         .scored_by(Arc::clone(scorers), config.scorer_concurrency);
+    if let Some(artifacts) = artifacts {
+        executor = executor.reading_from(artifacts.clone());
+    }
     match super::judge::OpenAiJudge::from_config(config) {
         Ok(Some(judge)) => {
             executor = executor.judged_by(Arc::new(judge), config.judge_concurrency);
@@ -109,6 +135,9 @@ pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
     judge: Option<(Arc<dyn JudgeModel>, usize)>,
     scorers: Option<(Arc<dyn ExternalScorers>, usize)>,
+    /// Where a generated run's answers are read from: the rows the generation
+    /// step's worker wrote, which reach this step as its input.
+    artifacts: Option<Artifacts>,
 }
 
 impl ScoreExecutor {
@@ -118,7 +147,54 @@ impl ScoreExecutor {
             evaluations,
             judge: None,
             scorers: None,
+            artifacts: None,
         }
+    }
+
+    /// The same executor, reading a generated run's answers from this store.
+    #[must_use]
+    pub fn reading_from(mut self, artifacts: Artifacts) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
+    /// The answers a worker generated, as the rows the step before this wrote.
+    ///
+    /// Read from this attempt's own input, which the run pinned when the
+    /// generation step completed: a retry of this step reads the same answers,
+    /// and never asks the application again.
+    async fn generated(
+        &self,
+        command: &ActivityCommand,
+    ) -> Result<Vec<RecordedAnswer>, ActivityError> {
+        let Some(artifacts) = &self.artifacts else {
+            return Err(ActivityError::user_code(
+                "this run's answers were generated, and this process holds no object store to \
+                 read them from",
+            ));
+        };
+        let Some(input) = command.inputs.first() else {
+            return Err(ActivityError::user_code(
+                "this run's answers were generated, and the generation step produced none",
+            ));
+        };
+        artifacts
+            .read_rows(input)
+            .await?
+            .into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                serde_json::from_value::<RecordedAnswer>(serde_json::Value::Object(
+                    row.into_iter().collect(),
+                ))
+                .map_err(|error| {
+                    ActivityError::user_code(format!(
+                        "the generation step's row {index} is not an answer \
+                         ({{\"case_id\", \"answer\", \"trace_id\"?, \"span_id\"?}}): {error}"
+                    ))
+                })
+            })
+            .collect()
     }
 
     /// The same executor, putting cases to this scorer service this many at a
@@ -161,84 +237,16 @@ impl ActivityExecutor for ScoreExecutor {
         else {
             return Err(ActivityError::user_code("this step does not score"));
         };
-        let declared = self
-            .evaluations
-            .scoring_run(&spec.declaration)
-            .await
-            .map_err(refusal)?
-            .ok_or_else(|| {
-                ActivityError::user_code(format!(
-                    "no scoring run is declared under {}",
-                    spec.declaration
-                ))
-            })?;
+        let Prepared {
+            declared,
+            card,
+            rubrics,
+            taken,
+            external_taken,
+            manifest,
+            subject,
+        } = prepare(&self.evaluations, &spec.declaration, command).await?;
         let run = &declared.run;
-        let card = self
-            .evaluations
-            .scorecard(&run.scorecard.name, Some(&run.scorecard.version))
-            .await
-            .map_err(refusal)?
-            .ok_or_else(|| {
-                ActivityError::user_code(format!(
-                    "{} has no version {}",
-                    run.scorecard.name, run.scorecard.version
-                ))
-            })?;
-
-        let rubrics = self
-            .evaluations
-            .rubrics_for(&card.scorecard)
-            .await
-            .map_err(refusal)?;
-        let taken = match &run.judge {
-            Some(declared) => Some(
-                self.evaluations
-                    .calibration(&declared.calibration.version)
-                    .await
-                    .map_err(refusal)?
-                    .ok_or_else(|| {
-                        ActivityError::user_code("the calibration set this run names is gone")
-                    })?,
-            ),
-            None => None,
-        };
-        let external_taken = match &run.external_calibration {
-            Some(named) => Some(
-                self.evaluations
-                    .calibration(&named.version)
-                    .await
-                    .map_err(refusal)?
-                    .ok_or_else(|| {
-                        ActivityError::user_code(
-                            "the calibration set this run names for its framework metrics is gone",
-                        )
-                    })?,
-            ),
-            None => None,
-        };
-        let manifest = run
-            .manifest(
-                &card.scorecard,
-                &rubrics,
-                taken.as_ref().map(|taken| &taken.calibration),
-                external_taken.as_ref().map(|taken| &taken.calibration),
-                Some(&StepOrigin {
-                    execution_id: command.key.execution_id.to_string(),
-                    step_id: Some(command.key.step_id.clone()),
-                }),
-            )
-            .map_err(refusal)?;
-        // Who declared it, rather than who pressed start: the declaration is
-        // what the source's rights are resolved against, and repeating one is
-        // how two people reach the same run at all.
-        let subject = declared.declared_by.clone();
-        // Asked before anything is read rather than left to publication: for
-        // a conversation cohort, the admission is the only authority there is
-        // to read it under.
-        self.evaluations
-            .admission(&manifest)
-            .await
-            .map_err(refusal)?;
         let reads_archive = manifest
             .context
             .judge
@@ -273,10 +281,13 @@ impl ActivityExecutor for ScoreExecutor {
             .cohort_cases(&manifest, &subject)
             .await
             .map_err(refusal)?;
-        let answers = evaluations
-            .answers(run, &cohort.expected)
-            .await
-            .map_err(refusal)?;
+        let answers = match run.answers.generation() {
+            Some(_) => self.generated(command).await?,
+            None => evaluations
+                .answers(run, &cohort.expected)
+                .await
+                .map_err(refusal)?,
+        };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // A scorer service's numbers, before the judge's: both are handed to
@@ -509,6 +520,188 @@ impl ActivityExecutor for ScoreExecutor {
             ..ActivityResult::default()
         })
     }
+}
+
+/// The first step of a run whose answers a worker generates: each case's input,
+/// as rows the worker reads.
+///
+/// Only the inputs. What a case expected stays with the cohort's owner and the
+/// step that scores, because a generator that could read the expectations
+/// could answer by copying them — and nothing in the numbers would say so.
+#[derive(Debug)]
+pub struct CasesExecutor {
+    evaluations: Arc<Evaluations>,
+    artifacts: Artifacts,
+}
+
+impl CasesExecutor {
+    #[must_use]
+    pub const fn new(evaluations: Arc<Evaluations>, artifacts: Artifacts) -> Self {
+        Self {
+            evaluations,
+            artifacts,
+        }
+    }
+}
+
+#[async_trait]
+impl ActivityExecutor for CasesExecutor {
+    fn runtime(&self) -> RuntimeKind {
+        RuntimeKind::EvaluationCases
+    }
+
+    async fn execute(
+        &self,
+        command: &ActivityCommand,
+        context: &ActivityContext,
+    ) -> Result<ActivityResult, ActivityError> {
+        let RuntimeBinding::EvaluationCases(spec) = &command.step.runtime else {
+            return Err(ActivityError::user_code("this step reads no cohort"));
+        };
+        let Prepared {
+            declared,
+            manifest,
+            subject,
+            ..
+        } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        if declared.run.answers.generation().is_none() {
+            return Err(ActivityError::user_code(
+                "this run scores answers it already has, so nothing is generated for its cases",
+            ));
+        }
+        context.stop.check()?;
+        let cohort = self
+            .evaluations
+            .cohort_cases(&manifest, &subject)
+            .await
+            .map_err(refusal)?;
+        // In the cohort's own order, which is the owner's — so the rows a
+        // worker is handed, and the answers it writes back, read the way the
+        // cohort does.
+        let rows: Vec<std::collections::BTreeMap<String, serde_json::Value>> = cohort
+            .expected
+            .keys()
+            .map(|case_id| {
+                let mut row = std::collections::BTreeMap::new();
+                row.insert("case_id".to_owned(), json!(case_id));
+                if let Some(input) = cohort.inputs.get(case_id) {
+                    row.insert("input".to_owned(), input.clone());
+                }
+                row
+            })
+            .collect();
+        let artifact = self
+            .artifacts
+            .put_rows(aiwatcher_evaluation::COHORT_INPUTS, &rows)
+            .await?;
+        Ok(ActivityResult {
+            outputs: vec![artifact],
+            result: Some(json!({
+                "cases": rows.len(),
+                "with_input": cohort.inputs.len(),
+            })),
+            diagnostics: None,
+            awaiting: None,
+            // The cohort is pinned, but a result is only ever read by the run
+            // that produced it: the generation after it is never cached.
+            cacheable: false,
+        })
+    }
+}
+
+/// What every step of a scoring run reads before it does its own part.
+struct Prepared {
+    declared: aiwatcher_evaluation::DeclaredRun,
+    card: aiwatcher_evaluation::ScorecardVersion,
+    rubrics: aiwatcher_evaluation::Rubrics,
+    taken: Option<aiwatcher_evaluation::CalibrationVersion>,
+    external_taken: Option<aiwatcher_evaluation::CalibrationVersion>,
+    manifest: aiwatcher_evaluation::EvaluationManifest,
+    /// Who declared it, rather than who pressed start: the declaration is what
+    /// the source's rights are resolved against, and repeating one is how two
+    /// people reach the same run at all.
+    subject: String,
+}
+
+/// The declaration, its card and its calibration sets, the manifest the run
+/// publishes — and the pair's admission, asked before anything is read rather
+/// than left to publication: for a conversation cohort, the admission is the
+/// only authority there is to read it under.
+async fn prepare(
+    evaluations: &Evaluations,
+    declaration: &str,
+    command: &ActivityCommand,
+) -> Result<Prepared, ActivityError> {
+    let declared = evaluations
+        .scoring_run(declaration)
+        .await
+        .map_err(refusal)?
+        .ok_or_else(|| {
+            ActivityError::user_code(format!("no scoring run is declared under {declaration}"))
+        })?;
+    let run = &declared.run;
+    let card = evaluations
+        .scorecard(&run.scorecard.name, Some(&run.scorecard.version))
+        .await
+        .map_err(refusal)?
+        .ok_or_else(|| {
+            ActivityError::user_code(format!(
+                "{} has no version {}",
+                run.scorecard.name, run.scorecard.version
+            ))
+        })?;
+    let rubrics = evaluations
+        .rubrics_for(&card.scorecard)
+        .await
+        .map_err(refusal)?;
+    let calibration = |named: Option<&aiwatcher_evaluation::VersionReference>,
+                       gone: &'static str| {
+        let version = named.map(|named| named.version.clone());
+        async move {
+            match version {
+                Some(version) => evaluations
+                    .calibration(&version)
+                    .await
+                    .map_err(refusal)?
+                    .map(Some)
+                    .ok_or_else(|| ActivityError::user_code(gone)),
+                None => Ok(None),
+            }
+        }
+    };
+    let taken = calibration(
+        run.judge.as_ref().map(|judge| &judge.calibration),
+        "the calibration set this run names is gone",
+    )
+    .await?;
+    let external_taken = calibration(
+        run.external_calibration.as_ref(),
+        "the calibration set this run names for its framework metrics is gone",
+    )
+    .await?;
+    let manifest = run
+        .manifest(
+            &card.scorecard,
+            &rubrics,
+            taken.as_ref().map(|taken| &taken.calibration),
+            external_taken.as_ref().map(|taken| &taken.calibration),
+            Some(&StepOrigin {
+                execution_id: command.key.execution_id.to_string(),
+                step_id: Some(command.key.step_id.clone()),
+            }),
+        )
+        .map_err(refusal)?;
+    evaluations.admission(&manifest).await.map_err(refusal)?;
+    let subject = declared.declared_by.clone();
+    Ok(Prepared {
+        declared,
+        card,
+        rubrics,
+        taken,
+        external_taken,
+        manifest,
+        subject,
+    })
 }
 
 /// The declaration's pace, never past the deployment's: the start refused a run

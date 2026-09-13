@@ -66,12 +66,12 @@ pub use scorecard::{
     ScorerSpec,
 };
 pub use scoring::{
-    Answers, ArchiveWord, Asked, Asking, Calibrated, Cohort, CohortCases, DeclaredRun,
-    ExternalAsking, ExternalQuestion, JudgeQuestion, Judged, MAX_RUN_CONCURRENCY,
-    MAX_RUN_TIMEOUT_SECONDS, MIN_RUN_TIMEOUT_SECONDS, RecordedAnswer, RecordedAnswers, RunSettings,
-    SCORING_ENGINE, SCORING_VERSION, Scored, ScoringRun, ScoringRunView, Shown, StepOrigin,
-    archived, external_questions, external_replies, questions, replies, score, score_with,
-    scoring_engine, warnings,
+    Answers, ArchiveWord, Asked, Asking, COHORT_INPUTS, Calibrated, Cohort, CohortCases,
+    DeclaredRun, ExternalAsking, ExternalQuestion, GENERATED_ANSWERS, Generated, Generation,
+    JudgeQuestion, Judged, MAX_RUN_CONCURRENCY, MAX_RUN_TIMEOUT_SECONDS, MIN_RUN_TIMEOUT_SECONDS,
+    RecordedAnswer, RecordedAnswers, RunSettings, SCORING_ENGINE, SCORING_VERSION, Scored,
+    ScoringRun, ScoringRunView, Shown, StepOrigin, archived, external_questions, external_replies,
+    questions, replies, score, score_with, scoring_engine, warnings,
 };
 
 use serde::Serialize;

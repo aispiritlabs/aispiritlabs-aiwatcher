@@ -6689,6 +6689,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'judge_evaluation';
 }) | (ScoreEvaluationSpec & {
     runtime: 'external_evaluation';
+}) | (ScoreEvaluationSpec & {
+    runtime: 'evaluation_cases';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -6707,6 +6709,7 @@ export const RuntimeKind = {
     SCORE_EVALUATION: 'score_evaluation',
     JUDGE_EVALUATION: 'judge_evaluation',
     EXTERNAL_EVALUATION: 'external_evaluation',
+    EVALUATION_CASES: 'evaluation_cases',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -7187,7 +7190,7 @@ export type ScoringAccepted = {
  * Both names carry the scoring run they belong to in the contract: a gate's
  * answers and the conversation archive are other domains' words.
  */
-export type ScoringAnswers = ArtifactRef | ScoringArchive;
+export type ScoringAnswers = ArtifactRef | ScoringArchive | ScoringGenerated;
 
 /**
  * The one word that names the archive as a run's answers.
@@ -7198,6 +7201,40 @@ export const ScoringArchive = { ARCHIVE: 'archive' } as const;
  * The one word that names the archive as a run's answers.
  */
 export type ScoringArchive = typeof ScoringArchive[keyof typeof ScoringArchive];
+
+/**
+ * Answers a worker generates, on the wire as `{"generated_by": {…}}`.
+ */
+export type ScoringGenerated = {
+    generated_by: ScoringGeneration;
+};
+
+/**
+ * The worker task that generates a run's answers.
+ *
+ * Named like any registered workflow's step — a task a worker registered and
+ * the queue it claims from — and never code: the application is the worker's,
+ * and aiwatcher hands it inputs and reads what it wrote. What it runs is the
+ * variant's to say, so the task is told the variant manifest it is measured
+ * as, and nothing the cohort expected.
+ */
+export type ScoringGeneration = {
+    /**
+     * Handed to the task beside the variant. Part of the declaration, so two
+     * runs told different things are two runs.
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The queue a worker claims it from; its token has to name it.
+     */
+    queue: string;
+    /**
+     * `name@version`, as the worker registered it.
+     */
+    task: string;
+};
 
 /**
  * What a run of saved answers measures, and what it measures it on.

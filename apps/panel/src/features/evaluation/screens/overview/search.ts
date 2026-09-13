@@ -57,6 +57,12 @@ export const searchSchema = z.object({
   declaration: z.string().optional(),
   /** The execution that declaration started, which a start answers with. */
   measured: z.string().optional(),
+  /**
+   * The baseline declared beside it, measured the same way, and the run that
+   * one started — so a reload follows both halves of the pair.
+   */
+  baseline_declaration: z.string().optional(),
+  baseline_measured: z.string().optional(),
   baseline: z.string().optional(),
   /**
    * The published result the open evidence is compared with.

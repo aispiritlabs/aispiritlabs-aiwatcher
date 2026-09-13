@@ -202,7 +202,13 @@ export function EvaluationPage() {
             onClick={() =>
               select(
                 search.measure
-                  ? { measure: undefined, declaration: undefined, measured: undefined }
+                  ? {
+                      measure: undefined,
+                      declaration: undefined,
+                      measured: undefined,
+                      baseline_declaration: undefined,
+                      baseline_measured: undefined,
+                    }
                   : { measure: true },
               )
             }
@@ -231,9 +237,20 @@ export function EvaluationPage() {
         <Measure
           declaration={search.declaration}
           measured={search.measured}
-          onDeclared={(declaration) => select({ declaration, measured: undefined })}
+          baseline={search.baseline_declaration}
+          baselineMeasured={search.baseline_measured}
+          onDeclared={(declaration, baseline) =>
+            select({
+              declaration,
+              measured: undefined,
+              baseline_declaration: baseline,
+              baseline_measured: undefined,
+            })
+          }
           onStarted={(measured) => select({ measured })}
+          onBaselineStarted={(baselineMeasured) => select({ baseline_measured: baselineMeasured })}
           onOpenResult={(evidence) => select({ evidence, report: undefined })}
+          onCompare={(evidence, compare) => select({ evidence, compare, report: undefined })}
         />
       ) : null}
       {search.scorecards ? <Scorecards /> : null}

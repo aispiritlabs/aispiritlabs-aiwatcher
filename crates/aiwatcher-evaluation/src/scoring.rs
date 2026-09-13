@@ -118,7 +118,47 @@ pub enum Answers {
     /// admitted the pair, sealed like every result from that source, and never
     /// staged anywhere in the clear.
     Archive(ArchiveWord),
+    /// What the variant answers now: a worker task is handed each case's
+    /// input and writes an answer per case, which the run then scores. The
+    /// template of C1, and the one source whose answers did not exist when the
+    /// run was declared — pinned instead by the attempt that produced them.
+    Generated(Generated),
 }
+
+/// Answers a worker generates, on the wire as `{"generated_by": {…}}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScoringGenerated)]
+#[serde(deny_unknown_fields)]
+pub struct Generated {
+    pub generated_by: Generation,
+}
+
+/// The worker task that generates a run's answers.
+///
+/// Named like any registered workflow's step — a task a worker registered and
+/// the queue it claims from — and never code: the application is the worker's,
+/// and aiwatcher hands it inputs and reads what it wrote. What it runs is the
+/// variant's to say, so the task is told the variant manifest it is measured
+/// as, and nothing the cohort expected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScoringGeneration)]
+#[serde(deny_unknown_fields)]
+pub struct Generation {
+    /// `name@version`, as the worker registered it.
+    pub task: String,
+    /// The queue a worker claims it from; its token has to name it.
+    pub queue: String,
+    /// Handed to the task beside the variant. Part of the declaration, so two
+    /// runs told different things are two runs.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    #[schema(value_type = Object)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What the generation step writes: one row per case it answered.
+pub const GENERATED_ANSWERS: &str = "answers";
+/// What the cases step writes for the generation step to read.
+pub const COHORT_INPUTS: &str = "cases";
 
 /// The one word that names the archive as a run's answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -140,8 +180,13 @@ impl<'de> Deserialize<'de> for Answers {
             }
             serde_json::Value::String(word) => Err(D::Error::custom(format!(
                 "answers: `{word}` names no source; a recording is an artifact reference, \
-                 and the archive is \"archive\""
+                 the archive is \"archive\", and generated answers are {{\"generated_by\": …}}"
             ))),
+            serde_json::Value::Object(fields) if fields.contains_key("generated_by") => {
+                Generated::deserialize(serde_json::Value::Object(fields))
+                    .map(Self::Generated)
+                    .map_err(D::Error::custom)
+            }
             value => ArtifactRef::deserialize(value)
                 .map(Self::Recording)
                 .map_err(D::Error::custom),
@@ -155,7 +200,16 @@ impl Answers {
     pub const fn recording(&self) -> Option<&ArtifactRef> {
         match self {
             Self::Recording(artifact) => Some(artifact),
-            Self::Archive(_) => None,
+            Self::Archive(_) | Self::Generated(_) => None,
+        }
+    }
+
+    /// The worker task, when a worker generates the answers.
+    #[must_use]
+    pub const fn generation(&self) -> Option<&Generation> {
+        match self {
+            Self::Generated(generated) => Some(&generated.generated_by),
+            Self::Recording(_) | Self::Archive(_) => None,
         }
     }
 }
@@ -316,6 +370,29 @@ impl ScoringRun {
                 "run.answers",
                 "only a conversation cohort has answers in the archive",
             ),
+            Answers::Generated(generated) => {
+                let generation = &generated.generated_by;
+                text(&generation.task, "run.answers.generated_by.task")?;
+                require(
+                    generation
+                        .task
+                        .split_once('@')
+                        .is_some_and(|(name, version)| !name.is_empty() && !version.is_empty()),
+                    "run.answers.generated_by.task",
+                    "names a task as `name@version`, the way a worker registered it",
+                )?;
+                text(&generation.queue, "run.answers.generated_by.queue")?;
+                // Each case's question would reach a worker as a row in the
+                // artifact store, outside the archive's seal, retention and
+                // erasure — the recording's refusal, arriving from the other side.
+                require(
+                    !conversations,
+                    "run.answers",
+                    "a conversation cohort's questions are the archive's words, and a worker \
+                     generating answers would be handed them outside it; score the archive's \
+                     own responses instead",
+                )
+            }
         }
     }
 
@@ -1156,9 +1233,9 @@ pub fn external_replies(
         }
     }
     let report = match (&run.external_calibration, calibration) {
-        (Some(named), Some(set)) => Some(crate::external_agreement(
-            card, rubrics, named, set, &said,
-        )),
+        (Some(named), Some(set)) => {
+            Some(crate::external_agreement(card, rubrics, named, set, &said))
+        }
         _ => None,
     };
     (judged, report)
@@ -1330,6 +1407,47 @@ mod tests {
             malformed.to_string().contains("missing field"),
             "the artifact's own refusal, not \"matched no variant\": {malformed}"
         );
+    }
+
+    #[test]
+    fn generated_answers_name_a_worker_task_and_are_refused_over_the_archive() {
+        let generated = |task: &str| {
+            Answers::Generated(Generated {
+                generated_by: Generation {
+                    task: task.into(),
+                    queue: "evaluation".into(),
+                    params: serde_json::Map::new(),
+                },
+            })
+        };
+        let declared = run(DatasetKind::Curation, generated("support-bot.answer@3"));
+        assert!(declared.validate().is_ok());
+        let wire = serde_json::to_value(&declared).unwrap();
+        assert_eq!(
+            wire["answers"],
+            json!({"generated_by": {"task": "support-bot.answer@3", "queue": "evaluation"}})
+        );
+        let read: ScoringRun = serde_json::from_value(wire).expect("and reads back");
+        assert_eq!(read, declared);
+
+        let unpinned = run(DatasetKind::Curation, generated("support-bot.answer"))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(unpinned.contains("name@version"), "{unpinned}");
+        let archive = run(
+            DatasetKind::Conversations,
+            generated("support-bot.answer@3"),
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(archive.contains("archive's words"), "{archive}");
+        let stray = serde_json::from_value::<Answers>(
+            json!({"generated_by": {"task": "a@1", "queue": "q", "code": "print(1)"}}),
+        )
+        .unwrap_err();
+        assert!(stray.to_string().contains("unknown field"), "{stray}");
     }
 
     fn external(reads: Vec<crate::CaseSide>, graded: bool) -> Scorer {
@@ -1547,7 +1665,9 @@ mod tests {
         );
         assert!(said[0].contains("llamacpp"), "{said:?}");
         assert!(
-            archive.manifest(&judged, &rubrics, None, None, None).is_err(),
+            archive
+                .manifest(&judged, &rubrics, None, None, None)
+                .is_err(),
             "whether a judge reads the archive is not guessed without its calibration set"
         );
 

@@ -28,8 +28,9 @@ use aiwatcher_evaluation::{
 };
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
-    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
-    RuntimeBinding, ScoreEvaluationSpec,
+    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, InputBinding,
+    OutputDeclaration, PlanEdge, PlanStep, PythonTaskSpec, RetryPolicy, RuntimeBinding,
+    ScoreEvaluationSpec,
 };
 use aiwatcher_execution::{RunIdentity, StartRun};
 use axum::extract::{Path, State};
@@ -50,9 +51,18 @@ const SCORING_TIMEOUT_SECONDS: u64 = 900;
 /// The same for a run that asks a judge, which waits on a model once per
 /// judged case and once per calibration item.
 const JUDGED_TIMEOUT_SECONDS: u64 = 3600;
-/// The one step such a plan has. Named rather than numbered, because it is
-/// what the waterfall and a context lookup address it by.
+/// The step that scores. Named rather than numbered, because it is what the
+/// waterfall and a context lookup address it by.
 const SCORING_STEP: &str = "score";
+/// Before it, when a worker generates the answers: the cohort's inputs read
+/// under the pair's admission, and the worker's task answering them.
+const CASES_STEP: &str = "cases";
+const GENERATE_STEP: &str = "generate";
+/// Reading a cohort is one read of its owner, bounded by the cohort.
+const CASES_TIMEOUT_SECONDS: u64 = 300;
+/// The application answering every case. As long as a judged step, because it
+/// is the same kind of wait: a model, once per case.
+const GENERATION_TIMEOUT_SECONDS: u64 = 3600;
 
 /// An accepted measurement, and the run that will make it.
 ///
@@ -228,6 +238,12 @@ async fn start_scoring_run(
     // Before a run exists rather than after: a judged run on a deployment with
     // no judge, or with another profile, is one nothing would ever claim — and
     // a run whose card asks a scorer service, on a deployment with none.
+    // A run whose answers a worker generates hands it the cases and reads its
+    // answers through the object store; without one, its first step is one
+    // nothing here would claim.
+    if viewed.declaration.run.answers.generation().is_some() && state.artifacts.is_none() {
+        return Err(ApiError::WorkerArtifactsDisabled);
+    }
     let external = asks_a_scorer_service(&viewed.manifest);
     let asked = viewed.declaration.run.settings.concurrency;
     if external {
@@ -427,11 +443,13 @@ async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResu
         .ok_or_else(|| ApiError::NotFound(format!("scoring run {id}")))
 }
 
-/// The one-step plan that measures one declaration.
+/// The plan that measures one declaration.
 ///
 /// Sealed here rather than compiled from a name, because there is no name: a
 /// declaration is addressed by its content, and that address is both the plan's
-/// revision and the only thing its step carries.
+/// revision and what its steps carry. One step scores saved answers; a run whose
+/// answers a worker generates is C1's template, three steps long — the cohort's
+/// inputs, the worker's answers, and the same score step reading them.
 fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
     let spec = ScoreEvaluationSpec {
         declaration: declared.id.clone(),
@@ -463,20 +481,105 @@ fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
         .settings
         .timeout_seconds
         .unwrap_or(default_timeout);
+    let score = |inputs| PlanStep {
+        id: SCORING_STEP.to_owned(),
+        runtime,
+        inputs,
+        outputs: Vec::new(),
+        retry: RetryPolicy::default(),
+        timeout_seconds,
+        cache: CachePolicy::Never,
+    };
+    let (steps, edges) = match declared.run.answers.generation() {
+        None => (vec![score(Vec::new())], Vec::new()),
+        Some(generation) => {
+            let rows = |name: &str| OutputDeclaration {
+                name: name.to_owned(),
+                kind: aiwatcher_core::ArtifactKind::Rows,
+                schema_ref: None,
+            };
+            // What the task is told: the declaration it answers for and the
+            // variant it is measured as, beside the declared parameters — so a
+            // worker serving several variants knows which one this is.
+            let mut params = std::collections::BTreeMap::new();
+            params.insert(
+                "declaration".to_owned(),
+                serde_json::Value::String(declared.id.clone()),
+            );
+            params.insert(
+                "evaluation_id".to_owned(),
+                serde_json::Value::String(declared.run.evaluation_id.clone()),
+            );
+            params.insert(
+                "repetition_id".to_owned(),
+                serde_json::Value::String(declared.run.repetition_id.clone()),
+            );
+            params.insert(
+                "variant".to_owned(),
+                serde_json::to_value(&declared.run.variant).unwrap_or_default(),
+            );
+            params.insert(
+                "params".to_owned(),
+                serde_json::Value::Object(generation.params.clone()),
+            );
+            (
+                vec![
+                    PlanStep {
+                        id: CASES_STEP.to_owned(),
+                        runtime: RuntimeBinding::EvaluationCases(ScoreEvaluationSpec {
+                            declaration: declared.id.clone(),
+                        }),
+                        inputs: Vec::new(),
+                        outputs: vec![rows(aiwatcher_evaluation::COHORT_INPUTS)],
+                        retry: RetryPolicy::default(),
+                        timeout_seconds: CASES_TIMEOUT_SECONDS,
+                        cache: CachePolicy::Never,
+                    },
+                    PlanStep {
+                        id: GENERATE_STEP.to_owned(),
+                        runtime: RuntimeBinding::PythonTask(PythonTaskSpec {
+                            task_ref: generation.task.clone(),
+                            queue: generation.queue.clone(),
+                            params,
+                        }),
+                        inputs: vec![InputBinding::Step {
+                            step: CASES_STEP.to_owned(),
+                            output: aiwatcher_evaluation::COHORT_INPUTS.to_owned(),
+                        }],
+                        outputs: vec![rows(aiwatcher_evaluation::GENERATED_ANSWERS)],
+                        retry: RetryPolicy::default(),
+                        timeout_seconds: declared
+                            .run
+                            .settings
+                            .timeout_seconds
+                            .unwrap_or(GENERATION_TIMEOUT_SECONDS),
+                        // A model's answers are not a function of their inputs.
+                        cache: CachePolicy::Never,
+                    },
+                    score(vec![InputBinding::Step {
+                        step: GENERATE_STEP.to_owned(),
+                        output: aiwatcher_evaluation::GENERATED_ANSWERS.to_owned(),
+                    }]),
+                ],
+                vec![
+                    PlanEdge {
+                        from: CASES_STEP.to_owned(),
+                        to: GENERATE_STEP.to_owned(),
+                    },
+                    PlanEdge {
+                        from: GENERATE_STEP.to_owned(),
+                        to: SCORING_STEP.to_owned(),
+                    },
+                ],
+            )
+        }
+    };
     ExecutionPlan::seal(
         DefinitionKind::Evaluation,
         declared.run.evaluation_id.clone(),
         DefinitionRevision(declared.id.clone()),
-        vec![PlanStep {
-            id: SCORING_STEP.to_owned(),
-            runtime,
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-            retry: RetryPolicy::default(),
-            timeout_seconds,
-            cache: CachePolicy::Never,
-        }],
-        Vec::new(),
+        steps,
+        edges,
     )
 }
 
@@ -570,5 +673,51 @@ mod tests {
             external.steps[0].runtime.kind().as_str(),
             "external_evaluation"
         );
+    }
+
+    #[test]
+    fn generated_answers_are_three_steps_and_the_worker_sees_the_cases_never_the_expectations() {
+        let mut run = declared(Default::default(), false);
+        run.run.answers =
+            aiwatcher_evaluation::Answers::Generated(aiwatcher_evaluation::Generated {
+                generated_by: aiwatcher_evaluation::Generation {
+                    task: "support-bot.answer@3".into(),
+                    queue: "evaluation".into(),
+                    params: serde_json::Map::from_iter([("temperature".into(), 0.into())]),
+                },
+            });
+        let plan = plan_for(&run, false);
+        let kinds: Vec<&str> = plan
+            .steps
+            .iter()
+            .map(|step| step.runtime.kind().as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["evaluation_cases", "python_task", "score_evaluation"]
+        );
+        let RuntimeBinding::PythonTask(generate) = &plan.steps[1].runtime else {
+            panic!("a worker's task");
+        };
+        assert_eq!(generate.task_ref, "support-bot.answer@3");
+        assert_eq!(generate.params["declaration"], run.id);
+        assert_eq!(generate.params["params"]["temperature"], 0);
+        assert!(generate.params["variant"].is_object());
+        assert_eq!(
+            plan.steps[1].inputs,
+            [InputBinding::Step {
+                step: CASES_STEP.to_owned(),
+                output: "cases".to_owned()
+            }]
+        );
+        assert_eq!(
+            plan.steps[2].inputs,
+            [InputBinding::Step {
+                step: GENERATE_STEP.to_owned(),
+                output: "answers".to_owned()
+            }],
+            "the score step reads what the worker wrote"
+        );
+        assert_eq!(plan.edges.len(), 2);
     }
 }

@@ -18,6 +18,13 @@ from aiwatcher_sdk.worker.errors import (
     TaskError,
     WorkerError,
 )
+from aiwatcher_sdk.worker.generation import (
+    Case,
+    Declined,
+    Generated,
+    Generation,
+    generation_task,
+)
 from aiwatcher_sdk.worker.reference import AttemptRef
 from aiwatcher_sdk.worker.task import Task, task
 from aiwatcher_sdk.worker.worker import Worker
@@ -27,7 +34,11 @@ __all__ = [
     "ArtifactRef",
     "Assignment",
     "AttemptRef",
+    "Case",
+    "Declined",
     "Fail",
+    "Generated",
+    "Generation",
     "InputAnswer",
     "InputRequired",
     "JsonObject",
@@ -40,6 +51,7 @@ __all__ = [
     "TaskError",
     "Worker",
     "WorkerError",
+    "generation_task",
     "get_task_context",
     "task",
 ]

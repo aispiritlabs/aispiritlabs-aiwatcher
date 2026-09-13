@@ -916,3 +916,65 @@ def test_asking_is_raised_rather_than_returned_so_a_task_cannot_carry_on() -> No
 
     assert reached == ["unwound"]
     assert api.reports[0]["outcome"] == "parked"
+
+
+def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once() -> None:
+    from aiwatcher_sdk.worker import Case, Declined, Generated, Generation, generation_task
+
+    seen: list[tuple[str, Any, Any]] = []
+
+    @generation_task("support-bot.answer", version="3")
+    def answer(case: Case, run: Generation) -> Any:
+        seen.append((case.case_id, case.input, run.variant["experiment_id"]))
+        if case.case_id == "case-2":
+            return Generated({"text": "four"}, trace_id="ab" * 16)
+        if case.case_id == "case-3":
+            return Declined("the application would not say")
+        return {"text": f"answer to {case.input}"}
+
+    api = WorkerApi(
+        assignment(
+            step_id="generate",
+            context_id="import-1/generate/1",
+            task_ref="support-bot.answer@3",
+            queue="evaluation",
+            params={
+                "declaration": "d" * 64,
+                "evaluation_id": "candidate-1",
+                "repetition_id": "measurement-1",
+                "variant": {"experiment_id": "candidate"},
+                "params": {},
+            },
+            parameters={},
+            inputs=[reference("cases")],
+        )
+    )
+    api.artifacts["cases"] = [
+        {"case_id": "case-1", "input": {"question": "capital"}},
+        {"case_id": "case-2", "input": {"question": "2+2"}},
+        {"case_id": "case-3", "input": {"question": "secret"}},
+    ]
+    process = Worker(
+        "http://aiwatcher.invalid",
+        "queue-token",
+        queues=["evaluation"],
+        tasks=[answer],
+        name="worker-1",
+        client=httpx.Client(transport=httpx.MockTransport(api.handle)),
+        telemetry=AiwatcherClient(service="test", transport=NullTransport()),
+    )
+    with process:
+        assert process.run_once()
+
+    assert seen == [
+        ("case-1", {"question": "capital"}, "candidate"),
+        ("case-2", {"question": "2+2"}, "candidate"),
+        ("case-3", {"question": "secret"}, "candidate"),
+    ]
+    assert api.artifacts["answers"] == [
+        {"case_id": "case-1", "answer": {"text": "answer to {'question': 'capital'}"}},
+        {"case_id": "case-2", "answer": {"text": "four"}, "trace_id": "ab" * 16},
+    ]
+    assert api.reports[0]["outcome"] == "completed"
+    written = [request for request in api.requests if "/outputs/" in request.url.path]
+    assert len(written) == 1, "the answers are written once, at the end"

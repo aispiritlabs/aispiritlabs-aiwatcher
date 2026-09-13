@@ -140,6 +140,12 @@ pub enum RuntimeBinding {
     /// reason: the service is a socket, and it is claimed where
     /// `AIWATCHER_SCORER_URL` is, with a judge beside it when the card asks one.
     ExternalEvaluation(ScoreEvaluationSpec),
+    /// What each case of a scoring run's cohort asked, handed to the worker
+    /// that generates its answers — and nothing it expected, which a generator
+    /// must never see. A kind of its own because it reads the cohort under the
+    /// pair's admission, which is the serve role's registry, and writes rows a
+    /// worker reads.
+    EvaluationCases(ScoreEvaluationSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -160,6 +166,7 @@ pub enum RuntimeKind {
     ScoreEvaluation,
     JudgeEvaluation,
     ExternalEvaluation,
+    EvaluationCases,
     HumanInput,
 }
 
@@ -177,6 +184,7 @@ impl RuntimeKind {
             Self::ScoreEvaluation => "score_evaluation",
             Self::JudgeEvaluation => "judge_evaluation",
             Self::ExternalEvaluation => "external_evaluation",
+            Self::EvaluationCases => "evaluation_cases",
             Self::HumanInput => "human_input",
         }
     }
@@ -249,6 +257,7 @@ impl RuntimeKind {
             | Self::ScoreEvaluation
             | Self::JudgeEvaluation
             | Self::ExternalEvaluation
+            | Self::EvaluationCases
             | Self::HumanInput => None,
         }
     }
@@ -266,6 +275,7 @@ impl RuntimeBinding {
             Self::ScoreEvaluation(_) => RuntimeKind::ScoreEvaluation,
             Self::JudgeEvaluation(_) => RuntimeKind::JudgeEvaluation,
             Self::ExternalEvaluation(_) => RuntimeKind::ExternalEvaluation,
+            Self::EvaluationCases(_) => RuntimeKind::EvaluationCases,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
@@ -301,7 +311,8 @@ impl RuntimeBinding {
             | Self::ContainerJob(_)
             | Self::ScoreEvaluation(_)
             | Self::JudgeEvaluation(_)
-            | Self::ExternalEvaluation(_) => None,
+            | Self::ExternalEvaluation(_)
+            | Self::EvaluationCases(_) => None,
         }
     }
 
@@ -324,6 +335,7 @@ impl RuntimeBinding {
             | Self::ScoreEvaluation(_)
             | Self::JudgeEvaluation(_)
             | Self::ExternalEvaluation(_)
+            | Self::EvaluationCases(_)
             | Self::HumanInput(_) => None,
         }
     }

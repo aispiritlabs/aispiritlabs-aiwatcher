@@ -313,6 +313,7 @@ fn node_kind(runtime: &RuntimeBinding) -> &'static str {
         | RuntimeBinding::ScoreEvaluation(_)
         | RuntimeBinding::JudgeEvaluation(_)
         | RuntimeBinding::ExternalEvaluation(_) => "chain",
+        RuntimeBinding::EvaluationCases(_) => "retriever",
         RuntimeBinding::HumanInput(_) => "guardrail",
     }
 }

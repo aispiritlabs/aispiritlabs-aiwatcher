@@ -73,35 +73,61 @@ function Refused({ error }: { error: unknown }) {
 export function Measure({
   declaration,
   measured,
+  baseline,
+  baselineMeasured,
   onDeclared,
   onStarted,
+  onBaselineStarted,
   onOpenResult,
+  onCompare,
 }: {
   declaration: string | undefined;
   measured: string | undefined;
-  onDeclared: (declaration: string | undefined) => void;
+  /** The baseline declared beside it, when the draft declared a pair. */
+  baseline?: string;
+  baselineMeasured?: string;
+  onDeclared: (declaration: string | undefined, baseline?: string) => void;
   /** The run this declaration started, or none once a missing one is forgotten. */
   onStarted: (execution: string | undefined) => void;
+  onBaselineStarted?: (execution: string | undefined) => void;
   onOpenResult: (evaluationId: string) => void;
+  onCompare?: (evaluationId: string, baseline: string) => void;
 }) {
   return (
     <Card className="flex flex-col gap-3 p-4">
       <div>
         <h2 className="text-sm font-semibold">Measure</h2>
         <p className="text-xs text-muted-foreground">
-          Score answers somebody already has against a scorecard, as a managed run that publishes
-          its own evidence. No model of the application is called; a judge is, when the card asks
-          one.
+          Score answers against a scorecard, as a managed run that publishes its own evidence: a
+          recording somebody already has, or answers a worker&apos;s task generates now — for a
+          candidate and, beside it, a baseline measured the same way.
         </p>
       </div>
       {declaration ? (
-        <Declared
-          id={declaration}
-          measured={measured}
-          onStarted={onStarted}
-          onOpenResult={onOpenResult}
-          onAnother={() => onDeclared(undefined)}
-        />
+        <>
+          <Declared
+            id={declaration}
+            measured={measured}
+            onStarted={onStarted}
+            onOpenResult={onOpenResult}
+            onAnother={() => onDeclared(undefined)}
+          />
+          {baseline ? (
+            <>
+              <h3 className="border-t border-border pt-3 text-xs font-semibold">
+                Baseline, measured the same way
+              </h3>
+              <Declared
+                id={baseline}
+                measured={baselineMeasured}
+                onStarted={onBaselineStarted ?? (() => undefined)}
+                onOpenResult={onOpenResult}
+                onAnother={() => onDeclared(undefined)}
+              />
+              <ComparePair candidate={declaration} baseline={baseline} onCompare={onCompare} />
+            </>
+          ) : null}
+        </>
       ) : (
         <Draft onDeclared={onDeclared} />
       )}
@@ -141,7 +167,7 @@ function usePublished(): DurableEvaluation[] {
     .filter((row) => row.manifest && (row.state === 'complete' || row.state === 'partial'));
 }
 
-function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
+function Draft({ onDeclared }: { onDeclared: (declaration: string, baseline?: string) => void }) {
   const editor = useRoleDecision('editor');
   const cards = useQuery({
     queryKey: ['evaluation-scorecards'],
@@ -155,7 +181,10 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
   const [experiment, setExperiment] = React.useState('');
   const [evaluationId, setEvaluationId] = React.useState('');
   const [repetition, setRepetition] = React.useState('measurement-1');
-  const [answers, setAnswers] = React.useState<'recording' | 'archive'>('recording');
+  const [answers, setAnswers] = React.useState<'recording' | 'archive' | 'generated'>('recording');
+  // The worker task that generates the answers, and what it is handed.
+  const [generation, setGeneration] = React.useState({ task: '', queue: '', params: '' });
+  const [baselineId, setBaselineId] = React.useState('');
   const [recording, setRecording] = React.useState<File | undefined>();
   const [judge, setJudge] = React.useState({
     provider: 'llamacpp',
@@ -220,8 +249,9 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
     (cohort.from === 'dataset' ? cohort.kind : source?.manifest?.context.dataset.kind) ===
     'conversations';
   // The archive is the only place a conversation cohort's answers may come
-  // from; the server refuses the other pairing, and the form does not offer it.
+  // from; the server refuses the other pairings, and the form does not offer them.
   const chosenAnswers = conversations ? 'archive' : answers;
+  const baselineSource = published.find((row) => row.receipt.evaluation_id === baselineId);
 
   React.useEffect(() => {
     if (source?.manifest) setExperiment(source.manifest.variant.experiment_id);
@@ -239,7 +269,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
   });
 
   const declare = useMutation({
-    mutationFn: async (): Promise<ScoringRunView> => {
+    mutationFn: async (): Promise<{ candidate: ScoringRunView; baseline?: ScoringRunView }> => {
       const manifest = source?.manifest;
       if (!manifest || !head) throw new Error('Choose a scorecard and a result to measure like.');
       if ((asksJudge || calibratesFramework) && !calibration) {
@@ -250,6 +280,26 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
         );
       }
       let staged: ScoringRun['answers'] = 'archive';
+      if (chosenAnswers === 'generated') {
+        if (!generation.task.trim() || !generation.queue.trim()) {
+          throw new Error('Name the task that generates the answers, and its queue.');
+        }
+        let params: Record<string, unknown> | undefined;
+        if (generation.params.trim()) {
+          const parsed: unknown = JSON.parse(generation.params);
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error("The task's parameters are a JSON object.");
+          }
+          params = parsed as Record<string, unknown>;
+        }
+        staged = {
+          generated_by: {
+            task: generation.task.trim(),
+            queue: generation.queue.trim(),
+            ...(params ? { params } : {}),
+          },
+        };
+      }
       if (chosenAnswers === 'recording') {
         if (!recording) throw new Error('Choose the recording to score.');
         staged = answerOf(
@@ -329,9 +379,30 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
             ? { name: calibration.calibration.name, version: calibration.version }
             : undefined,
       };
-      return answerOf(await declareScoringRun({ body: run }), 'the declaration was refused');
+      const candidate = answerOf(
+        await declareScoringRun({ body: run }),
+        'the declaration was refused',
+      );
+      // The baseline, measured exactly as the candidate is: its own variant and
+      // experiment, and every other part of the declaration the same — which is
+      // what makes the two results share a context and compare.
+      const paired = baselineSource?.manifest;
+      if (chosenAnswers !== 'generated' || !paired) return { candidate };
+      const baselineRun: ScoringRun = {
+        ...run,
+        evaluation_id: `${run.evaluation_id}-baseline`,
+        variant: { ...paired.variant, dataset },
+      };
+      const baseline = answerOf(
+        await declareScoringRun({ body: baselineRun }),
+        'the baseline declaration was refused',
+      );
+      return { candidate, baseline };
     },
-    onSuccess: (view) => onDeclared(view.declaration.id),
+    onSuccess: ({ candidate, baseline }) =>
+      baseline
+        ? onDeclared(candidate.declaration.id, baseline.declaration.id)
+        : onDeclared(candidate.declaration.id),
   });
 
   return (
@@ -457,6 +528,77 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
               : '— only for a conversation cohort.'}
           </span>
         </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="answers"
+            aria-label="Generated by a worker"
+            checked={chosenAnswers === 'generated'}
+            disabled={conversations}
+            onChange={() => setAnswers('generated')}
+          />
+          Generated now, by a worker&apos;s task
+          <span className="text-muted-foreground">
+            — handed each case&apos;s input and never what it expected; told the variant it answers
+            as.
+          </span>
+        </label>
+        {chosenAnswers === 'generated' ? (
+          <div className="grid gap-2 pl-6 md:grid-cols-3">
+            <label className="flex flex-col gap-1">
+              Task
+              <input
+                aria-label="Generation task"
+                className={FIELD}
+                placeholder="name@version"
+                value={generation.task}
+                onChange={(event) => setGeneration({ ...generation, task: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Queue
+              <input
+                aria-label="Generation queue"
+                className={FIELD}
+                value={generation.queue}
+                onChange={(event) => setGeneration({ ...generation, queue: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Parameters (JSON)
+              <input
+                aria-label="Generation parameters"
+                className={FIELD}
+                placeholder="{}"
+                value={generation.params}
+                onChange={(event) => setGeneration({ ...generation, params: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 md:col-span-3">
+              Baseline, measured the same way
+              <select
+                aria-label="Baseline"
+                className={FIELD}
+                value={baselineId}
+                onChange={(event) => setBaselineId(event.target.value)}
+              >
+                <option value="">No baseline</option>
+                {published
+                  .filter((row) => row.receipt.evaluation_id !== sourceId)
+                  .map((row) => (
+                    <option key={row.receipt.evaluation_id} value={row.receipt.evaluation_id}>
+                      {row.receipt.evaluation_id} · experiment {row.manifest?.variant.experiment_id}
+                    </option>
+                  ))}
+              </select>
+              <span className="text-muted-foreground">
+                Its variant, with this cohort, card, task and pace: a second run publishing as{' '}
+                {evaluationId.trim() ? `${evaluationId.trim()}-baseline` : '…-baseline'}, whose
+                result compares with this one.
+              </span>
+            </label>
+          </div>
+        ) : null}
       </fieldset>
 
       {asksJudge ? (
@@ -941,6 +1083,54 @@ function Calibration({
   );
 }
 
+/**
+ * The two halves of a pair, once both have published: one press to the
+ * comparison, which the server decides — this only knows the two IDs.
+ */
+function ComparePair({
+  candidate,
+  baseline,
+  onCompare,
+}: {
+  candidate: string;
+  baseline: string;
+  onCompare: ((evaluationId: string, baseline: string) => void) | undefined;
+}) {
+  const published = usePublished();
+  const runs = useQuery({
+    queryKey: ['evaluation-run-pair', candidate, baseline],
+    queryFn: async () =>
+      Promise.all(
+        [candidate, baseline].map(async (id) =>
+          answerOf(await getScoringRun({ path: { id } }), 'could not read this declaration'),
+        ),
+      ),
+    retry: false,
+  });
+  const [current, previous] = (runs.data ?? []).map((view) => view.declaration.run.evaluation_id);
+  const ready =
+    current &&
+    previous &&
+    [current, previous].every((id) => published.some((row) => row.receipt.evaluation_id === id));
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={!ready || !onCompare}
+        onClick={() => current && previous && onCompare?.(current, previous)}
+      >
+        Compare with the baseline
+      </Button>
+      <span className="text-muted-foreground">
+        {ready
+          ? 'Both results are published.'
+          : 'Once both runs have published, their results compare here.'}
+      </span>
+    </div>
+  );
+}
+
 /** A declared run: what it publishes, whether it may, and the run once started. */
 function Declared({
   id,
@@ -1051,7 +1241,9 @@ function Declared({
         <dd>
           {run.answers === 'archive'
             ? "the archive's own responses"
-            : `${run.answers.name} (${pinchId(run.answers.digest, 8, 6)})`}
+            : 'generated_by' in run.answers
+              ? `generated by ${run.answers.generated_by.task} on queue ${run.answers.generated_by.queue}`
+              : `${run.answers.name} (${pinchId(run.answers.digest, 8, 6)})`}
         </dd>
         <dt className="text-muted-foreground">Runs</dt>
         <dd>

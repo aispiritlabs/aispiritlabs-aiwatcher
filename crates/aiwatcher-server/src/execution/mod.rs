@@ -199,7 +199,8 @@ pub fn spawn(
         // The one executor that runs where the ingress is, because it executes
         // nothing: it writes a dataset version through the object store this
         // role already holds.
-        let executors = publish::executors(state, artifacts).merge(scoring::executors(state));
+        let executors =
+            publish::executors(state, artifacts).merge(scoring::executors(state, artifacts));
         if !executors.is_empty() {
             tasks.reactors.push((
                 "serve",
@@ -304,8 +305,13 @@ pub fn spawn(
         }
         let executors = query::executors(config, artifacts)
             .merge(marimo::executors(config, artifacts))
-            .merge(scoring::judged(state, config))
-            .merge(scoring::external(state, config, scorer_service.as_ref()));
+            .merge(scoring::judged(state, config, artifacts))
+            .merge(scoring::external(
+                state,
+                config,
+                scorer_service.as_ref(),
+                artifacts,
+            ));
         // Judged against the registry the claim filter is built from, so the
         // two cannot disagree about what this process performs. Started even
         // when that registry is empty, which is when it has the most to say.

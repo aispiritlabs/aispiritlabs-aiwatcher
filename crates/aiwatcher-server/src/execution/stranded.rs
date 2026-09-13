@@ -99,6 +99,7 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         // wait.
         RuntimeKind::PublishDataset
         | RuntimeKind::ScoreEvaluation
+        | RuntimeKind::EvaluationCases
         | RuntimeKind::PythonTask
         | RuntimeKind::ContainerJob
         | RuntimeKind::HumanInput => false,

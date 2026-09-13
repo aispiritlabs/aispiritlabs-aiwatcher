@@ -488,7 +488,10 @@ impl Registry {
                 reason: "names judge settings no run declared".into(),
             })?;
         let taken = self
-            .pinned_calibration(&judge.calibration_dataset, "context.judge.calibration_dataset")
+            .pinned_calibration(
+                &judge.calibration_dataset,
+                "context.judge.calibration_dataset",
+            )
             .await?;
         // Derived, so a context that says otherwise was written by hand — and
         // the one thing it must not be able to do is admit a judge that reads
@@ -2505,6 +2508,12 @@ impl Registry {
                     .answers)
             }
             crate::Answers::Archive(_) => Ok(crate::archived(cohort)),
+            crate::Answers::Generated(_) => Err(EvaluationError::Invalid {
+                field: "run.answers".into(),
+                reason: "generated answers are the rows the generation step wrote, which the \
+                         step that scores them reads from its own input"
+                    .into(),
+            }),
         }
     }
 

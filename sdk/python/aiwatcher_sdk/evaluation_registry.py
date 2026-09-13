@@ -308,6 +308,19 @@ class RunSettings(TypedDict, total=False):
     concurrency: int
 
 
+class Generation(TypedDict):
+    """The worker task that generates a run's answers, and the queue it is claimed from."""
+
+    #: ``name@version``, as the worker registered it.
+    task: str
+    queue: str
+    params: NotRequired[dict[str, Any]]
+
+
+class GeneratedAnswers(TypedDict):
+    generated_by: Generation
+
+
 class ScoringRun(TypedDict):
     evaluation_id: str
     repetition_id: str
@@ -318,7 +331,9 @@ class ScoringRun(TypedDict):
     #: answers are the archive's own responses, read under the pair's approval
     #: and never staged in the clear. Over the archive a card may read no
     #: expectation, because the expectation is the response being measured.
-    answers: ArtifactReference | Literal["archive"]
+    #: Or ``{"generated_by": …}``: a worker task answers each case first — see
+    #: ``aiwatcher_sdk.worker.generation_task``.
+    answers: ArtifactReference | Literal["archive"] | GeneratedAnswers
     #: Required exactly when the card asks a judge, and refused otherwise.
     judge: NotRequired[JudgeDeclaration]
     #: Required exactly when the card calibrates a framework metric: the set

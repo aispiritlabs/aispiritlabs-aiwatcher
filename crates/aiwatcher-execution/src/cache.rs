@@ -147,6 +147,7 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
         | RuntimeBinding::ScoreEvaluation(_)
         | RuntimeBinding::JudgeEvaluation(_)
         | RuntimeBinding::ExternalEvaluation(_)
+        | RuntimeBinding::EvaluationCases(_)
         | RuntimeBinding::HumanInput(_) => None,
     }
 }
