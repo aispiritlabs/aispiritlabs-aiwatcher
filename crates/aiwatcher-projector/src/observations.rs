@@ -8,11 +8,13 @@
 //! measurement's case (`evaluation_id` on `run.started`) is counted apart and
 //! in no figure here: a benchmark is not an observation.
 //!
-//! Folded from the read model, like [`crate::dimensions`], and bounded by what
-//! it holds — so the projector also writes closed periods down as the log
-//! passes them ([`ObservedPeriod`], [`crate::period_fold`]), and a window
-//! reaching further back than the read model is answered from those, whole
-//! periods at a time, with the live fold for the runs no written period holds. A period keeps its
+//! Two answers, never mixed. Without a window, the read model's, like
+//! [`crate::dimensions`]: every run it holds, timed exactly, and bounded by
+//! what it holds. With a window, the period fold's ([`crate::period_fold`]),
+//! wherever there is a store to write periods to: every period the window
+//! reaches into, whole, from the records written as the log passed them and
+//! from the fold's own memory past those — one source, so a run that ended
+//! late or was evicted from the read model is counted once. A period keeps its
 //! durations as a histogram, so periods add up and still answer a percentile,
 //! within one bucket.
 
@@ -76,15 +78,31 @@ pub struct VariantObservations {
         skip_serializing_if = "Option::is_none"
     )]
     pub last_seen_at: Option<OffsetDateTime>,
-    /// Written periods these figures include. Nought when the window asked for
-    /// none, or reached no further back than what the read model holds.
+    /// Written periods these figures include. Nought without a window, which
+    /// the read model answers.
     pub periods: usize,
-    /// Of `runs`, those counted from written periods rather than from the read
-    /// model — which leaves out every run that ended in one.
+    /// Of `runs`, those counted from written periods rather than from the
+    /// periods the fold has not written yet.
     pub runs_from_periods: u64,
-    /// Of the periods, those whose fold could not vouch it held every run that
-    /// ended in them.
+    /// Of the periods counted, written or not, those whose fold could not
+    /// vouch it held every run that ended in them.
     pub incomplete_periods: usize,
+    /// Of `runs`, those whose end reached the log after the period they ended
+    /// in had closed, counted in the period that was open when it did.
+    #[serde(default)]
+    pub late_runs: u64,
+    /// Where a window's counting starts: the beginning of the period its start
+    /// falls in, which may be before it. Absent without a window.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub counted_from: Option<OffsetDateTime>,
+    /// The window reaches back before the fold began observing, so nothing
+    /// before `counted_from` could be counted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub window_before_observations: bool,
 }
 
 /// Durations, in milliseconds, over this many.
@@ -186,8 +204,8 @@ impl DurationHistogram {
     }
 }
 
-/// One variant's runs that ended in one closed period, as written down when the
-/// period closed — the record that outlives the read model.
+/// One variant's runs that ended in one period, as the fold counted them — the
+/// record written when the period closed, which outlives the read model.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ObservedPeriod {
     pub variant_id: String,
@@ -217,6 +235,39 @@ pub struct ObservedPeriod {
     /// Whether the fold saw every run counted here from its start: one it
     /// did not is counted with no duration.
     pub complete: bool,
+}
+
+impl ObservedPeriod {
+    /// Add another period's runs of the same variant to this one, as a period
+    /// inside an hour adds up to the hour.
+    pub fn merge(&mut self, other: &Self) {
+        self.runs += other.runs;
+        self.succeeded += other.succeeded;
+        self.failed += other.failed;
+        self.measured_runs += other.measured_runs;
+        self.run_ms.merge(&other.run_ms);
+        self.call_ms.merge(&other.call_ms);
+        self.time_to_first_token_ms
+            .merge(&other.time_to_first_token_ms);
+        self.llm_calls += other.llm_calls;
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        for model in &other.models {
+            ModelUsage::add_to(&mut self.models, model);
+        }
+        let earliest = |one: Option<i64>, other: Option<i64>| match (one, other) {
+            (Some(one), Some(other)) => Some(one.min(other)),
+            (one, other) => one.or(other),
+        };
+        let latest = |one: Option<i64>, other: Option<i64>| match (one, other) {
+            (Some(one), Some(other)) => Some(one.max(other)),
+            (one, other) => one.or(other),
+        };
+        self.first_seen_at = earliest(self.first_seen_at, other.first_seen_at);
+        self.last_seen_at = latest(self.last_seen_at, other.last_seen_at);
+        self.late_runs += other.late_runs;
+        self.complete &= other.complete;
+    }
 }
 
 /// One variant's figures while they are being folded.
@@ -310,98 +361,103 @@ impl Accumulated {
         }
     }
 
-    /// The figures a reader sees: this fold's, and every written period's.
-    fn observations(
-        self,
-        variant_id: &str,
-        periods: &[&ObservedPeriod],
-        prices: Option<&ModelPrices>,
-    ) -> VariantObservations {
-        let mut models = self.models;
-        let mut by_day = self.by_day;
-        let (mut runs, mut succeeded, mut failed, mut measured) =
-            (self.runs, self.succeeded, self.failed, self.measured_runs);
-        let (mut llm_calls, mut input, mut output) =
-            (self.llm_calls, self.input_tokens, self.output_tokens);
-        let (mut first, mut last) = (self.first_seen_at, self.last_seen_at);
-        let seconds = |at: i64| OffsetDateTime::from_unix_timestamp(at).ok();
-        let mut run_ms = DurationHistogram::default();
-        let mut call_ms = DurationHistogram::default();
-        let mut ttft_ms = DurationHistogram::default();
-        for period in periods {
-            runs += period.runs;
-            succeeded += period.succeeded;
-            failed += period.failed;
-            measured += period.measured_runs;
-            llm_calls += period.llm_calls;
-            input += period.input_tokens;
-            output += period.output_tokens;
-            run_ms.merge(&period.run_ms);
-            call_ms.merge(&period.call_ms);
-            ttft_ms.merge(&period.time_to_first_token_ms);
-            let day = by_day.entry(day_of(period.from)).or_default();
-            for model in &period.models {
-                ModelUsage::add_to(day, model);
-            }
-            for model in &period.models {
-                let entry = models
-                    .entry(model.model.clone())
-                    .or_insert_with(|| ModelUsage {
-                        model: model.model.clone(),
-                        ..ModelUsage::default()
-                    });
-                entry.calls += model.calls;
-                entry.input_tokens += model.input_tokens;
-                entry.output_tokens += model.output_tokens;
-                entry.cached_tokens += model.cached_tokens;
-            }
-            if let Some(at) = period.first_seen_at.and_then(seconds) {
-                first = Some(first.map_or(at, |seen| seen.min(at)));
-            }
-            if let Some(at) = period.last_seen_at.and_then(seconds) {
-                last = Some(last.map_or(at, |seen| seen.max(at)));
-            }
-        }
-        // Exact where nothing written is included; buckets once anything is,
-        // with this fold's own durations counted into them.
-        let summary = |exact: Vec<i64>, mut histogram: DurationHistogram| {
-            if periods.is_empty() {
-                return DurationSummary::exact(exact);
-            }
-            for value in exact {
-                histogram.add(value);
-            }
-            histogram.summary()
-        };
-        let models: Vec<ModelUsage> = models.into_values().collect();
+    /// The figures a reader sees.
+    fn observations(self, variant_id: &str, prices: Option<&ModelPrices>) -> VariantObservations {
+        let models: Vec<ModelUsage> = self.models.into_values().collect();
         let cost = prices.map(|table| {
             table.cost_by_day(
-                by_day
+                self.by_day
                     .iter()
                     .map(|(day, usage)| (day.as_str(), usage.as_slice())),
             )
         });
         VariantObservations {
             variant_id: variant_id.to_owned(),
-            runs,
-            succeeded,
-            failed,
+            runs: self.runs,
+            succeeded: self.succeeded,
+            failed: self.failed,
             running: self.running,
-            measured_runs: measured,
-            duration_ms: summary(self.run_ms, run_ms),
-            call_ms: summary(self.call_ms, call_ms),
-            time_to_first_token_ms: summary(self.ttft_ms, ttft_ms),
-            llm_calls,
-            input_tokens: input,
-            output_tokens: output,
+            measured_runs: self.measured_runs,
+            duration_ms: DurationSummary::exact(self.run_ms),
+            call_ms: DurationSummary::exact(self.call_ms),
+            time_to_first_token_ms: DurationSummary::exact(self.ttft_ms),
+            llm_calls: self.llm_calls,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
             models,
             cost,
-            first_seen_at: first,
-            last_seen_at: last,
-            periods: periods.len(),
-            runs_from_periods: periods.iter().map(|period| period.runs).sum(),
-            incomplete_periods: periods.iter().filter(|period| !period.complete).count(),
+            first_seen_at: self.first_seen_at,
+            last_seen_at: self.last_seen_at,
+            periods: 0,
+            runs_from_periods: 0,
+            incomplete_periods: 0,
+            late_runs: 0,
+            counted_from: None,
+            window_before_observations: false,
         }
+    }
+}
+
+/// One variant's figures over a window, from the periods it reaches into:
+/// those written, and those the fold has not written yet — each counted once,
+/// because a period is in one or the other — with the runs in flight.
+#[must_use]
+pub fn from_periods(
+    variant_id: &str,
+    written: &[ObservedPeriod],
+    unwritten: &[ObservedPeriod],
+    running: u64,
+    counted_from: Option<i64>,
+    window_before_observations: bool,
+    prices: Option<&ModelPrices>,
+) -> VariantObservations {
+    let mut total = ObservedPeriod {
+        variant_id: variant_id.to_owned(),
+        complete: true,
+        ..ObservedPeriod::default()
+    };
+    let mut by_day: BTreeMap<String, Vec<ModelUsage>> = BTreeMap::new();
+    for period in written.iter().chain(unwritten) {
+        total.merge(period);
+        let day = by_day.entry(day_of(period.from)).or_default();
+        for model in &period.models {
+            ModelUsage::add_to(day, model);
+        }
+    }
+    let seconds = |at: Option<i64>| at.and_then(|at| OffsetDateTime::from_unix_timestamp(at).ok());
+    VariantObservations {
+        variant_id: variant_id.to_owned(),
+        runs: total.runs,
+        succeeded: total.succeeded,
+        failed: total.failed,
+        running,
+        measured_runs: total.measured_runs,
+        duration_ms: total.run_ms.summary(),
+        call_ms: total.call_ms.summary(),
+        time_to_first_token_ms: total.time_to_first_token_ms.summary(),
+        llm_calls: total.llm_calls,
+        input_tokens: total.input_tokens,
+        output_tokens: total.output_tokens,
+        cost: prices.map(|table| {
+            table.cost_by_day(
+                by_day
+                    .iter()
+                    .map(|(day, usage)| (day.as_str(), usage.as_slice())),
+            )
+        }),
+        models: total.models,
+        first_seen_at: seconds(total.first_seen_at),
+        last_seen_at: seconds(total.last_seen_at),
+        periods: written.len(),
+        runs_from_periods: written.iter().map(|period| period.runs).sum(),
+        incomplete_periods: written
+            .iter()
+            .chain(unwritten)
+            .filter(|period| !period.complete)
+            .count(),
+        late_runs: total.late_runs,
+        counted_from: seconds(counted_from),
+        window_before_observations,
     }
 }
 
@@ -424,21 +480,9 @@ fn number(span: &CompletedSpan, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// Whether `ended` falls in one of these written periods.
-fn written(periods: &[(i64, i64)], ended: Option<OffsetDateTime>) -> bool {
-    ended.is_some_and(|at| {
-        let at = at.unix_timestamp();
-        periods.iter().any(|(from, to)| (*from..*to).contains(&at))
-    })
-}
-
 /// One row per variant asked about, in the order asked, whether or not any
 /// run named it — "never observed" is an answer, and an absent row would read
 /// as a variant nobody asked about.
-///
-/// `written` are the periods whose record is included: a run that ended in one
-/// is that record's, and the live fold leaves it out rather than count it
-/// twice.
 #[must_use]
 pub fn compute<'a>(
     runs: impl IntoIterator<Item = &'a RunSummary>,
@@ -446,25 +490,15 @@ pub fn compute<'a>(
     variant_ids: &[&str],
     window_seconds: Option<i64>,
     now: OffsetDateTime,
-    periods: &[ObservedPeriod],
     prices: Option<&ModelPrices>,
 ) -> Vec<VariantObservations> {
     let since = crate::window::cutoff(window_seconds, now);
-    let ranges: Vec<(i64, i64)> = {
-        let mut ranges: Vec<(i64, i64)> = periods
-            .iter()
-            .map(|period| (period.from, period.to))
-            .collect();
-        ranges.sort_unstable();
-        ranges.dedup();
-        ranges
-    };
     let mut rows: Vec<(&str, Accumulated)> = variant_ids
         .iter()
         .map(|variant_id| (*variant_id, Accumulated::default()))
         .collect();
     for run in runs {
-        if since.is_some_and(|start| run.last_event_at < start) || written(&ranges, run.ended_at) {
+        if since.is_some_and(|start| run.last_event_at < start) {
             continue;
         }
         let Some((_, row)) = run
@@ -477,13 +511,7 @@ pub fn compute<'a>(
         row.add(run, spans.get(&run.run_id));
     }
     rows.into_iter()
-        .map(|(variant_id, row)| {
-            let own: Vec<&ObservedPeriod> = periods
-                .iter()
-                .filter(|period| period.variant_id == variant_id)
-                .collect();
-            row.observations(variant_id, &own, prices)
-        })
+        .map(|(variant_id, row)| row.observations(variant_id, prices))
         .collect()
 }
 
@@ -584,7 +612,7 @@ mod tests {
             ])
             .collect();
 
-        let [row] = compute(&runs, &HashMap::new(), &["v1"], None, NOW, &[], None)
+        let [row] = compute(&runs, &HashMap::new(), &["v1"], None, NOW, None)
             .try_into()
             .expect("one row per variant asked about");
 
@@ -619,7 +647,7 @@ mod tests {
             run("served", Some("v1"), RunStatus::Succeeded, 200),
         ];
 
-        let row = &compute(&runs, &HashMap::new(), &["v1"], None, NOW, &[], None)[0];
+        let row = &compute(&runs, &HashMap::new(), &["v1"], None, NOW, None)[0];
 
         assert_eq!((row.runs, row.measured_runs), (1, 1));
         assert_eq!(
@@ -637,7 +665,6 @@ mod tests {
             &["v1", "v2"],
             None,
             NOW,
-            &[],
             None,
         );
 
@@ -655,7 +682,6 @@ mod tests {
             &["v1"],
             Some(60),
             NOW,
-            &[],
             None,
         );
 
@@ -684,7 +710,7 @@ mod tests {
             }],
         };
 
-        let row = &compute(&runs, &spans, &["v1"], None, NOW, &[], Some(&prices))[0];
+        let row = &compute(&runs, &spans, &["v1"], None, NOW, Some(&prices))[0];
 
         assert_eq!(
             row.call_ms.as_ref().map(|calls| (calls.count, calls.max)),
@@ -702,73 +728,75 @@ mod tests {
     }
 
     #[test]
-    fn a_written_period_is_counted_once_and_its_runs_are_left_out_of_the_live_fold() {
-        let runs: Vec<RunSummary> = (1..=4)
-            .map(|at| {
-                run(
-                    &format!("r{at}"),
-                    Some("v1"),
-                    RunStatus::Succeeded,
-                    at * 100,
-                )
-            })
-            .collect();
-        let from = datetime!(2026-09-13 10:00:00 UTC).unix_timestamp();
-        // What the period fold wrote for the first two, which ended in the hour.
-        let mut record = ObservedPeriod {
-            variant_id: "v1".to_owned(),
-            from,
-            to: from + 3_600,
-            runs: 2,
-            succeeded: 2,
-            complete: true,
-            ..ObservedPeriod::default()
+    fn a_window_s_periods_add_up_written_or_not_and_each_is_priced_on_its_day() {
+        let day = datetime!(2026-09-13 00:00:00 UTC).unix_timestamp();
+        let period = |from: i64, runs: u64, took: &[i64], complete: bool| {
+            let mut record = ObservedPeriod {
+                variant_id: "v1".to_owned(),
+                from,
+                to: from + 3_600,
+                runs,
+                succeeded: runs,
+                llm_calls: runs,
+                models: vec![ModelUsage {
+                    model: "gpt-4o".to_owned(),
+                    calls: runs,
+                    input_tokens: 1_000_000 * i64::try_from(runs).unwrap(),
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                }],
+                late_runs: u64::from(!complete),
+                complete,
+                ..ObservedPeriod::default()
+            };
+            for ms in took {
+                record.run_ms.add(*ms);
+            }
+            record
         };
-        record.run_ms.add(100);
-        record.run_ms.add(200);
-        let written = vec![record];
-        // Two more runs ended in the same period, which the record holds, and
-        // the read model since lost the first two.
-        let [row] = compute(
-            &runs[2..],
-            &HashMap::new(),
-            &["v1"],
-            Some(7_200),
-            NOW,
-            &written,
-            None,
-        )
-        .try_into()
-        .expect("one row");
+        let written = [period(day - 3_600, 2, &[100, 200], true)];
+        let unwritten = [period(day, 1, &[250], false)];
+        let prices = ModelPrices {
+            currency: "USD".into(),
+            prices: [("2026-09-01", 1.0), ("2026-09-13", 2.0)]
+                .into_iter()
+                .map(|(as_of, input)| ModelPrice {
+                    model: "gpt-4o".into(),
+                    input_per_million: input,
+                    output_per_million: 0.0,
+                    cached_input_per_million: None,
+                    source: "https://openai.com/api/pricing".into(),
+                    as_of: as_of.into(),
+                })
+                .collect(),
+        };
 
-        assert_eq!(
-            row.runs, 2,
-            "only what the record holds: the rest ended in it"
+        let row = from_periods(
+            "v1",
+            &written,
+            &unwritten,
+            4,
+            Some(day - 3_600),
+            false,
+            Some(&prices),
         );
-        assert_eq!(row.runs_from_periods, 2);
-        assert_eq!((row.periods, row.incomplete_periods), (1, 0));
 
-        let later = datetime!(2026-09-13 12:00:00 UTC);
-        let mut after = run("r9", Some("v1"), RunStatus::Succeeded, 250);
-        after.started_at = later;
-        after.last_event_at = later + time::Duration::milliseconds(250);
-        after.ended_at = Some(after.last_event_at);
-        let [row] = compute(
-            [&after],
-            &HashMap::new(),
-            &["v1"],
-            Some(10_800),
-            later + time::Duration::minutes(1),
-            &written,
-            None,
-        )
-        .try_into()
-        .expect("one row");
-        assert_eq!(row.runs, 3, "the record's two and the live one");
+        assert_eq!((row.runs, row.running, row.late_runs), (3, 4, 1));
+        assert_eq!(
+            (row.periods, row.runs_from_periods, row.incomplete_periods),
+            (1, 2, 1)
+        );
         let duration = row.duration_ms.expect("finished runs");
-        assert!(duration.bucketed);
-        assert_eq!(duration.count, 3);
-        assert!(duration.max == 250 && duration.p50 >= 200 && duration.p50 <= 250);
+        assert!(duration.bucketed && duration.count == 3 && duration.max == 250);
+        let cost = row.cost.expect("a table");
+        assert!(
+            (cost.amount - (2.0 * 1.0 + 1.0 * 2.0)).abs() < 1e-9,
+            "the day before at the first price, the day itself at the second"
+        );
+        assert_eq!(
+            row.counted_from.map(OffsetDateTime::unix_timestamp),
+            Some(day - 3_600)
+        );
     }
 
     #[test]

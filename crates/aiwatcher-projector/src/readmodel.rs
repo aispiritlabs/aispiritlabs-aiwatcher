@@ -716,15 +716,12 @@ impl ReadModel {
         crate::dimensions::compute(&runs, &state.spans, kind, filter, OffsetDateTime::now_utc())
     }
 
-    /// What each of these variants was observed doing, from the runs that
-    /// name it. See [`crate::observations`].
-    /// What each variant was observed doing over the window: the runs held,
-    /// less those a written period in `periods` holds, and those periods.
+    /// What each of these variants was observed doing, from the runs held
+    /// that name it. See [`crate::observations`].
     pub async fn variant_observations(
         &self,
         variant_ids: &[&str],
         window_seconds: Option<i64>,
-        periods: &[crate::observations::ObservedPeriod],
         prices: Option<&aiwatcher_core::prices::ModelPrices>,
     ) -> Vec<crate::observations::VariantObservations> {
         let state = self.state.read().await;
@@ -734,7 +731,6 @@ impl ReadModel {
             variant_ids,
             window_seconds,
             OffsetDateTime::now_utc(),
-            periods,
             prices,
         )
     }
@@ -1201,7 +1197,7 @@ mod tests {
         assert_eq!(benchmark.variant_id.as_deref(), Some("v1"));
         assert_eq!(benchmark.evaluation_id.as_deref(), Some("answers-v1"));
 
-        let observed = model.variant_observations(&["v1"], None, &[], None).await;
+        let observed = model.variant_observations(&["v1"], None, None).await;
         assert_eq!((observed[0].runs, observed[0].measured_runs), (1, 1));
     }
 

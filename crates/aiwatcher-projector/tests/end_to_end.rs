@@ -1045,17 +1045,34 @@ async fn observed_periods_survive_a_restart_that_does_not_replay_the_log() {
     project(&bus, output(), 10).await;
 
     let hour = time::macros::datetime!(2026-09-13 09:00:00 UTC).unix_timestamp();
-    let periods = store
-        .read(&["v1"], hour, hour + 7_200)
-        .await
-        .expect("reads");
-    let runs: Vec<(i64, u64, bool)> = periods
-        .iter()
-        .map(|period| (period.from - hour, period.runs, period.complete))
-        .collect();
+    let mut runs = Vec::new();
+    for from in [hour, hour + 3_600] {
+        let records = store
+            .period(3_600, from, &["v1"])
+            .await
+            .expect("reads")
+            .expect("written");
+        runs.extend(
+            records
+                .iter()
+                .map(|period| (period.from - hour, period.runs, period.complete)),
+        );
+    }
     assert_eq!(
         runs,
         [(0, 2, true), (3_600, 2, true)],
         "r1 and r2 in the first hour, the run across it and r3 in the second, each once"
+    );
+
+    // A fourth process answers a window from what the third saved: the written
+    // hours, and the third hour it still held open.
+    let reader =
+        aiwatcher_projector::PeriodOutput::new(store.clone(), "aiwatcher-projector", 3_600);
+    assert_eq!(reader.load().await, Some(10));
+    let observed = reader.observe(&["v1"], hour, None).await.expect("reads");
+    assert_eq!(
+        (observed[0].runs, observed[0].runs_from_periods),
+        (5, 4),
+        "each run once, r4 from the saved state"
     );
 }

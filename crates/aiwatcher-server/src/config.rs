@@ -488,8 +488,10 @@ pub struct Config {
     /// credential other than the answer's own does.
     pub witnesses: Vec<String>,
     /// How wide a period of what variants were observed doing is when the
-    /// projector writes it down as the log passes it. An hour unless a
-    /// deployment says otherwise; a fold saved for another width starts afresh.
+    /// projector writes it down as the log passes it — and so how far before a
+    /// window's start its counting may begin. Five minutes unless a deployment
+    /// says otherwise, rolled up into hours and days; a fold saved for another
+    /// width starts afresh.
     pub observation_period: Duration,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
@@ -710,7 +712,7 @@ impl Default for Config {
             dataset_sources: None,
             model_prices: None,
             witnesses: Vec::new(),
-            observation_period: Duration::from_secs(3_600),
+            observation_period: Duration::from_secs(300),
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
@@ -988,11 +990,12 @@ impl Config {
             let seconds = raw
                 .parse::<u64>()
                 .ok()
-                .filter(|seconds| (1..=86_400).contains(seconds))
+                .filter(|seconds| *seconds > 0 && 3_600 % seconds == 0)
                 .ok_or(ConfigError::Invalid {
                     name: "AIWATCHER_OBSERVATION_PERIOD_SECONDS",
                     value: raw,
-                    expected: "how many seconds a written period spans, one to a day",
+                    expected: "number of seconds dividing an hour, such as 60, 300 or 3600, so \
+                               periods add up to hours and days",
                 })?;
             config.observation_period = Duration::from_secs(seconds);
         }

@@ -154,6 +154,9 @@ function serving() {
               periods: 3,
               runs_from_periods: 12,
               incomplete_periods: 1,
+              late_runs: 2,
+              counted_from: '2026-09-13T09:05:00Z',
+              window_before_observations: true,
               cost: {
                 currency: 'USD',
                 amount: 0.008,
@@ -183,6 +186,7 @@ function serving() {
               periods: 0,
               runs_from_periods: 0,
               incomplete_periods: 0,
+              late_runs: 0,
             },
           ],
         },
@@ -234,7 +238,7 @@ it('lists the contexts, and opens one as its variants beside the chosen baseline
   expect(screen.getByText('800 ms / 2.00 s / 4.00 s')).toBeTruthy();
   expect(
     screen.getByText(
-      /over 20 finished · 2,000 \/ 300 tokens in 20 calls · 4 measured runs left out · 12 runs from 3 written periods, 1 incomplete/,
+      /over 20 finished · 2,000 \/ 300 tokens in 20 calls · 4 measured runs left out · 12 runs from 3 written periods, 1 incomplete · counted from 2026-09-13 09:05 UTC, nothing observed before · 2 ended late and counted when they arrived/,
     ),
   ).toBeTruthy();
   // Each call's time, bucketed where written periods are in it, and a cost

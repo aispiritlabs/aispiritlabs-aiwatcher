@@ -9241,12 +9241,17 @@ export type VariantManifest = {
 export type VariantObservations = {
     call_ms?: null | DurationSummary;
     cost?: null | TokenCost;
+    /**
+     * Where a window's counting starts: the beginning of the period its start
+     * falls in, which may be before it. Absent without a window.
+     */
+    counted_from?: string | null;
     duration_ms?: null | DurationSummary;
     failed: number;
     first_seen_at?: string | null;
     /**
-     * Of the periods, those whose fold could not vouch it held every run that
-     * ended in them.
+     * Of the periods counted, written or not, those whose fold could not
+     * vouch it held every run that ended in them.
      */
     incomplete_periods: number;
     /**
@@ -9255,6 +9260,11 @@ export type VariantObservations = {
      */
     input_tokens: number;
     last_seen_at?: string | null;
+    /**
+     * Of `runs`, those whose end reached the log after the period they ended
+     * in had closed, counted in the period that was open when it did.
+     */
+    late_runs?: number;
     llm_calls: number;
     /**
      * Runs naming it that answered a measurement's cases, left out of every
@@ -9267,8 +9277,8 @@ export type VariantObservations = {
     models?: Array<ModelUsage>;
     output_tokens: number;
     /**
-     * Written periods these figures include. Nought when the window asked for
-     * none, or reached no further back than what the read model holds.
+     * Written periods these figures include. Nought without a window, which
+     * the read model answers.
      */
     periods: number;
     running: number;
@@ -9277,13 +9287,18 @@ export type VariantObservations = {
      */
     runs: number;
     /**
-     * Of `runs`, those counted from written periods rather than from the read
-     * model — which leaves out every run that ended in one.
+     * Of `runs`, those counted from written periods rather than from the
+     * periods the fold has not written yet.
      */
     runs_from_periods: number;
     succeeded: number;
     time_to_first_token_ms?: null | DurationSummary;
     variant_id: string;
+    /**
+     * The window reaches back before the fold began observing, so nothing
+     * before `counted_from` could be counted.
+     */
+    window_before_observations?: boolean;
 };
 
 /**
@@ -13230,8 +13245,8 @@ export type GetExperimentData = {
         baseline?: string | null;
         /**
          * How far back the observed runs reach, in seconds; absent or zero is
-         * everything the read model still holds. A window also reads every
-         * written period lying wholly inside it.
+         * everything the read model still holds. A window counts every period it
+         * reaches into, whole, and says where counting began.
          */
         window_seconds?: number | null;
     };

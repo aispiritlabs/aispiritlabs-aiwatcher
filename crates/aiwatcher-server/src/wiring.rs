@@ -686,6 +686,13 @@ pub async fn build(config: Config) -> Result<Runtime> {
             .map(|hubs| hubs as Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>),
     )
     .await?;
+    let observations = registries.objects.clone().map(|store| {
+        Arc::new(aiwatcher_projector::PeriodOutput::new(
+            aiwatcher_projector::PeriodStore::new(store),
+            config.processor_id.clone(),
+            i64::try_from(config.observation_period.as_secs()).unwrap_or(300),
+        ))
+    });
     let outputs = Outputs {
         live: Arc::clone(&live) as _,
         traces,
@@ -693,14 +700,9 @@ pub async fn build(config: Config) -> Result<Runtime> {
         dead_letters,
         read_model: Arc::clone(&read_model),
         // What variants were observed doing, written as the log passes each
-        // period, wherever there is an object store to write it to.
-        periods: registries.objects.clone().map(|store| {
-            Arc::new(aiwatcher_projector::PeriodOutput::new(
-                aiwatcher_projector::PeriodStore::new(store),
-                config.processor_id.clone(),
-                i64::try_from(config.observation_period.as_secs()).unwrap_or(3_600),
-            ))
-        }),
+        // period, wherever there is an object store to write it to — and read
+        // back by every window over it.
+        periods: observations.clone(),
     };
 
     // Each arm produces the same three things; only the concrete types differ.
@@ -838,10 +840,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         training: registries.training,
         evaluations: registries.evaluations,
         evaluation_bundles: registries.evaluation_bundles,
-        observation_periods: registries
-            .objects
-            .clone()
-            .map(aiwatcher_projector::PeriodStore::new),
+        observations,
         model_prices: build_model_prices(&config)?,
         // A witness's digests of a call's words are keyed by the credential it
         // published with, which this deployment issued: every ingest token's

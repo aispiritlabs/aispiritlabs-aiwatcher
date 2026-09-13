@@ -215,10 +215,11 @@ pub struct AppState {
     /// same shape as `prompts` — an empty listing would say somebody's upload
     /// had been accepted and lost.
     pub evaluation_bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
-    /// Closed periods of what variants were observed doing, written as they
-    /// close, which a window reaching past the read model is answered from.
-    /// `None` without an object store: observations are then the read model's.
-    pub observation_periods: Option<aiwatcher_projector::PeriodStore>,
+    /// The projector's fold of what variants were observed doing, period by
+    /// period, which answers every window over those observations — from the
+    /// periods it wrote and from its own memory. `None` without an object
+    /// store to write periods to: a window is then the read model's.
+    pub observations: Option<Arc<aiwatcher_projector::PeriodOutput>>,
     /// What models' tokens cost, as the deployment loaded it. `None` prices
     /// nothing.
     pub model_prices: Option<Arc<aiwatcher_core::prices::ModelPrices>>,

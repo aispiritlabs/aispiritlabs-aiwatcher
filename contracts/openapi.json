@@ -8780,7 +8780,7 @@
           {
             "name": "window_seconds",
             "in": "query",
-            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the read model still holds. A window also reads every\nwritten period lying wholly inside it.",
+            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the read model still holds. A window counts every period it\nreaches into, whole, and says where counting began.",
             "required": false,
             "schema": {
               "type": [
@@ -29354,6 +29354,14 @@
               }
             ]
           },
+          "counted_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Where a window's counting starts: the beginning of the period its start\nfalls in, which may be before it. Absent without a window."
+          },
           "duration_ms": {
             "oneOf": [
               {
@@ -29379,7 +29387,7 @@
           },
           "incomplete_periods": {
             "type": "integer",
-            "description": "Of the periods, those whose fold could not vouch it held every run that\nended in them.",
+            "description": "Of the periods counted, written or not, those whose fold could not\nvouch it held every run that ended in them.",
             "minimum": 0
           },
           "input_tokens": {
@@ -29393,6 +29401,12 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "late_runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `runs`, those whose end reached the log after the period they ended\nin had closed, counted in the period that was open when it did.",
+            "minimum": 0
           },
           "llm_calls": {
             "type": "integer",
@@ -29418,7 +29432,7 @@
           },
           "periods": {
             "type": "integer",
-            "description": "Written periods these figures include. Nought when the window asked for\nnone, or reached no further back than what the read model holds.",
+            "description": "Written periods these figures include. Nought without a window, which\nthe read model answers.",
             "minimum": 0
           },
           "running": {
@@ -29435,7 +29449,7 @@
           "runs_from_periods": {
             "type": "integer",
             "format": "int64",
-            "description": "Of `runs`, those counted from written periods rather than from the read\nmodel — which leaves out every run that ended in one.",
+            "description": "Of `runs`, those counted from written periods rather than from the\nperiods the fold has not written yet.",
             "minimum": 0
           },
           "succeeded": {
@@ -29456,6 +29470,10 @@
           },
           "variant_id": {
             "type": "string"
+          },
+          "window_before_observations": {
+            "type": "boolean",
+            "description": "The window reaches back before the fold began observing, so nothing\nbefore `counted_from` could be counted."
           }
         }
       },

@@ -186,7 +186,7 @@ impl Fixture {
         let state = AppState {
             evaluations: None,
             evaluation_bundles: None,
-            observation_periods: None,
+            observations: None,
             model_prices: None,
             witnesses: aiwatcher_evaluation::Witnesses::default(),
             answer_limits: Default::default(),
