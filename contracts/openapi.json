@@ -19305,7 +19305,7 @@
           },
           "require_witnessed_answer": {
             "type": "boolean",
-            "description": "Every generated answer must also be, word for word, a reply a witness\nrelayed for its run — or what the application said, before the reply\ncame, it would take out of it — to a request that held its case's input\nand, where the variant pins a prompt, nothing but that prompt rendered\nand its values, the answer not among them: which an application calling\nits provider around the gateway, or telling the model what to say,\ncannot show; fewer is `incomplete`. Off by default."
+            "description": "Every generated answer must also be, word for word, a reply a witness\nrelayed for its run — or what the application said, before the reply\ncame, it would take out of it — to a request that held its case's input\nand, where the variant pins a prompt, nothing but that prompt rendered,\nthe answer not in it, with values that are each the case's input or a\npart of it or the reply of another call so made: which an application\ncalling its provider around the gateway, telling the model what to say\nor handing it a value it made cannot show; fewer is `incomplete`. Off by\ndefault."
           },
           "tolerance": {
             "type": "object",
@@ -19482,7 +19482,7 @@
               "integer",
               "null"
             ],
-            "description": "Answers one witnessed call relayed as its reply to a request that held\ntheir case's input and nothing but the pinned prompt and its values;\nabsent when the variant pins no prompt.",
+            "description": "Answers one witnessed call relayed as its reply to a request that was\nnothing but the pinned prompt, rendered with their case's input or with\nwhat a call so made had replied; absent when the variant pins no prompt.",
             "minimum": 0
           },
           "witnessed_input": {
@@ -21921,6 +21921,30 @@
             "minimum": 0
           },
           "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MissedEvents": {
+        "type": "object",
+        "description": "Events a window's span may be short of, because the fold was never given them.",
+        "required": [
+          "events",
+          "from",
+          "until"
+        ],
+        "properties": {
+          "events": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "until": {
             "type": "string",
             "format": "date-time"
           }
@@ -29368,7 +29392,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "Where a window's counting starts: its own start, to the slice of a\nperiod — a second at five-minute periods — or later, where observations\nbegan later. Absent without a window."
+            "description": "Where a window's counting starts: its own start, to the second — earlier\nonly where a period written before periods were kept by the second\nholds the window's start inside a wider slice — or later, where\nobservations began later. Absent without a window."
           },
           "duration_ms": {
             "oneOf": [
@@ -29426,6 +29450,13 @@
             "format": "int64",
             "description": "Runs naming it that answered a measurement's cases, left out of every\nother figure.",
             "minimum": 0
+          },
+          "missed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MissedEvents"
+            },
+            "description": "Events the fold was never given when it came to them — the log's\nretention had passed them, a fold with no state left started again from\nfurther back than the log reaches, or a record there could not be read\n— each with the span of time they may have lain in. A run that ended\nthere may be missing from every figure here, whatever variant it named."
           },
           "models": {
             "type": "array",

@@ -17,6 +17,11 @@
 //! marker also says where the fold was when the period closed, so a fold whose
 //! every saved state is gone starts again from the last period it wrote rather
 //! than from nothing.
+//!
+//! And what the fold could not read is written down under `gaps/`: positions
+//! the log no longer held when the fold came to them, and the span of time the
+//! events there may have lain in — so a window over that span says what it
+//! may be short of rather than reading as complete.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -47,6 +52,52 @@ pub struct FoldAt {
     /// The width of its periods from each moment on.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub widths: BTreeMap<i64, i64>,
+}
+
+/// Positions a fold expected and the log no longer held: the events between
+/// the last one it read and the next one the log gave it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogGap {
+    pub first_position: u64,
+    pub last_position: u64,
+    /// The span of time, in Unix seconds, those events may have lain in: from
+    /// the log's clock before them to the clock of the first event after.
+    pub from: i64,
+    pub until: i64,
+}
+
+impl LogGap {
+    /// How many events the log no longer held.
+    #[must_use]
+    pub const fn events(&self) -> u64 {
+        self.last_position - self.first_position + 1
+    }
+
+    /// Named by all it is, so a gap written twice lands on one key and one
+    /// listing answers which reach a window without reading a single object.
+    fn key(&self) -> String {
+        format!(
+            "{PREFIX}gaps/{:012}-{:012}-{:020}-{:020}.json",
+            self.until, self.from, self.first_position, self.last_position
+        )
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        let mut parts = key
+            .strip_prefix(&format!("{PREFIX}gaps/"))?
+            .strip_suffix(".json")?
+            .splitn(4, '-');
+        let until = parts.next()?.parse().ok()?;
+        let from = parts.next()?.parse().ok()?;
+        let first_position = parts.next()?.parse().ok()?;
+        let last_position = parts.next()?.parse().ok()?;
+        Some(Self {
+            first_position,
+            last_position,
+            from,
+            until,
+        })
+    }
 }
 
 /// What says a period was written, and which variants it holds records for.
@@ -272,6 +323,32 @@ impl PeriodStore {
             .map(|marker| (level, from, marker.fold)))
     }
 
+    /// Write down positions the fold found missing.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure.
+    pub async fn write_gap(&self, gap: &LogGap) -> Result<(), PortError> {
+        self.0.create(&gap.key(), encoded(gap)?).await.map(|_| ())
+    }
+
+    /// Every gap written whose span reaches `since` or later, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure.
+    pub async fn gaps(&self, since: i64) -> Result<Vec<LogGap>, PortError> {
+        let mut gaps: Vec<LogGap> = self
+            .keys(&format!("{PREFIX}gaps/"))
+            .await?
+            .iter()
+            .filter_map(|key| LogGap::from_key(key))
+            .filter(|gap| gap.until >= since)
+            .collect();
+        gaps.sort_by_key(|gap| (gap.from, gap.first_position));
+        Ok(gaps)
+    }
+
     async fn keys(&self, prefix: &str) -> Result<Vec<String>, PortError> {
         Ok(self
             .0
@@ -478,6 +555,30 @@ pub(crate) mod tests {
             (300, 3_300, Some(38)),
             "the hour names the fold's width, whose periods are listed; the last ends with it"
         );
+    }
+
+    #[tokio::test]
+    async fn a_gap_is_written_once_and_listed_for_the_windows_it_reaches() {
+        let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
+        let gap = LogGap {
+            first_position: 41,
+            last_position: 140,
+            from: 1_789_300_800,
+            until: 1_789_304_400,
+        };
+        store.write_gap(&gap).await.unwrap();
+        store.write_gap(&gap).await.unwrap();
+
+        assert_eq!(
+            store.gaps(gap.from).await.unwrap(),
+            std::slice::from_ref(&gap)
+        );
+        assert_eq!(
+            store.gaps(gap.until).await.unwrap(),
+            std::slice::from_ref(&gap)
+        );
+        assert!(store.gaps(gap.until + 1).await.unwrap().is_empty());
+        assert_eq!(gap.events(), 100);
     }
 
     #[tokio::test]

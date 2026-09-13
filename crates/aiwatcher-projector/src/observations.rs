@@ -92,9 +92,10 @@ pub struct VariantObservations {
     /// in had closed — counted there all the same.
     #[serde(default)]
     pub late_runs: u64,
-    /// Where a window's counting starts: its own start, to the slice of a
-    /// period — a second at five-minute periods — or later, where observations
-    /// began later. Absent without a window.
+    /// Where a window's counting starts: its own start, to the second — earlier
+    /// only where a period written before periods were kept by the second
+    /// holds the window's start inside a wider slice — or later, where
+    /// observations began later. Absent without a window.
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
@@ -105,6 +106,23 @@ pub struct VariantObservations {
     /// before `counted_from` could be counted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub window_before_observations: bool,
+    /// Events the fold was never given when it came to them — the log's
+    /// retention had passed them, a fold with no state left started again from
+    /// further back than the log reaches, or a record there could not be read
+    /// — each with the span of time they may have lain in. A run that ended
+    /// there may be missing from every figure here, whatever variant it named.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missed: Vec<MissedEvents>,
+}
+
+/// Events a window's span may be short of, because the fold was never given them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct MissedEvents {
+    pub events: u64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub from: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub until: OffsetDateTime,
 }
 
 /// Durations, in milliseconds, over this many.
@@ -249,9 +267,10 @@ pub struct ObservedPeriod {
     /// Whether the fold saw every run counted here from its start: one it
     /// did not is counted with no duration.
     pub complete: bool,
-    /// These runs by the slice of the period they ended in, keyed by the
-    /// slice's offset in seconds from `from`. Kept at a period's own width, not
-    /// in the hours and days it adds up to.
+    /// These runs by the second of the period they ended in, keyed by that
+    /// second's offset from `from` — a record written before seconds were kept
+    /// may hold wider slices, each with its own `from` and `to`. Kept at a
+    /// period's own width, not in the hours and days it adds up to.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub slices: BTreeMap<u32, ObservedPeriod>,
     /// Runs that ended in an earlier period and reached the log after it
@@ -378,6 +397,23 @@ impl ObservedPeriod {
     }
 }
 
+impl ObservedPeriod {
+    /// Where counting from `since` really starts in this record, when the
+    /// period starting at `edge` counts a slice that begins before `since` —
+    /// one written when a period kept wider slices than a second.
+    #[must_use]
+    pub fn straddled_from(&self, edge: i64, since: i64) -> Option<i64> {
+        [self]
+            .into_iter()
+            .chain(self.late.values())
+            .filter(|record| record.from == edge && since > edge)
+            .flat_map(|record| record.slices.values())
+            .filter(|slice| slice.from < since && slice.to > since)
+            .map(|slice| slice.from)
+            .min()
+    }
+}
+
 /// One variant's figures while they are being folded.
 #[derive(Debug, Default)]
 struct Accumulated {
@@ -501,6 +537,7 @@ impl Accumulated {
             late_runs: 0,
             counted_from: None,
             window_before_observations: false,
+            missed: Vec::new(),
         }
     }
 }
@@ -519,6 +556,8 @@ pub struct Counted {
     pub counted_from: Option<i64>,
     /// The window reaches back before the fold began observing.
     pub before_observations: bool,
+    /// What the log no longer held in the window's span.
+    pub missed: Vec<crate::periods::LogGap>,
 }
 
 /// One part of a window's count.
@@ -588,6 +627,17 @@ pub fn from_periods(
         late_runs: runs_where(|part| part.late),
         counted_from: seconds(counted.counted_from),
         window_before_observations: counted.before_observations,
+        missed: counted
+            .missed
+            .iter()
+            .filter_map(|gap| {
+                Some(MissedEvents {
+                    events: gap.events(),
+                    from: seconds(Some(gap.from))?,
+                    until: seconds(Some(gap.until))?,
+                })
+            })
+            .collect(),
     }
 }
 
@@ -933,6 +983,7 @@ mod tests {
             ],
             periods: 1,
             running: 4,
+            missed: Vec::new(),
             counted_from: Some(day - 3_600),
             before_observations: false,
         };

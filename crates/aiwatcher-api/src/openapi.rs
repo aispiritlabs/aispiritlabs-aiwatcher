@@ -44,6 +44,7 @@ use utoipa::OpenApi;
         aiwatcher_projector::DimensionPage,
         aiwatcher_projector::DimensionSummary,
         aiwatcher_projector::VariantObservations,
+        aiwatcher_projector::MissedEvents,
         aiwatcher_projector::DurationSummary,
         aiwatcher_projector::SpanPage,
         aiwatcher_projector::SpanRow,

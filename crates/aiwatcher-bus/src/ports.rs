@@ -214,6 +214,15 @@ pub trait MessageSource: Send + Sync + fmt::Debug {
         options: SubscribeOptions,
     ) -> BusResult<BoxStream<'static, SourceMessage>>;
 
+    /// Whether every event's `global_position` is one after the event before
+    /// it, so a subscriber handed a position further on knows it was never
+    /// given what lay between — retention passed it, or a record there could
+    /// not be read. A log that numbers only some records says no, and a jump
+    /// then means nothing.
+    fn positions_are_contiguous(&self) -> bool {
+        false
+    }
+
     /// A bounded read, for the REST endpoints that serve history.
     async fn read(&self, from: &Checkpoint, limit: usize) -> BusResult<Vec<RecordedEvent>>;
 

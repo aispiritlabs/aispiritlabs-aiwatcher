@@ -182,7 +182,12 @@ where
         // committed, so a resume starts from whichever is behind: what the
         // fold already holds it skips, and nothing it lacks is passed by.
         let folded = match &self.outputs.periods {
-            Some(periods) => periods.load().await,
+            Some(periods) => {
+                periods
+                    .reads_contiguous_positions(self.source.positions_are_contiguous())
+                    .await;
+                periods.load().await
+            }
             None => None,
         };
         let from = if self.config.rebuild_on_start {

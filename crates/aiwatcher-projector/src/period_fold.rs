@@ -8,12 +8,16 @@
 //! producer closes nothing early — has passed it, rolled up into the hour and
 //! the day it lies in. A run is counted in the period it ended in: one whose
 //! end reaches the log after that period closed is held, by that period, in the
-//! oldest one still open (`late`), and each period keeps its runs by the slice
-//! they ended in, so a window starting inside a period counts what ended after.
+//! oldest one still open (`late`), and each period keeps its runs by the second
+//! they ended in, so a window starting inside a period counts what ended from
+//! its start on, whatever the period's width.
 //! Its state is saved with the position it was folded through; a restart loads
 //! the one furthest along — or, with none left, starts again from the last
-//! period written — and skips what it holds. A width configured anew takes over
-//! at the next hour, so periods of two widths never overlap.
+//! period written — and skips what it holds. On a log that numbers every event,
+//! a position the log no longer holds when the fold comes to it — retention
+//! passed it — is written down with the span of time it may have lain in, and
+//! the periods that span reaches say they are incomplete. A width configured
+//! anew takes over at the next hour, so periods of two widths never overlap.
 //!
 //! A window is answered here and nowhere else ([`PeriodOutput::observe`]):
 //! the periods it reaches into — written ones from the store, the rest from
@@ -32,7 +36,7 @@ use aiwatcher_core::prices::{ModelPrices, ModelUsage};
 use aiwatcher_core::{Phase, RecordedEvent, Subject};
 
 use crate::observations::{Counted, CountedPart, ObservedPeriod, VariantObservations};
-use crate::periods::{FoldAt, PeriodStore};
+use crate::periods::{FoldAt, LogGap, PeriodStore};
 
 /// Runs in flight past this are not tracked; each is counted at its end with
 /// no duration, in a period that says it is incomplete.
@@ -43,8 +47,6 @@ const MOST_CALLS_TIMED: usize = 1_000;
 const SAVE_EVERY: Duration = Duration::from_secs(15);
 /// Periods read from the store at once when a window is answered.
 const READ_AT_ONCE: usize = 16;
-/// How many slices a period keeps its runs in, at most.
-const SLICES: i64 = 300;
 const HOUR: i64 = 3_600;
 const DAY: i64 = 86_400;
 
@@ -129,6 +131,19 @@ pub struct PeriodFold {
     /// once these are written.
     #[serde(skip)]
     closed: Vec<ClosedPeriod>,
+    /// Positions the log no longer held when the fold came to them, not yet
+    /// written down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    missed: Vec<LogGap>,
+    /// The spans of time those positions may have lain in, `(from, until)`,
+    /// while a period they reach may still be counted into: a run placed in
+    /// one of those periods says it is incomplete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    missed_spans: Vec<(i64, i64)>,
+    /// Whether the log numbers every event one after the last, so a jump in
+    /// positions is events it no longer holds. The log's to say, never saved.
+    #[serde(skip)]
+    contiguous: bool,
 }
 
 fn millis(at: time::OffsetDateTime) -> i64 {
@@ -233,18 +248,29 @@ impl PeriodFold {
         self.widths.insert(switch, width);
     }
 
+    /// Read positions as a log that numbers every event one after the last.
+    pub fn reads_contiguous_positions(&mut self, contiguous: bool) {
+        self.contiguous = contiguous;
+    }
+
     /// Fold one event in, once: an event at or before `through` is skipped.
     pub fn apply(&mut self, event: &RecordedEvent) {
         let position = event.metadata.global_position;
         if self.through.is_some_and(|through| position <= through) {
             return;
         }
-        self.through = Some(position);
         let bound = event
             .metadata
             .occurred_at
             .min(event.metadata.ingested_at)
             .unix_timestamp();
+        if let Some(through) = self
+            .through
+            .filter(|through| self.contiguous && position > through + 1)
+        {
+            self.missed_before(through, position, bound);
+        }
+        self.through = Some(position);
         if self.began.is_none() {
             self.began = Some(self.floor_at(bound));
         }
@@ -254,6 +280,58 @@ impl PeriodFold {
         }
         self.clock = Some(self.clock.map_or(bound, |clock| clock.max(bound)));
         self.close();
+    }
+
+    /// The log gave `position` after `through`, and holds nothing between:
+    /// what lay there may have ended runs anywhere from the log's clock before
+    /// it to `bound`, so each period that span reaches — open now, or opened by
+    /// a run placed there later — says it is incomplete.
+    fn missed_before(&mut self, through: u64, position: u64, bound: i64) {
+        let from = self
+            .clock
+            .or(self.closed_through)
+            .or(self.began)
+            .unwrap_or(bound)
+            .min(bound);
+        self.missed.push(LogGap {
+            first_position: through + 1,
+            last_position: position - 1,
+            from,
+            until: bound,
+        });
+        self.missed_spans.push((from, bound));
+        let reached: Vec<i64> = self
+            .open
+            .keys()
+            .copied()
+            .filter(|start| *start <= bound && from < start + self.width_at(*start))
+            .collect();
+        for start in reached {
+            for record in self
+                .open
+                .get_mut(&start)
+                .into_iter()
+                .flat_map(|v| v.values_mut())
+            {
+                record.complete = false;
+            }
+        }
+        for (level, open) in &mut self.rollups {
+            for (start, variants) in open.range_mut(..=bound) {
+                if from < start + level {
+                    for record in variants.values_mut() {
+                        record.complete = false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether a period `[from, to)` reaches a span the log no longer held.
+    fn reaches_missed(&self, from: i64, to: i64) -> bool {
+        self.missed_spans
+            .iter()
+            .any(|(gap_from, until)| *gap_from < to && from <= *until)
     }
 
     fn fold(&mut self, event: &RecordedEvent, subject: Subject) {
@@ -376,7 +454,7 @@ impl PeriodFold {
         }
     }
 
-    /// Count one run's figures in the period it ended in and in its slice —
+    /// Count one run's figures in the period it ended in and in its second —
     /// held in the oldest open period, by the one it ended in, when that one
     /// has closed.
     fn place(&mut self, variant_id: &str, end_seconds: i64, run: &ObservedPeriod) {
@@ -386,17 +464,19 @@ impl PeriodFold {
             .max(self.began.unwrap_or(ended_in));
         let ended_width = self.width_at(ended_in);
         let open_width = self.width_at(open_from);
-        let slice = (ended_width / SLICES).max(1);
-        let offset = (end_seconds - ended_in).div_euclid(slice) * slice;
+        let offset = end_seconds - ended_in;
+        let missed = self.reaches_missed(ended_in, ended_in + ended_width)
+            || self.reaches_missed(open_from, open_from + open_width);
         let record = self
             .open
             .entry(open_from)
             .or_default()
             .entry(variant_id.to_owned())
             .or_insert_with(|| empty(variant_id, open_from, open_from + open_width));
-        if self
-            .gap_from
-            .is_some_and(|gap| gap == ended_in || gap == open_from)
+        if missed
+            || self
+                .gap_from
+                .is_some_and(|gap| gap == ended_in || gap == open_from)
         {
             record.complete = false;
         }
@@ -413,7 +493,7 @@ impl PeriodFold {
         counted
             .slices
             .entry(u32::try_from(offset).unwrap_or(u32::MAX))
-            .or_insert_with(|| empty("", ended_in + offset, ended_in + offset + slice))
+            .or_insert_with(|| empty("", ended_in + offset, ended_in + offset + 1))
             .merge(run);
     }
 
@@ -529,6 +609,8 @@ impl PeriodFold {
             }
         }
         self.closed_through = Some(edge);
+        // A late run may still be placed in a period a day behind the edge.
+        self.missed_spans.retain(|(_, until)| until + DAY >= edge);
     }
 
     /// Take what is closed and waiting to be written.
@@ -546,6 +628,11 @@ impl PeriodFold {
         {
             self.closed.remove(at);
         }
+    }
+
+    /// Forget a gap once it is written down.
+    fn gap_written(&mut self, gap: &LogGap) {
+        self.missed.retain(|held| held != gap);
     }
 
     /// Where the fold was, for a marker to say.
@@ -642,6 +729,8 @@ struct Window {
     held: Vec<ObservedPeriod>,
     /// Runs in flight heard from in the window, by variant.
     running: BTreeMap<String, u64>,
+    /// Gaps in the log reaching the window that are not written down yet.
+    missed: Vec<LogGap>,
 }
 
 impl PeriodFold {
@@ -654,7 +743,6 @@ impl PeriodFold {
         let wanted = |variant: &str| variant_ids.contains(&variant);
         let edge = self.floor_at(since).max(began);
         let sliced = since > edge;
-        let slice = (self.width_at(edge) / SLICES).max(1);
         let stored = self.plan(edge, base_written, sliced, i64::MAX);
         let held_from = edge.max(base_written);
         let held = self
@@ -679,15 +767,17 @@ impl PeriodFold {
         Window {
             edge,
             since,
-            counted_from: Some(if sliced {
-                edge + (since - edge).div_euclid(slice) * slice
-            } else {
-                edge
-            }),
+            counted_from: Some(if sliced { since } else { edge }),
             before_began: since < began,
             stored,
             held,
             running,
+            missed: self
+                .missed
+                .iter()
+                .filter(|gap| gap.until >= since)
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -738,9 +828,19 @@ impl PeriodOutput {
         let mut fold = self.fold.lock().await;
         if let Some(mut loaded) = loaded {
             loaded.change_width(width);
+            loaded.contiguous = fold.contiguous;
             *fold = loaded;
         }
         fold.through
+    }
+
+    /// Whether the log this fold reads numbers every event one after the
+    /// last, so a jump in positions is events it no longer holds.
+    pub async fn reads_contiguous_positions(&self, contiguous: bool) {
+        self.fold
+            .lock()
+            .await
+            .reads_contiguous_positions(contiguous);
     }
 
     /// A fold started again from the last period written, with the hours and
@@ -801,10 +901,23 @@ impl PeriodOutput {
     /// `false` when a period could not be written: the caller holds its
     /// checkpoint back, and the period is tried again at the next flush.
     pub async fn flush(&self, force: bool) -> bool {
-        let (waiting, at) = {
+        let (missed, waiting, at) = {
             let fold = self.fold.lock().await;
-            (fold.closed.clone(), fold.at(None))
+            (fold.missed.clone(), fold.closed.clone(), fold.at(None))
         };
+        for gap in missed {
+            if let Err(error) = self.store.write_gap(&gap).await {
+                tracing::warn!(%error, first = gap.first_position, last = gap.last_position, "a gap in the log could not be written down; holding the checkpoint");
+                return false;
+            }
+            tracing::warn!(
+                first = gap.first_position,
+                last = gap.last_position,
+                events = gap.events(),
+                "the log no longer held events the observation fold came to; the periods they may have ended runs in say they are incomplete"
+            );
+            self.fold.lock().await.gap_written(&gap);
+        }
         for period in waiting {
             let at = FoldAt {
                 through: period.through,
@@ -862,6 +975,12 @@ impl PeriodOutput {
         prices: Option<&ModelPrices>,
     ) -> Result<Vec<VariantObservations>, PortError> {
         let window = self.fold.lock().await.window(variant_ids, since);
+        let mut missed = self.store.gaps(since).await?;
+        for gap in &window.missed {
+            if !missed.contains(gap) {
+                missed.push(gap.clone());
+            }
+        }
         let wanted: Vec<String> = variant_ids.iter().map(|id| (*id).to_owned()).collect();
         let stored: Vec<Vec<ObservedPeriod>> = futures::stream::iter(window.stored.clone())
             .map(|(level, from)| {
@@ -884,6 +1003,7 @@ impl PeriodOutput {
                     running: window.running.get(*variant_id).copied().unwrap_or(0),
                     counted_from: window.counted_from,
                     before_observations: window.before_began,
+                    missed: missed.clone(),
                     ..Counted::default()
                 };
                 for (records, written) in [(&stored, true), (&window.held, false)] {
@@ -892,6 +1012,10 @@ impl PeriodOutput {
                         .filter(|record| record.variant_id == *variant_id)
                     {
                         counted.periods += usize::from(written);
+                        if let Some(from) = record.straddled_from(window.edge, window.since) {
+                            counted.counted_from =
+                                Some(counted.counted_from.map_or(from, |at| at.min(from)));
+                        }
                         counted.parts.extend(
                             record
                                 .counted_since(window.edge, window.since)
@@ -1246,6 +1370,128 @@ mod tests {
             .expect("reads");
         assert!(before[0].window_before_observations);
         assert_eq!(before[0].runs, 5);
+    }
+
+    #[tokio::test]
+    async fn an_hour_wide_period_counts_a_window_from_its_second_and_an_older_slice_says_where() {
+        let start = HOUR_START.unix_timestamp();
+        let mut log = Log::new();
+        log.served("before", 990, 1_000)
+            .served("after", 995, 1_005)
+            .served("next hour", 4_000, 4_010);
+        let objects = Arc::new(MemoryObjectStore::default());
+        let store = PeriodStore::new(objects.clone());
+        let output = PeriodOutput::new(store.clone(), "projector", 3_600);
+        for event in &log.events {
+            output.apply(event).await;
+            assert!(output.flush(false).await, "the memory store writes");
+        }
+
+        let [row] = output
+            .observe(&["v1"], start + 1_003, None)
+            .await
+            .expect("reads")
+            .try_into()
+            .expect("one row");
+        assert_eq!(
+            row.runs, 2,
+            "the run that ended at 1005 and the next hour's, not the one at 1000"
+        );
+        assert_eq!(
+            row.counted_from.map(time::OffsetDateTime::unix_timestamp),
+            Some(start + 1_003)
+        );
+
+        // The same hour as it was written when an hour kept twelve-second
+        // slices: counted from where the slice holding the window's start
+        // began, and saying so.
+        let mut written = store
+            .records(3_600, start)
+            .await
+            .expect("reads")
+            .into_iter()
+            .next()
+            .expect("the first hour was written");
+        let mut wide = ObservedPeriod {
+            from: start + 996,
+            to: start + 1_008,
+            ..ObservedPeriod::default()
+        };
+        for slice in std::mem::take(&mut written.slices).into_values() {
+            wide.merge(&slice);
+        }
+        written.slices = BTreeMap::from([(996, wide)]);
+        assert_eq!(
+            written.straddled_from(start, start + 1_003),
+            Some(start + 996)
+        );
+        assert_eq!(written.straddled_from(start, start + 1_008), None);
+    }
+
+    #[tokio::test]
+    async fn positions_the_log_no_longer_holds_are_written_down_and_the_periods_they_reach_say_so()
+    {
+        let start = HOUR_START.unix_timestamp();
+        let mut log = Log::new();
+        log.served("r1", 60, 62)
+            .served("evicted", 400, 410)
+            .served("r3", 700, 710);
+        // Retention took the second run's four events before the fold read them.
+        let kept: Vec<RecordedEvent> = log
+            .events
+            .iter()
+            .filter(|event| !(5..=8).contains(&event.metadata.global_position))
+            .cloned()
+            .collect();
+        let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
+        let output = PeriodOutput::new(store.clone(), "projector", 300);
+        output.reads_contiguous_positions(true).await;
+        for event in &kept {
+            output.apply(event).await;
+            assert!(output.flush(false).await, "the memory store writes");
+        }
+
+        let [row] = output
+            .observe(&["v1"], start, None)
+            .await
+            .expect("reads")
+            .try_into()
+            .expect("one row");
+        assert_eq!(row.runs, 2, "what the log still held");
+        assert_eq!(
+            row.missed
+                .iter()
+                .map(|gap| (
+                    gap.events,
+                    gap.from.unix_timestamp() - start,
+                    gap.until.unix_timestamp() - start
+                ))
+                .collect::<Vec<_>>(),
+            [(4, 62, 700)],
+            "from the log's clock before them to the first event after"
+        );
+        assert_eq!(
+            row.incomplete_periods, 2,
+            "the period open when the gap was found, and the one a run was placed in after"
+        );
+        assert_eq!(store.gaps(start).await.expect("lists").len(), 1);
+        let after = output
+            .observe(&["v1"], start + 701, None)
+            .await
+            .expect("reads");
+        assert!(after[0].missed.is_empty(), "a window after the span");
+
+        let unnumbered = output_over(&kept).await;
+        let [row] = unnumbered
+            .observe(&["v1"], start, None)
+            .await
+            .expect("reads")
+            .try_into()
+            .expect("one row");
+        assert!(
+            row.missed.is_empty() && row.incomplete_periods == 0,
+            "a log that does not number every event says nothing by a jump"
+        );
     }
 
     #[tokio::test]

@@ -337,6 +337,11 @@ impl MessageSink for FileWal {
 
 #[async_trait]
 impl MessageSource for FileWal {
+    /// Every append numbers its events one after the last.
+    fn positions_are_contiguous(&self) -> bool {
+        true
+    }
+
     async fn subscribe(
         &self,
         options: SubscribeOptions,

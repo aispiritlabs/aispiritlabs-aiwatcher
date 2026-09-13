@@ -307,6 +307,13 @@ impl MessageSink for LaserBus {
 
 #[async_trait]
 impl MessageSource for LaserBus {
+    /// A position is the record's offset in the one partition, and a broker
+    /// numbers a partition's records one after the last — removing old ones
+    /// by retention without renumbering the rest.
+    fn positions_are_contiguous(&self) -> bool {
+        true
+    }
+
     async fn subscribe(
         &self,
         options: SubscribeOptions,

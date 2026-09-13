@@ -3724,10 +3724,12 @@ export type GatePolicy = {
      * Every generated answer must also be, word for word, a reply a witness
      * relayed for its run — or what the application said, before the reply
      * came, it would take out of it — to a request that held its case's input
-     * and, where the variant pins a prompt, nothing but that prompt rendered
-     * and its values, the answer not among them: which an application calling
-     * its provider around the gateway, or telling the model what to say,
-     * cannot show; fewer is `incomplete`. Off by default.
+     * and, where the variant pins a prompt, nothing but that prompt rendered,
+     * the answer not in it, with values that are each the case's input or a
+     * part of it or the reply of another call so made: which an application
+     * calling its provider around the gateway, telling the model what to say
+     * or handing it a value it made cannot show; fewer is `incomplete`. Off by
+     * default.
      */
     require_witnessed_answer?: boolean;
     /**
@@ -3832,9 +3834,9 @@ export type GenerationTrace = {
      */
     witnessed_answer?: number | null;
     /**
-     * Answers one witnessed call relayed as its reply to a request that held
-     * their case's input and nothing but the pinned prompt and its values;
-     * absent when the variant pins no prompt.
+     * Answers one witnessed call relayed as its reply to a request that was
+     * nothing but the pinned prompt, rendered with their case's input or with
+     * what a call so made had replied; absent when the variant pins no prompt.
      */
     witnessed_exchange?: number | null;
     /**
@@ -5192,6 +5194,15 @@ export type MetricsWindow = {
      */
     runs_retained: number;
     to: string;
+};
+
+/**
+ * Events a window's span may be short of, because the fold was never given them.
+ */
+export type MissedEvents = {
+    events: number;
+    from: string;
+    until: string;
 };
 
 export type ModelBreakdown = {
@@ -9250,9 +9261,10 @@ export type VariantObservations = {
     call_ms?: null | DurationSummary;
     cost?: null | TokenCost;
     /**
-     * Where a window's counting starts: its own start, to the slice of a
-     * period — a second at five-minute periods — or later, where observations
-     * began later. Absent without a window.
+     * Where a window's counting starts: its own start, to the second — earlier
+     * only where a period written before periods were kept by the second
+     * holds the window's start inside a wider slice — or later, where
+     * observations began later. Absent without a window.
      */
     counted_from?: string | null;
     duration_ms?: null | DurationSummary;
@@ -9280,6 +9292,14 @@ export type VariantObservations = {
      * other figure.
      */
     measured_runs: number;
+    /**
+     * Events the fold was never given when it came to them — the log's
+     * retention had passed them, a fold with no state left started again from
+     * further back than the log reaches, or a record there could not be read
+     * — each with the span of time they may have lain in. A run that ended
+     * there may be missing from every figure here, whatever variant it named.
+     */
+    missed?: Array<MissedEvents>;
     /**
      * The same calls by the model they named, from their spans.
      */

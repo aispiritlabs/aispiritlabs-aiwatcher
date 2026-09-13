@@ -43,7 +43,9 @@ pub use evaluations::{
 };
 pub use live::{LiveHub, ReplayGap};
 pub use metrics::{MetricsFilter, MetricsSummary};
-pub use observations::{DurationHistogram, DurationSummary, ObservedPeriod, VariantObservations};
+pub use observations::{
+    DurationHistogram, DurationSummary, MissedEvents, ObservedPeriod, VariantObservations,
+};
 pub use period_fold::PeriodOutput;
 pub use periods::PeriodStore;
 pub use pipeline::{Projector, ProjectorConfig};

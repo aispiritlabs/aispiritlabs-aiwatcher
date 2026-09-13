@@ -466,6 +466,15 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
           (observed.late_runs ?? 0) > 0
             ? `${observed.late_runs} reached the log after their period closed`
             : null,
+          ...(observed.missed ?? []).map(
+            (gap) =>
+              `${gap.events} events from ${gap.from.slice(0, 19).replace('T', ' ')} to ${gap.until
+                .slice(0, 19)
+                .replace(
+                  'T',
+                  ' ',
+                )} UTC never reached the fold, so runs that ended then may be missing`,
+          ),
         ]
           .filter(Boolean)
           .join(' · ')}
