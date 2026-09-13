@@ -24509,7 +24509,7 @@
               "string",
               "null"
             ],
-            "description": "A JSON Pointer into the case's input, shown to a judge before the\nanswer — empty for the whole input. Absent shows it nothing, so a card\nwritten before a judge could see the question keeps its version and\nasks what it asked. Only a judge reads it: every other scorer compares\nan answer with an expectation, and the question changes neither."
+            "description": "A JSON Pointer into the case's input, shown to a judge before the\nanswer, or sent to a framework's metric that reads it — empty for the\nwhole input. Absent shows it nothing, so a card written before a judge\ncould see the question keeps its version and asks what it asked. No\nother scorer reads it: they compare an answer with an expectation, and\nthe question changes neither."
           },
           "metric": {
             "type": "string",

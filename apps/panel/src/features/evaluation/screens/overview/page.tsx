@@ -18,6 +18,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { Approvals } from './approvals';
+import { Scorecards } from './scorecards';
 import { Measure } from './measure';
 import { ComparabilityControl } from './comparability';
 import { EvidencePane, EvidenceRow, EvidenceUnavailable, Retention, useEvidence } from './evidence';
@@ -210,6 +211,14 @@ export function EvaluationPage() {
           </Button>
           <Button
             size="sm"
+            variant={search.scorecards ? 'default' : 'outline'}
+            aria-pressed={search.scorecards === true}
+            onClick={() => select({ scorecards: search.scorecards ? undefined : true })}
+          >
+            Scorecards
+          </Button>
+          <Button
+            size="sm"
             variant={search.approvals ? 'default' : 'outline'}
             aria-pressed={search.approvals === true}
             onClick={() => select({ approvals: search.approvals ? undefined : true })}
@@ -227,6 +236,7 @@ export function EvaluationPage() {
           onOpenResult={(evidence) => select({ evidence, report: undefined })}
         />
       ) : null}
+      {search.scorecards ? <Scorecards /> : null}
       {search.approvals ? <Approvals /> : null}
 
       <LocalViews

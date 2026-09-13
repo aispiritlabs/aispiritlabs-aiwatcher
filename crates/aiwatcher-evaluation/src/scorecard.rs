@@ -413,10 +413,11 @@ pub struct ScorerSpec {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expected_path: String,
     /// A JSON Pointer into the case's input, shown to a judge before the
-    /// answer — empty for the whole input. Absent shows it nothing, so a card
-    /// written before a judge could see the question keeps its version and
-    /// asks what it asked. Only a judge reads it: every other scorer compares
-    /// an answer with an expectation, and the question changes neither.
+    /// answer, or sent to a framework's metric that reads it — empty for the
+    /// whole input. Absent shows it nothing, so a card written before a judge
+    /// could see the question keeps its version and asks what it asked. No
+    /// other scorer reads it: they compare an answer with an expectation, and
+    /// the question changes neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_path: Option<String>,
     pub scorer: Scorer,

@@ -46,6 +46,8 @@ export const searchSchema = z.object({
   approvals: z.boolean().optional(),
   /** Whether the form that starts a measurement is open. */
   measure: z.boolean().optional(),
+  /** Whether the cards a measurement is declared against, and the form that publishes one, are open. */
+  scorecards: z.boolean().optional(),
   /**
    * The declared run that form is following, once there is one.
    *
