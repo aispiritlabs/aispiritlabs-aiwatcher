@@ -64,9 +64,9 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, are scored and compared
-just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error
-just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces, scored, compared and observed
+just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too
+just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases, a result's case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
@@ -157,7 +157,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, a conversation cohort's own archived responses, or answers a worker's task **generates** for each case's input, against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric, held against people when the card says so — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, a conversation cohort's own archived responses, or answers a worker's task **generates** for each case's input — held to the variant's prompt and model by the traces of their runs — against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric, held against people when the card says so — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -881,13 +881,20 @@ what runs a real graph.
   are the evidence's `usage`, measured by the producer and summarised per result
   at publication, while a run's duration is the log fold's, for as long as the
   log keeps it. A variant measured twice is two rows, because a mean of two p90s
-  is no p90, and nothing is priced until a price has a source.
+  is no p90, and nothing is priced until a price has a source. A third clock is
+  what each variant was **observed** doing: the server's fold of the runs that
+  named its `variant_id` and that no measurement made, over the window in the
+  URL, one per variant and never folded into a row's numbers — a variant seen
+  only in its own measurement reads as observed nowhere.
 - `evaluation`'s **Case review** panel is where feedback becomes a regression
   case: a proposal names the trace or case it was seen on and the dataset it
   joins, and the queue writes expected answers, approves, rejects and publishes
   the approved as a new version — every rule the server's, every refusal
   rendered as it came, a 403 on somebody else's words as the admin role it
-  needs.
+  needs. A case's judgements show the reviews of that case, whichever dataset
+  each joins, from `GET /evaluation-reviews/of-target`, and propose it by the
+  position its comparison row carries: the server reads the question and the
+  answer, so nothing is retyped and nothing is composed in the browser.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -1928,8 +1935,10 @@ the review.
   context pins it as `external_calibration`, and the result carries `external`:
   how often the two verdicts matched over every item, with the Wilson interval,
   as a judge's agreement is counted, beside how far the metric orders answers as
-  the people do and the bar these people would have supported — found on the
-  same items, so shown and never applied. The service turns every framework's phoning home off
+  the people do, with its interval, and the bar these people would have
+  supported — found on the same items, so shown and never applied, beside
+  `held_out`: that fit made on half the set and scored on the other half, both
+  ways round, with the halves dealt by case. The service turns every framework's phoning home off
   before importing it, wants a bearer token on both routes — off localhost it
   refuses to start without one — and in a cluster the chart generates that
   token and lets the pod reach DNS and its model alone.
@@ -2029,7 +2038,14 @@ the review.
   task also writes `generated_with` — the digests of the code and generation
   config it holds — and the score step refuses answers it is missing from or
   disagrees with the variant's pins: a worker built from another commit answers
-  under the variant's name with something else. Not over the conversation
+  under the variant's name with something else. The prompt and the model are
+  references it resolves, so their witness is the application's trace: an
+  answer names its `run_id`, and `evaluation_traces` — in the serve role, where
+  the log's fold is — refuses answers whose run names another variant or result,
+  whose call rendered another version of the pinned prompt, or whose pinned
+  model served at another version, and counts what the traces do not show
+  rather than refusing it; a gate's `require_traces` is where fewer than all
+  fails. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2042,8 +2058,11 @@ the review.
   words (`observed`) takes the admin role — and `POST
   /evaluation-reviews/publish` writes the approved cases as a new version of that
   curation dataset, the version before the proposals marked with it. A published
-  case does not change. The conversation archive is not a source: its words
-  leave the seal only through a corpus export.
+  case does not change. A result's case holds its own words: proposed by where
+  it sits (the `at` a comparison row carries, never a search through shards),
+  its question and answer are read from the result and marked `measured`; a
+  trace holds none, so its proposal writes them. The conversation archive is not
+  a source: its words leave the seal only through a corpus export.
 - **Never ask anybody to stage a cohort this deployment can derive.** A
   curation version's, an annotation export's and a conversation corpus's cases
   are already derived from their owners at admission, so `POST
@@ -2085,11 +2104,21 @@ the review.
   /evaluation-results/{id}/gate` answers `pass`, `regression`, `incomplete` or
   `error` from the comparison the panel draws, held to a policy — a tolerance
   per metric, metrics ignored, and critical cases that must be measured and no
-  worse whatever the average did. A scorer that failed or a case nobody answered
+  worse whatever the average did, and whether generated answers must all be
+  traced on the variant's pins. A scorer that failed or a case nobody answered
   is `incomplete` and never passes, and a pair that does not compare is
   `error`. `aiwatcher-gate` stages, declares, starts, follows and asks, and exits
   0 to 3 by the verdict; a second implementation of the rule in a pipeline
   script would be the one that passed a regression.
+- **Never count a benchmark's runs as what a variant was observed doing.** A run
+  names the variant that answered in it (`variant_id` on the envelope, ADR_0001
+  amended), and a run made to answer a measurement's case also names that
+  result on its start (`data.evaluation_id`) — `Generation.traced` opens one
+  that way. The variant's observations count those apart and in no figure,
+  because the measurement's own runs already are its result; and the telemetry
+  clients take a variant only as an argument, never from the environment, so a
+  worker importing the deployed application does not inherit its variant and
+  report a benchmark as traffic.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an
@@ -2148,8 +2177,10 @@ the review.
   new commit needs nobody. Each variant is still approved by name when its run
   starts — the registry stages the declaration and the files the variant pins
   from bytes kept by their digest, and approves naming the line — and a line is
-  refused for evidence a producer measured, over the conversation archive, and
-  for a variant naming a model or a workflow.
+  refused for evidence a producer measured and over the conversation archive. A
+  variant naming a model or a workflow brings what those imply, as the adapter
+  names it: the model's package derived from the training registry, and the
+  weights and the workflow's declaration a pipeline sent by digest.
 - **Never let the adapter's bytes be the registry's business.** An operator
   stages a bundle through `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}`
   (admin) and it lands in `evaluation-bundles/`, the adapter's own prefix

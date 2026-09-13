@@ -1106,3 +1106,79 @@ evaluation-reviews/<dataset>`, and only then marks the proposals published in
 it; a published case does not change. The conversation archive is not a
 source: its words leave the seal, retention and erasure only through a corpus
 export, and a proposal holds what its proposer supplied.
+
+## Amendment (2026-09-13, last): what a trace says about a variant, a bar checked where it was not fitted, a line over a model, and a case's own words
+
+Five limits of the amendment above, each closed without moving a context or a
+result written before it.
+
+**A run names the variant that answered in it.** The envelope gains
+`variant_id` — the content address `Evaluation::prepare` derives, which a
+scoring run's view now returns — recorded on every event of the run and as
+`aiwatcher.variant.id` on every span; ADR_0001's envelope stays flat, and a
+record without the field reads as a run that named none. The telemetry clients
+take it once, on the client, never from the environment: a worker measuring a
+variant imports the same application, and an inherited variable would put a
+benchmark among what the variant was observed doing. A run made to answer a
+measurement's case says so on its start (`data.evaluation_id`), and
+`Generation.traced` opens such a run. The read model folds both, the explorer
+pivots on the variant, and `GET /experiments/{context_id}` answers `observed`:
+for each variant the rows measured, the runs that named it **and no
+measurement made** — outcomes, duration by nearest rank, tokens, the measured
+runs counted apart — over `?window_seconds=`. It is another sample on another
+clock, so nothing folds it into a result's numbers.
+
+**A generated answer is held to the variant's prompt and model through its
+run's trace.** `generated_with` stays the worker's word about the bytes it holds;
+the model and prompt are references it resolves, so their witness is the
+application's own telemetry as this deployment folded it. A generated run is now
+four steps: `evaluation_cases`, the worker's `generate`, **`evaluation_traces`**
+in the serve role — the one role holding the fold — and the score step. An
+answer may name its `run_id`; the traces step waits a bounded while for those
+runs to end with a span per call and refuses the answers, publishing nothing,
+when a run names another variant or result, a call rendered another version of
+the pinned prompt, or the pinned model served a call at another version
+(`aiwatcher.model.version`, from the serving profile's `model_version`). What
+the traces do not show — an answer naming no run, a run the log never received,
+a model named without its version — is counted and not refused, because
+telemetry is best effort by design and silence contradicts nothing. The result
+carries `traces` (answers, named, seen, on the prompt, on the model), a case
+without a trace ID leads to the one its run was seen in, and a gate policy with
+`require_traces` holds anything short of all of them `incomplete`. Still not a
+proof: an application reporting the pins while calling something else passes;
+one reporting something else no longer does.
+
+**A calibration's fitted bar is checked on items it was not fitted on.** Each
+calibrated metric's row carries `held_out`: the same fit made on one half of the
+set and scored on the other, both ways round, so every item is scored once by a
+bar that never saw it, with its Wilson interval and the bar each half found. The
+halves are dealt by a digest of the case ID, so a case two people judged stays
+on one side and a set is dealt the same way on every run. The card's own bar
+was fitted on nothing, so `agreement` is already out of sample; `held_out` is
+what the fitting procedure is worth, and `fitted_agreement` above both is its
+flattery. `rank_interval` gives gamma a 95% interval from its asymptotic
+standard error through Fisher's transform — checked against gamma's spread over
+fresh samples — absent where every pair was ordered one way. Nothing applies a
+fitted bar.
+
+**A line admits a variant naming a model or a workflow.** The refusal said a
+pipeline could not send a model's package. It does not have to: the adapter
+names what those references imply (`ApprovalBundles::pinned_members`) — the
+model's package as the training registry holds it, derived, which is the
+declaration admission compares with the owner's, and each artifact and the
+workflow's declaration by the digest their owners pinned. The line stages the
+package and copies the rest from the variant artifacts a pipeline sent by
+digest, held to digest and size; a member nobody sent is refused naming it and
+the route. No URI is fetched, and each variant is still approved by name. A line
+over the conversation archive and over producer evidence stays refused.
+
+**A result's case gives its own words to a proposal.** A proposal of a case
+target may leave out its question and name where the case sits — the `at` a
+comparison row carries, never a search through shards. The registry reads that
+case and the cohort's input for it: the question asked and what the variant
+answered, content `measured` — this deployment's data already, approved by an
+editor. A position that is another case, conversation evidence, and a trace or
+session with no question are refused; a question must say whose words it is.
+Proposals are indexed by their target after the revision is written, and `GET
+/evaluation-reviews/of-target` answers every review of one target whichever
+dataset it joins, which a case's judgements show.

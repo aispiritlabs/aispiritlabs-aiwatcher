@@ -216,3 +216,16 @@ The comparison itself followed in section 20.
   approvals and a new curation version holding the approved cases. `just
   e2e-generate` 9/9, `just e2e-gate` 6/6, `just e2e-review` 6/6, `just
   e2e-pod-death` on this host's engine and on the local cluster
+- 2026-09-13 — section 31's limits (plan section 32). A run names its
+  `variant_id` on the envelope and a measurement's run names its result, so
+  Experiments sets what each variant was observed doing beside what it scored,
+  the benchmark's runs counted apart. A generated run gains `evaluation_traces`:
+  answers name their run, and a run whose calls rendered another version of the
+  pinned prompt, or whose pinned model served at another version, is refused;
+  the result counts what the traces covered and a gate may require all of it. A
+  calibration's fitted bar is scored on the half of the set it was not fitted
+  on, and gamma has an interval. A line admits a variant naming a registered
+  model or a workflow, staging the package from the training registry and the
+  weights a job sent by digest. A result's case is proposed in the words the
+  result holds, and a case's judgements show its reviews. `just e2e-generate`
+  12/12, `just e2e-gate` 7/7, `just e2e-review` 8/8

@@ -255,3 +255,16 @@ the envelope at publish time, so a record carries the rule that produced it.
 And if a hash with a real security property is ever needed — a producer that
 must not be able to steer its run into another tenant's trace — no finalizer
 over FNV supplies that. That needs a keyed hash, and it is a different ADR.
+
+## Amendment 2026-09-13: a run may name the variant that answered
+
+`variant_id` joins `conversation_id`, `workflow_id` and `agent_id` as a flat,
+optional envelope field copied into `RecordedMetadata`: which declared variant
+answered in the run — Evaluation's content address of its pins (ADR_0030,
+amended). A conversation groups runs by who is talking and a workflow by what is
+executed; a variant groups them by the configuration that answered, which is
+what lets what it did in production stand beside what it scored. It changes no
+derived ID, is written as `aiwatcher.variant.id` on every span, and a record
+without it reads as a run that named none. Nothing checks it against a
+declaration: the log takes what a producer says, as it does for every other
+correlation field.

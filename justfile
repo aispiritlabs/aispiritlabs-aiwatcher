@@ -542,19 +542,22 @@ e2e-pod-death *args:
 e2e-optimise:
     ./scripts/e2e-optimise-prompt.py
 
-# A baseline and a candidate generate their answers on a worker and are scored
-# on one derived cohort, then compared (FTI C1): cases → generate → score, twice,
-# against a server of its own.
+# A baseline and a candidate generate their answers on a worker, are held to the
+# traces of their runs and scored on one derived cohort, then compared and set
+# beside what the candidate was observed serving (FTI C1, C2): cases → generate →
+# traces → score, twice, against a server of its own.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 
-# A regression gate in CI (FTI C3): an admin admits a line once, then jobs at four
-# commits run `aiwatcher-gate` and exit pass, regression, incomplete and error.
+# A regression gate in CI (FTI C3): an admin admits a line once, then jobs at
+# several commits run `aiwatcher-gate` and exit pass, regression, incomplete and
+# error — one of them a variant naming a registered model and a workflow.
 e2e-gate:
     ./scripts/e2e-gate.py
 
 # Feedback into a regression case (FTI C4): a trace proposed, an expected answer
-# written and approved, and a new version of the curation dataset holding it.
+# written and approved, a new version of the curation dataset holding it, and a
+# result's case proposed in the words the result holds.
 e2e-review:
     ./scripts/e2e-review.py
 
