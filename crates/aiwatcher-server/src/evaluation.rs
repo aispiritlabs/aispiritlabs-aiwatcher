@@ -270,6 +270,22 @@ struct SourceCase {
     case_id: String,
     input: Question,
     expected: Answer,
+    /// The split a curation row names. Absent from every row of a version
+    /// without the column, so no cohort derived before it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    split: Option<String>,
+}
+
+/// A curation version's cases in one split, in the owner's order: the rows
+/// naming it, and the rows naming none — which is every row of a version
+/// without the column, as it always was — and whether any row named a split.
+fn in_split(rows: Vec<SourceCase>, split: &str) -> (Vec<SourceCase>, bool) {
+    let named = rows.iter().any(|row| row.split.is_some());
+    let taken = rows
+        .into_iter()
+        .filter(|row| row.split.as_deref().is_none_or(|own| own == split))
+        .collect();
+    (taken, named)
 }
 #[derive(Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -545,9 +561,11 @@ impl SourceAuthority for LocalSource {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
         if c.dataset.kind == DatasetKind::Curation {
-            let rows = self
-                .curation_rows(&c.dataset.name, &c.dataset.version)
-                .await?;
+            let (rows, _) = in_split(
+                self.curation_rows(&c.dataset.name, &c.dataset.version)
+                    .await?,
+                &c.split,
+            );
             // Order, IDs, inputs and expectations must agree with the pinned
             // case manifest. Matching only answers would admit different work.
             // The owner's first cases, as many as the cohort declares: a cohort
@@ -582,10 +600,12 @@ impl SourceAuthority for LocalSource {
         request.validate()?;
         match request.dataset.kind {
             DatasetKind::Curation => {
-                let rows = self
-                    .curation_rows(&request.dataset.name, &request.dataset.version)
-                    .await?;
-                cohort_files(
+                let (rows, named) = in_split(
+                    self.curation_rows(&request.dataset.name, &request.dataset.version)
+                        .await?,
+                    &request.split,
+                );
+                let mut files = cohort_files(
                     &rows,
                     request.limit,
                     &serde_json::json!({
@@ -600,7 +620,14 @@ impl SourceAuthority for LocalSource {
                         "required": ["answer"],
                         "additionalProperties": false
                     }),
-                )
+                )?;
+                files.unsplit = named.then(|| {
+                    rows.iter()
+                        .take(usize::try_from(files.count).unwrap_or(usize::MAX))
+                        .filter(|row| row.split.is_none())
+                        .count() as u64
+                });
+                Ok(files)
             }
             DatasetKind::Annotations => self.annotation_cohort(request).await,
             DatasetKind::Conversations => self.conversation_cohort(request).await,
@@ -702,6 +729,7 @@ fn cohort_files<T: serde::Serialize>(
         expectations_schema: schema(expectations_schema)?,
         count,
         available,
+        unsplit: None,
     })
 }
 

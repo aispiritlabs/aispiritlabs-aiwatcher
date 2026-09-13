@@ -81,6 +81,12 @@ pub struct CaseProposal {
     /// words read from a result are `measured` whatever this says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<ReviewContent>,
+    /// The split the case joins in its dataset — `test`, `dev`, whatever that
+    /// dataset calls them. A row names it in a `split` column, and a cohort of a
+    /// split takes that split's rows. Absent, the case names none, and joins the
+    /// cohort of every split, as every row of a dataset without the column does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<String>,
 }
 
 /// The words a proposal starts with, as the registry settled them: the
@@ -137,6 +143,9 @@ pub struct ReviewItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assessment: Option<String>,
     pub content: ReviewContent,
+    /// The split it joins, written in the row it becomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<String>,
     pub proposed_by: String,
     pub proposed_at: i64,
     pub state: ReviewState,
@@ -169,10 +178,14 @@ impl ReviewItem {
 #[schema(as = CaseReviewAction)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ReviewAction {
-    /// Write what the answer should have been. An approved proposal edited is
-    /// approved no longer: what was approved is not what it now says.
+    /// Write what the answer should have been, and which split the case
+    /// joins when that changes too. An approved proposal edited is approved no
+    /// longer: what was approved is not what it now says.
     Expect {
         expected: String,
+        /// Replaces the split the proposal named; absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split: Option<String>,
     },
     Approve,
     Reject {
@@ -203,6 +216,19 @@ fn bounded(value: &str, field: &str) -> Result<()> {
         value.len() <= MAX_TEXT_BYTES && !value.contains('\0'),
         field,
         "must be at most 8 KiB of text",
+    )
+}
+
+/// A split's name: one short word a dataset row and a cohort both carry.
+fn split_name(value: &str, field: &str) -> Result<()> {
+    require(
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')),
+        field,
+        "must be a split's name: 1 to 64 letters, digits, `_`, `-` or `.`",
     )
 }
 
@@ -290,6 +316,9 @@ pub(crate) async fn propose(
         "note",
         "must be at most 8 KiB of text",
     )?;
+    if let Some(split) = &proposal.split {
+        split_name(split, "split")?;
+    }
     let id = proposal_id(&proposal.dataset, &proposal.target)?;
     if let Some(existing) = current(store, &proposal.dataset, &id).await? {
         index(store, &existing).await?;
@@ -304,6 +333,7 @@ pub(crate) async fn propose(
         note: proposal.note.clone(),
         assessment: proposal.assessment.clone(),
         content: words.content,
+        split: proposal.split.clone(),
         proposed_by: proposed_by.to_owned(),
         proposed_at: now,
         state: ReviewState::Proposed,
@@ -380,13 +410,19 @@ fn acted(
         ..item.clone()
     };
     match action {
-        ReviewAction::Expect { expected } => {
+        ReviewAction::Expect { expected, split } => {
             bounded(expected, "expected")?;
+            if let Some(split) = split {
+                split_name(split, "split")?;
+            }
+            let split = split.clone().or_else(|| item.split.clone());
             if item.expected.as_deref() == Some(expected.as_str())
+                && item.split == split
                 && item.state == ReviewState::Ready
             {
                 return Ok(None);
             }
+            next.split = split;
             next.expected = Some(expected.clone());
             next.expected_by = Some(subject.to_owned());
             next.state = ReviewState::Ready;
@@ -514,6 +550,7 @@ mod tests {
             note: String::new(),
             assessment: None,
             content,
+            split: None,
             proposed_by: "ada".into(),
             proposed_at: 1,
             state,
@@ -539,6 +576,7 @@ mod tests {
             &approved,
             &ReviewAction::Expect {
                 expected: "Nairobi, Kenya".into(),
+                split: None,
             },
             "grace",
             false,
@@ -558,6 +596,71 @@ mod tests {
                 .is_none(),
             "approving again is not a new revision"
         );
+    }
+
+    #[test]
+    fn moving_a_case_to_another_split_takes_its_approval_away_and_a_bad_name_is_refused() {
+        let approved = ReviewItem {
+            split: Some("test".into()),
+            ..item(ReviewState::Approved, ReviewContent::Written)
+        };
+        let kept = acted(
+            &approved,
+            &ReviewAction::Expect {
+                expected: "Nairobi".into(),
+                split: None,
+            },
+            "grace",
+            false,
+            2,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (kept.split.as_deref(), kept.state),
+            (Some("test"), ReviewState::Ready),
+            "no split named keeps the one it had"
+        );
+        let moved = acted(
+            &kept,
+            &ReviewAction::Expect {
+                expected: "Nairobi".into(),
+                split: Some("dev".into()),
+            },
+            "grace",
+            false,
+            3,
+        )
+        .unwrap()
+        .expect("another split is a change");
+        assert_eq!(moved.split.as_deref(), Some("dev"));
+        assert!(
+            acted(
+                &moved,
+                &ReviewAction::Expect {
+                    expected: "Nairobi".into(),
+                    split: Some("dev".into()),
+                },
+                "grace",
+                false,
+                4,
+            )
+            .unwrap()
+            .is_none(),
+            "saying the same again is no revision"
+        );
+        let refused = acted(
+            &moved,
+            &ReviewAction::Expect {
+                expected: "Nairobi".into(),
+                split: Some("held out".into()),
+            },
+            "grace",
+            false,
+            4,
+        )
+        .unwrap_err();
+        assert!(refused.to_string().contains("split's name"), "{refused}");
     }
 
     #[test]

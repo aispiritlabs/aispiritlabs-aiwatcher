@@ -14129,6 +14129,13 @@
             ],
             "description": "The question, in the proposer's words or copied. Absent to have it read\nfrom the result a case target names, at `at`."
           },
+          "split": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The split the case joins in its dataset — `test`, `dev`, whatever that\ndataset calls them. A row names it in a `split` column, and a cohort of a\nsplit takes that split's rows. Absent, the case names none, and joins the\ncohort of every split, as every row of a dataset without the column does."
+          },
           "target": {
             "$ref": "#/components/schemas/AssessmentTarget",
             "description": "Where it was seen."
@@ -14140,7 +14147,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Write what the answer should have been. An approved proposal edited is\napproved no longer: what was approved is not what it now says.",
+            "description": "Write what the answer should have been, and which split the case\njoins when that changes too. An approved proposal edited is approved no\nlonger: what was approved is not what it now says.",
             "required": [
               "expected",
               "action"
@@ -14154,6 +14161,13 @@
               },
               "expected": {
                 "type": "string"
+              },
+              "split": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Replaces the split the proposal named; absent keeps it."
               }
             }
           },
@@ -14294,6 +14308,13 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "split": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The split it joins, written in the row it becomes."
           },
           "state": {
             "$ref": "#/components/schemas/CaseReviewState"
@@ -14624,7 +14645,7 @@
           },
           "split": {
             "type": "string",
-            "description": "For an annotation export, the split it deals (`train`, `validation`,\n`test`); a conversation corpus is measured on `test`. A curation\nversion has no splits of its own, so there it is the name the cohort\nis given and selects nothing."
+            "description": "For an annotation export, the split it deals (`train`, `validation`,\n`test`); a conversation corpus is measured on `test`. A curation\nversion's rows name theirs in a `split` column, and the cohort takes the\nrows naming this one and every row naming none; a version without the\ncolumn has no splits of its own, so there the name selects nothing."
           }
         },
         "additionalProperties": false
@@ -15890,6 +15911,15 @@
           },
           "request": {
             "$ref": "#/components/schemas/CohortRequest"
+          },
+          "unsplit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of the cases selected, how many name no split, where the version's other\ncases do: they are in every split's cohort, `dev`'s and `test`'s alike,\nand a reader comparing the two should know. Absent where no case of the\nversion names a split, or the owner has none to name.",
+            "minimum": 0
           }
         }
       },

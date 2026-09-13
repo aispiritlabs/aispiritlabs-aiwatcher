@@ -15,8 +15,10 @@ notices the application named Mombasa for Kenya's capital in a trace, and:
 3. writes the expected answer, approves it, and publishes: the dataset gains a
    version holding the four cases and the reviewed one, named for the review;
 4. publishing the same approved set again lands on that version;
-5. a cohort derived from the new version holds five cases, the reviewed one
-   with its question and the answer people wrote;
+5. the new version's rows say which split each names — the reviewed case
+   `test`, the four before it none — so a cohort of `test` holds five cases,
+   the reviewed one with its question and the answer people wrote, a cohort of
+   `dev` holds the four, and both say four of theirs name no split;
 6. the review says which version it was published in, and refuses to change;
 7. a case of a published result — measured on the first version, where the
    application named Valparaíso for Chile, the result's first case — is
@@ -258,7 +260,7 @@ def main() -> int:
         call(
             "POST",
             f"/api/v1/evaluation-reviews/{review['id']}/actions{query}",
-            {"action": "expect", "expected": "Nairobi"},
+            {"action": "expect", "expected": "Nairobi", "split": "test"},
         )
         approved = call(
             "POST",
@@ -294,6 +296,7 @@ def main() -> int:
 
         dataset = {"kind": "curation", "name": "capitals", "version": latest.get("version")}
         cohort = call("POST", "/api/v1/evaluation-cohorts", {"dataset": dataset, "split": "test"})
+        dev = call("POST", "/api/v1/evaluation-cohorts", {"dataset": dataset, "split": "dev"})
         rows_now = call(
             "GET", f"/api/v1/dataset-rows?name=capitals&version={latest.get('version')}&limit=10"
         )[1]
@@ -304,13 +307,21 @@ def main() -> int:
         ]
         check(
             5,
-            "a cohort derived from the new version holds the reviewed case",
+            "the test split's cohort holds the reviewed case and dev's does not, both counting "
+            "the rows that name no split",
             cohort[0] == 200
             and cohort[1]["cohort"]["case_count"] == 5
+            and cohort[1].get("unsplit") == 4
+            and dev[0] == 200
+            and dev[1]["cohort"]["case_count"] == 4
+            and dev[1].get("unsplit") == 4
             and len(reviewed) == 1
-            and reviewed[0]["expected"] == {"answer": "Nairobi"},
+            and reviewed[0]["expected"] == {"answer": "Nairobi"}
+            and reviewed[0].get("split") == "test",
             {
-                "case_count": (cohort[1] or {}).get("cohort", {}).get("case_count"),
+                "test": (cohort[1] or {}).get("cohort", {}).get("case_count"),
+                "dev": (dev[1] or {}).get("cohort", {}).get("case_count"),
+                "unsplit": (cohort[1] or {}).get("unsplit"),
                 "reviewed": reviewed[:1],
             },
         )

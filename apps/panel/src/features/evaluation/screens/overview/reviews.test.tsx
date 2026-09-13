@@ -99,6 +99,7 @@ it('proposes a case from a trace, and approves and publishes what people wrote',
     '4bf92f3577b34da6a3ce929d0e0e4736',
   );
   await userEvent.type(screen.getByLabelText('Question'), 'What is the capital of Kenya?');
+  await userEvent.type(screen.getByLabelText('Split'), 'test');
   await userEvent.click(screen.getByRole('button', { name: 'Propose as a case' }));
   expect(await screen.findByText(/Already under review/)).toBeTruthy();
   const proposed = server.calls.find(
@@ -108,17 +109,21 @@ it('proposes a case from a trace, and approves and publishes what people wrote',
     dataset: 'capitals',
     target: { kind: 'trace', trace_id: '4bf92f3577b34da6a3ce929d0e0e4736' },
     content: 'written',
+    split: 'test',
   });
+  // A case naming no split says it joins every split's cohort.
+  expect(screen.getByText(/joins every split/)).toBeTruthy();
 
   await userEvent.type(
     screen.getByLabelText('Expected answer for What is the capital of Kenya?'),
     'Nairobi',
   );
+  await userEvent.type(screen.getByLabelText('Split for What is the capital of Kenya?'), 'dev');
   await userEvent.click(screen.getByRole('button', { name: 'Save expected' }));
   await waitFor(() =>
     expect(
       server.calls.find((call) => call.url.endsWith(`/evaluation-reviews/${ID}/actions`))?.body,
-    ).toEqual({ action: 'expect', expected: 'Nairobi' }),
+    ).toEqual({ action: 'expect', expected: 'Nairobi', split: 'dev' }),
   );
 
   const publish = await screen.findByRole('button', {

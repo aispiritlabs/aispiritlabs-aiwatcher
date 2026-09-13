@@ -37,8 +37,9 @@ pub struct CohortRequest {
     pub dataset: DatasetReference,
     /// For an annotation export, the split it deals (`train`, `validation`,
     /// `test`); a conversation corpus is measured on `test`. A curation
-    /// version has no splits of its own, so there it is the name the cohort
-    /// is given and selects nothing.
+    /// version's rows name theirs in a `split` column, and the cohort takes the
+    /// rows naming this one and every row naming none; a version without the
+    /// column has no splits of its own, so there the name selects nothing.
     pub split: String,
     /// The owner's first this-many cases, when fewer than all of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +78,10 @@ pub struct CohortFiles {
     pub count: u64,
     /// How many the split holds, of which `count` are the first.
     pub available: u64,
+    /// Of the `count` selected, how many name no split — present only where
+    /// some case of the version does name one. Those join every split's cohort,
+    /// so the same case may be measured in `dev` and in `test`.
+    pub unsplit: Option<u64>,
 }
 
 impl CohortFiles {
@@ -135,6 +140,12 @@ pub struct DerivedCohort {
     /// How many cases the split holds, of which the cohort selects the first
     /// `cohort.case_count`.
     pub available: u64,
+    /// Of the cases selected, how many name no split, where the version's other
+    /// cases do: they are in every split's cohort, `dev`'s and `test`'s alike,
+    /// and a reader comparing the two should know. Absent where no case of the
+    /// version names a split, or the owner has none to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsplit: Option<u64>,
     pub derived_by: String,
     pub derived_at: i64,
 }

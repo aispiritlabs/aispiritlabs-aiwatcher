@@ -1165,6 +1165,13 @@ export type CaseProposal = {
      */
     question?: string | null;
     /**
+     * The split the case joins in its dataset — `test`, `dev`, whatever that
+     * dataset calls them. A row names it in a `split` column, and a cohort of a
+     * split takes that split's rows. Absent, the case names none, and joins the
+     * cohort of every split, as every row of a dataset without the column does.
+     */
+    split?: string | null;
+    /**
      * Where it was seen.
      */
     target: AssessmentTarget;
@@ -1176,6 +1183,10 @@ export type CaseProposal = {
 export type CaseReviewAction = {
     action: 'expect';
     expected: string;
+    /**
+     * Replaces the split the proposal named; absent keeps it.
+     */
+    split?: string | null;
 } | {
     action: 'approve';
 } | {
@@ -1221,6 +1232,10 @@ export type CaseReviewItem = {
     recorded_at: number;
     recorded_by: string;
     revision: number;
+    /**
+     * The split it joins, written in the row it becomes.
+     */
+    split?: string | null;
     state: CaseReviewState;
     target: AssessmentTarget;
 };
@@ -1410,8 +1425,9 @@ export type CohortRequest = {
     /**
      * For an annotation export, the split it deals (`train`, `validation`,
      * `test`); a conversation corpus is measured on `test`. A curation
-     * version has no splits of its own, so there it is the name the cohort
-     * is given and selects nothing.
+     * version's rows name theirs in a `split` column, and the cohort takes the
+     * rows naming this one and every row naming none; a version without the
+     * column has no splits of its own, so there the name selects nothing.
      */
     split: string;
 };
@@ -2135,6 +2151,13 @@ export type DerivedCohort = {
     derived_at: number;
     derived_by: string;
     request: CohortRequest;
+    /**
+     * Of the cases selected, how many name no split, where the version's other
+     * cases do: they are in every split's cohort, `dev`'s and `test`'s alike,
+     * and a reader comparing the two should know. Absent where no case of the
+     * version names a split, or the owner has none to name.
+     */
+    unsplit?: number | null;
 };
 
 /**

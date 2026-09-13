@@ -13,6 +13,7 @@ fn proposal(trace: &str) -> CaseProposal {
         note: "the user said it was wrong".into(),
         assessment: None,
         content: Some(ReviewContent::Written),
+        split: None,
     }
 }
 
@@ -33,6 +34,7 @@ async fn proposing_what_is_already_under_review_lands_on_that_review() {
             &first.id,
             &ReviewAction::Expect {
                 expected: "Nairobi".into(),
+                split: None,
             },
             "grace",
             false,
@@ -142,6 +144,7 @@ async fn a_result_s_case_is_proposed_in_its_own_words_and_found_from_the_case() 
         note: "judged wrong".into(),
         assessment: Some("standing-1".into()),
         content: None,
+        split: None,
     };
 
     let (review, created) = registry
@@ -163,6 +166,7 @@ async fn a_result_s_case_is_proposed_in_its_own_words_and_found_from_the_case() 
             &review.id,
             &ReviewAction::Expect {
                 expected: "Nairobi".into(),
+                split: None,
             },
             "grace",
             false,

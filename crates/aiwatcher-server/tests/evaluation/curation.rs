@@ -554,3 +554,61 @@ async fn an_external_or_unowned_dataset_derives_no_cohort_and_says_why() {
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
 }
+
+#[tokio::test]
+async fn a_curation_cohort_takes_its_split_s_rows_and_counts_the_rows_that_name_none() {
+    let fixture = Fixture::new("splits").await;
+    let registry = fixture.registry();
+    let mut rows = fixture.rows.clone();
+    rows.columns.push("split".into());
+    rows.items[0].insert("split".into(), json!("dev"));
+    rows.items[1].insert("split".into(), json!("test"));
+    let version = fixture
+        .datasets
+        .publish(rows)
+        .await
+        .unwrap()
+        .dataset
+        .latest
+        .version;
+    let derive = |dataset: DatasetReference, split: &str| CohortRequest {
+        dataset,
+        split: split.into(),
+        limit: None,
+    };
+    let split_version = DatasetReference {
+        version,
+        ..fixture.request.manifest.context.dataset.clone()
+    };
+
+    let test = registry
+        .derive_cohort(&derive(split_version.clone(), "test"), "ada", 100)
+        .await
+        .unwrap();
+    let dev = registry
+        .derive_cohort(&derive(split_version.clone(), "dev"), "ada", 101)
+        .await
+        .unwrap();
+    assert_eq!(
+        (test.cohort.case_count, test.unsplit),
+        (2, Some(1)),
+        "its own row and the one naming no split"
+    );
+    assert_eq!((dev.cohort.case_count, dev.unsplit), (2, Some(1)));
+    assert_ne!(
+        test.cohort.case_manifest.digest,
+        dev.cohort.case_manifest.digest
+    );
+
+    // A version without the column is one split of every name, as before, and
+    // says nothing about rows that name none.
+    let unsplit = registry
+        .derive_cohort(
+            &derive(fixture.request.manifest.context.dataset.clone(), "test"),
+            "ada",
+            102,
+        )
+        .await
+        .unwrap();
+    assert_eq!((unsplit.cohort.case_count, unsplit.unsplit), (3, None));
+}

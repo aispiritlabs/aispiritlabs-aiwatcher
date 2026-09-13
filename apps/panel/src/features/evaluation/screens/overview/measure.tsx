@@ -1230,6 +1230,13 @@ function Declared({
             ? `the first ${manifest.context.case_count} of ${view.data.cohort.available} cases`
             : `${manifest.context.case_count} cases`}{' '}
           · split {manifest.context.split}
+          {view.data.cohort?.unsplit ? (
+            <span className="text-warning">
+              {' '}
+              — {view.data.cohort.unsplit} of them name no split, so they are in every split&apos;s
+              cohort
+            </span>
+          ) : null}
           {view.data.cohort ? (
             <span className="text-muted-foreground">
               {' '}

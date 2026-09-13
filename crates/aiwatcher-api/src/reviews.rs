@@ -248,6 +248,11 @@ async fn publish_reviews(
             columns.push(column.to_owned());
         }
     }
+    // A split is a column the first case naming one adds; the rows before it
+    // name none, and a cohort of any split takes those, as it always did.
+    if approved.iter().any(|item| item.split.is_some()) && !columns.iter().any(|c| c == "split") {
+        columns.push("split".to_owned());
+    }
     let held: std::collections::BTreeSet<String> = items
         .iter()
         .filter_map(|row| row.get("case_id")?.as_str().map(str::to_owned))
@@ -256,14 +261,18 @@ async fn publish_reviews(
         if held.contains(&item.case_id()) {
             continue;
         }
-        items.push(BTreeMap::from([
+        let mut row = BTreeMap::from([
             ("case_id".to_owned(), Value::String(item.case_id())),
             ("input".to_owned(), json!({ "question": item.question })),
             (
                 "expected".to_owned(),
                 json!({ "answer": item.expected.clone().unwrap_or_default() }),
             ),
-        ]));
+        ]);
+        if let Some(split) = &item.split {
+            row.insert("split".to_owned(), Value::String(split.clone()));
+        }
+        items.push(row);
     }
     let published = datasets
         .publish(PublishDatasetRequest {

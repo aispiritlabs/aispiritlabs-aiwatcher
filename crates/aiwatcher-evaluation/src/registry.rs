@@ -3223,14 +3223,25 @@ impl Registry {
             request: request.clone(),
             cohort: files.cohort(&request.split),
             available: files.available,
+            unsplit: files.unsplit,
             derived_by: subject.to_owned(),
             derived_at: now,
         };
         let key = crate::store::derived_cohort(&derived.cohort.case_manifest.digest);
         // Create-only: the first derivation of these cases is the one kept, and
-        // a later one of the same cases says nothing it did not.
+        // a later one of the same cases says nothing it did not about where
+        // they came from. How many the split held, and how many of these name
+        // no split, are this request's: another version or split can select
+        // the same cases out of more of them.
         self.store.create(&key, &derived).await?;
-        Ok(self.store.read(&key).await?.unwrap_or(derived))
+        Ok(match self.store.read(&key).await? {
+            Some(kept) => crate::DerivedCohort {
+                available: derived.available,
+                unsplit: derived.unsplit,
+                ..kept
+            },
+            None => derived,
+        })
     }
 
     /// Where the cases under this digest were derived from, if they were.

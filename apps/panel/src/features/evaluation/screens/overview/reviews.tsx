@@ -116,6 +116,7 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
   const [question, setQuestion] = React.useState('');
   const [answer, setAnswer] = React.useState('');
   const [note, setNote] = React.useState('');
+  const [split, setSplit] = React.useState('');
   const [content, setContent] = React.useState<ReviewContent>('written');
   const propose = useMutation({
     mutationFn: async () => {
@@ -136,6 +137,7 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
             question,
             ...(answer.trim() ? { answer } : {}),
             ...(note.trim() ? { note } : {}),
+            ...(split.trim() ? { split: split.trim() } : {}),
             content,
           },
         }),
@@ -231,7 +233,17 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
           onChange={(event) => setNote(event.target.value)}
         />
       </label>
-      <label className="flex flex-col gap-1 md:col-span-2">
+      <label className="flex flex-col gap-1">
+        Split it joins
+        <input
+          aria-label="Split"
+          className={FIELD}
+          placeholder="test, dev — or none, to join every split"
+          value={split}
+          onChange={(event) => setSplit(event.target.value)}
+        />
+      </label>
+      <label className="flex flex-col gap-1">
         Whose words
         <select
           aria-label="Whose words"
@@ -359,6 +371,7 @@ function Item({
 }) {
   const queries = useQueryClient();
   const [expected, setExpected] = React.useState(item.expected ?? '');
+  const [split, setSplit] = React.useState(item.split ?? '');
   const [reason, setReason] = React.useState('');
   const act = useMutation({
     mutationFn: async (action: ReviewAction) =>
@@ -381,6 +394,7 @@ function Item({
         {[
           item.answer ? `answered “${item.answer}”` : null,
           item.note || null,
+          item.split ? `joins ${item.split}` : 'joins every split',
           item.target.kind === 'trace'
             ? `trace ${pinchId(item.target.trace_id, 8, 4)}`
             : item.target.kind === 'case'
@@ -403,6 +417,7 @@ function Item({
             full={item.published_in ?? ''}
           />
           as {`expected “${item.expected ?? ''}”`}
+          {item.split ? `, in ${item.split}` : ''}
         </span>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
@@ -413,11 +428,25 @@ function Item({
             value={expected}
             onChange={(event) => setExpected(event.target.value)}
           />
+          <input
+            aria-label={`Split for ${item.question}`}
+            className={FIELD}
+            placeholder="split"
+            value={split}
+            onChange={(event) => setSplit(event.target.value)}
+          />
+          {/* A split once named is moved, never cleared: absent keeps it. */}
           <Button
             size="sm"
             variant="outline"
             disabled={editor === false || !expected.trim() || act.isPending}
-            onClick={() => act.mutate({ action: 'expect', expected })}
+            onClick={() =>
+              act.mutate({
+                action: 'expect',
+                expected,
+                ...(split.trim() ? { split: split.trim() } : {}),
+              })
+            }
           >
             Save expected
           </Button>
