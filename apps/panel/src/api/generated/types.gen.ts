@@ -1082,6 +1082,13 @@ export type CaseFilter = typeof CaseFilter[keyof typeof CaseFilter];
  */
 export type CaseMeasurement = {
     actual?: unknown;
+    /**
+     * The answer's JSON as it was written, where `actual` holds a number of it
+     * only as the double nearest it — an integer wider than 64 bits, or a
+     * decimal longer than a double keeps — which is how a scorer read it.
+     * Absent from every other case, so no shard written before it moves.
+     */
+    actual_spelled?: string | null;
     case_id: string;
     error?: string | null;
     metrics: {

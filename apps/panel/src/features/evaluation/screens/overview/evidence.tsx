@@ -1000,7 +1000,9 @@ function Cases({ evaluationId, version }: { evaluationId: string; version: strin
                       {row.measurement.error ? (
                         <span className="text-danger">{row.measurement.error}</span>
                       ) : (
-                        JSON.stringify(row.measurement.actual)
+                        // As written, where the parsed answer holds a number of
+                        // it only as the double nearest it.
+                        (row.measurement.actual_spelled ?? JSON.stringify(row.measurement.actual))
                       )}
                     </td>
                     <td className="px-4 py-1.5 text-right text-xs tabular-nums">

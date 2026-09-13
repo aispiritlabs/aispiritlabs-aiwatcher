@@ -918,6 +918,12 @@ pub fn score_spelled(
                 Ok(_) => answer.map(|answer| answer.answer.clone()),
                 Err(_) => None,
             },
+            actual_spelled: spelled
+                .get(case_id)
+                .filter(|text| {
+                    measured.is_ok() && aiwatcher_core::witness::spells_inexact_number(text)
+                })
+                .cloned(),
             metrics: measured.clone().unwrap_or_default(),
             error: measured.err().map(|reason| clip(&reason)),
             // A span is only addressable through the trace that holds it, and
@@ -1941,5 +1947,14 @@ mod tests {
             &BTreeMap::from([("wide".to_owned(), spelled.to_owned())]),
         );
         assert_eq!(exact.cases[0].metrics["measured"], 1.0);
+        assert_eq!(
+            exact.cases[0].actual_spelled.as_deref(),
+            Some(spelled),
+            "the answer as written, beside the double it parses to"
+        );
+        assert_eq!(
+            rounded.cases[0].actual_spelled, None,
+            "nothing spelled, nothing kept"
+        );
     }
 }

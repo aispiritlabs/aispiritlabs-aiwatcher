@@ -156,6 +156,7 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
                 case_id: format!("case-{n:05}"),
                 repetition_id: manifest.origin.repetition_id.clone(),
                 actual: Some(serde_json::json!({"answer": ""})),
+                actual_spelled: None,
                 metrics: BTreeMap::from([("accuracy".into(), 1.0)]),
                 error: None,
                 trace_id: None,

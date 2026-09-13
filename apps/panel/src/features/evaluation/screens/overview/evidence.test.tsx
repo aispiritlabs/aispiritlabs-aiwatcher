@@ -585,6 +585,20 @@ it("opens a result's first case where it is judged, and proposes it by where its
                 span_id: null,
               },
             },
+            {
+              at: 'ff00:1',
+              expected: { answer: '123456789012345678901234567890' },
+              measurement: {
+                case_id: 'population-wide',
+                repetition_id: 'measurement-1',
+                actual: 1.2345678901234568e29,
+                actual_spelled: '123456789012345678901234567890',
+                metrics: { exact: 1 },
+                error: null,
+                trace_id: null,
+                span_id: null,
+              },
+            },
           ],
         },
       },
@@ -608,6 +622,8 @@ it("opens a result's first case where it is judged, and proposes it by where its
   ]);
   render(withQueries(<Evidence evidence={evidence('complete')} />));
 
+  // A number wider than a double, as it was written rather than as it parsed.
+  expect(await screen.findByText('123456789012345678901234567890')).toBeTruthy();
   fireEvent.click(await screen.findByRole('button', { name: 'capital-chile' }));
   fireEvent.change(await screen.findByLabelText('Dataset to propose it to'), {
     target: { value: 'regressions' },

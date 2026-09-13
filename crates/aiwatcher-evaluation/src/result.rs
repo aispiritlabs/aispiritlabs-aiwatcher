@@ -31,6 +31,12 @@ pub struct CaseMeasurement {
     pub case_id: String,
     pub repetition_id: String,
     pub actual: Option<serde_json::Value>,
+    /// The answer's JSON as it was written, where `actual` holds a number of it
+    /// only as the double nearest it — an integer wider than 64 bits, or a
+    /// decimal longer than a double keeps — which is how a scorer read it.
+    /// Absent from every other case, so no shard written before it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_spelled: Option<String>,
     pub metrics: BTreeMap<String, f64>,
     pub error: Option<String>,
     pub trace_id: Option<String>,
@@ -298,6 +304,7 @@ mod tests {
             case_id: format!("case-{at}"),
             repetition_id: "measurement-1".into(),
             actual: Some(serde_json::json!("an answer")),
+            actual_spelled: None,
             metrics: BTreeMap::new(),
             error: None,
             trace_id: None,

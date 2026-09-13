@@ -452,35 +452,35 @@ function CaseAnswers({
   return (
     <div className="rounded-md bg-muted/40 px-3 py-2">
       <div className="grid gap-2 sm:grid-cols-2">
-      {sides.map((side, index) => {
-        const answer = answers[index];
-        const found = answer?.data?.cases[0];
-        return (
-          <div key={side.label} className="min-w-0">
-            <p className="font-medium">{side.label}</p>
-            {side.outcome === undefined ? (
-              <p className="text-muted-foreground">never measured this case</p>
-            ) : answer?.isLoading ? (
-              <Spinner />
-            ) : !found ? (
-              <p className="text-muted-foreground">its evidence could not be read</p>
-            ) : (
-              <dl className="mt-0.5">
-                <dt className="text-muted-foreground">expected</dt>
-                <dd className="break-words">{JSON.stringify(found.expected)}</dd>
-                <dt className="mt-1 text-muted-foreground">answered</dt>
-                <dd className="break-words">
-                  {found.measurement.error ? (
-                    <span className="text-danger">{found.measurement.error}</span>
-                  ) : (
-                    JSON.stringify(found.measurement.actual)
-                  )}
-                </dd>
-              </dl>
-            )}
-          </div>
-        );
-      })}
+        {sides.map((side, index) => {
+          const answer = answers[index];
+          const found = answer?.data?.cases[0];
+          return (
+            <div key={side.label} className="min-w-0">
+              <p className="font-medium">{side.label}</p>
+              {side.outcome === undefined ? (
+                <p className="text-muted-foreground">never measured this case</p>
+              ) : answer?.isLoading ? (
+                <Spinner />
+              ) : !found ? (
+                <p className="text-muted-foreground">its evidence could not be read</p>
+              ) : (
+                <dl className="mt-0.5">
+                  <dt className="text-muted-foreground">expected</dt>
+                  <dd className="break-words">{JSON.stringify(found.expected)}</dd>
+                  <dt className="mt-1 text-muted-foreground">answered</dt>
+                  <dd className="break-words">
+                    {found.measurement.error ? (
+                      <span className="text-danger">{found.measurement.error}</span>
+                    ) : (
+                      (found.measurement.actual_spelled ?? JSON.stringify(found.measurement.actual))
+                    )}
+                  </dd>
+                </dl>
+              )}
+            </div>
+          );
+        })}
       </div>
       {/* Judged where the answer is, and only once this side has been read:
           the target names the repetition, which is a fact about the

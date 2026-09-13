@@ -869,9 +869,11 @@ impl Registry {
         };
         Ok(crate::review::Words {
             question: words(&asked),
-            answer: case.measurement.actual.as_ref().map(|actual| match actual {
-                serde_json::Value::String(text) => text.clone(),
-                other => other.to_string(),
+            answer: case.measurement.actual_spelled.clone().or_else(|| {
+                case.measurement.actual.as_ref().map(|actual| match actual {
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
             }),
             content: crate::ReviewContent::Measured,
         })

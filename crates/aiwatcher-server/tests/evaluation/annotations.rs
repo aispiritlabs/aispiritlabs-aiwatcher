@@ -58,6 +58,7 @@ async fn pin(fixture: &mut Fixture, owner: &Annotations) -> Value {
             case_id: case["case_id"].as_str().unwrap().into(),
             repetition_id: fixture.request.manifest.origin.repetition_id.clone(),
             actual: Some(case["expected"].clone()),
+            actual_spelled: None,
             metrics: BTreeMap::from([("accuracy".into(), 1.0)]),
             error: None,
             trace_id: None,

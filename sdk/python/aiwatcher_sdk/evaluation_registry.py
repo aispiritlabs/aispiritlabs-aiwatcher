@@ -375,6 +375,9 @@ class CaseMeasurement(TypedDict):
     case_id: str
     repetition_id: str
     actual: Any
+    #: The answer's JSON as written, where ``actual`` holds a number of it only
+    #: as the double nearest it.
+    actual_spelled: NotRequired[str]
     metrics: dict[str, float]
     error: str | None
     trace_id: str | None
