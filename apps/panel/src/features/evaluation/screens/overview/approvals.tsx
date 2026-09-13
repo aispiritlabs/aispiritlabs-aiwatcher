@@ -246,10 +246,12 @@ function Admit({ disabled }: { disabled: boolean }) {
               ?.text()
               .then((text) => {
                 const manifest = JSON.parse(text) as EvaluationManifest;
-                // Either field says the archive's words leave it: a judge that
-                // reads it, or a scorer service measuring a conversation cohort.
+                // Any of these says the archive's words leave it: a judge that
+                // reads it, a scorer service measuring a conversation cohort, or
+                // one held against people judged on conversation evidence.
                 setReadsArchive(
                   manifest.context?.judge?.reads_archive === true ||
+                    manifest.context?.external_calibration?.reads_archive === true ||
                     (manifest.context?.dataset.kind === 'conversations' &&
                       (manifest.context?.metrics ?? []).some((metric) => metric.measured_by)),
                 );

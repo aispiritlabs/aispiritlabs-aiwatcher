@@ -436,6 +436,7 @@ async fn a_cohort_derived_from_a_curation_version_is_admitted_and_measured_with_
         },
         answers: Answers::Recording(recording),
         judge: None,
+        external_calibration: None,
         settings: Default::default(),
     };
     let declared = registry

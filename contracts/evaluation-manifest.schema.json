@@ -70,6 +70,23 @@
       ],
       "type": "object"
     },
+    "CalibrationPin": {
+      "additionalProperties": false,
+      "description": "The calibration set a context's framework metrics were held against.\n\nPinned like a judge's, and for the same two reasons: an operator admitting\nthe pair admits whose judgements the metrics are measured against, and a\nresult calibrated on other people's judgements is a different claim.",
+      "properties": {
+        "calibration_dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "reads_archive": {
+          "description": "The set was taken from conversation evidence, so the answers people\njudged are sent to the scorer service — and on to the provider of a\nmodel grading the metric. Derived, never authored; absent when false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "calibration_dataset"
+      ],
+      "type": "object"
+    },
     "DatasetKind": {
       "enum": [
         "curation",
@@ -117,6 +134,17 @@
         },
         "expectations_schema": {
           "$ref": "#/$defs/ArtifactRef"
+        },
+        "external_calibration": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/CalibrationPin",
+              "description": "The set a card's calibrated framework metrics were held against. Absent\nfrom every context whose card calibrates none, so none of those moves."
+            }
+          ]
         },
         "input_schema": {
           "$ref": "#/$defs/ArtifactRef"

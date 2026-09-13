@@ -73,6 +73,22 @@ pub struct JudgeConfiguration {
     pub reads_archive: bool,
 }
 
+/// The calibration set a context's framework metrics were held against.
+///
+/// Pinned like a judge's, and for the same two reasons: an operator admitting
+/// the pair admits whose judgements the metrics are measured against, and a
+/// result calibrated on other people's judgements is a different claim.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationPin {
+    pub calibration_dataset: DatasetReference,
+    /// The set was taken from conversation evidence, so the answers people
+    /// judged are sent to the scorer service — and on to the provider of a
+    /// model grading the metric. Derived, never authored; absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reads_archive: bool,
+}
+
 /// Evidence context is separate from variant identity: a new scorer measures
 /// the same variant, and a different case manifest is a different cohort.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -90,6 +106,10 @@ pub struct EvaluationContext {
     pub expectations_schema: ArtifactRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<JudgeConfiguration>,
+    /// The set a card's calibrated framework metrics were held against. Absent
+    /// from every context whose card calibrates none, so none of those moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_calibration: Option<CalibrationPin>,
     #[schema(min_items = 1, max_items = 128)]
     pub metrics: Vec<MetricDefinition>,
 }
@@ -115,6 +135,10 @@ impl EvaluationContext {
             judge
                 .calibration_dataset
                 .validate("context.judge.calibration_dataset")?;
+        }
+        if let Some(pin) = &self.external_calibration {
+            pin.calibration_dataset
+                .validate("context.external_calibration.calibration_dataset")?;
         }
         require(
             !self.metrics.is_empty() && self.metrics.len() <= 128,

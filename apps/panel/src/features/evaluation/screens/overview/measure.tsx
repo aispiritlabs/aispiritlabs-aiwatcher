@@ -183,10 +183,27 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
       ),
     retry: false,
   });
-  const rubrics: VersionReference[] = (card.data?.scorecard.scorers ?? []).flatMap((spec) =>
+  const judged: VersionReference[] = (card.data?.scorecard.scorers ?? []).flatMap((spec) =>
     spec.scorer.kind === 'judge' ? [spec.scorer.rubric] : [],
   );
-  const asksJudge = rubrics.length > 0;
+  // The framework metrics the card holds against people, and under what.
+  const heldAgainstPeople = (card.data?.scorecard.scorers ?? []).flatMap((spec) =>
+    spec.scorer.kind === 'external' && spec.scorer.calibration
+      ? [{ metric: spec.metric, calibration: spec.scorer.calibration }]
+      : [],
+  );
+  // One set of people's judgements answers both: it is taken under every
+  // rubric the card names, and the server holds each side to its own.
+  const rubrics: VersionReference[] = [
+    ...judged,
+    ...heldAgainstPeople.map((held) => held.calibration.rubric),
+  ].filter(
+    (rubric, index, all) =>
+      all.findIndex((other) => other.name === rubric.name && other.version === rubric.version) ===
+      index,
+  );
+  const asksJudge = judged.length > 0;
+  const calibratesFramework = heldAgainstPeople.length > 0;
   // A judge and a scorer service both answer a bounded number at a time, and
   // the declaration's pace is for both.
   const asksElsewhere =
@@ -225,8 +242,12 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
     mutationFn: async (): Promise<ScoringRunView> => {
       const manifest = source?.manifest;
       if (!manifest || !head) throw new Error('Choose a scorecard and a result to measure like.');
-      if (asksJudge && !calibration) {
-        throw new Error('This card asks a judge: take its calibration set first.');
+      if ((asksJudge || calibratesFramework) && !calibration) {
+        throw new Error(
+          asksJudge
+            ? 'This card asks a judge: take its calibration set first.'
+            : 'This card holds a framework metric against people: take its calibration set first.',
+        );
       }
       let staged: ScoringRun['answers'] = 'archive';
       if (chosenAnswers === 'recording') {
@@ -302,6 +323,10 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
                   version: calibration.version,
                 },
               }
+            : undefined,
+        external_calibration:
+          calibratesFramework && calibration
+            ? { name: calibration.calibration.name, version: calibration.version }
             : undefined,
       };
       return answerOf(await declareScoringRun({ body: run }), 'the declaration was refused');
@@ -438,7 +463,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
         <fieldset className="grid gap-2 rounded border border-border p-3 md:col-span-2 md:grid-cols-3">
           <legend>Judge</legend>
           <p className="text-muted-foreground md:col-span-3">
-            This card asks a model about {rubrics.map((rubric) => rubric.name).join(', ')}. The
+            This card asks a model about {judged.map((rubric) => rubric.name).join(', ')}. The
             result will say so, and carry how far the model agreed with the people it is calibrated
             against.{' '}
             {shownInputs.length > 0
@@ -528,6 +553,31 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
               onChange={(event) => setJudge({ ...judge, instructions: event.target.value })}
             />
           </label>
+          <Calibration
+            published={published}
+            exclude={evaluationId.trim()}
+            taken={calibration}
+            pending={take.isPending}
+            error={take.error}
+            onTake={(from) => take.mutate(from)}
+          />
+        </fieldset>
+      ) : null}
+
+      {calibratesFramework && !asksJudge ? (
+        <fieldset className="grid gap-2 rounded border border-border p-3 md:col-span-2">
+          <legend>Held against people</legend>
+          <p className="text-muted-foreground">
+            {heldAgainstPeople
+              .map(
+                ({ metric, calibration: held }) =>
+                  `${metric} passes at ${held.pass_at}, and a person's judgement under ${held.rubric.name} ${
+                    held.pass_level ? `at ${held.pass_level}` : 'on its better answer'
+                  }`,
+              )
+              .join('; ')}
+            . The result carries how often the two verdicts were the same.
+          </p>
           <Calibration
             published={published}
             exclude={evaluationId.trim()}
@@ -1014,6 +1064,15 @@ function Declared({
               } at once`
             : ''}
         </dd>
+        {run.external_calibration ? (
+          <>
+            <dt className="text-muted-foreground">People</dt>
+            <dd>
+              framework metrics held against {run.external_calibration.name} @{' '}
+              {pinchId(run.external_calibration.version, 8, 6)}
+            </dd>
+          </>
+        ) : null}
         {run.judge ? (
           <>
             <dt className="text-muted-foreground">Judge</dt>

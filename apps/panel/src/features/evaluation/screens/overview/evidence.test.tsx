@@ -378,3 +378,87 @@ it('names the framework that measured a metric, and says a model graded it uncal
   // No rubric judge, so no calibration table and no "carries no agreement" alarm.
   expect(screen.queryByText(/carries no agreement with its calibration set/)).toBeNull();
 });
+
+it('shows how often a calibrated framework metric agreed with people, as two verdicts', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  const artifact = (name: string) => ({
+    name,
+    uri: `file://${name}`,
+    digest: 'e'.repeat(64),
+    size_bytes: 10,
+    content_type: 'application/json',
+  });
+  const dataset = { kind: 'curation' as const, name: 'questions', version: 'v1' };
+  const people = { kind: 'assessments' as const, name: 'people', version: 'f'.repeat(64) };
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          reproducible: false,
+          metrics: { relevancy: 0.75 },
+          external: {
+            calibration: { name: 'people', version: people.version },
+            agreement: [
+              {
+                metric: 'relevancy',
+                rubric: { name: 'helpful', version: 'r1' },
+                items: 4,
+                answered: 4,
+                agreement: 0.75,
+                agreement_interval: { low: 0.3, high: 0.95 },
+                mean_absolute_difference: 0.25,
+              },
+            ],
+          },
+          manifest: {
+            schema_version: 1,
+            origin: { evaluation_id: 'framework', repetition_id: 'measurement-1' },
+            variant: {
+              schema_version: 1,
+              experiment_id: 'candidate',
+              dataset,
+              code: artifact('responses.py'),
+              generation_config: artifact('generation.json'),
+            },
+            context: {
+              dataset,
+              case_manifest: artifact('cases.json'),
+              case_count: 2,
+              split: 'test',
+              suite: { name: 'framework-metrics', version: 'c'.repeat(64) },
+              scorer: { name: 'aiwatcher.scoring', version: '1' },
+              input_schema: artifact('input-schema.json'),
+              expectations_schema: artifact('expectations-schema.json'),
+              external_calibration: { calibration_dataset: people },
+              metrics: [
+                {
+                  name: 'relevancy',
+                  unit: 'score',
+                  direction: 'higher',
+                  aggregation: 'mean',
+                  measured_by: {
+                    adapter: { name: 'deepeval', version: '4.2.2' },
+                    metric: 'answer_relevancy',
+                    model: { name: 'gemma-4-e2b', version: 'q4' },
+                  },
+                },
+              ],
+            },
+          },
+        })}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/how often its verdicts were people’s is below/)).toBeTruthy();
+  expect(screen.queryByText(/whose agreement with people nothing measured/)).toBeNull();
+  expect(screen.getByText(/Held against the people in people/)).toBeTruthy();
+  expect(screen.getByText('Verdicts differed')).toBeTruthy();
+  expect(screen.getByText('30–95%')).toBeTruthy();
+  expect(screen.getByText('25%')).toBeTruthy();
+});

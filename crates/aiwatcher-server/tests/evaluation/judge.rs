@@ -186,6 +186,7 @@ async fn declared_under(
                 version: calibration.version.clone(),
             },
         }),
+        external_calibration: None,
         settings: Default::default(),
     };
     registry
@@ -775,4 +776,215 @@ async fn a_level_to_reach_publishes_the_fraction_that_reached_it_and_agreement_o
         "the judge and the person differ by a level and agree on what the result counts"
     );
     assert!(agreement.agreement_interval.unwrap().low < 0.5);
+}
+
+/// A scorer service whose relevancy likes anything that sounds helpful,
+/// dodges included, and gives no verdict on a mumble.
+#[derive(Debug, Default)]
+struct Relevancy {
+    asked: Mutex<usize>,
+}
+
+#[async_trait]
+impl ExternalScorers for Relevancy {
+    async fn catalog(&self) -> std::result::Result<ScorerCatalog, ScorerFailure> {
+        Ok(relevancy_catalog())
+    }
+
+    async fn score(
+        &self,
+        call: &ExternalCall,
+    ) -> std::result::Result<ExternalReply, ScorerFailure> {
+        *self.asked.lock().unwrap() += 1;
+        let answer = call.case.answer.as_str().unwrap_or_default();
+        Ok(if answer.contains("mumble") {
+            ExternalReply {
+                value: None,
+                failed: Some("MetricError: no verdict".into()),
+            }
+        } else if answer.contains("helpful") {
+            ExternalReply {
+                value: Some(0.9),
+                failed: None,
+            }
+        } else {
+            ExternalReply {
+                value: Some(0.1),
+                failed: None,
+            }
+        })
+    }
+}
+
+fn relevancy_catalog() -> ScorerCatalog {
+    serde_json::from_value(json!({
+        "contract": 1,
+        "adapters": [{
+            "name": "deepeval", "version": "4.2.2",
+            "model": {"name": "gemma-4-e2b", "version": "ud-q4-k-xl"},
+            "metrics": [
+                {"metric": "answer_relevancy", "unit": "score", "direction": "higher",
+                 "aggregation": "mean", "reads": ["answer"], "model_graded": true,
+                 "range": [0.0, 1.0]}
+            ]
+        }]
+    }))
+    .unwrap()
+}
+
+fn relevancy_card(rubric: &str, pass_at: f64) -> Scorecard {
+    serde_json::from_value(json!({
+        "name": "framework-calibrated",
+        "scorers": [
+            {"metric": "relevancy", "answer_path": "/text",
+             "scorer": {"kind": "external", "adapter": "deepeval", "metric": "answer_relevancy",
+                        "calibration": {"rubric": {"name": "helpful", "version": rubric},
+                                        "pass_at": pass_at}}}
+        ]
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_framework_metric_held_against_people_publishes_how_often_its_verdicts_were_theirs() {
+    // The uncalibrated warning said nothing measured how often a framework's
+    // model agrees with people. A card that names a rubric and a bar now gets
+    // that number, counted the way a judge's is: every item, declined ones too.
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let rubric = registry
+        .publish_rubric(&helpful(), "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let calibration = calibrated(&registry, &rubric).await;
+    registry
+        .record_scorer_catalog(&relevancy_catalog(), "work-1", now())
+        .await
+        .unwrap();
+
+    let outside = registry
+        .publish_scorecard(&relevancy_card(&rubric, 1.5), "ada", now())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(outside.contains("pass_at"), "{outside}");
+
+    let card = relevancy_card(&rubric, 0.5);
+    let version = registry
+        .publish_scorecard(&card, "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let template = request("calibrated-run", 3).manifest;
+    let recording = registry
+        .stage_recording(
+            "answers.json",
+            serde_json::to_vec(&json!({"answers": [
+                said("case-00000", "a helpful reply"),
+                said("case-00001", "no"),
+                said("case-00002", "mumble"),
+            ]}))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut run = ScoringRun {
+        evaluation_id: "calibrated-run".into(),
+        repetition_id: template.origin.repetition_id.clone(),
+        variant: template.variant.clone(),
+        cohort: Cohort {
+            case_manifest: template.context.case_manifest.clone(),
+            case_count: 3,
+            split: template.context.split.clone(),
+            input_schema: template.context.input_schema.clone(),
+            expectations_schema: template.context.expectations_schema.clone(),
+        },
+        scorecard: VersionReference {
+            name: card.name.clone(),
+            version,
+        },
+        answers: Answers::Recording(recording),
+        judge: None,
+        external_calibration: None,
+        settings: Default::default(),
+    };
+    let unnamed = registry
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(unnamed.contains("external_calibration"), "{unnamed}");
+
+    run.external_calibration = Some(VersionReference {
+        name: "people".into(),
+        version: calibration.version.clone(),
+    });
+    let declared = registry
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .unwrap();
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let pin = view
+        .manifest
+        .context
+        .external_calibration
+        .clone()
+        .expect("the set is pinned in the context an operator admits");
+    assert_eq!(pin.calibration_dataset.version, calibration.version);
+    assert!(!pin.reads_archive);
+    assert!(
+        view.warnings
+            .iter()
+            .any(|warning| warning.contains("measured on people")),
+        "{:?}",
+        view.warnings
+    );
+    registry
+        .approve(&view.manifest, "operator", now())
+        .await
+        .expect("admitted with the set it pins");
+
+    let service = Arc::new(Relevancy::default());
+    let (mut command, attempt) = attempt(&declared.id, "calibrated-run");
+    command.step.runtime = aiwatcher_execution::RuntimeBinding::ExternalEvaluation(
+        aiwatcher_execution::plan::ScoreEvaluationSpec {
+            declaration: declared.id.clone(),
+        },
+    );
+    let reported = ScoreExecutor::new(Arc::clone(&registry))
+        .scored_by(service.clone(), 2)
+        .execute(&command, &attempt)
+        .await
+        .expect("the run scores")
+        .result
+        .unwrap();
+    assert_eq!(
+        reported["scorer_questions"], 5,
+        "three cases and the two answers people judged"
+    );
+
+    let evidence = registry
+        .get("calibrated-run", "reader", now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!evidence.reproducible, "still a model's word");
+    let report = evidence
+        .external
+        .expect("the agreement rides beside the numbers");
+    assert_eq!(report.calibration.version, calibration.version);
+    let relevancy = &report.agreement[0];
+    assert_eq!((relevancy.items, relevancy.answered), (2, 2));
+    assert_eq!(
+        relevancy.agreement, 0.5,
+        "it passed the dodge the person failed"
+    );
+    assert!(relevancy.agreement_interval.is_some());
 }

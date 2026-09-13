@@ -20,6 +20,7 @@ import type {
   DurableEvaluation,
   EvidenceCase,
   EvidenceState,
+  JudgeAgreement,
   JudgeReport,
   ResultCounts,
   ResultStatus,
@@ -442,15 +443,17 @@ function judgedByARubric(evidence: DurableEvaluation): boolean {
  * Metrics a scorer framework measured, named where the numbers are.
  *
  * The framework and its release are the server's word, pinned when the card
- * was published. A metric a model graded is a model's word nobody calibrated:
- * a rubric judge carries its agreement with people, and this carries none, so
- * the note says that rather than leaving a gap to be read as agreement.
+ * was published. A metric a model graded is a model's word: where the card held
+ * it against people, the result carries how often its verdicts were theirs, as
+ * a rubric judge's agreement; where it did not, the note says nothing measured
+ * that, rather than leaving a gap to be read as agreement.
  */
 function FrameworkNote({ evidence }: { evidence: DurableEvaluation }) {
   const context = evidence.manifest?.context;
   const measured = (context?.metrics ?? []).filter((metric) => metric.measured_by);
   if (!context || measured.length === 0) return null;
   const graded = measured.some((metric) => metric.measured_by?.model);
+  const calibrated = new Set((evidence.external?.agreement ?? []).map((row) => row.metric));
   return (
     <div
       className={cn(
@@ -467,20 +470,92 @@ function FrameworkNote({ evidence }: { evidence: DurableEvaluation }) {
               <span className="font-medium">{metric.name}</span> was measured by {by.adapter.name}{' '}
               {by.adapter.version} ({by.metric})
               {by.model
-                ? `, graded by ${by.model.name} @ ${by.model.version} — a model's word, which re-reading will not reproduce and whose agreement with people nothing measured.`
+                ? `, graded by ${by.model.name} @ ${by.model.version} — a model's word, which re-reading will not reproduce${
+                    calibrated.has(metric.name)
+                      ? '; how often its verdicts were people’s is below.'
+                      : ' and whose agreement with people nothing measured.'
+                  }`
                 : '.'}
             </li>
           );
         })}
       </ul>
-      {context.dataset.kind === 'conversations' ? (
+      {context.dataset.kind === 'conversations' || context.external_calibration?.reads_archive ? (
         <p className="mt-1 text-danger">
           The scorer service was sent words from the conversation archive
           {graded ? ', and its graded metrics sent them on to their model’s provider' : ''} —
           outside the archive&apos;s encryption, retention and erasure.
         </p>
       ) : null}
+      {context.external_calibration ? (
+        <>
+          <p className="mt-2 text-muted-foreground">
+            Held against the people in {context.external_calibration.calibration_dataset.name}: a
+            verdict on each side, compared item by item.
+          </p>
+          {evidence.external ? (
+            <AgreementTable rows={evidence.external.agreement} distance="share" />
+          ) : (
+            <p className="mt-1 text-danger">
+              This result carries no agreement with its calibration set.
+            </p>
+          )}
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * How often a model's word was people's, per metric, over every item.
+ *
+ * `distance` says what the last column is: a judge's mean distance on the
+ * metric's own scale, or — for a framework metric, whose number and a person's
+ * judgement meet only as two verdicts — the share of answered items the
+ * verdicts differed on.
+ */
+function AgreementTable({
+  rows,
+  distance,
+}: {
+  rows: JudgeAgreement[];
+  distance: 'mean' | 'share';
+}) {
+  return (
+    <table className="mt-2 w-full text-left">
+      <thead className="text-muted-foreground">
+        <tr>
+          <th className="font-normal">Metric</th>
+          <th className="font-normal">Agreed with people</th>
+          <th className="font-normal">95% interval</th>
+          <th className="font-normal">Answered</th>
+          <th className="font-normal">
+            {distance === 'mean' ? 'Mean distance' : 'Verdicts differed'}
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.metric}>
+            <td>{row.metric}</td>
+            <td>{`${Math.round(row.agreement * 100)}%`}</td>
+            <td>
+              {row.agreement_interval
+                ? `${Math.round(row.agreement_interval.low * 100)}–${Math.round(row.agreement_interval.high * 100)}%`
+                : '—'}
+            </td>
+            <td>{`${row.answered} of ${row.items}`}</td>
+            <td>
+              {row.mean_absolute_difference === undefined || row.mean_absolute_difference === null
+                ? '—'
+                : distance === 'mean'
+                  ? row.mean_absolute_difference.toFixed(3)
+                  : `${Math.round(row.mean_absolute_difference * 100)}%`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -515,32 +590,7 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
       ) : null}
       {report ? <Served report={report} /> : null}
       {report ? (
-        <table className="mt-2 w-full text-left">
-          <thead className="text-muted-foreground">
-            <tr>
-              <th className="font-normal">Metric</th>
-              <th className="font-normal">Agreed with people</th>
-              <th className="font-normal">95% interval</th>
-              <th className="font-normal">Answered</th>
-              <th className="font-normal">Mean distance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.agreement.map((row) => (
-              <tr key={row.metric}>
-                <td>{row.metric}</td>
-                <td>{`${Math.round(row.agreement * 100)}%`}</td>
-                <td>
-                  {row.agreement_interval
-                    ? `${Math.round(row.agreement_interval.low * 100)}–${Math.round(row.agreement_interval.high * 100)}%`
-                    : '—'}
-                </td>
-                <td>{`${row.answered} of ${row.items}`}</td>
-                <td>{row.mean_absolute_difference?.toFixed(3) ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <AgreementTable rows={report.agreement} distance="mean" />
       ) : (
         <p className="mt-1 text-danger">
           This result carries no agreement with its calibration set.

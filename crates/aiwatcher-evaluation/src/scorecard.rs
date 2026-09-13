@@ -103,6 +103,11 @@ pub enum Scorer {
         /// card that brings one is held to what the catalog says now.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         declared: Option<crate::ExternalDeclaration>,
+        /// How this metric's verdicts are held against people's judgements.
+        /// Absent from every card that holds it against nobody, so no version
+        /// moves; a run of a card that names one names a calibration set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calibration: Option<Box<crate::ExternalCalibration>>,
     },
 }
 
@@ -135,6 +140,7 @@ pub struct External<'a> {
     pub metric: &'a str,
     pub parameters: &'a serde_json::Map<String, serde_json::Value>,
     pub declared: Option<&'a crate::ExternalDeclaration>,
+    pub calibration: Option<&'a crate::ExternalCalibration>,
 }
 
 /// One scorer's answer about one case.
@@ -188,11 +194,13 @@ impl Scorer {
                 metric,
                 parameters,
                 declared,
+                calibration,
             } => Some(External {
                 adapter,
                 metric,
                 parameters,
                 declared: declared.as_ref(),
+                calibration: calibration.as_deref(),
             }),
             _ => None,
         }
@@ -307,10 +315,17 @@ impl Scorer {
                 }
             }
             Self::External {
-                adapter, metric, ..
+                adapter,
+                metric,
+                calibration,
+                ..
             } => {
                 text(adapter, &format!("{field}.adapter"))?;
-                text(metric, &format!("{field}.metric"))
+                text(metric, &format!("{field}.metric"))?;
+                match calibration {
+                    Some(calibration) => calibration.validate(&format!("{field}.calibration")),
+                    None => Ok(()),
+                }
             }
             Self::ExactMatch { .. } | Self::Contains { .. } => Ok(()),
         }
@@ -551,6 +566,18 @@ impl ScorerSpec {
                 ),
             )?;
         }
+        if let Some(external) = self.scorer.external()
+            && let (Some(calibration), Some(declared)) = (external.calibration, external.declared)
+        {
+            let field = format!("scorecard.scorers.{}.scorer", self.metric);
+            let rubric = rubrics
+                .get(&calibration.rubric)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: format!("{field}.calibration.rubric"),
+                    reason: "names a rubric version this registry has not published".into(),
+                })?;
+            calibration.check(&field, declared, rubric)?;
+        }
         let (unit, direction, aggregation) =
             self.scorer
                 .defines(rubric)
@@ -678,6 +705,7 @@ impl Scorecard {
                 metric,
                 parameters,
                 declared,
+                ..
             } = &mut spec.scorer
             {
                 let catalog = catalog.ok_or_else(|| EvaluationError::Invalid {
@@ -697,6 +725,19 @@ impl Scorecard {
             }
         }
         Ok(card)
+    }
+
+    /// The rubric versions this card's framework metrics are calibrated
+    /// against, each once.
+    #[must_use]
+    pub fn external_calibrations(&self) -> Vec<&VersionReference> {
+        let mut seen = BTreeSet::new();
+        self.scorers
+            .iter()
+            .filter_map(|spec| spec.scorer.external()?.calibration)
+            .map(|calibration| &calibration.rubric)
+            .filter(|rubric| seen.insert((&rubric.name, &rubric.version)))
+            .collect()
     }
 
     /// The rubric versions this card's judges ask, each once.

@@ -135,6 +135,7 @@ async fn declared(
         },
         answers: Answers::Recording(recording),
         judge: None,
+        external_calibration: None,
         settings: RunSettings {
             timeout_seconds: None,
             concurrency: Some(1),

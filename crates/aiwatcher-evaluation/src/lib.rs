@@ -43,13 +43,14 @@ pub use result::*;
 pub use store::EvidenceCipher;
 
 pub use context::{
-    Aggregation, EvaluationContext, ExternalMeasure, JudgeConfiguration, MetricDefinition,
-    MetricDirection,
+    Aggregation, CalibrationPin, EvaluationContext, ExternalMeasure, JudgeConfiguration,
+    MetricDefinition, MetricDirection,
 };
 pub use external::{
-    CaseSide, CatalogAdapter, CatalogMetric, ExternalCall, ExternalCase, ExternalDeclaration,
-    ExternalReply, ExternalScorers, KeptScore, Parameter, ParameterKind, RecordedCatalog,
-    SCORER_CONTRACT, ScorerCatalog, ScorerFailure, resolve as resolve_external,
+    CaseSide, CatalogAdapter, CatalogMetric, ExternalCalibration, ExternalCall, ExternalCase,
+    ExternalDeclaration, ExternalReply, ExternalReport, ExternalScorers, KeptScore, Parameter,
+    ParameterKind, RecordedCatalog, SCORER_CONTRACT, ScorerCatalog, ScorerFailure,
+    external_agreement, resolve as resolve_external,
 };
 pub use judge::{
     AgreementInterval, CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion,

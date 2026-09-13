@@ -808,6 +808,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         },
         answers: Answers::Archive(ArchiveWord::Archive),
         judge: None,
+        external_calibration: None,
         settings: Default::default(),
     };
 
@@ -849,7 +850,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         .unwrap();
     let manifest = declared
         .run
-        .manifest(&card, &Rubrics::default(), None, None)
+        .manifest(&card, &Rubrics::default(), None, None, None)
         .unwrap();
     let executor = ScoreExecutor::new(deployment.clone());
     let (command, attempt) = attempt(&declared.id, "archive-scored");
@@ -1082,6 +1083,7 @@ async fn a_judge_over_the_archive_is_sent_its_words_under_a_context_that_says_so
                 version: calibration.version.clone(),
             },
         }),
+        external_calibration: None,
         settings: Default::default(),
     };
     let declared = deployment
@@ -1221,6 +1223,7 @@ async fn an_admin_derives_a_corpus_cohort_of_digests_and_a_run_measures_just_tho
         },
         answers: Answers::Archive(ArchiveWord::Archive),
         judge: None,
+        external_calibration: None,
         settings: Default::default(),
     };
     let declared = deployment
@@ -1229,7 +1232,7 @@ async fn an_admin_derives_a_corpus_cohort_of_digests_and_a_run_measures_just_tho
         .unwrap();
     let manifest = declared
         .run
-        .manifest(&card, &Rubrics::default(), None, None)
+        .manifest(&card, &Rubrics::default(), None, None, None)
         .unwrap();
     for name in [
         COHORT_CASES,

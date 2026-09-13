@@ -49,6 +49,10 @@ pub struct PublishEvaluation {
     /// by the run that asked it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::JudgeReport>,
+    /// How far the card's calibrated framework metrics agreed with the people
+    /// in their calibration set. Present exactly when the context pins one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<crate::ExternalReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -84,6 +88,8 @@ pub struct DurableEvaluation {
     pub reproducible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::JudgeReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<crate::ExternalReport>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]

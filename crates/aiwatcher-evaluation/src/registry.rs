@@ -98,6 +98,7 @@ fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
         metrics: BTreeMap::new(),
         reproducible: true,
         judge: None,
+        external: None,
     }
 }
 
@@ -255,6 +256,8 @@ struct Metadata {
     /// Beside the numbers it qualifies, in the one object a summary reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     judge: Option<crate::JudgeReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external: Option<crate::ExternalReport>,
 }
 
 impl Registry {
@@ -447,7 +450,20 @@ impl Registry {
             "context.metrics",
             "must be exactly the metrics the scorecard declares",
         )?;
-        let asks = card.scorecard.judges();
+        self.admit_judge(context, &card.scorecard).await?;
+        self.admit_external_calibration(context, &card.scorecard)
+            .await
+    }
+
+    /// A judge's own rule rather than the bytes rule: its settings and its
+    /// calibration set are read from this registry by the digests the context
+    /// pins, because a model's answer is not something to re-read.
+    async fn admit_judge(
+        &self,
+        context: &crate::EvaluationContext,
+        card: &crate::Scorecard,
+    ) -> Result<()> {
+        let asks = card.judges();
         let Some(judge) = &context.judge else {
             return require(
                 asks.is_empty(),
@@ -460,9 +476,6 @@ impl Registry {
             "context.judge",
             "names a judge the scorecard does not ask",
         )?;
-        // The judge's own rule rather than the bytes rule: its settings and
-        // its calibration set are read from this registry by the digests the
-        // context pins, because a model's answer is not something to re-read.
         require(
             matches!(judge.provider.as_str(), "openai" | "llamacpp"),
             "context.judge.provider",
@@ -474,19 +487,9 @@ impl Registry {
                 field: "context.judge.configuration".into(),
                 reason: "names judge settings no run declared".into(),
             })?;
-        require(
-            judge.calibration_dataset.kind == crate::DatasetKind::Assessments,
-            "context.judge.calibration_dataset",
-            "a judge is calibrated against people's judgements",
-        )?;
         let taken = self
-            .calibration(&judge.calibration_dataset.version)
-            .await?
-            .filter(|taken| taken.calibration.name == judge.calibration_dataset.name)
-            .ok_or_else(|| EvaluationError::Invalid {
-                field: "context.judge.calibration_dataset".into(),
-                reason: "names no calibration set this registry took".into(),
-            })?;
+            .pinned_calibration(&judge.calibration_dataset, "context.judge.calibration_dataset")
+            .await?;
         // Derived, so a context that says otherwise was written by hand — and
         // the one thing it must not be able to do is admit a judge that reads
         // the archive under a context that says it does not.
@@ -499,6 +502,61 @@ impl Registry {
              and this calibration set decide",
         )?;
         covers(&taken.calibration, &asks)
+    }
+
+    /// The same rule for the set a card's calibrated framework metrics are
+    /// held against.
+    async fn admit_external_calibration(
+        &self,
+        context: &crate::EvaluationContext,
+        card: &crate::Scorecard,
+    ) -> Result<()> {
+        let asks = card.external_calibrations();
+        let Some(pin) = &context.external_calibration else {
+            return require(
+                asks.is_empty(),
+                "context.external_calibration",
+                "the scorecard holds a framework metric against people, and a result it measured \
+                 names the calibration set",
+            );
+        };
+        require(
+            !asks.is_empty(),
+            "context.external_calibration",
+            "names a calibration set for framework metrics the scorecard does not calibrate",
+        )?;
+        let taken = self
+            .pinned_calibration(
+                &pin.calibration_dataset,
+                "context.external_calibration.calibration_dataset",
+            )
+            .await?;
+        require(
+            pin.reads_archive == taken.calibration.from_archive,
+            "context.external_calibration.reads_archive",
+            "must say whether the scorer service is sent the conversation archive's words, as \
+             this calibration set decides",
+        )?;
+        covers(&taken.calibration, &asks)
+    }
+
+    async fn pinned_calibration(
+        &self,
+        pinned: &crate::DatasetReference,
+        field: &str,
+    ) -> Result<crate::CalibrationVersion> {
+        require(
+            pinned.kind == crate::DatasetKind::Assessments,
+            field,
+            "a model's word is calibrated against people's judgements",
+        )?;
+        self.calibration(&pinned.version)
+            .await?
+            .filter(|taken| taken.calibration.name == pinned.name)
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: field.into(),
+                reason: "names no calibration set this registry took".into(),
+            })
     }
 
     /// The gate a publication passes and a read is refused by.
@@ -536,6 +594,7 @@ impl Registry {
         let protected = self.protected(&request.manifest)?;
         self.admit_scoring(&request.manifest.context).await?;
         judged_as_declared(&request)?;
+        calibrated_as_declared(&request)?;
         let id = &request.manifest.origin.evaluation_id;
         if let Some(state) = self
             .store
@@ -619,6 +678,7 @@ impl Registry {
             metrics,
             shards,
             judge: request.judge.clone(),
+            external: request.external.clone(),
         };
         require(
             bytes.saturating_add(canonical(&metadata)?.len()) <= self.config.max_bytes,
@@ -972,6 +1032,7 @@ impl Registry {
                             .is_none_or(|measure| measure.model.is_none())
                     });
                 result.judge = metadata.judge.clone();
+                result.external = metadata.external.clone();
                 return Ok((result, Some(metadata)));
             }
             Err(EvaluationError::Unavailable(state)) => {
@@ -1607,6 +1668,35 @@ fn covers(set: &crate::CalibrationSet, asked: &[&crate::VersionReference]) -> Re
     Ok(())
 }
 
+/// A result whose framework metrics were calibrated carries their agreement,
+/// and only such a result does.
+fn calibrated_as_declared(request: &PublishEvaluation) -> Result<()> {
+    match (
+        &request.manifest.context.external_calibration,
+        &request.external,
+    ) {
+        (None, None) => Ok(()),
+        (Some(pin), Some(report)) => require(
+            request.manifest.context.scored_here()
+                && report.calibration.name == pin.calibration_dataset.name
+                && report.calibration.version == pin.calibration_dataset.version,
+            "external",
+            "reports agreement against a calibration set other than the one the context pins",
+        ),
+        (Some(_), None) => Err(EvaluationError::Invalid {
+            field: "external".into(),
+            reason: "a result whose framework metrics were calibrated carries how far their \
+                     verdicts agreed with its calibration set"
+                .into(),
+        }),
+        (None, Some(_)) => Err(EvaluationError::Invalid {
+            field: "external".into(),
+            reason: "reports framework metrics' agreement for a context that calibrates none"
+                .into(),
+        }),
+    }
+}
+
 /// A judged result carries its agreement, and only a judged result does.
 fn judged_as_declared(request: &PublishEvaluation) -> Result<()> {
     match (&request.manifest.context.judge, &request.judge) {
@@ -1788,7 +1878,8 @@ impl Registry {
             .into())
     }
 
-    /// The rubric versions a card's judges ask, resolved.
+    /// The rubric versions a card's judges ask and its framework metrics are
+    /// calibrated against, resolved.
     ///
     /// # Errors
     ///
@@ -1796,7 +1887,11 @@ impl Registry {
     /// and [`EvaluationError::Storage`] when the store cannot be reached.
     pub async fn rubrics_for(&self, scorecard: &crate::Scorecard) -> Result<crate::Rubrics> {
         let mut rubrics = crate::Rubrics::default();
-        for pinned in scorecard.judges() {
+        for pinned in scorecard
+            .judges()
+            .into_iter()
+            .chain(scorecard.external_calibrations())
+        {
             let published = self
                 .rubric(&pinned.name, Some(&pinned.version))
                 .await?
@@ -2144,6 +2239,23 @@ impl Registry {
             // context will pin — before the declaration that names them.
             crate::judge::keep_settings(&self.store, &judge.settings).await?;
         }
+        if let Some(named) = &run.external_calibration {
+            let taken = self
+                .calibration(&named.version)
+                .await?
+                .filter(|taken| taken.calibration.name == named.name)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "run.external_calibration".into(),
+                    reason: "names no calibration set this registry took".into(),
+                })?;
+            require(
+                taken.calibration.result.name != run.evaluation_id,
+                "run.external_calibration",
+                "is taken from this run's own result; a metric is calibrated on answers people \
+                 already judged, not on the ones it is about to",
+            )?;
+            covers(&taken.calibration, &card.scorecard.external_calibrations())?;
+        }
         crate::scoring::declare(&self.store, run, declared_by, now).await
     }
 
@@ -2181,10 +2293,22 @@ impl Registry {
             ),
             None => None,
         };
-        let manifest =
-            declaration
-                .run
-                .manifest(&card.scorecard, &rubrics, calibration.as_ref(), None)?;
+        let external_calibration = match &declaration.run.external_calibration {
+            Some(named) => Some(
+                self.calibration(&named.version)
+                    .await?
+                    .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?
+                    .calibration,
+            ),
+            None => None,
+        };
+        let manifest = declaration.run.manifest(
+            &card.scorecard,
+            &rubrics,
+            calibration.as_ref(),
+            external_calibration.as_ref(),
+            None,
+        )?;
         let prepared = Evaluation::prepare(manifest.clone())?;
         let cohort = self
             .derived_cohort(&declaration.run.cohort.case_manifest.digest)

@@ -275,6 +275,89 @@ it('asks for a calibration set before declaring a run whose card asks a judge', 
   expect(taken.rubrics).toEqual([rubric]);
 });
 
+it('takes one calibration set for a framework metric held against people, and names it on the run', async () => {
+  const rubric = { name: 'helpful', version: 'r'.repeat(64) };
+  const server = drafting(
+    {
+      kind: 'external',
+      adapter: 'deepeval',
+      metric: 'answer_relevancy',
+      calibration: { rubric, pass_at: 0.7 },
+    },
+    'curation',
+    [
+      {
+        method: 'POST',
+        path: '/evaluation-calibrations',
+        answer: {
+          status: 200,
+          body: {
+            version: 'f'.repeat(64),
+            taken_by: 'ada',
+            taken_at: 1,
+            calibration: {
+              name: 'people-on-baseline-1',
+              result: { name: 'baseline-1', version: 'v1' },
+              items: [{}, {}],
+            },
+          },
+        },
+      },
+      {
+        method: 'PUT',
+        path: '/evaluation-recordings/answers.json',
+        answer: { status: 200, body: artifact('answers.json') },
+      },
+      {
+        method: 'POST',
+        path: '/evaluation-runs',
+        answer: { status: 200, body: { declaration: { id: DECLARATION } } },
+      },
+    ],
+  );
+  const onDeclared = vi.fn();
+  render(
+    withQueries(
+      <Measure
+        declaration={undefined}
+        measured={undefined}
+        onDeclared={onDeclared}
+        onStarted={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  await choose();
+  expect(await screen.findByText(/exact passes at 0.7/)).toBeTruthy();
+  // No judge is asked, so none is offered.
+  expect(screen.queryByLabelText('Judge model')).toBeNull();
+  await userEvent.type(screen.getByLabelText('Evaluation ID'), 'framework-1');
+  await userEvent.upload(screen.getByLabelText('Recording'), recordingFile());
+  await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
+  expect(await screen.findByText(/holds a framework metric against people/)).toBeTruthy();
+  expect(server.countOf('POST', '/evaluation-runs')).toBe(0);
+
+  await userEvent.selectOptions(
+    screen.getByLabelText('Calibration result'),
+    screen.getAllByRole('option', { name: 'baseline-1' }).at(-1)!,
+  );
+  await userEvent.click(screen.getByRole('button', { name: 'Take calibration set' }));
+  expect(await screen.findByText(/2 human judgements of baseline-1/)).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
+  await waitFor(() => expect(onDeclared).toHaveBeenCalledWith(DECLARATION));
+  const taken = server.calls.find((call) => call.url.endsWith('/evaluation-calibrations'))
+    ?.body as Record<string, unknown>;
+  expect(taken.rubrics).toEqual([rubric]);
+  const declared = server.calls.find(
+    (call) => call.method === 'POST' && call.url.endsWith('/evaluation-runs'),
+  )?.body as Record<string, any>;
+  expect(declared.judge).toBeUndefined();
+  expect(declared.external_calibration).toEqual({
+    name: 'people-on-baseline-1',
+    version: 'f'.repeat(64),
+  });
+});
+
 it('says who has to admit a declared pair, and follows the run once it starts', async () => {
   const onStarted = vi.fn();
   const view = (admitted: boolean) => ({

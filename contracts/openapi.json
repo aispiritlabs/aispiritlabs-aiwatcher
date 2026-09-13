@@ -12802,6 +12802,23 @@
           }
         }
       },
+      "CalibrationPin": {
+        "type": "object",
+        "description": "The calibration set a context's framework metrics were held against.\n\nPinned like a judge's, and for the same two reasons: an operator admitting\nthe pair admits whose judgements the metrics are measured against, and a\nresult calibrated on other people's judgements is a different claim.",
+        "required": [
+          "calibration_dataset"
+        ],
+        "properties": {
+          "calibration_dataset": {
+            "$ref": "#/components/schemas/DatasetReference"
+          },
+          "reads_archive": {
+            "type": "boolean",
+            "description": "The set was taken from conversation evidence, so the answers people\njudged are sent to the scorer service — and on to the provider of a\nmodel grading the metric. Derived, never authored; absent when false."
+          }
+        },
+        "additionalProperties": false
+      },
       "CalibrationRequest": {
         "type": "object",
         "description": "What a caller asks to be frozen.",
@@ -14774,6 +14791,16 @@
               }
             ]
           },
+          "external": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExternalReport"
+              }
+            ]
+          },
           "judge": {
             "oneOf": [
               {
@@ -15221,6 +15248,17 @@
           },
           "expectations_schema": {
             "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "external_calibration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CalibrationPin",
+                "description": "The set a card's calibrated framework metrics were held against. Absent\nfrom every context whose card calibrates none, so none of those moves."
+              }
+            ]
           },
           "input_schema": {
             "$ref": "#/components/schemas/ArtifactRef"
@@ -17132,6 +17170,33 @@
           }
         }
       },
+      "ExternalCalibration": {
+        "type": "object",
+        "description": "Where a framework metric's number and a person's judgement become the same\nkind of answer, so that the two can be counted as agreeing or not.\n\nA verdict on each side, because the two are on different scales: a\nrelevancy of 0.83 is not \"good\", but \"at 0.7 or more\" and \"good or better\"\nare both a pass. Part of the card, so a calibration against another bar is\nanother card version.",
+        "required": [
+          "rubric",
+          "pass_at"
+        ],
+        "properties": {
+          "pass_at": {
+            "type": "number",
+            "format": "double",
+            "description": "The metric's number at which an answer passes: at it, or on the side\nthe catalog declared better."
+          },
+          "pass_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rubric's level at which a person's judgement passes, on a rubric\nwith named levels. A yes-or-no rubric passes on its better answer and\nnames none."
+          },
+          "rubric": {
+            "$ref": "#/components/schemas/VersionReference",
+            "description": "The rubric the people in a calibration set judged under."
+          }
+        },
+        "additionalProperties": false
+      },
       "ExternalDeclaration": {
         "type": "object",
         "description": "What a card version pins about one external metric: the catalog's word at\nthe moment the card was published, and never the author's.",
@@ -17213,6 +17278,26 @@
           }
         },
         "additionalProperties": false
+      },
+      "ExternalReport": {
+        "type": "object",
+        "description": "What a result whose framework metrics were calibrated carries beside its\nnumbers: the set, and how far each metric's verdicts were its people's.",
+        "required": [
+          "calibration",
+          "agreement"
+        ],
+        "properties": {
+          "agreement": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JudgeAgreement"
+            },
+            "description": "One row per calibrated metric. Its `mean_absolute_difference` is over\nthe two verdicts, so it is the share of answered items they differed on."
+          },
+          "calibration": {
+            "$ref": "#/components/schemas/VersionReference"
+          }
+        }
       },
       "FailureClass": {
         "type": "string",
@@ -18797,7 +18882,7 @@
       },
       "JudgeAgreement": {
         "type": "object",
-        "description": "How far a judge agreed with the people it was calibrated against, for one\nmetric.",
+        "description": "How far a model's word agreed with the people it was calibrated against,\nfor one metric — a rubric judge's, or a framework metric's model's.",
         "required": [
           "metric",
           "rubric",
@@ -21500,6 +21585,17 @@
               "$ref": "#/components/schemas/CaseMeasurement"
             },
             "description": "Missing selected cases remain unscored; never implicitly successful."
+          },
+          "external": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExternalReport",
+                "description": "How far the card's calibrated framework metrics agreed with the people\nin their calibration set. Present exactly when the context pins one."
+              }
+            ]
           },
           "judge": {
             "oneOf": [
@@ -24220,6 +24316,17 @@
               "adapter": {
                 "type": "string"
               },
+              "calibration": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalCalibration",
+                    "description": "How this metric's verdicts are held against people's judgements.\nAbsent from every card that holds it against nobody, so no version\nmoves; a run of a card that names one names a calibration set."
+                  }
+                ]
+              },
               "declared": {
                 "oneOf": [
                   {
@@ -24479,6 +24586,17 @@
           "evaluation_id": {
             "type": "string",
             "description": "The logical result this run produces. A technical retry reuses it."
+          },
+          "external_calibration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference",
+                "description": "The calibration set the card's calibrated framework metrics are held\nagainst, when it calibrates any — taken under the rubrics the card\nnames, and possibly the set a judge names too. Absent otherwise, and\nabsent from the content address then."
+              }
+            ]
           },
           "judge": {
             "oneOf": [

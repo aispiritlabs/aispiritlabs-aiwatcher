@@ -500,8 +500,8 @@ pub fn number(scale: &Scale, value: &AssessmentValue) -> Option<f64> {
     }
 }
 
-/// How far a judge agreed with the people it was calibrated against, for one
-/// metric.
+/// How far a model's word agreed with the people it was calibrated against,
+/// for one metric — a rubric judge's, or a framework metric's model's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct JudgeAgreement {
     pub metric: String,
@@ -603,45 +603,65 @@ pub fn agreement(
             continue;
         };
         let pass_level = spec.scorer.pass_level();
-        let mut items = 0;
-        let mut matched = 0;
-        let mut distances = Vec::new();
-        for (index, item) in set.items.iter().enumerate() {
-            if item.rubric != *pinned {
-                continue;
-            }
-            items += 1;
-            let (Some(Some(judge)), Some(person)) = (
-                said.get(&(index, spec.metric.clone())),
-                scored(rubric, pass_level, &item.value),
-            ) else {
-                continue;
-            };
-            let distance = (judge - person).abs();
-            if distance < 1e-9 {
-                matched += 1;
-            }
-            distances.push(distance);
-        }
-        agreement.push(JudgeAgreement {
-            metric: spec.metric.clone(),
-            rubric: pinned.clone(),
-            items,
-            answered: distances.len(),
-            agreement: if items == 0 {
-                0.0
-            } else {
-                f64::from(matched) / items as f64
-            },
-            agreement_interval: AgreementInterval::wilson(matched as usize, items),
-            mean_absolute_difference: (!distances.is_empty())
-                .then(|| distances.iter().sum::<f64>() / distances.len() as f64),
-        });
+        agreement.push(counted(
+            &spec.metric,
+            pinned,
+            set.items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.rubric == *pinned)
+                .map(|(index, item)| {
+                    (
+                        said.get(&(index, spec.metric.clone())).copied().flatten(),
+                        scored(rubric, pass_level, &item.value),
+                    )
+                }),
+        ));
     }
     JudgeReport {
         calibration: calibration.clone(),
         agreement,
         served: Vec::new(),
+    }
+}
+
+/// One metric's agreement over every item of a set under its rubric.
+///
+/// `pairs` holds, per item, the number the model's answer scored and the one
+/// the person's judgement did, either absent where it was not one. Every item
+/// is in the denominator; only a pair of two numbers can agree.
+pub(crate) fn counted(
+    metric: &str,
+    rubric: &VersionReference,
+    pairs: impl IntoIterator<Item = (Option<f64>, Option<f64>)>,
+) -> JudgeAgreement {
+    let mut items = 0;
+    let mut matched = 0;
+    let mut distances = Vec::new();
+    for pair in pairs {
+        items += 1;
+        let (Some(model), Some(person)) = pair else {
+            continue;
+        };
+        let distance = (model - person).abs();
+        if distance < 1e-9 {
+            matched += 1;
+        }
+        distances.push(distance);
+    }
+    JudgeAgreement {
+        metric: metric.to_owned(),
+        rubric: rubric.clone(),
+        items,
+        answered: distances.len(),
+        agreement: if items == 0 {
+            0.0
+        } else {
+            f64::from(matched) / items as f64
+        },
+        agreement_interval: AgreementInterval::wilson(matched as usize, items),
+        mean_absolute_difference: (!distances.is_empty())
+            .then(|| distances.iter().sum::<f64>() / distances.len() as f64),
     }
 }
 

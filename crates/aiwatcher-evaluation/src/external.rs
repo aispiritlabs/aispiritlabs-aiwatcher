@@ -12,6 +12,13 @@
 //! **A metric a model graded says so**, as `measured_by` on its definition, and
 //! **a reply keeps its number and never its words.** See ADR_0030's amendment
 //! of 2026-09-13.
+//!
+//! **A graded metric may be held against people.** A card names a rubric, the
+//! number at which the metric's answer passes and, on named levels, the level
+//! at which a person's does; a run names a calibration set taken under that
+//! rubric, asks the metric about every item and publishes how often the two
+//! verdicts were the same, beside the numbers — a judge's agreement, for a
+//! framework's model.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +26,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Aggregation, EvaluationError, MetricDirection, Result, VersionReference, digest, require, text,
+    Aggregation, AssessmentValue, CalibrationSet, EvaluationError, JudgeAgreement, MetricDirection,
+    Result, Rubric, Rubrics, Scale, Scorecard, VersionReference, digest, require, text,
 };
 
 /// The contract version a catalog speaks. A service speaking another is
@@ -303,6 +311,182 @@ pub fn resolve(
     Ok(declared)
 }
 
+/// Where a framework metric's number and a person's judgement become the same
+/// kind of answer, so that the two can be counted as agreeing or not.
+///
+/// A verdict on each side, because the two are on different scales: a
+/// relevancy of 0.83 is not "good", but "at 0.7 or more" and "good or better"
+/// are both a pass. Part of the card, so a calibration against another bar is
+/// another card version.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalCalibration {
+    /// The rubric the people in a calibration set judged under.
+    pub rubric: VersionReference,
+    /// The metric's number at which an answer passes: at it, or on the side
+    /// the catalog declared better.
+    pub pass_at: f64,
+    /// The rubric's level at which a person's judgement passes, on a rubric
+    /// with named levels. A yes-or-no rubric passes on its better answer and
+    /// names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_level: Option<String>,
+}
+
+impl ExternalCalibration {
+    pub(crate) fn validate(&self, field: &str) -> Result<()> {
+        self.rubric.validate(&format!("{field}.rubric"))?;
+        require(
+            self.pass_at.is_finite(),
+            &format!("{field}.pass_at"),
+            "must be a finite number",
+        )?;
+        match &self.pass_level {
+            Some(level) => text(level, &format!("{field}.pass_level")),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether this calibration can be drawn for a metric declared so, under
+    /// that rubric: a direction on both sides, a bar inside the metric's
+    /// range, and a level the rubric has — or a yes-or-no rubric and no level.
+    pub(crate) fn check(
+        &self,
+        field: &str,
+        declared: &ExternalDeclaration,
+        rubric: &Rubric,
+    ) -> Result<()> {
+        require(
+            declared.direction != MetricDirection::None,
+            &format!("{field}.calibration"),
+            "the catalog says neither end of this metric is better, so no number of it passes",
+        )?;
+        require(
+            declared
+                .range
+                .is_none_or(|[low, high]| (low..=high).contains(&self.pass_at)),
+            &format!("{field}.calibration.pass_at"),
+            "lies outside the range the catalog declared for this metric",
+        )?;
+        require(
+            rubric.direction != MetricDirection::None,
+            &format!("{field}.calibration.rubric"),
+            "says neither end of its scale is better, so no judgement under it passes",
+        )?;
+        match (&rubric.scale, &self.pass_level) {
+            (Scale::Ordinal { levels }, Some(level)) => require(
+                levels.iter().any(|named| named == level),
+                &format!("{field}.calibration.pass_level"),
+                &format!("`{level}` is not one of the rubric's levels"),
+            ),
+            (Scale::Ordinal { .. }, None) => Err(EvaluationError::Invalid {
+                field: format!("{field}.calibration.pass_level"),
+                reason: "a rubric with named levels needs the level a judgement passes at".into(),
+            }),
+            (Scale::Flag, None) => Ok(()),
+            (Scale::Flag, Some(_)) => Err(EvaluationError::Invalid {
+                field: format!("{field}.calibration.pass_level"),
+                reason: "a yes-or-no rubric passes on its better answer and names no level".into(),
+            }),
+            (Scale::Numeric { .. }, _) => Err(EvaluationError::Invalid {
+                field: format!("{field}.calibration.rubric"),
+                reason: "a numeric rubric names no level a person's judgement passes at; \
+                         calibrate against named levels or a yes-or-no rubric"
+                    .into(),
+            }),
+        }
+    }
+
+    /// The metric's verdict on a number it gave: one for a pass, nought not.
+    #[must_use]
+    pub fn verdict(&self, declared: &ExternalDeclaration, value: f64) -> Option<f64> {
+        let passed = match declared.direction {
+            MetricDirection::Higher => value >= self.pass_at,
+            MetricDirection::Lower => value <= self.pass_at,
+            MetricDirection::None => return None,
+        };
+        Some(if passed { 1.0 } else { 0.0 })
+    }
+
+    /// A person's verdict on the same answer, under the rubric.
+    #[must_use]
+    pub fn judged(&self, rubric: &Rubric, value: &AssessmentValue) -> Option<f64> {
+        match (&rubric.scale, value) {
+            (Scale::Ordinal { .. }, _) => {
+                crate::scored(rubric, Some(self.pass_level.as_deref()?), value)
+            }
+            (Scale::Flag, AssessmentValue::Flag { value }) => {
+                let passed = match rubric.direction {
+                    MetricDirection::Higher => *value,
+                    MetricDirection::Lower => !*value,
+                    MetricDirection::None => return None,
+                };
+                Some(if passed { 1.0 } else { 0.0 })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What a result whose framework metrics were calibrated carries beside its
+/// numbers: the set, and how far each metric's verdicts were its people's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ExternalReport {
+    pub calibration: VersionReference,
+    /// One row per calibrated metric. Its `mean_absolute_difference` is over
+    /// the two verdicts, so it is the share of answered items they differed on.
+    pub agreement: Vec<JudgeAgreement>,
+}
+
+/// Fold what a card's calibrated framework metrics said about a calibration
+/// set into agreement per metric.
+///
+/// `said` is keyed by the item's position in the set and the metric, and holds
+/// the number the service gave — or nothing where it gave none, which counts
+/// against the metric like an item a judge declined.
+#[must_use]
+pub fn external_agreement(
+    card: &Scorecard,
+    rubrics: &Rubrics,
+    calibration: &VersionReference,
+    set: &CalibrationSet,
+    said: &BTreeMap<(usize, String), Option<f64>>,
+) -> ExternalReport {
+    let mut agreement = Vec::new();
+    for spec in &card.scorers {
+        let Some(external) = spec.scorer.external() else {
+            continue;
+        };
+        let (Some(calibrated), Some(declared)) = (external.calibration, external.declared) else {
+            continue;
+        };
+        let Some(rubric) = rubrics.get(&calibrated.rubric) else {
+            continue;
+        };
+        agreement.push(crate::judge::counted(
+            &spec.metric,
+            &calibrated.rubric,
+            set.items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.rubric == calibrated.rubric)
+                .map(|(index, item)| {
+                    (
+                        said.get(&(index, spec.metric.clone()))
+                            .copied()
+                            .flatten()
+                            .and_then(|value| calibrated.verdict(declared, value)),
+                        calibrated.judged(rubric, &item.value),
+                    )
+                }),
+        ));
+    }
+    ExternalReport {
+        calibration: calibration.clone(),
+        agreement,
+    }
+}
+
 /// One case put to one external metric.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExternalCase {
@@ -561,6 +745,103 @@ mod tests {
         assert_eq!(
             failed.score(&bounded),
             crate::Score::Unscored("the scorer service: MetricErrorno context given".into())
+        );
+    }
+
+    fn graded(direction: MetricDirection) -> ExternalDeclaration {
+        ExternalDeclaration {
+            version: "4.2.2".into(),
+            model: None,
+            unit: "score".into(),
+            direction,
+            aggregation: Aggregation::Mean,
+            reads: vec![CaseSide::Answer],
+            range: Some([0.0, 1.0]),
+        }
+    }
+
+    fn rubric(scale: Scale, direction: MetricDirection) -> Rubric {
+        Rubric {
+            name: "helpful".into(),
+            question: "Does it help?".into(),
+            guidance: String::new(),
+            scale,
+            direction,
+        }
+    }
+
+    fn calibration(pass_at: f64, pass_level: Option<&str>) -> ExternalCalibration {
+        ExternalCalibration {
+            rubric: VersionReference {
+                name: "helpful".into(),
+                version: "r1".into(),
+            },
+            pass_at,
+            pass_level: pass_level.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_calibration_is_drawn_only_where_both_sides_can_pass() {
+        let levels = rubric(
+            Scale::Ordinal {
+                levels: vec!["poor".into(), "fair".into(), "good".into()],
+            },
+            MetricDirection::Higher,
+        );
+        let flag = rubric(Scale::Flag, MetricDirection::Higher);
+        let higher = graded(MetricDirection::Higher);
+
+        assert!(calibration(0.7, Some("good")).check("s", &higher, &levels).is_ok());
+        assert!(calibration(0.7, None).check("s", &higher, &flag).is_ok());
+        for (refused, declared, rubric, why) in [
+            (calibration(0.7, None), &higher, &levels, "pass_level"),
+            (calibration(0.7, Some("great")), &higher, &levels, "great"),
+            (calibration(0.7, Some("good")), &higher, &flag, "names no level"),
+            (calibration(1.5, None), &higher, &flag, "range"),
+            (
+                calibration(0.7, None),
+                &graded(MetricDirection::None),
+                &flag,
+                "neither end",
+            ),
+            (
+                calibration(0.7, None),
+                &higher,
+                &rubric(Scale::Numeric { min: 1.0, max: 5.0 }, MetricDirection::Higher),
+                "numeric",
+            ),
+        ] {
+            let reason = refused.check("s", declared, rubric).unwrap_err().to_string();
+            assert!(reason.contains(why), "{why}: {reason}");
+        }
+    }
+
+    #[test]
+    fn a_verdict_is_a_pass_on_the_better_side_of_the_bar_on_both_sides() {
+        let bar = calibration(0.7, Some("fair"));
+        assert_eq!(bar.verdict(&graded(MetricDirection::Higher), 0.7), Some(1.0));
+        assert_eq!(bar.verdict(&graded(MetricDirection::Higher), 0.69), Some(0.0));
+        assert_eq!(bar.verdict(&graded(MetricDirection::Lower), 0.2), Some(1.0));
+
+        let fewer_is_better = rubric(
+            Scale::Ordinal {
+                levels: vec!["none".into(), "fair".into(), "many".into()],
+            },
+            MetricDirection::Lower,
+        );
+        let level = |value: &str| AssessmentValue::Level {
+            value: value.into(),
+        };
+        assert_eq!(bar.judged(&fewer_is_better, &level("none")), Some(1.0));
+        assert_eq!(bar.judged(&fewer_is_better, &level("many")), Some(0.0));
+
+        let harmful = rubric(Scale::Flag, MetricDirection::Lower);
+        let yes = AssessmentValue::Flag { value: true };
+        assert_eq!(
+            calibration(0.7, None).judged(&harmful, &yes),
+            Some(0.0),
+            "a yes on a rubric where yes is worse is a fail"
         );
     }
 }

@@ -153,6 +153,7 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
         manifest,
         status: ResultStatus::Succeeded,
         judge: None,
+        external: None,
     }
 }
 fn registry(store: Arc<dyn ObjectStore>, source: Arc<Source>) -> Registry {

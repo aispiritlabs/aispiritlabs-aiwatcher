@@ -535,6 +535,7 @@ mod tests {
                     aiwatcher_evaluation::ArchiveWord::Archive,
                 ),
                 judge,
+                external_calibration: None,
                 settings,
             },
             declared_by: "ada".into(),

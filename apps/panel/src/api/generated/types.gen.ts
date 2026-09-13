@@ -882,6 +882,23 @@ export type CalibrationItem = {
 };
 
 /**
+ * The calibration set a context's framework metrics were held against.
+ *
+ * Pinned like a judge's, and for the same two reasons: an operator admitting
+ * the pair admits whose judgements the metrics are measured against, and a
+ * result calibrated on other people's judgements is a different claim.
+ */
+export type CalibrationPin = {
+    calibration_dataset: DatasetReference;
+    /**
+     * The set was taken from conversation evidence, so the answers people
+     * judged are sent to the scorer service — and on to the provider of a
+     * model grading the metric. Derived, never authored; absent when false.
+     */
+    reads_archive?: boolean;
+};
+
+/**
  * What a caller asks to be frozen.
  */
 export type CalibrationRequest = {
@@ -2046,6 +2063,7 @@ export type Direction = typeof Direction[keyof typeof Direction];
 
 export type DurableEvaluation = {
     counts?: null | ResultCounts;
+    external?: null | ExternalReport;
     judge?: null | JudgeReport;
     manifest?: null | EvaluationManifest;
     metrics: {
@@ -2242,6 +2260,7 @@ export type EvaluationContext = {
     case_manifest: ArtifactRef;
     dataset: DatasetReference;
     expectations_schema: ArtifactRef;
+    external_calibration?: null | CalibrationPin;
     input_schema: ArtifactRef;
     judge?: null | JudgeConfiguration;
     metrics: Array<MetricDefinition>;
@@ -3092,6 +3111,33 @@ export type ExportVersionSummary = {
 };
 
 /**
+ * Where a framework metric's number and a person's judgement become the same
+ * kind of answer, so that the two can be counted as agreeing or not.
+ *
+ * A verdict on each side, because the two are on different scales: a
+ * relevancy of 0.83 is not "good", but "at 0.7 or more" and "good or better"
+ * are both a pass. Part of the card, so a calibration against another bar is
+ * another card version.
+ */
+export type ExternalCalibration = {
+    /**
+     * The metric's number at which an answer passes: at it, or on the side
+     * the catalog declared better.
+     */
+    pass_at: number;
+    /**
+     * The rubric's level at which a person's judgement passes, on a rubric
+     * with named levels. A yes-or-no rubric passes on its better answer and
+     * names none.
+     */
+    pass_level?: string | null;
+    /**
+     * The rubric the people in a calibration set judged under.
+     */
+    rubric: VersionReference;
+};
+
+/**
  * What a card version pins about one external metric: the catalog's word at
  * the moment the card was published, and never the author's.
  */
@@ -3119,6 +3165,19 @@ export type ExternalMeasure = {
     adapter: VersionReference;
     metric: string;
     model?: null | VersionReference;
+};
+
+/**
+ * What a result whose framework metrics were calibrated carries beside its
+ * numbers: the set, and how far each metric's verdicts were its people's.
+ */
+export type ExternalReport = {
+    /**
+     * One row per calibrated metric. Its `mean_absolute_difference` is over
+     * the two verdicts, so it is the share of answered items they differed on.
+     */
+    agreement: Array<JudgeAgreement>;
+    calibration: VersionReference;
 };
 
 /**
@@ -4041,8 +4100,8 @@ export const JobState = {
 export type JobState = typeof JobState[keyof typeof JobState];
 
 /**
- * How far a judge agreed with the people it was calibrated against, for one
- * metric.
+ * How far a model's word agreed with the people it was calibrated against,
+ * for one metric — a rubric judge's, or a framework metric's model's.
  */
 export type JudgeAgreement = {
     /**
@@ -5532,6 +5591,7 @@ export type PublishEvaluation = {
      * Missing selected cases remain unscored; never implicitly successful.
      */
     cases: Array<CaseMeasurement>;
+    external?: null | ExternalReport;
     judge?: null | JudgeReport;
     manifest: EvaluationManifest;
     status: ResultStatus;
@@ -6999,6 +7059,7 @@ export type Scorer = {
     rubric: VersionReference;
 } | {
     adapter: string;
+    calibration?: null | ExternalCalibration;
     declared?: null | ExternalDeclaration;
     kind: 'external';
     metric: string;
@@ -7153,6 +7214,7 @@ export type ScoringRun = {
      * The logical result this run produces. A technical retry reuses it.
      */
     evaluation_id: string;
+    external_calibration?: null | VersionReference;
     judge?: null | JudgeDeclaration;
     /**
      * An independent measurement of the same variant, not an attempt counter.

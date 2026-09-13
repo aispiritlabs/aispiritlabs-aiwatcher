@@ -91,6 +91,7 @@ fn declaration(evaluation_id: &str, version: &str) -> ScoringRun {
         },
         answers: Answers::Recording(manifest.context.case_manifest.clone()),
         judge: None,
+        external_calibration: None,
         settings: Default::default(),
     }
 }
@@ -117,11 +118,12 @@ async fn measured(
         PublishEvaluation {
             manifest: declared
                 .run
-                .manifest(&card, &Rubrics::default(), None, None)
+                .manifest(&card, &Rubrics::default(), None, None, None)
                 .unwrap(),
             status: scored.status,
             cases: scored.cases,
             judge: None,
+            external: None,
         },
         "editor",
         200,
@@ -217,11 +219,12 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
         &registry,
         PublishEvaluation {
             manifest: run
-                .manifest(&card, &Rubrics::default(), None, None)
+                .manifest(&card, &Rubrics::default(), None, None, None)
                 .unwrap(),
             status: scored.status,
             cases: scored.cases,
             judge: None,
+            external: None,
         },
         "editor",
         200,
@@ -446,11 +449,12 @@ async fn engine_scored(registry: &Registry, evaluation_id: &str) -> PublishEvalu
     );
     PublishEvaluation {
         manifest: run
-            .manifest(&card, &Rubrics::default(), None, None)
+            .manifest(&card, &Rubrics::default(), None, None, None)
             .unwrap(),
         status: scored.status,
         cases: scored.cases,
         judge: None,
+        external: None,
     }
 }
 
@@ -517,7 +521,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
         .version;
     let run = declaration("scored-against-the-fixture", &version);
     let manifest = run
-        .manifest(&card, &Rubrics::default(), None, None)
+        .manifest(&card, &Rubrics::default(), None, None, None)
         .unwrap();
     let prepared = Evaluation::prepare(manifest.clone()).unwrap();
     let approval =
@@ -570,6 +574,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
                 status: scored.status,
                 cases: scored.cases,
                 judge: None,
+                external: None,
             },
             "ada",
             200,

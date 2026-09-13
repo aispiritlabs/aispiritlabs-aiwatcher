@@ -260,6 +260,12 @@ pub struct ScoringRun {
     /// the content address then, so a declaration from before judges keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<JudgeDeclaration>,
+    /// The calibration set the card's calibrated framework metrics are held
+    /// against, when it calibrates any — taken under the rubrics the card
+    /// names, and possibly the set a judge names too. Absent otherwise, and
+    /// absent from the content address then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_calibration: Option<VersionReference>,
     /// The deadline and the pace. Absent when nothing was chosen, and absent
     /// from the content address then.
     #[serde(default, skip_serializing_if = "RunSettings::is_default")]
@@ -287,6 +293,9 @@ impl ScoringRun {
         self.settings.validate()?;
         if let Some(judge) = &self.judge {
             judge.validate()?;
+        }
+        if let Some(calibration) = &self.external_calibration {
+            calibration.validate("run.external_calibration")?;
         }
 
         let conversations = self.variant.dataset.kind == DatasetKind::Conversations;
@@ -343,6 +352,18 @@ impl ScoringRun {
                 "the card asks no judge, so the run declares none"
             },
         )?;
+        let calibrates = !card.external_calibrations().is_empty();
+        require(
+            calibrates == self.external_calibration.is_some(),
+            "run.external_calibration",
+            if calibrates {
+                "the card holds a framework metric against people, so the run names the \
+                 calibration set whose judgements it is held against"
+            } else {
+                "the card holds no framework metric against people, so the run names no \
+                 calibration set for one"
+            },
+        )?;
         let archive = matches!(self.answers, Answers::Archive(_));
         if archive
             && let Some(spec) = card
@@ -376,12 +397,14 @@ impl ScoringRun {
     ///
     /// `calibration` is the set the judge names, when it names one: whether the
     /// judge is sent the archive's words depends on where that set was taken
-    /// from as well as on this cohort.
+    /// from as well as on this cohort. `external_calibration` is the set the
+    /// run names for its framework metrics, for the same reason.
     pub fn manifest(
         &self,
         card: &Scorecard,
         rubrics: &Rubrics,
         calibration: Option<&CalibrationSet>,
+        external_calibration: Option<&CalibrationSet>,
         ran_by: Option<&StepOrigin>,
     ) -> Result<EvaluationManifest> {
         self.check(card)?;
@@ -390,6 +413,22 @@ impl ScoringRun {
             "run.judge.calibration",
             "is needed to say whether the judge is sent the conversation archive's words",
         )?;
+        require(
+            self.external_calibration.is_none() || external_calibration.is_some(),
+            "run.external_calibration",
+            "is needed to say whether the scorer service is sent the conversation archive's words",
+        )?;
+        let external_calibration = match (&self.external_calibration, external_calibration) {
+            (Some(named), Some(set)) => Some(crate::CalibrationPin {
+                calibration_dataset: DatasetReference {
+                    kind: DatasetKind::Assessments,
+                    name: named.name.clone(),
+                    version: named.version.clone(),
+                },
+                reads_archive: set.from_archive,
+            }),
+            _ => None,
+        };
         let reads_archive = self.variant.dataset.kind == DatasetKind::Conversations
             || calibration.is_some_and(|set| set.from_archive);
         let judge = match &self.judge {
@@ -425,6 +464,7 @@ impl ScoringRun {
                 input_schema: self.cohort.input_schema.clone(),
                 expectations_schema: self.cohort.expectations_schema.clone(),
                 judge,
+                external_calibration,
                 metrics: card.metrics(rubrics)?,
             },
         })
@@ -508,16 +548,50 @@ fn external_warnings(manifest: &EvaluationManifest, card: &Scorecard) -> Vec<Str
         if let Some(measure) = &metric.measured_by
             && let Some(model) = &measure.model
         {
-            said.push(format!(
-                "`{}` is graded by {} {} through {} {}: a model's word, which re-reading will not \
-                 reproduce and whose agreement with people nothing here measured.",
-                metric.name,
-                model.name,
-                model.version,
-                measure.adapter.name,
-                measure.adapter.version
-            ));
+            let calibrated = card
+                .scorers
+                .iter()
+                .find(|spec| spec.metric == metric.name)
+                .and_then(|spec| spec.scorer.external()?.calibration);
+            said.push(match (calibrated, &manifest.context.external_calibration) {
+                (Some(calibrated), Some(pin)) => format!(
+                    "`{}` is graded by {} {} through {} {}: a model's word, which re-reading will \
+                     not reproduce. How often its verdicts are people's under {} {} is measured \
+                     on {} and published beside it.",
+                    metric.name,
+                    model.name,
+                    model.version,
+                    measure.adapter.name,
+                    measure.adapter.version,
+                    calibrated.rubric.name,
+                    calibrated.rubric.version,
+                    pin.calibration_dataset.name
+                ),
+                _ => format!(
+                    "`{}` is graded by {} {} through {} {}: a model's word, which re-reading will \
+                     not reproduce and whose agreement with people nothing here measured.",
+                    metric.name,
+                    model.name,
+                    model.version,
+                    measure.adapter.name,
+                    measure.adapter.version
+                ),
+            });
         }
+    }
+    if let Some(pin) = manifest
+        .context
+        .external_calibration
+        .as_ref()
+        .filter(|pin| pin.reads_archive)
+    {
+        said.push(format!(
+            "This run sends the scorer service the conversation answers people judged in its \
+             calibration set {}, and its graded metrics send them on to their model's provider. \
+             What leaves the archive is outside its encryption, retention and erasure, and \
+             nothing here can take it back.",
+            pin.calibration_dataset.name
+        ));
     }
     if manifest.context.dataset.kind == DatasetKind::Conversations && !measured.is_empty() {
         let mut sent = vec!["each assistant response this run scores"];
@@ -940,7 +1014,7 @@ pub fn replies(
 /// One case a run puts to a scorer service.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExternalQuestion {
-    pub case_id: String,
+    pub about: Asked,
     pub metric: String,
     pub call: crate::ExternalCall,
 }
@@ -961,11 +1035,16 @@ pub struct ExternalAsking {
 /// and a case the metric cannot be asked about — it reads the question and
 /// the card shows none — carries its reason back. A metric the card has not
 /// pinned a declaration for is asked nothing, and the fold says so.
+///
+/// A calibrated metric is also asked about every item of `calibration` under
+/// its rubric, put the answer the person was shown; an item it cannot be
+/// asked about is not asked, and counts against its agreement.
 #[must_use]
 pub fn external_questions(
     card: &Scorecard,
     cohort: &CohortCases,
     answers: &[RecordedAnswer],
+    calibration: Option<(&CalibrationSet, &Calibrated)>,
 ) -> ExternalAsking {
     let mut asking = ExternalAsking::default();
     let mut once: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
@@ -981,22 +1060,16 @@ pub fn external_questions(
         let Some(declared) = external.declared else {
             continue;
         };
-        for (case_id, answered) in &once {
-            let [answer] = answered.as_slice() else {
-                continue;
-            };
-            let expected = &cohort.expected[*case_id];
-            if spec.sides(&answer.answer, expected).is_err() {
-                continue;
+        let mut put = |about: Asked,
+                       input: Option<&serde_json::Value>,
+                       answer: &serde_json::Value,
+                       expected: &serde_json::Value| {
+            if spec.sides(answer, expected).is_err() {
+                return;
             }
-            match spec.external_case(
-                declared,
-                cohort.inputs.get(*case_id),
-                &answer.answer,
-                expected,
-            ) {
+            match spec.external_case(declared, input, answer, expected) {
                 Ok(case) => asking.questions.push(ExternalQuestion {
-                    case_id: (*case_id).to_owned(),
+                    about,
                     metric: spec.metric.clone(),
                     call: crate::ExternalCall {
                         adapter: external.adapter.to_owned(),
@@ -1007,32 +1080,88 @@ pub fn external_questions(
                     },
                 }),
                 Err(reason) => {
-                    asking.refused.insert(
-                        ((*case_id).to_owned(), spec.metric.clone()),
-                        Score::Unscored(reason),
-                    );
+                    if let Asked::Case(case_id) = about {
+                        asking
+                            .refused
+                            .insert((case_id, spec.metric.clone()), Score::Unscored(reason));
+                    }
                 }
+            }
+        };
+        for (case_id, answered) in &once {
+            let [answer] = answered.as_slice() else {
+                continue;
+            };
+            put(
+                Asked::Case((*case_id).to_owned()),
+                cohort.inputs.get(*case_id),
+                &answer.answer,
+                &cohort.expected[*case_id],
+            );
+        }
+        let (Some((set, calibrated)), Some(calibrating)) = (calibration, external.calibration)
+        else {
+            continue;
+        };
+        for (index, item) in set.items.iter().enumerate() {
+            if item.rubric != calibrating.rubric {
+                continue;
+            }
+            if let Some(shown) = calibrated.get(&(item.case_id.clone(), item.repetition_id.clone()))
+            {
+                put(
+                    Asked::Calibration(index),
+                    shown.input.as_ref(),
+                    &shown.answer,
+                    &shown.expected,
+                );
             }
         }
     }
     asking
 }
 
-/// What a scorer service's replies score, for the fold.
+/// What a scorer service's replies score, for the fold and for the agreement.
 ///
 /// `replies` is in the order of the questions asked, and each is held to what
 /// the card pinned about its metric: a number outside the declared range, or a
-/// rate that is neither nought nor one, scores nothing.
+/// rate that is neither nought nor one, scores nothing — and about a
+/// calibration item, counts against the metric's agreement.
 #[must_use]
-pub fn external_replies(asking: &ExternalAsking, replies: &[crate::ExternalReply]) -> Judged {
+pub fn external_replies(
+    run: &ScoringRun,
+    card: &Scorecard,
+    rubrics: &Rubrics,
+    calibration: Option<&CalibrationSet>,
+    asking: &ExternalAsking,
+    replies: &[crate::ExternalReply],
+) -> (Judged, Option<crate::ExternalReport>) {
     let mut judged = asking.refused.clone();
+    let mut said = BTreeMap::new();
     for (question, reply) in asking.questions.iter().zip(replies) {
-        judged.insert(
-            (question.case_id.clone(), question.metric.clone()),
-            reply.score(&question.call.declared),
-        );
+        let score = reply.score(&question.call.declared);
+        match &question.about {
+            Asked::Case(case_id) => {
+                judged.insert((case_id.clone(), question.metric.clone()), score);
+            }
+            Asked::Calibration(index) => {
+                said.insert(
+                    (*index, question.metric.clone()),
+                    match score {
+                        Score::Measured(value) => Some(value),
+                        Score::Unscored(_) => None,
+                    },
+                );
+            }
+        }
     }
-    judged
+    let report = match (&run.external_calibration, calibration) {
+        (Some(named), Some(set)) => Some(crate::external_agreement(
+            card, rubrics, named, set, &said,
+        )),
+        _ => None,
+    };
+    (judged, report)
 }
 
 pub(crate) async fn declare(
@@ -1149,6 +1278,7 @@ mod tests {
             },
             answers,
             judge: None,
+            external_calibration: None,
             settings: RunSettings::default(),
         }
     }
@@ -1207,6 +1337,7 @@ mod tests {
             adapter: "deepeval".into(),
             metric: "answer_relevancy".into(),
             parameters: serde_json::Map::new(),
+            calibration: None,
             declared: Some(crate::ExternalDeclaration {
                 version: "4.2.2".into(),
                 model: graded.then(|| VersionReference {
@@ -1233,7 +1364,7 @@ mod tests {
         let mut graded = card(external(vec![Input, Answer], true));
         graded.scorers[0].input_path = Some("/question".into());
         let manifest = archived
-            .manifest(&graded, &Rubrics::default(), None, None)
+            .manifest(&graded, &Rubrics::default(), None, None, None)
             .expect("a graded metric that reads the question and the answer is declared");
         assert!(
             manifest.context.metrics[0]
@@ -1255,7 +1386,7 @@ mod tests {
         // A heuristic over a curation cohort sends nothing anywhere worth a word.
         let plain = card(external(vec![Answer], false));
         let quiet = run(DatasetKind::Curation, Answers::Recording(recording()))
-            .manifest(&plain, &Rubrics::default(), None, None)
+            .manifest(&plain, &Rubrics::default(), None, None, None)
             .unwrap();
         assert!(warnings(&quiet, &plain, None).is_empty());
 
@@ -1288,10 +1419,10 @@ mod tests {
         card.scorers[0].expected_path = "/answer".into();
         assert_eq!(
             paced
-                .manifest(&card, &Rubrics::default(), None, None)
+                .manifest(&card, &Rubrics::default(), None, None, None)
                 .unwrap(),
             declared
-                .manifest(&card, &Rubrics::default(), None, None)
+                .manifest(&card, &Rubrics::default(), None, None, None)
                 .unwrap()
         );
     }
@@ -1404,7 +1535,7 @@ mod tests {
         );
         assert!(archive.check(&judged).is_ok());
         let manifest = archive
-            .manifest(&judged, &rubrics, Some(&set(false)), None)
+            .manifest(&judged, &rubrics, Some(&set(false)), None, None)
             .unwrap();
         assert!(reads(&manifest));
         let said = warnings(&manifest, &judged, Some(&set(false)));
@@ -1416,13 +1547,13 @@ mod tests {
         );
         assert!(said[0].contains("llamacpp"), "{said:?}");
         assert!(
-            archive.manifest(&judged, &rubrics, None, None).is_err(),
+            archive.manifest(&judged, &rubrics, None, None, None).is_err(),
             "whether a judge reads the archive is not guessed without its calibration set"
         );
 
         let recording = declare(DatasetKind::Curation, Answers::Recording(recording()));
         let quiet = recording
-            .manifest(&judged, &rubrics, Some(&set(false)), None)
+            .manifest(&judged, &rubrics, Some(&set(false)), None, None)
             .unwrap();
         assert!(!reads(&quiet));
         assert!(warnings(&quiet, &judged, Some(&set(false))).is_empty());
@@ -1433,7 +1564,7 @@ mod tests {
             "a context whose judge reads nothing of the archive keeps its bytes"
         );
         let calibrated = recording
-            .manifest(&judged, &rubrics, Some(&set(true)), None)
+            .manifest(&judged, &rubrics, Some(&set(true)), None, None)
             .unwrap();
         assert!(reads(&calibrated));
         let said = warnings(&calibrated, &judged, Some(&set(true)));

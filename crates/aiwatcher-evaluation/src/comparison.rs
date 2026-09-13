@@ -93,6 +93,10 @@ fn differences(current: &EvaluationContext, baseline: &EvaluationContext) -> Vec
                 || current.expectations_schema != baseline.expectations_schema,
         ),
         ("judge", current.judge != baseline.judge),
+        (
+            "calibration of framework metrics",
+            current.external_calibration != baseline.external_calibration,
+        ),
         ("metric definitions", current.metrics != baseline.metrics),
     ] {
         if differs {

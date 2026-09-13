@@ -10,6 +10,7 @@ from typing import Literal, NotRequired, TypedDict
 
 __all__ = [
     "ArtifactReference",
+    "CalibrationPin",
     "DatasetReference",
     "EvaluationContext",
     "EvaluationManifest",
@@ -71,6 +72,15 @@ class JudgeConfiguration(TypedDict):
     reads_archive: NotRequired[bool]
 
 
+class CalibrationPin(TypedDict):
+    """The calibration set a context's framework metrics were held against."""
+
+    calibration_dataset: DatasetReference
+    #: The set's answers come from the conversation archive. Derived by the
+    #: server; absent when false.
+    reads_archive: NotRequired[bool]
+
+
 class EvaluationContext(TypedDict):
     dataset: DatasetReference
     case_manifest: ArtifactReference
@@ -81,6 +91,7 @@ class EvaluationContext(TypedDict):
     input_schema: ArtifactReference
     expectations_schema: ArtifactReference
     judge: NotRequired[JudgeConfiguration | None]
+    external_calibration: NotRequired[CalibrationPin | None]
     metrics: list[MetricDefinition]
 
 

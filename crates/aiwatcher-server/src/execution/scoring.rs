@@ -202,11 +202,26 @@ impl ActivityExecutor for ScoreExecutor {
             ),
             None => None,
         };
+        let external_taken = match &run.external_calibration {
+            Some(named) => Some(
+                self.evaluations
+                    .calibration(&named.version)
+                    .await
+                    .map_err(refusal)?
+                    .ok_or_else(|| {
+                        ActivityError::user_code(
+                            "the calibration set this run names for its framework metrics is gone",
+                        )
+                    })?,
+            ),
+            None => None,
+        };
         let manifest = run
             .manifest(
                 &card.scorecard,
                 &rubrics,
                 taken.as_ref().map(|taken| &taken.calibration),
+                external_taken.as_ref().map(|taken| &taken.calibration),
                 Some(&StepOrigin {
                     execution_id: command.key.execution_id.to_string(),
                     step_id: Some(command.key.step_id.clone()),
@@ -230,9 +245,17 @@ impl ActivityExecutor for ScoreExecutor {
             .as_ref()
             .is_some_and(|judge| judge.reads_archive);
         // The same authority for a calibration set taken from conversation
-        // evidence: the admitted context says its judge reads the archive.
+        // evidence: the admitted context says its judge, or its scorer
+        // service, reads the archive.
+        let external_reads_archive = manifest
+            .context
+            .external_calibration
+            .as_ref()
+            .is_some_and(|pin| pin.reads_archive);
         let evaluations = self.evaluations.as_ref().clone().with_content_access(
-            manifest.context.dataset.kind == DatasetKind::Conversations || reads_archive,
+            manifest.context.dataset.kind == DatasetKind::Conversations
+                || reads_archive
+                || external_reads_archive,
         );
         if reads_archive {
             tracing::warn!(
@@ -258,7 +281,10 @@ impl ActivityExecutor for ScoreExecutor {
 
         // A scorer service's numbers, before the judge's: both are handed to
         // the fold in one map, and neither asks anything of the other.
-        let (scored_elsewhere, external_asked) = if card.scorecard.asks_a_scorer_service() {
+        let (scored_elsewhere, external_report, external_asked) = if card
+            .scorecard
+            .asks_a_scorer_service()
+        {
             let Some((scorers, ceiling)) = &self.scorers else {
                 return Err(ActivityError::user_code(
                     "this card asks a scorer service, and this process holds none",
@@ -282,7 +308,34 @@ impl ActivityExecutor for ScoreExecutor {
                     .map_err(|error| ActivityError::user_code(error.to_string()))?;
                 }
             }
-            let asking = external_questions(&card.scorecard, &cohort, &answers);
+            let calibrated = match &external_taken {
+                Some(taken) => Some(
+                    evaluations
+                        .calibrated(
+                            &taken.calibration,
+                            card.scorecard.scorers.iter().any(|spec| {
+                                spec.scorer
+                                    .external()
+                                    .is_some_and(|external| external.calibration.is_some())
+                                    && spec.input_path.is_some()
+                            }),
+                            &subject,
+                            now,
+                        )
+                        .await
+                        .map_err(refusal)?,
+                ),
+                None => None,
+            };
+            let asking = external_questions(
+                &card.scorecard,
+                &cohort,
+                &answers,
+                external_taken
+                    .as_ref()
+                    .zip(calibrated.as_ref())
+                    .map(|(taken, calibrated)| (&taken.calibration, calibrated)),
+            );
             let remembering: Arc<dyn ExternalScorers> = Arc::new(super::scorers::Remembering::new(
                 Arc::clone(scorers),
                 Arc::clone(&self.evaluations),
@@ -303,9 +356,17 @@ impl ActivityExecutor for ScoreExecutor {
                 Some(reason) => reason.as_error(),
                 None => scorer_failure(failure),
             })?;
-            (external_replies(&asking, &replies), asking.questions.len())
+            let (scored, report) = external_replies(
+                run,
+                &card.scorecard,
+                &rubrics,
+                external_taken.as_ref().map(|taken| &taken.calibration),
+                &asking,
+                &replies,
+            );
+            (scored, report, asking.questions.len())
         } else {
-            (Judged::new(), 0)
+            (Judged::new(), None, 0)
         };
 
         let (judged, report, asked) = match (&run.judge, &self.judge) {
@@ -419,6 +480,7 @@ impl ActivityExecutor for ScoreExecutor {
                     status,
                     cases: scored.cases,
                     judge: report.clone(),
+                    external: external_report.clone(),
                 },
                 &subject,
                 now,
@@ -441,6 +503,7 @@ impl ActivityExecutor for ScoreExecutor {
                 "judge_questions": asked,
                 "scorer_questions": external_asked,
                 "judge": report,
+                "external": external_report,
             })),
             diagnostics: None,
             awaiting: None,
@@ -574,6 +637,7 @@ mod tests {
             },
             answers: aiwatcher_evaluation::Answers::Recording(answers),
             judge: None,
+            external_calibration: None,
             settings: Default::default(),
         }
     }
@@ -655,6 +719,7 @@ mod tests {
                     .manifest(
                         &card(),
                         &aiwatcher_evaluation::Rubrics::default(),
+                        None,
                         None,
                         None,
                     )

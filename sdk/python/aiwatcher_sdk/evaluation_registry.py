@@ -173,6 +173,20 @@ class Judge(TypedDict):
     pass_level: NotRequired[str]
 
 
+class ExternalCalibration(TypedDict):
+    """Where a framework metric's number and a person's judgement both pass.
+
+    ``pass_at`` is the metric's bar, on the side its catalog says is better;
+    ``pass_level`` is the rubric's level for a rubric with named levels, and
+    absent for a yes-or-no rubric. A run of the card names the calibration set
+    as ``external_calibration``.
+    """
+
+    rubric: VersionReference
+    pass_at: float
+    pass_level: NotRequired[str]
+
+
 class External(TypedDict):
     """A metric a scorer framework implements, measured by the scorer service.
 
@@ -188,6 +202,8 @@ class External(TypedDict):
     metric: str
     parameters: NotRequired[dict[str, Any]]
     declared: NotRequired[dict[str, Any]]
+    #: Hold this metric's verdicts against people's judgements under a rubric.
+    calibration: NotRequired[ExternalCalibration]
 
 
 Scorer = (
@@ -305,6 +321,9 @@ class ScoringRun(TypedDict):
     answers: ArtifactReference | Literal["archive"]
     #: Required exactly when the card asks a judge, and refused otherwise.
     judge: NotRequired[JudgeDeclaration]
+    #: Required exactly when the card calibrates a framework metric: the set
+    #: its verdicts are held against, taken with ``take_calibration``.
+    external_calibration: NotRequired[VersionReference]
     settings: NotRequired[RunSettings]
 
 

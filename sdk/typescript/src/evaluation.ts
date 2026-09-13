@@ -50,6 +50,13 @@ export interface JudgeConfiguration {
   reads_archive?: boolean;
 }
 
+/** The calibration set a context's framework metrics were held against. */
+export interface CalibrationPin {
+  calibration_dataset: DatasetReference;
+  /** The set's answers come from the conversation archive. Derived by the server; absent when false. */
+  reads_archive?: boolean;
+}
+
 export interface EvaluationContext {
   dataset: DatasetReference;
   case_manifest: ArtifactReference;
@@ -60,6 +67,7 @@ export interface EvaluationContext {
   input_schema: ArtifactReference;
   expectations_schema: ArtifactReference;
   judge?: JudgeConfiguration | null;
+  external_calibration?: CalibrationPin | null;
   metrics: MetricDefinition[];
 }
 
