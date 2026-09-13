@@ -11,7 +11,9 @@
   workflow's shape, folds by case, a model addressed by its package, and
   observations kept past the read model; and witnesses a deployment names, a
   gateway for a provider and the prompt, the order a workflow leads, a result
-  priced, and periods folded with a state of their own
+  priced, and periods folded with a state of their own; and an answer bound to
+  what a witness relayed, how often a node runs, a price history, and a window
+  answered by the period fold alone
 - **Date**: 2026-09-11
 
 ## Context
@@ -1304,3 +1306,55 @@ position when it is behind its checkpoint, and a period that could not be
 written holds the checkpoint back. A late end is counted in the oldest open
 period and said to be (`late_runs`); a run whose start the fold never saw is
 counted without a duration, in a period marked incomplete.
+
+## Amendment (2026-09-13, after): an answer bound to what a witness relayed, how often a node runs, a price history, and one answer per window
+
+Four limits of the amendment above.
+
+**A witness can say an answer is the reply it relayed, to a request that held
+the case's input.** A gateway sees a call's words and must put none on the log,
+so it publishes keyed digests instead: of each message, of each value the
+application says it rendered the prompt with
+(`LlmCall.caller_body`, a body field the gateway removes before the provider
+sees it) where it found exactly that rendering in the request, and of each reply
+— as text and, where the reply is JSON, as its canonical form. The key is an
+HMAC of the gateway's own credential's secret (`aiwatcher_core::witness`), which
+this deployment issued: the traces step can ask whether an answer is among the
+replies and whether a case's input is among what was asked, while a reader of
+the log cannot test a guess against a one-word answer, and the application,
+holding neither the credential nor the key, cannot publish one. It counts
+`witnessed_answer` and `witnessed_input`; a gate's `require_witnessed_answer`
+holds anything short of all incomplete. An application that holds its own
+provider key and answers from a call made around the gateway has neither, even
+where its model and prompt are witnessed; so has one that reshapes a reply before
+answering, which is why this is a policy of its own. A template made mostly of
+variables now says more too: the values it was rendered with are checked by
+exact rendering, and one of them is the case's input.
+
+**A workflow is held to how often it leads a node.** A completed node sends the
+run on along each edge out of it, once; a start uses one of those and a failed
+start gives its back, so a retry needs no second completion. The run enters
+where nothing outside leads in — a node no edge enters, or a cycle entered from
+nowhere else — once. A declared loop goes round as often as its nodes complete,
+and a node run twice for one completion, or again when nothing leads back into
+it, is refused. A node declared `"repeats": true` runs as often as it likes once
+admitted, and is part of the shape's digest only where declared. A run that took
+more steps than its fold keeps is counted as unseen on the workflow.
+
+**A price table keeps its history.** A model may have an entry per day its price
+was read; a call is priced by the latest read on or before its day, and one older
+than every entry by the earliest, counted as priced before its price was read. A
+result is priced on the day it was committed, and an observed period on its own
+day, so the same figure reads the same whichever day it is looked at.
+
+**A window is the period fold's alone.** It counts every period it reaches into,
+whole — written ones from the store, the rest from the fold's memory, with the
+runs in flight — so a late run is counted the moment it ends and no run is
+counted from both a period and the read model. Periods are five minutes unless
+configured, a whole part of an hour, written only where something ended, and
+rolled up into hours and days, so a week reads a handful of records; the answer
+says where counting began (`counted_from`), whether the window reaches back
+before the fold began, and how many runs were late. Without a window the answer
+is still the read model's. The fold's state is saved as generations under the
+position it reached, and the one furthest along is loaded, so two processes
+sharing a processor ID cannot set it back.

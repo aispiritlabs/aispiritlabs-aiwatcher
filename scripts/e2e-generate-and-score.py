@@ -57,27 +57,36 @@ What it checks:
     model — and the gateway in front of the stand-in provider, publishing its own
     run under the one credential the server names a witness, is a second
     witness on every one to the model version the provider said served the call
-    and to the prompt version whose template it found in the request: the log
-    records each run as published by the token that sent it;
+    and to the prompt version whose template it found in the request — and, by
+    its keyed digests, to every answer being the reply it relayed and every
+    case's question being in the request: the log records each run as published
+    by the token that sent it, and none of those words;
 14. an application that steps through a node the pinned workflow does not
     declare fails at the traces step naming the node, and publishes nothing —
     and so does one that starts `answer` before `retrieve`, which the pinned
-    declaration leads into it from, has completed;
+    declaration leads into it from, has completed, and one that answers twice
+    for one retrieval;
 15. what the candidate was observed serving is written down as each period
-    closes, and a window asked of the experiment reads those periods with the
-    live runs no written period holds: still five runs, not ten, each model
-    call timed, and priced at the deployment's table, which says where and
-    when the price was read;
+    closes, and a window asked of the experiment is answered from the period
+    fold alone — the written periods and the ones it holds: still five runs,
+    not ten, counted from where observations began, each model call timed,
+    and priced at the deployment's table, which says where and when the price
+    was read;
 16. a gateway holding the application's own token witnesses nothing: every
     answer is counted self-witnessed, and a gate requiring a witness holds the
     result incomplete, saying to give the serving host a token of its own;
-17. a request naming the pinned prompt whose text does not hold its template
+17. an application that asks the witness about somewhere else and answers from
+    a call made around it has its model and prompt witnessed and no answer
+    and no question, and a gate requiring witnessed answers holds the result
+    incomplete, saying they were made around the gateway;
+18. a request naming the pinned prompt whose text does not hold its template
     fails at the traces step on the gateway's word, and publishes nothing;
-18. the server stops with runs still in a period it has not written, starts
+19. the server stops with runs still in a period it has not written, starts
     again on the same data and replays its log over the period fold's saved
     state: the window counts every run once — the three before the restart
-    from their written period, and none twice. (A restart that does not
-    replay, as on Laser, is the projector's own test.)
+    from their written period, the two after from the period the fold still
+    holds open. (A restart that does not replay, as on Laser, is the projector's
+    own test.)
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -223,9 +232,13 @@ class Provider(BaseHTTPRequestHandler):
 
 
 def through_gateway(
-    which: str, headers: dict[str, str], system: str, question: str
+    which: str,
+    headers: dict[str, str],
+    system: str,
+    question: str,
+    body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One call to the provider, through a gateway."""
+    """One call to the provider, through a gateway — or, for `around`, straight to it."""
     request = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
         GATEWAYS[which] + "/v1/chat/completions",
         data=json.dumps(
@@ -235,6 +248,7 @@ def through_gateway(
                     {"role": "system", "content": system},
                     {"role": "user", "content": question},
                 ],
+                **(body or {}),
             }
         ).encode(),
         method="POST",
@@ -304,6 +318,8 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
             steps.append("improvise")
         if run.params.get("reorder"):
             steps.reverse()
+        if run.params.get("twice"):
+            steps.append("answer")
         with run.traced_workflow(
             TELEMETRY[0],
             case,
@@ -327,11 +343,26 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         if run.params.get("drift")
                         else version.render(country=country)
                     )
+                    if run.params.get("around"):
+                        # Somewhere else, through the witness; this case, around it.
+                        elsewhere = "Kenya" if country != "Kenya" else "Japan"
+                        through_gateway(
+                            "witness",
+                            llm.caller_headers(),
+                            version.render(country=elsewhere),
+                            f"What is the capital of {elsewhere}?",
+                            llm.caller_body(country=elsewhere),
+                        )
                     reply = through_gateway(
-                        "shared" if run.params.get("shared") else "witness",
+                        "provider"
+                        if run.params.get("around")
+                        else "shared"
+                        if run.params.get("shared")
+                        else "witness",
                         llm.caller_headers(),
                         system,
                         question,
+                        None if run.params.get("drift") else llm.caller_body(country=country),
                     )
                     said = str(reply["choices"][0]["message"]["content"])
                     llm.usage(
@@ -659,11 +690,14 @@ def main() -> int:
             AiwatcherClient(service=f"e2e-gateway-{which}", base_url=BASE, token=secret),
             prompts=PromptRegistry(BASE, token=secret),
             upstream_token="provider-key",  # noqa: S106 — the stand-in provider's
+            credential=secret,
         )
         gateway = relay.server(port=0)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
         GATEWAYS[which] = f"http://127.0.0.1:{gateway.server_address[1]}"
         gateways.append(gateway)
+    # An application holding the provider's key calls it without a gateway.
+    GATEWAYS["provider"] = f"http://127.0.0.1:{provider.server_address[1]}"
     worker = Worker(
         BASE,
         WORKER_SECRET,
@@ -920,6 +954,8 @@ def main() -> int:
                 "on_prompt": len(CAPITALS),
                 # Nobody but the application saw these calls.
                 "witnessed_prompt": 0,
+                "witnessed_answer": 0,
+                "witnessed_input": 0,
             }
             and traces["declining"].get("on_prompt") == len(CAPITALS) - 1,
             traces,
@@ -996,7 +1032,8 @@ def main() -> int:
         check(
             13,
             "every answer is seen executing the pinned workflow on the pinned model, and the "
-            "gateway's own run under the witness credential witnesses its model and prompt",
+            "gateway's own run under the witness credential witnesses its model, its prompt, "
+            "its answer and its question",
             flowed["execution"]["state"]["state_type"] == "completed"
             and witnessed
             == {
@@ -1008,6 +1045,8 @@ def main() -> int:
                 "on_workflow": len(CAPITALS),
                 "witnessed_model": len(CAPITALS),
                 "witnessed_prompt": len(CAPITALS),
+                "witnessed_answer": len(CAPITALS),
+                "witnessed_input": len(CAPITALS),
                 "witnesses": ["serving"],
             }
             and publishers == {"application", "serving"},
@@ -1053,10 +1092,26 @@ def main() -> int:
                 "starting the run whose application answers before it retrieves",
             )["execution"]["execution_id"]
         )
+        doubling = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-8",
+            params={"twice": True},
+            served=True,
+            suffix="-served",
+        )
+        doubled = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{doubling['declaration']['id']}/start")[:2],
+                "starting the run whose application answers twice for one retrieval",
+            )["execution"]["execution_id"]
+        )
         check(
             14,
-            "answers whose run stepped off the pinned workflow, or out of its order, are never "
-            "scored",
+            "answers whose run stepped off the pinned workflow, out of its order, or through a "
+            "node more often than it leads are never scored",
             strayed["execution"]["state"]["state_type"] == "failed"
             and [
                 step["step_id"]
@@ -1071,11 +1126,14 @@ def main() -> int:
             )[0]
             == 404
             and reordered["execution"]["state"]["state_type"] == "failed"
-            and "started answer before retrieve had completed"
-            in json.dumps(reordered["execution"]),
+            and "started answer before retrieve had completed" in json.dumps(reordered["execution"])
+            and doubled["execution"]["state"]["state_type"] == "failed"
+            and "started answer again with no completion of retrieve since"
+            in json.dumps(doubled["execution"]),
             {
                 "stray": strayed["execution"]["state"]["state_type"],
                 "reordered": reordered["execution"]["state"]["state_type"],
+                "doubled": doubled["execution"]["state"]["state_type"],
             },
         )
 
@@ -1100,10 +1158,12 @@ def main() -> int:
         cost = windowed.get("cost") or {}
         check(
             15,
-            "observations over a window read the written periods once, time each call, and price "
-            "them at a dated price",
+            "observations over a window are the period fold's, counted once from where they "
+            "began, each call timed and priced at a dated price",
             windowed.get("runs") == served
             and windowed.get("runs_from_periods") == served
+            and windowed.get("window_before_observations") is True
+            and bool(windowed.get("counted_from"))
             and (windowed.get("duration_ms") or {}).get("bucketed") is True
             and (windowed.get("call_ms") or {}).get("count") == served
             and cost.get("priced_calls") == served
@@ -1116,6 +1176,8 @@ def main() -> int:
                     "runs_from_periods",
                     "periods",
                     "incomplete_periods",
+                    "counted_from",
+                    "window_before_observations",
                     "duration_ms",
                     "call_ms",
                     "cost",
@@ -1164,6 +1226,55 @@ def main() -> int:
             {"traces": shared_traces, "gate": gated.get("reasons")},
         )
 
+        # An application asking the witness about somewhere else, and answering
+        # from a call it made around the gateway.
+        bypassing = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-9",
+            params={"around": True},
+            served=True,
+            suffix="-served",
+        )
+        bypassed = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{bypassing['declaration']['id']}/start")[
+                    :2
+                ],
+                "starting the run whose application answers around the gateway",
+            )["execution"]["execution_id"]
+        )
+        bypassing_id = bypassing["declaration"]["run"]["evaluation_id"]
+        around = (call("GET", f"/api/v1/evaluation-results/{bypassing_id}")[1] or {}).get(
+            "traces"
+        ) or {}
+        held = (
+            call(
+                "POST",
+                f"/api/v1/evaluation-results/{bypassing_id}/gate",
+                {
+                    "baseline": evaluation,
+                    "policy": {"require_witness": True, "require_witnessed_answer": True},
+                },
+            )[1]
+            or {}
+        )
+        check(
+            17,
+            "an answer made around the gateway has its model and prompt witnessed and neither "
+            "its answer nor its question, and a gate requiring witnessed answers says so",
+            bypassed["execution"]["state"]["state_type"] == "completed"
+            and around.get("witnessed_model") == len(CAPITALS)
+            and around.get("witnessed_prompt") == len(CAPITALS)
+            and around.get("witnessed_answer") == 0
+            and around.get("witnessed_input") == 0
+            and held.get("verdict") == "incomplete"
+            and any("made around the gateway" in reason for reason in held.get("reasons", [])),
+            {"traces": around, "gate": held.get("reasons")},
+        )
+
         # A request naming the pinned prompt with other words in it.
         drifting = declare(
             "candidate",
@@ -1182,7 +1293,7 @@ def main() -> int:
             )["execution"]["execution_id"]
         )
         check(
-            17,
+            18,
             "a request whose text does not hold the pinned prompt is refused on the gateway's word",
             drifted["execution"]["state"]["state_type"] == "failed"
             and "does not hold that version's template" in json.dumps(drifted["execution"])
@@ -1240,7 +1351,7 @@ def main() -> int:
                 break
             time.sleep(1)
         check(
-            18,
+            19,
             "a restart that replays the log over the fold's saved state counts every run once",
             restarted.get("runs") == served + 5
             and restarted.get("runs_from_periods") == served + 3,

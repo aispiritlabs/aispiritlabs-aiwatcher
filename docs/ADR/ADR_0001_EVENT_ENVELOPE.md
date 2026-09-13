@@ -306,3 +306,15 @@ is what `aiwatcher_sdk.gateway` reports about a call it relayed, and it means
 nothing on an application's own call — the application saying it rendered what
 it says it rendered. Like every other field, it is taken as the producer sent it;
 what makes it a witness is the credential it was published under.
+
+## Amendment 2026-09-13, after: what a witness saw of a call's words
+
+`llm.*` data may carry `asked_digests` and `replied_digests`, recorded on the
+span as `aiwatcher.witness.asked` and `aiwatcher.witness.replied`: keyed digests
+of what a request held and what came back, never the words. A digest is the
+first 128 bits of an HMAC under a key derived from the publishing credential's
+secret (`aiwatcher_core::witness`), so only a deployment that issued that
+credential can test a text against it, and the assembler keeps only values
+shaped like a digest — a producer's words in the same field stay off the span.
+Like `prompt_verified`, they mean nothing on an application's own call; what
+makes them a witness is the credential they were published under.

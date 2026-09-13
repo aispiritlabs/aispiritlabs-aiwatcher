@@ -547,8 +547,10 @@ e2e-optimise:
 # beside what the candidate was observed serving (FTI C1, C2): cases → generate →
 # traces → score, twice, against a server of its own behind a stand-in proxy with
 # three tokens — so a gateway in front of a stand-in provider is a second witness
-# to the model and the prompt, a pinned workflow is held to its shape and order,
-# results and observations are priced, and written periods survive a restart.
+# to the model, the prompt, the question and the answer, and an answer made
+# around it is not; a pinned workflow is held to its shape, order and traversals;
+# results and observations are priced from a table with a history; and a window
+# is the period fold's, across a restart.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 

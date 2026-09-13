@@ -4,7 +4,8 @@
   removed Flyte on 2026-09-09, and ADR_0016 is superseded by
   [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md).
   The decision stands — a declaration is still the source that is right on
-  every path. Amended 2026-09-11 (below): how the panel lays the graph out.
+  every path. Amended 2026-09-11 (below): how the panel lays the graph out;
+  amended 2026-09-13: a node that repeats, and where a run enters a shape.
 - **Date**: 2026-08-29
 
 ## Context
@@ -263,3 +264,37 @@ A graph that declaration order cannot keep legible — ranks tangled enough that
 people stop reading the canvas. `max_nodes_per_execution` above already says the
 answer to size is collapsing sub-graphs; the answer to tangle would be crossing
 minimisation, and only a variant that holds still across live frames.
+
+## Amendment, 2026-09-13: a node that repeats, and where a run enters a shape
+
+### What prompted it
+
+A generated answer is held to the workflow its variant pins (ADR_0030), first
+to its shape and nodes and then to the order its edges lead. Order alone passed
+a run that answered twice for one retrieval, or went round a loop the
+declaration does not have; counting traversals needed two things a declaration
+did not say.
+
+### Decision
+
+- **A node may declare `"repeats": true`.** A stage run once per item — as many
+  times as a run has items, side by side — needs only its first admission. It
+  changes what a run may do on the shape, so it is part of
+  `Topology::digest`, and only where declared: every declaration without one
+  digests as it did.
+- **A run enters where nothing outside leads in.** `Topology::entries` is each
+  part of the graph no edge from outside enters — a node no edge enters, or a
+  cycle entered from nowhere else, such as two agents that call each other —
+  and entering starts one of its nodes, once.
+
+What the traces step does with them: a completed node sends the run on along
+each edge out of it once, a start uses one of those, a failed start gives its
+back. A declared loop goes round as often as its nodes complete; a node started
+twice for one completion, or again when nothing leads back into it, is refused.
+
+### What would make this wrong
+
+A workflow whose repetition is a count rather than a flag — "at most three
+attempts at a plan" — has nowhere to say it here, and a run going round a
+declared loop a thousand times passes. The fold keeps 256 steps a run; a run
+that took more is counted as unseen on the workflow rather than checked in part.

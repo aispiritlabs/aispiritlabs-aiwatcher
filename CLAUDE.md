@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word, scored, compared, observed, priced, and restarted
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer, scored, compared, observed, priced, and restarted
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -162,7 +162,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close (`periods`, the one module here that writes an object store), dedup, retry, dead letters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`, and `periods`, the one module here that writes an object store), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
@@ -738,10 +738,17 @@ front of a provider, holding the provider's key so the application need not,
 that publishes under its own token a run naming the caller's
 (`Aiwatcher-Caller-Run`) with the model the provider said served the call and
 whether the request's text holds the template of the prompt version the caller
-names (`Aiwatcher-Prompt`). It is the telemetry client's half — the standard
-library and nothing else — and it publishes neither the request nor the reply.
-It posts the witness before the reply ends, because the caller reads to the
-connection's close, so a call cannot end on the log before its witness is there.
+names (`Aiwatcher-Prompt`) — found exactly, rendered with the values the
+caller sends in the body field it removes before the provider sees the request
+(`LlmCall.caller_body`), or by the template's literal parts. It is the telemetry
+client's half — the standard library and nothing else — and it publishes neither
+the request nor the reply: only keyed digests of each message, of the values it
+found rendered and of each reply, under a key derived from its own credential,
+which the deployment can test an answer and a case's input against and a reader
+of the log cannot test a guess against (`aiwatcher_core::witness`, byte for
+byte). It posts the witness before the reply ends, because the caller reads to
+the connection's close, so a call cannot end on the log before its witness is
+there.
 
 ### Panel
 
@@ -896,13 +903,15 @@ connection's close, so a call cannot end on the log before its witness is there.
   server's fold of the runs that named its `variant_id` and that no measurement
   made, over the window in the URL, one per variant and never folded into a
   row's numbers — a variant seen only in its own measurement reads as observed
-  nowhere. It times each model call and its first token, and a window reaching
-  past the read model reads the periods the projector wrote as the log passed
-  them, which the column says with how many runs came from them and that the
-  percentiles are bucketed. What calls cost is the server's, at the
-  deployment's price table — a variant's observed calls and each row's cases,
-  by the models their usage names — drawn with the day and the model each price
-  was read for and the calls nothing priced.
+  nowhere. It times each model call and its first token, and a window is the
+  projector's period fold's — every period the window reaches into, whole,
+  written or still held — which the column says with where counting began, how
+  many runs came from written periods and ended late, and that the percentiles
+  are bucketed. What calls cost is the server's, at the deployment's price
+  table, each call at the price in force on its day — a variant's observed calls
+  and each row's cases, by the models their usage names — drawn with the day and
+  the model each price was read for, the calls priced before any price was read,
+  and the calls nothing priced.
 - `evaluation`'s **Case review** panel is where feedback becomes a regression
   case: a proposal names the trace or case it was seen on and the dataset it
   joins, and the queue writes expected answers, approves, rejects and publishes
@@ -2073,8 +2082,14 @@ the review.
   and a gateway in front of a provider (`aiwatcher_sdk.gateway`) is one to the
   version the provider said served it and to whether the request's text holds
   the pinned prompt's template, refusing the answers when it does not;
-  `require_witness` requires both for every answer, and a run's steps are held
-  to the order the pinned declaration leads. Not over the conversation
+  `require_witness` requires both for every answer. Its keyed digests say
+  whether an answer is, word for word, a reply it relayed and whether the
+  request held the case's input — which an application answering from a call
+  made around it cannot show — and `require_witnessed_answer` requires both. A
+  run's steps are held to the order the pinned declaration leads and to how
+  often: a node starts once per completion leading into it, a failed start
+  gives its turn back, a declared loop goes round as often as it completes, and
+  a node declared `repeats` runs once per item. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2157,26 +2172,38 @@ the review.
   credential: a serving run the application's own token published is the
   application's word again, counted as self-witnessed and said to be so — and
   where a deployment names its witnesses (`AIWATCHER_WITNESSES`), only those
-  credentials witness at all (ADR_0001, amended).
+  credentials witness at all (ADR_0001, amended). What a witness saw of a call's
+  words is keyed by the credential it published with, so its digests are only
+  its word under that credential too.
 - **Never snapshot a bounded fold into a durable record.** What a variant was
   observed doing is a projector output of its own (`period_fold`), not a copy
   of the read model: it reads each event once in log order, closes a period
   when the log's clock — `min(occurred_at, ingested_at)`, so a skewed producer
-  closes nothing early — has passed it, and writes it create-only. Its state is
-  saved with the position it was folded through, the projector resumes from
-  that position when it is behind the checkpoint, and the fold skips what it
-  holds, so a restart that does not replay leaves no gap and a replay counts
-  nothing twice. A closed period that could not be written holds the checkpoint
-  back. A run ending in a written period is counted in the oldest open one as
-  late, never dropped; a window counts a run from its period's record and never
-  from the read model as well.
+  closes nothing early — has passed it, and writes it create-only, rolled up
+  into the hour and the day it lies in. Its state is saved as generations under
+  the position it was folded through, the one furthest along is loaded, the
+  projector resumes from that position when it is behind the checkpoint, and
+  the fold skips what it holds, so a restart that does not replay leaves no gap,
+  a replay counts nothing twice, and a process sharing the processor ID sets
+  nothing back. A closed period that could not be written holds the checkpoint
+  back, and stays the fold's to read until it is written. A run ending in a
+  closed period is counted in the oldest open one as late, never dropped.
+- **Never answer a window from two folds.** A window over what a variant was
+  observed doing is the period fold's alone — every period it reaches into,
+  whole, from the store and from the fold's memory — and says where counting
+  began; without a window the answer is the read model's alone. Split between
+  the two, a late run or an evicted one was counted twice or not at all, and
+  nothing in the numbers said which.
 - **Never price a call without the page and the day.** A price is an entry a
   deployment loads (`AIWATCHER_MODEL_PRICES`), one currency for the table, and an
   entry without the page it was read from or the day is refused at start-up. A
   call no entry covers is counted unpriced, never priced at nought, and nothing
-  here fetches a price. A cost is computed at read time — observations and a
-  result's rows alike, from tokens by model — and never written into evidence,
-  because a price is the deployment's and a result is not.
+  here fetches a price. A table is a history: a call is priced by the entry in
+  force on its day, and one older than every entry by the earliest and counted
+  as such — a result on the day it was committed, an observed period on its own
+  day. A cost is computed at read time — observations and a result's rows
+  alike, from tokens by model — and never written into evidence, because a
+  price is the deployment's and a result is not.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an
