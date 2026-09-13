@@ -100,6 +100,18 @@ pub mod aiwatcher {
         pub const SEQUENCE: &str = "aiwatcher.event.sequence";
     }
 
+    /// What a gateway saw of a call's words, as keyed digests only a
+    /// deployment holding the gateway's credential can test — see
+    /// [`crate::witness`]. On a witness's own call, never on the
+    /// application's.
+    pub mod witness {
+        /// The texts the request held: each message, and each value the
+        /// named template was found rendered with.
+        pub const ASKED: &str = "aiwatcher.witness.asked";
+        /// The texts the provider replied with.
+        pub const REPLIED: &str = "aiwatcher.witness.replied";
+    }
+
     pub mod source {
         pub const SERVICE: &str = "aiwatcher.source.service";
         pub const INSTANCE: &str = "aiwatcher.source.instance";

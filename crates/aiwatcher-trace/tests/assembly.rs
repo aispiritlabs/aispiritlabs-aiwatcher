@@ -352,6 +352,53 @@ fn a_call_names_the_prompt_version_it_ran_on_and_never_its_text() {
     }
 }
 
+/// A witness's digests of a call's words reach the span as lists, and anything
+/// that is not a digest — a producer's text in the same field — does not.
+#[test]
+fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
+    let mut run = Run::new("run-witnessed");
+    let digest = "0123456789abcdef0123456789abcdef";
+    let events = vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5)
+            .emit(EventType::AgentStarted, Some("gateway"), json!({})),
+        run.after(5).emit(
+            EventType::LlmStarted,
+            Some("gateway"),
+            json!({ "call_id": "c", "model": "capitals" }),
+        ),
+        run.after(50).emit(
+            EventType::LlmCompleted,
+            Some("gateway"),
+            json!({
+                "call_id": "c",
+                "model": "capitals",
+                "asked_digests": [digest, "What is the capital of Peru?"],
+                "replied_digests": [digest],
+            }),
+        ),
+    ];
+
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &events);
+    let llm = find(&assembled.spans, "chat capitals");
+    let list = |key: &str| {
+        llm.attributes
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+
+    assert_eq!(
+        list("aiwatcher.witness.asked"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+    assert_eq!(
+        list("aiwatcher.witness.replied"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+}
+
 /// The Python SDK restates the request on the end event. Once is a description;
 /// twice is an exporter writing the same fact into two rows.
 #[test]

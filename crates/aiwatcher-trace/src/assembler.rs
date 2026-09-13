@@ -681,6 +681,29 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             if let Some(cached) = event.data_i64("cached_tokens") {
                 out.push(attr("gen_ai.usage.cached_tokens", cached));
             }
+            // A witness's digests of the call's words: digests only, of the
+            // length the gateway writes, and never more than it keeps.
+            for (key, attribute) in [
+                ("asked_digests", own::witness::ASKED),
+                ("replied_digests", own::witness::REPLIED),
+            ] {
+                let digests: Vec<String> = event
+                    .data
+                    .get(key)
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|digest| {
+                        digest.len() == 32 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                    .take(aiwatcher_core::witness::MOST_DIGESTS)
+                    .map(ToOwned::to_owned)
+                    .collect();
+                if !digests.is_empty() {
+                    out.push((attribute.to_owned(), AttrValue::StrList(digests)));
+                }
+            }
             out.extend(request_attributes(event));
         }
         Subject::Tool => {

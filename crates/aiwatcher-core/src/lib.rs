@@ -26,6 +26,7 @@ pub mod prompts;
 pub mod storage;
 pub mod stream;
 pub mod topology;
+pub mod witness;
 
 pub use artifact::{ArtifactKind, ArtifactRef};
 pub use catalog::{EventType, Phase, Subject};

@@ -843,7 +843,17 @@ pub async fn build(config: Config) -> Result<Runtime> {
             .clone()
             .map(aiwatcher_projector::PeriodStore::new),
         model_prices: build_model_prices(&config)?,
-        witnesses: config.witnesses.clone(),
+        // A witness's digests of a call's words are keyed by the credential it
+        // published with, which this deployment issued: every ingest token's
+        // key, and only the named ones admitted where any are named.
+        witnesses: aiwatcher_evaluation::Witnesses::named(config.witnesses.clone()).keyed(
+            config.auth.ingest_tokens.iter().map(|token| {
+                (
+                    token.label.clone(),
+                    aiwatcher_core::witness::key_for(&token.secret),
+                )
+            }),
+        ),
         runner: build_workflow_runner(&config)?,
         // Built in the `serve` role too, unlike an executor: opening a block's
         // editor is a person waiting on a request, not an attempt somebody

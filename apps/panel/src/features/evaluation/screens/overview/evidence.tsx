@@ -505,6 +505,18 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.witnessed_prompt} of ${traces.answers} had a gateway's own run saying it found the pinned prompt's template in the request it relayed.`}
         </p>
       ) : null}
+      {/* A witness's digests of the call's words: whether the answer is the
+          reply it relayed, and whether the request held the case's input. */}
+      {traces.witnessed_answer != null ? (
+        <p>
+          {`${traces.witnessed_answer} of ${traces.answers} are, word for word, a reply a witness relayed for their run — an answer made around the gateway, or reshaped from what came back, is not.`}
+        </p>
+      ) : null}
+      {traces.witnessed_input != null ? (
+        <p>
+          {`${traces.witnessed_input} of ${traces.answers} had a witnessed request holding their case's input.`}
+        </p>
+      ) : null}
       {(traces.witnesses ?? []).length > 0 ? (
         <p>{`Witnessed by ${(traces.witnesses ?? []).join(', ')}.`}</p>
       ) : null}

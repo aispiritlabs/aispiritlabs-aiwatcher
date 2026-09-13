@@ -529,6 +529,8 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
             on_workflow: 2,
             witnessed_model: 1,
             witnessed_prompt: 2,
+            witnessed_answer: 1,
+            witnessed_input: 2,
             witnesses: ['gateway'],
             self_witnessed: 1,
             served: [{ model: 'support-model-q4', answers: 2 }],
@@ -546,6 +548,10 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
     screen.getByText(/1 of 2 had a serving host's own run, under a witness's credential/),
   ).toBeTruthy();
   expect(screen.getByText(/2 of 2 had a gateway's own run/)).toBeTruthy();
+  expect(screen.getByText(/1 of 2 are, word for word, a reply a witness relayed/)).toBeTruthy();
+  expect(
+    screen.getByText(/2 of 2 had a witnessed request holding their case's input/),
+  ).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();
   expect(screen.getByText(/support-model-q4 \(2 answers\) — compared with nothing/)).toBeTruthy();

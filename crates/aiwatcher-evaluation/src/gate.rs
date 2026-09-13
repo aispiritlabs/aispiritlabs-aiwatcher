@@ -52,6 +52,13 @@ pub struct GatePolicy {
     /// give one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_witness: bool,
+    /// Every generated answer must also be, word for word, a reply a witness
+    /// relayed for its run, to a request that held its case's input — which an
+    /// application calling its provider around the gateway, or answering other
+    /// than the model did, cannot show; fewer is `incomplete`. Off by default:
+    /// an application that reshapes a reply before answering has none to show.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_witnessed_answer: bool,
 }
 
 impl GatePolicy {
@@ -217,7 +224,25 @@ pub fn decide(
             }
             Some(_) => false,
         };
-    let incomplete = incomplete || untraced || unwitnessed;
+    let unexchanged = policy.require_witnessed_answer
+        && match &candidate.traces {
+            None => {
+                reasons.push(
+                    "the policy requires every answer to be a reply a witness relayed, and the \
+                     candidate's answers were not generated here, so no trace was read"
+                        .to_owned(),
+                );
+                true
+            }
+            Some(traces) if !traces.answers_witnessed() => {
+                reasons.extend(traces.unwitnessed_answers().into_iter().map(|missing| {
+                    format!("the policy requires every answer witnessed as the reply: {missing}")
+                }));
+                true
+            }
+            Some(_) => false,
+        };
+    let incomplete = incomplete || untraced || unwitnessed || unexchanged;
 
     let ignored: BTreeSet<&str> = policy.ignore.iter().map(String::as_str).collect();
     let mut regressed = false;

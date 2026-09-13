@@ -276,6 +276,18 @@ def test_a_model_call_hands_its_server_the_run_it_is_and_the_server_names_it(
     assert served[0]["data"] == {"caller_run_id": "app-run"}
 
 
+def test_what_a_call_was_rendered_with_goes_to_its_gateway_and_never_on_the_log(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    from aiwatcher_sdk import GATEWAY_FIELD
+
+    with client.run("app-run") as run, run.agent("bot") as agent, agent.llm(model="m") as call:
+        body = call.caller_body(country="Peru")
+
+    assert body == {GATEWAY_FIELD: {"variables": {"country": "Peru"}}}
+    assert "Peru" not in str(transport.events)
+
+
 def test_a_workflow_run_can_name_the_variant_and_the_measurement_it_answers(
     client: AiwatcherClient, transport: RecordingTransport
 ) -> None:

@@ -60,8 +60,14 @@ CALLER_RUN_HEADER = "Aiwatcher-Caller-Run"
 #: request's own text (``aiwatcher_sdk.gateway``).
 PROMPT_HEADER = "Aiwatcher-Prompt"
 
+#: The field of a request's body a gateway reads the values a prompt version
+#: was rendered with from, and removes before the provider sees the request —
+#: see :meth:`LlmCall.caller_body`.
+GATEWAY_FIELD = "aiwatcher"
+
 __all__ = [
     "CALLER_RUN_HEADER",
+    "GATEWAY_FIELD",
     "PROMPT_HEADER",
     "SCHEMA_VERSION",
     "AgentContext",
@@ -1196,6 +1202,21 @@ class LlmCall(Scope):
         if name and version:
             headers[PROMPT_HEADER] = f"{name}@{version}"
         return headers
+
+    def caller_body(self, **variables: object) -> dict[str, Any]:
+        """The body field a gateway reads about this call, beside :meth:`caller_headers`.
+
+        Pass the values the prompt version was rendered with, and send the
+        result as part of the request's body (``extra_body=`` on an OpenAI
+        client). A gateway removes the field before the provider sees it,
+        renders the named version with these values and looks for exactly that
+        text in the request — and publishes, under its own credential, keyed
+        digests of the request's messages, of these values where it found them
+        rendered, and of the reply. So a case's input among them and an answer
+        that is the reply are a witness's word, and none of it reaches the log
+        as words.
+        """
+        return {GATEWAY_FIELD: {"variables": dict(variables)}}
 
     def first_token(self) -> None:
         """Call once, when the first token arrives. Drives time-to-first-token."""

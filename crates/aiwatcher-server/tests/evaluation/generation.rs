@@ -526,7 +526,8 @@ async fn the_traces_of_generated_answers_say_how_many_ran_on_the_pinned_prompt_a
     .expect("nothing the traces show contradicts the pins");
     assert_eq!(
         traced.result.as_ref().unwrap()["traces"],
-        json!({"answers": 3, "named": 2, "seen": 1, "on_prompt": 1, "witnessed_prompt": 0})
+        json!({"answers": 3, "named": 2, "seen": 1, "on_prompt": 1, "witnessed_prompt": 0,
+               "witnessed_answer": 0, "witnessed_input": 0})
     );
 
     let (command, context) = step(
@@ -705,9 +706,14 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
         folded_run(&read_model, run_id, "worker", Some("support-app"), events).await;
     }
     // The serving host's run, under its own credential, naming the call it
-    // served — and one the worker published for itself, which is its own word.
-    let served_call =
-        json!({"call_id": "serve-1", "model": "support-model", "model_version": "v7"});
+    // served — with its keyed digests of the answer it sent back and the
+    // question it was asked — and one the worker published for itself, which
+    // is its own word.
+    use aiwatcher_core::witness::{Said, digest, key_for};
+    let key = key_for("serving-secret");
+    let served_call = json!({"call_id": "serve-1", "model": "support-model", "model_version": "v7",
+        "replied_digests": [digest(&key, Said::Replied, r#"{"text":""}"#)],
+        "asked_digests": [digest(&key, Said::Asked, "question 0")]});
     folded_run(
         &read_model,
         "serve-1",
@@ -766,6 +772,7 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
         std::time::Duration::ZERO,
     )
     .reading_bundles_from(Arc::new(Declaration(declaration.to_vec())))
+    .witnessed_by(aiwatcher_evaluation::Witnesses::default().keyed([("serving".to_owned(), key)]))
     .execute(&command, &context)
     .await
     .expect("nothing contradicts the pins");
@@ -773,6 +780,7 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
         traced.result.as_ref().unwrap()["traces"],
         json!({"answers": 2, "named": 2, "seen": 2, "on_prompt": 2, "on_model": 2,
                "on_workflow": 2, "witnessed_model": 1, "witnessed_prompt": 0,
+               "witnessed_answer": 1, "witnessed_input": 1,
                "self_witnessed": 1, "witnesses": ["serving"],
                "served": [{"model": "support-model-q4", "answers": 2}]}),
         "the serving run the worker's own credential published is no witness"

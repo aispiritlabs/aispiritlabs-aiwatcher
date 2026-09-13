@@ -14,15 +14,23 @@ version the application names (:data:`~aiwatcher_sdk.PROMPT_HEADER`)::
         aiwatcher-gateway --upstream https://api.openai.com --listen 127.0.0.1:8085
 
 It publishes neither the request nor the reply: a model, a version, a prompt
-reference, a flag, tokens and a latency. Holding the provider's key itself, so
-the application holds none, is what makes a call the gateway did not see a call
-the application could not make.
+reference, a flag, tokens, a latency — and keyed digests of each message, of
+the values the application says it rendered the prompt with where the gateway
+found exactly that rendering (:meth:`~aiwatcher_sdk.LlmCall.caller_body`), and
+of each reply. The key is derived from the gateway's own credential, which the
+deployment issued, so the deployment can ask whether an answer is a reply the
+gateway relayed and whether a case's input was in the request, while a reader
+of the log cannot test a guess against a one-word answer. Holding the
+provider's key itself, so the application holds none, is what makes a call the
+gateway did not see a call the application could not make.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -37,19 +45,48 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, PROMPT_HEADER, AiwatcherClient
+from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
 
 __all__ = [
     "Gateway",
     "PromptSource",
     "holds_template",
     "main",
+    "witness_digest",
+    "witness_key",
 ]
 
 #: The same placeholder syntax the registry reads — see ``aiwatcher_sdk.prompts``.
 _PLACEHOLDER = re.compile(r"(?<!\{)\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}")
 #: A request body larger than this is refused rather than held in memory.
 MAX_BODY_BYTES = 8 * 1024 * 1024
+#: What a witness key is derived for — ``aiwatcher_core::witness``, byte for byte.
+WITNESS_KEY_LABEL = b"aiwatcher.witness.v1"
+#: How many digests of one side of a call are published.
+MOST_DIGESTS = 64
+#: A reply longer than this is relayed and not digested.
+MOST_REPLY_CHARS = 1024 * 1024
+#: The characters Rust's ``str::trim`` removes: Unicode's White_Space, which is
+#: not quite what ``str.strip()`` removes.
+_WHITE_SPACE = (
+    "\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def witness_key(secret: str) -> bytes:
+    """The witness key of a credential, from its secret."""
+    return hmac.new(secret.encode(), WITNESS_KEY_LABEL, hashlib.sha256).digest()
+
+
+def witness_digest(key: bytes, said: str, text: str) -> str:
+    """The digest of one text on one side of a call — ``said`` is ``asked`` or ``replied``."""
+    message = said.encode() + b"\0" + text.strip(_WHITE_SPACE).encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()[:32]
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 class PromptSource(Protocol):
@@ -79,6 +116,39 @@ def holds_template(template: str, messages: Sequence[Any]) -> bool:
     return any(pattern.search(text) for text in [*texts, "\n".join(texts)])
 
 
+def _texts_asked(body: Mapping[str, Any]) -> list[str]:
+    """Each text a request holds: every message's, or a completion's prompt."""
+    messages = body.get("messages")
+    texts = [_text_of(message) for message in messages] if isinstance(messages, list) else []
+    if isinstance(body.get("prompt"), str):
+        texts.append(body["prompt"])
+    return [text for text in texts if text.strip(_WHITE_SPACE)]
+
+
+def _holds_rendered(template: str, variables: Mapping[str, Any], texts: Sequence[str]) -> bool:
+    """Whether a text holds ``template`` rendered with exactly these values — the
+    registry's placeholder syntax, as :meth:`~aiwatcher_sdk.prompts.PromptVersion.render`
+    fills it."""
+    names = set(_PLACEHOLDER.findall(template))
+    if not names <= set(variables):
+        return False
+    rendered = _PLACEHOLDER.sub(lambda match: str(variables[match.group(1)]), template).strip(
+        _WHITE_SPACE
+    )
+    return bool(rendered) and any(rendered in text for text in [*texts, "\n".join(texts)])
+
+
+def _digested(key: bytes, said: str, texts: Sequence[str]) -> list[str]:
+    digests: list[str] = []
+    for text in texts:
+        digest = witness_digest(key, said, text)
+        if digest not in digests:
+            digests.append(digest)
+        if len(digests) == MOST_DIGESTS:
+            break
+    return digests
+
+
 def _text_of(message: Any) -> str:
     if not isinstance(message, Mapping):
         return ""
@@ -102,10 +172,27 @@ class Relayed:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     cached_tokens: int | None = None
+    #: Each choice's text, by its index, as far as it has arrived.
+    replies: dict[int, str] | None = None
 
-    def read(self, body: Mapping[str, Any]) -> None:
+    def read(self, body: Mapping[str, Any], *, streamed: bool = False) -> None:
         if isinstance(body.get("model"), str):
             self.served_model = body["model"]
+        choices = body.get("choices")
+        if isinstance(choices, list):
+            replies = self.replies if self.replies is not None else {}
+            for position, choice in enumerate(choices):
+                if not isinstance(choice, Mapping):
+                    continue
+                index = choice.get("index", position)
+                part = choice.get("delta" if streamed else "message")
+                text = _text_of(part) if isinstance(part, Mapping) else ""
+                if isinstance(choice.get("text"), str):
+                    text += choice["text"]
+                if isinstance(index, int) and text:
+                    joined = replies.get(index, "") + text
+                    replies[index] = joined[: MOST_REPLY_CHARS + 1]
+            self.replies = replies
         usage = body.get("usage")
         if isinstance(usage, Mapping):
             for field, key in (
@@ -130,13 +217,19 @@ class Gateway:
         prompts: PromptSource | None = None,
         upstream_token: str | None = None,
         token: str | None = None,
+        credential: str | None = None,
         timeout: float = 120.0,
     ) -> None:
+        """``credential`` is the token ``telemetry`` publishes with: the witness
+        key its digests are made under is derived from it, and without one the
+        gateway publishes no digests.
+        """
         self.upstream = upstream.rstrip("/")
         self.telemetry = telemetry
         self.prompts = prompts
         self.upstream_token = upstream_token
         self.token = token
+        self.key = witness_key(credential) if credential else None
         self.timeout = timeout
         self._templates: dict[tuple[str, str], str | None] = {}
         self._lock = threading.Lock()
@@ -171,22 +264,62 @@ class Gateway:
             self._templates[key] = text
         return text
 
-    def verified(self, named: str | None, body: Mapping[str, Any]) -> tuple[str, str, bool] | None:
-        """The prompt a request names, and whether its text holds that template.
+    def verified(
+        self,
+        named: str | None,
+        body: Mapping[str, Any],
+        variables: Mapping[str, Any] | None = None,
+    ) -> tuple[str, str, bool, bool] | None:
+        """The prompt a request names, whether its text holds that template, and
+        whether it holds it rendered with exactly ``variables``.
 
         ``None`` when it names none, or the registry could not be asked.
         """
         if not named or "@" not in named:
             return None
         name, version = named.rsplit("@", 1)
-        messages = body.get("messages")
         try:
             template = self.template(name, version)
         except PromptMissingError:
-            return name, version, False
+            return name, version, False, False
         except Exception:  # noqa: BLE001 — an unreachable registry verifies nothing
             return None
-        return name, version, isinstance(messages, list) and holds_template(template, messages)
+        texts = _texts_asked(body)
+        rendered = variables is not None and _holds_rendered(template, variables, texts)
+        messages = body.get("messages")
+        literal = isinstance(messages, list) and holds_template(template, messages)
+        return name, version, rendered or literal, rendered
+
+    def digests_asked(
+        self, body: Mapping[str, Any], variables: Mapping[str, Any] | None, rendered: bool
+    ) -> list[str]:
+        """Keyed digests of each text the request held — and of the values the
+        template was found rendered with, only where it was."""
+        if self.key is None:
+            return []
+        texts = _texts_asked(body)
+        if rendered and variables is not None:
+            texts.extend(
+                value if isinstance(value, str) else _canonical(value)
+                for value in variables.values()
+            )
+        return _digested(self.key, "asked", texts)
+
+    def digests_replied(self, relayed: Relayed) -> list[str]:
+        """Keyed digests of each reply, as text and, where it is JSON, as its
+        canonical form — which is how an answer that parsed it is compared."""
+        if self.key is None or not relayed.replies:
+            return []
+        texts: list[str] = []
+        for text in relayed.replies.values():
+            if len(text) > MOST_REPLY_CHARS:
+                continue
+            texts.append(text)
+            with contextlib.suppress(ValueError):
+                parsed = json.loads(text)
+                if isinstance(parsed, (dict, list)):
+                    texts.append(_canonical(parsed))
+        return _digested(self.key, "replied", texts)
 
     # ── Relaying ─────────────────────────────────────────────────────────
 
@@ -229,10 +362,11 @@ class Gateway:
         *,
         caller: str | None,
         requested: str | None,
-        prompt: tuple[str, str, bool] | None,
+        prompt: tuple[str, str, bool, bool] | None,
         relayed: Relayed,
         status: int,
         started: float,
+        asked: Sequence[str] = (),
     ) -> None:
         """One call, as the gateway saw it — with nothing that was said in it."""
         request: dict[str, Any] = {"provider": "aiwatcher-gateway"}
@@ -253,6 +387,11 @@ class Gateway:
             if relayed.served_model:
                 outcome["model_version"] = relayed.served_model
                 outcome["response_model"] = relayed.served_model
+            if asked:
+                outcome["asked_digests"] = list(asked)
+            replied = self.digests_replied(relayed)
+            if replied:
+                outcome["replied_digests"] = replied
             call.usage(
                 prompt_tokens=relayed.prompt_tokens,
                 completion_tokens=relayed.completion_tokens,
@@ -307,7 +446,16 @@ class Gateway:
                     self.send_json(HTTPStatus.BAD_REQUEST, {"error": "the body is not an object"})
                     return
                 started = time.monotonic()
-                prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body)
+                # What the application says about the call is for the gateway,
+                # never for the provider.
+                variables: Mapping[str, Any] | None = None
+                if GATEWAY_FIELD in body:
+                    told = body.pop(GATEWAY_FIELD)
+                    named = told.get("variables") if isinstance(told, Mapping) else None
+                    variables = named if isinstance(named, Mapping) else None
+                    raw = json.dumps(body, separators=(",", ":")).encode()
+                prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, variables)
+                asked = gateway.digests_asked(body, variables, prompt is not None and prompt[3])
                 relayed = Relayed()
                 try:
                     status, content_type, chunks = gateway.forward(self.path, raw, authorization)
@@ -339,6 +487,7 @@ class Gateway:
                     relayed=relayed,
                     status=int(status),
                     started=started,
+                    asked=asked,
                 )
 
         return Handler
@@ -372,7 +521,7 @@ def _read_events(chunk: bytes, held: bytearray, relayed: Relayed) -> None:
         with contextlib.suppress(ValueError):
             event = json.loads(payload)
             if isinstance(event, Mapping):
-                relayed.read(event)
+                relayed.read(event, streamed=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -406,6 +555,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prompts=prompts,
         upstream_token=os.environ.get(args.upstream_token_env) or None,
         token=token,
+        credential=credential,
     )
     server = gateway.server(host or "127.0.0.1", int(port))
     try:

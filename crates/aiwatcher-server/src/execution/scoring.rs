@@ -743,9 +743,9 @@ pub struct TracesExecutor {
     /// Where the pair's bundle is read: the declaration of a pinned workflow,
     /// which a run's own declaration is compared with.
     bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
-    /// The credentials whose runs may witness an answer; empty, any other than
-    /// the answer's own.
-    witnesses: Vec<String>,
+    /// The credentials whose runs may witness an answer — empty, any other
+    /// than the answer's own — and the key each one's digests are made under.
+    witnesses: aiwatcher_evaluation::Witnesses,
     wait: std::time::Duration,
 }
 
@@ -762,14 +762,14 @@ impl TracesExecutor {
             artifacts,
             read_model,
             bundles: None,
-            witnesses: Vec::new(),
+            witnesses: aiwatcher_evaluation::Witnesses::default(),
             wait,
         }
     }
 
-    /// Only these credentials' runs witness an answer.
+    /// Only these credentials' runs witness an answer, each with its key.
     #[must_use]
-    pub fn witnessed_by(mut self, witnesses: Vec<String>) -> Self {
+    pub fn witnessed_by(mut self, witnesses: aiwatcher_evaluation::Witnesses) -> Self {
         self.witnesses = witnesses;
         self
     }
@@ -884,6 +884,17 @@ fn number(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// A list-of-text attribute of a span, or none.
+fn list(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> Vec<String> {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            aiwatcher_core::ports::AttrValue::StrList(items) if name == key => Some(items.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 /// A run's model calls, as their spans say.
 fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
     use aiwatcher_core::attrs::{aiwatcher as own, genai};
@@ -920,6 +931,8 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             input_tokens: number(span, genai::USAGE_INPUT_TOKENS),
             output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),
             cached_tokens: number(span, "gen_ai.usage.cached_tokens"),
+            asked: list(span, own::witness::ASKED),
+            replied: list(span, own::witness::REPLIED),
         })
         .collect()
 }
@@ -939,8 +952,24 @@ impl ActivityExecutor for TracesExecutor {
             return Err(ActivityError::user_code("this step reads no traces"));
         };
         let Prepared {
-            declared, manifest, ..
+            declared,
+            manifest,
+            subject,
+            ..
         } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        // What a witness's digests of a request are tested for: each case's
+        // input, read under the pair's admission as the cases step read it.
+        let variant = &declared.run.variant;
+        let witnesses = if variant.model.is_some() || variant.prompt.is_some() {
+            let cohort = self
+                .evaluations
+                .cohort_cases(&manifest, &subject)
+                .await
+                .map_err(refusal)?;
+            self.witnesses.clone().asked(cohort.inputs)
+        } else {
+            self.witnesses.clone()
+        };
         let prepared = aiwatcher_evaluation::Evaluation::prepare(manifest)
             .map_err(|error| ActivityError::user_code(error.to_string()))?;
         let written = command
@@ -986,7 +1015,7 @@ impl ActivityExecutor for TracesExecutor {
             &answers,
             &runs,
             shape.as_ref(),
-            &self.witnesses,
+            &witnesses,
         )
         .map_err(|contradictions| {
             ActivityError::user_code(format!(

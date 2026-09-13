@@ -19303,6 +19303,10 @@
             "type": "boolean",
             "description": "Every generated answer must also have a witness's word for what the\nvariant pins that a witness can show — a serving host's for the model\nversion, a gateway's for the prompt it found in the request — published\nunder another credential than the application's, and one the\ndeployment names in `AIWATCHER_WITNESSES` where it names any; fewer is\n`incomplete`. Off by default: only a host that reports its own runs can\ngive one."
           },
+          "require_witnessed_answer": {
+            "type": "boolean",
+            "description": "Every generated answer must also be, word for word, a reply a witness\nrelayed for its run, to a request that held its case's input — which an\napplication calling its provider around the gateway, or answering other\nthan the model did, cannot show; fewer is `incomplete`. Off by default:\nan application that reshapes a reply before answering has none to show."
+          },
           "tolerance": {
             "type": "object",
             "description": "How far worse than the baseline a metric may be, in its own unit. A\nmetric not named here may not get worse at all.",
@@ -19463,6 +19467,22 @@
           "steps_unread": {
             "type": "integer",
             "description": "Seen runs that took more node steps than the fold keeps, whose order\npast them was therefore not read.",
+            "minimum": 0
+          },
+          "witnessed_answer": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Answers that are, word for word, a reply such a run relayed for their\nrun; absent when the variant pins neither a model nor a prompt.",
+            "minimum": 0
+          },
+          "witnessed_input": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Answers whose case's input such a run found in the request it relayed;\nabsent when the variant pins neither a model nor a prompt.",
             "minimum": 0
           },
           "witnessed_model": {

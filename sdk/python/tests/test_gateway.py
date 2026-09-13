@@ -11,11 +11,12 @@ from typing import Any, ClassVar
 
 import pytest
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, PROMPT_HEADER, AiwatcherClient
+from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
 from aiwatcher_sdk.api import ApiError
-from aiwatcher_sdk.gateway import Gateway, holds_template
+from aiwatcher_sdk.gateway import Gateway, holds_template, witness_digest, witness_key
 
 TEMPLATE = "Answer the question about {{ country }} in one word."
+KEY = witness_key("gateway-secret")
 
 
 class Recording:
@@ -97,6 +98,7 @@ def gateway() -> Generator[tuple[str, Recording], None, None]:
         AiwatcherClient(service="gateway", transport=recording),
         prompts=Prompts(),
         upstream_token="provider-key",
+        credential="gateway-secret",
     )
     server = relay.server(port=0)
     try:
@@ -205,3 +207,74 @@ def test_a_template_is_found_with_its_variables_filled_and_a_placeholder_alone_h
         [{"role": "user", "content": [{"type": "text", "text": "rules\nQ: capital?"}]}],
     )
     assert not holds_template("{{ everything }}", filled)
+
+
+def completed(recording: Recording) -> list[dict[str, Any]]:
+    return [event["data"] for event in recording.events if event["event_type"] == "llm.completed"]
+
+
+def test_a_digest_is_the_bytes_the_deployment_computes() -> None:
+    """The vectors ``aiwatcher_core::witness`` holds itself to."""
+    key = witness_key("serving-secret")
+    assert key.hex() == "b27f733074077db3bb749314c6dbc46fc967028defacac53f83907b0ecf83c15"
+    assert witness_digest(key, "replied", " Lima\n") == "424880e43451b760e40c782d90743997"
+    assert (
+        witness_digest(key, "asked", "What is the capital of Peru?")
+        == "8f3cf1564557884b7b44e9bf0077f300"
+    )
+
+
+def test_what_was_asked_and_replied_is_published_as_keyed_digests_and_the_field_goes_no_further(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    ask(
+        base,
+        {
+            "model": "capitals",
+            "messages": messages("Answer the question about Peru in one word."),
+            GATEWAY_FIELD: {"variables": {"country": "Peru"}},
+        },
+        {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"},
+    )
+
+    assert GATEWAY_FIELD not in Provider.seen[0], "the provider is sent the request, not the field"
+    [data] = completed(recording)
+    assert data["prompt_verified"] is True
+    for text in ("What is the capital of Peru?", "Peru"):
+        assert witness_digest(KEY, "asked", text) in data["asked_digests"], text
+    assert data["replied_digests"] == [witness_digest(KEY, "replied", "Lima")]
+    assert witness_digest(witness_key("another"), "replied", "Lima") not in data["replied_digests"]
+
+
+def test_values_the_request_was_not_rendered_with_are_not_vouched_for(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    ask(
+        base,
+        {
+            "model": "capitals",
+            "messages": messages("Answer the question about Peru in one word."),
+            GATEWAY_FIELD: {"variables": {"country": "Kenya"}},
+        },
+        {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"},
+    )
+
+    [data] = completed(recording)
+    assert data["prompt_verified"] is True, "its literal parts are there"
+    assert witness_digest(KEY, "asked", "Kenya") not in data["asked_digests"]
+
+
+def test_a_streamed_reply_is_digested_as_the_text_it_adds_up_to(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    ask(
+        base,
+        {"model": "capitals", "stream": True, "messages": messages("Hello")},
+        {CALLER_RUN_HEADER: "app-run"},
+    )
+
+    [data] = completed(recording)
+    assert data["replied_digests"] == [witness_digest(KEY, "replied", "Lima")]

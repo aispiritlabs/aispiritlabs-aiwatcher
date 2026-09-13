@@ -226,7 +226,10 @@ mod tests {
             .into_iter()
             .map(|part| part.into_iter().collect())
             .collect();
-        assert_eq!(entries, [vec!["rank".to_owned()], vec!["retrieve".to_owned()]]);
+        assert_eq!(
+            entries,
+            [vec!["rank".to_owned()], vec!["retrieve".to_owned()]]
+        );
 
         let conversation = Topology::read(&json!({
             "nodes": ["planner", "executor", "report"],

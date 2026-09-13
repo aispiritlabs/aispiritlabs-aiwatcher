@@ -46,6 +46,68 @@ pub struct TracedCall {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// A witness's keyed digests of what the request held and what came back
+    /// ([`aiwatcher_core::witness`]); empty on the application's own calls.
+    pub asked: Vec<String>,
+    pub replied: Vec<String>,
+}
+
+/// Who may witness a generated answer, the key each one's digests of a call's
+/// words are made under, and the inputs of the cases those digests are tested
+/// for.
+#[derive(Clone, Default)]
+pub struct Witnesses {
+    named: Vec<String>,
+    keys: BTreeMap<String, [u8; 32]>,
+    inputs: BTreeMap<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for Witnesses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the keys: each is derived from a credential's secret.
+        f.debug_struct("Witnesses")
+            .field("named", &self.named)
+            .field("keyed", &self.keys.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Witnesses {
+    /// Only these credentials witness; naming none, any credential other than
+    /// the answer's own does.
+    #[must_use]
+    pub fn named(named: Vec<String>) -> Self {
+        Self {
+            named,
+            ..Self::default()
+        }
+    }
+
+    /// Each credential's witness key ([`aiwatcher_core::witness::key_for`]):
+    /// a witness whose key is not here says nothing about a call's words.
+    #[must_use]
+    pub fn keyed(mut self, keys: impl IntoIterator<Item = (String, [u8; 32])>) -> Self {
+        self.keys.extend(keys);
+        self
+    }
+
+    /// Each case's input, which a witness's digests of a request are tested
+    /// for.
+    #[must_use]
+    pub fn asked(mut self, inputs: BTreeMap<String, serde_json::Value>) -> Self {
+        self.inputs = inputs;
+        self
+    }
+
+    /// The credentials named.
+    #[must_use]
+    pub fn names(&self) -> &[String] {
+        &self.named
+    }
+
+    fn admits(&self, witness: &str) -> bool {
+        self.named.is_empty() || self.named.iter().any(|named| named == witness)
+    }
 }
 
 /// A run an answer names, as the log folded it once it had ended and every
@@ -116,6 +178,16 @@ pub struct TracedAnswer {
     /// text of the request it relayed. Absent when the variant pins no prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_prompt: Option<bool>,
+    /// Such a run relayed a reply that is this answer, word for word — so the
+    /// answer came back through the witness rather than around it. Absent
+    /// when the variant pins neither a model nor a prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_answer: Option<bool>,
+    /// Such a run's request held the case's input — a message, or a value it
+    /// found the pinned template rendered with. Absent when the variant pins
+    /// neither a model nor a prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_input: Option<bool>,
     /// The credentials whose runs witnessed it, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnessed_by: Vec<String>,
@@ -193,6 +265,14 @@ pub struct GenerationTrace {
     /// version's template; absent when the variant pins no prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_prompt: Option<usize>,
+    /// Answers that are, word for word, a reply such a run relayed for their
+    /// run; absent when the variant pins neither a model nor a prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_answer: Option<usize>,
+    /// Answers whose case's input such a run found in the request it relayed;
+    /// absent when the variant pins neither a model nor a prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_input: Option<usize>,
     /// Answers whose serving runs were published under their own run's
     /// credential, which witnesses nothing: one token on two hosts.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -233,6 +313,8 @@ impl GenerationTrace {
             steps_unread: rows.iter().filter(|row| row.workflow_steps_unread).count(),
             witnessed_model: counted(|row| row.witnessed_model),
             witnessed_prompt: counted(|row| row.witnessed_prompt),
+            witnessed_answer: counted(|row| row.witnessed_answer),
+            witnessed_input: counted(|row| row.witnessed_input),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
             witnesses: {
                 let mut witnesses: Vec<String> = rows
@@ -317,6 +399,42 @@ impl GenerationTrace {
                     self.seen
                 ));
             }
+        }
+        said
+    }
+
+    /// Whether every answer is a reply a witness relayed, to a request that
+    /// held its case's input: an application that called around the gateway,
+    /// or answered other than the model did, has none.
+    #[must_use]
+    pub fn answers_witnessed(&self) -> bool {
+        self.witnessed_answer.is_none_or(|on| on == self.answers)
+            && self.witnessed_input.is_none_or(|on| on == self.answers)
+    }
+
+    /// What a witness did not show of the answers and the questions, in words;
+    /// empty when [`Self::answers_witnessed`].
+    #[must_use]
+    pub fn unwitnessed_answers(&self) -> Vec<String> {
+        let mut said = Vec::new();
+        if let Some(on) = self.witnessed_answer
+            && on < self.answers
+        {
+            said.push(format!(
+                "{} of {} answers are no reply a witness relayed for their run — made around the \
+                 gateway, or not what the model said",
+                self.answers - on,
+                self.answers
+            ));
+        }
+        if let Some(on) = self.witnessed_input
+            && on < self.answers
+        {
+            said.push(format!(
+                "{} of {} answers had no request a witness relayed holding their case's input",
+                self.answers - on,
+                self.answers
+            ));
         }
         said
     }
@@ -471,7 +589,7 @@ pub fn trace_answers(
     answers: &[RecordedAnswer],
     runs: &BTreeMap<String, TracedRun>,
     workflow: Option<&Topology>,
-    witnesses: &[String],
+    witnesses: &Witnesses,
 ) -> std::result::Result<Vec<TracedAnswer>, Vec<String>> {
     let mut rows = Vec::with_capacity(answers.len());
     let mut contradictions = Vec::new();
@@ -488,6 +606,9 @@ pub fn trace_answers(
             on_workflow: variant.workflow.as_ref().map(|_| false),
             witnessed_model: variant.model.as_ref().map(|_| false),
             witnessed_prompt: variant.prompt.as_ref().map(|_| false),
+            witnessed_answer: (variant.model.is_some() || variant.prompt.is_some())
+                .then_some(false),
+            witnessed_input: (variant.model.is_some() || variant.prompt.is_some()).then_some(false),
             witnessed_by: Vec::new(),
             self_witnessed: false,
             served_models: Vec::new(),
@@ -580,12 +701,30 @@ pub fn trace_answers(
                     row.self_witnessed |= names_a_pin;
                     continue;
                 }
-                if run.published_by.is_none()
-                    || (!witnesses.is_empty() && !witnesses.iter().any(|named| named == witness))
-                {
+                if run.published_by.is_none() || !witnesses.admits(witness) {
                     continue;
                 }
                 let mut vouched = false;
+                // Its digests of the call's words, under its own key: the
+                // answer among the replies, the case's input in the request.
+                if names_a_pin && let Some(key) = witnesses.keys.get(witness) {
+                    use aiwatcher_core::witness::{Said, answered_as, asked_as, digest};
+                    let holds = |digests: &[String], said: Said, texts: Vec<String>| {
+                        texts
+                            .iter()
+                            .any(|text| digests.contains(&digest(key, said, text)))
+                    };
+                    if holds(&call.replied, Said::Replied, answered_as(&answer.answer)) {
+                        row.witnessed_answer = Some(true);
+                        vouched = true;
+                    }
+                    if let Some(input) = witnesses.inputs.get(&answer.case_id)
+                        && holds(&call.asked, Said::Asked, asked_as(input))
+                    {
+                        row.witnessed_input = Some(true);
+                        vouched = true;
+                    }
+                }
                 if let Some(pinned) = &variant.model
                     && call.model.as_deref() == Some(pinned.name.as_str())
                 {
@@ -763,6 +902,8 @@ mod tests {
             input_tokens: 12,
             output_tokens: 3,
             cached_tokens: 0,
+            asked: Vec::new(),
+            replied: Vec::new(),
         }
     }
 
@@ -799,8 +940,16 @@ mod tests {
             answer("c4", None),
         ];
 
-        let rows = trace_answers(&variant(), "variant", "answers", &answers, &runs, None, &[])
-            .expect("nothing contradicts the pins");
+        let rows = trace_answers(
+            &variant(),
+            "variant",
+            "answers",
+            &answers,
+            &runs,
+            None,
+            &Witnesses::default(),
+        )
+        .expect("nothing contradicts the pins");
         let trace = GenerationTrace::of(&rows);
 
         assert_eq!(
@@ -816,6 +965,8 @@ mod tests {
                 steps_unread: 0,
                 witnessed_model: Some(0),
                 witnessed_prompt: Some(0),
+                witnessed_answer: Some(0),
+                witnessed_input: Some(0),
                 self_witnessed: 0,
                 witnesses: Vec::new(),
                 served: Vec::new(),
@@ -874,7 +1025,7 @@ mod tests {
             &[answer("c1", Some("r1"))],
             &runs,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("the trace contradicts the pins");
 
@@ -903,7 +1054,7 @@ mod tests {
             &[answer("c1", Some("r1"))],
             &runs,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("another variant's run");
 
@@ -938,7 +1089,7 @@ mod tests {
             &[answer("c1", Some("r1"))],
             &runs,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect("no version is no contradiction");
 
@@ -999,7 +1150,7 @@ mod tests {
             &[answer("c1", Some("r1")), answer("c2", Some("r2"))],
             &runs,
             Some(&pinned),
-            &[],
+            &Witnesses::default(),
         )
         .expect("nothing contradicts the pinned shape");
         let trace = GenerationTrace::of(&rows);
@@ -1039,7 +1190,7 @@ mod tests {
             ],
             &runs,
             Some(&pinned),
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("both contradict the pinned declaration");
 
@@ -1097,7 +1248,7 @@ mod tests {
             &[answer("c1", Some("in-order"))],
             &runs,
             Some(&pinned),
-            &[],
+            &Witnesses::default(),
         )
         .expect("the order the declaration leads");
         assert_eq!(rows[0].on_workflow, Some(true));
@@ -1109,7 +1260,7 @@ mod tests {
             &[answer("c2", Some("answered-first"))],
             &runs,
             Some(&pinned),
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("answer started before retrieve completed");
         assert_eq!(refused.len(), 1, "named once: {refused:?}");
@@ -1151,7 +1302,7 @@ mod tests {
             &[answer("c1", Some("r"))],
             &runs,
             Some(pinned),
-            &[],
+            &Witnesses::default(),
         )
     }
 
@@ -1181,7 +1332,13 @@ mod tests {
 
         let twice = traversed(
             &pinned,
-            &["retrieve:s", "retrieve:c", "answer:s", "answer:s", "answer:c"],
+            &[
+                "retrieve:s",
+                "retrieve:c",
+                "answer:s",
+                "answer:s",
+                "answer:c",
+            ],
         )
         .expect_err("one retrieval sends the run on to one answer");
         assert_eq!(twice.len(), 1, "{twice:?}");
@@ -1192,7 +1349,13 @@ mod tests {
 
         let again = traversed(
             &pinned,
-            &["retrieve:s", "retrieve:c", "answer:s", "answer:c", "retrieve:s"],
+            &[
+                "retrieve:s",
+                "retrieve:c",
+                "answer:s",
+                "answer:c",
+                "retrieve:s",
+            ],
         )
         .expect_err("nothing leads back into retrieve");
         assert!(
@@ -1217,8 +1380,14 @@ mod tests {
         let rows = traversed(
             &pinned,
             &[
-                "retrieve:s", "retrieve:c", "answer:s", "answer:s", "answer:c", "answer:c",
-                "answer:s", "answer:c",
+                "retrieve:s",
+                "retrieve:c",
+                "answer:s",
+                "answer:s",
+                "answer:c",
+                "answer:c",
+                "answer:s",
+                "answer:c",
             ],
         )
         .expect("one per item, side by side");
@@ -1226,7 +1395,10 @@ mod tests {
 
         let early = traversed(&pinned, &["answer:s", "retrieve:s"])
             .expect_err("its first start still waits for what leads into it");
-        assert!(early[0].contains("before retrieve had completed"), "{early:?}");
+        assert!(
+            early[0].contains("before retrieve had completed"),
+            "{early:?}"
+        );
     }
 
     #[test]
@@ -1248,7 +1420,7 @@ mod tests {
             &[answer("c1", Some("long"))],
             &runs,
             Some(&pinned),
-            &[],
+            &Witnesses::default(),
         )
         .expect("what was read is in order, and the rest is counted");
         let trace = GenerationTrace::of(&rows);
@@ -1305,7 +1477,7 @@ mod tests {
             ],
             &runs,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect("nothing contradicts the pins");
         let trace = GenerationTrace::of(&rows);
@@ -1350,7 +1522,7 @@ mod tests {
             &[answer("c1", Some("r1"))],
             &contradicted,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("the serving host served another version");
         assert!(
@@ -1395,7 +1567,7 @@ mod tests {
             ],
             &runs,
             None,
-            &["gateway".to_owned()],
+            &Witnesses::named(vec!["gateway".to_owned()]),
         )
         .expect("nothing contradicts the pins");
         let trace = GenerationTrace::of(&rows);
@@ -1414,12 +1586,122 @@ mod tests {
             &[answer("c1", Some("r1"))],
             &drifted,
             None,
-            &[],
+            &Witnesses::default(),
         )
         .expect_err("the request did not hold the pinned template");
         assert!(
             refused[0].contains("does not hold that version's template"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn an_answer_is_witnessed_only_as_a_reply_the_witness_relayed_to_a_request_holding_its_input() {
+        use aiwatcher_core::witness::{Said, digest, key_for};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let forged = key_for("application-secret");
+        let relayed = |replied: Vec<String>, asked: Vec<String>| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            published_by: Some("gateway".to_owned()),
+            replied,
+            asked,
+            ..TracedCall::default()
+        };
+        let run_with = |call: TracedCall| TracedRun {
+            served_for_it: vec![call],
+            ..run(vec![on_the_pins()])
+        };
+        let question = |country: &str| format!("What is the capital of {country}?");
+        let runs = BTreeMap::from([
+            (
+                "through".to_owned(),
+                run_with(relayed(
+                    vec![digest(&key, Said::Replied, "Paris")],
+                    vec![digest(&key, Said::Asked, &question("France"))],
+                )),
+            ),
+            (
+                "around".to_owned(),
+                run_with(relayed(
+                    vec![digest(&key, Said::Replied, "Lyon")],
+                    vec![digest(&key, Said::Asked, &question("Japan"))],
+                )),
+            ),
+            (
+                "forged".to_owned(),
+                run_with(relayed(
+                    vec![digest(&forged, Said::Replied, "Paris")],
+                    vec![digest(&forged, Said::Asked, &question("Peru"))],
+                )),
+            ),
+        ]);
+        let inputs = BTreeMap::from([
+            (
+                "c1".to_owned(),
+                serde_json::json!({"question": question("France")}),
+            ),
+            (
+                "c2".to_owned(),
+                serde_json::json!({"question": question("France")}),
+            ),
+            (
+                "c3".to_owned(),
+                serde_json::json!({"question": question("Peru")}),
+            ),
+        ]);
+        let witnesses = Witnesses::named(vec!["gateway".to_owned()])
+            .keyed([("gateway".to_owned(), key)])
+            .asked(inputs);
+
+        let rows = trace_answers(
+            &pins,
+            "variant",
+            "answers",
+            &[
+                answer("c1", Some("through")),
+                answer("c2", Some("around")),
+                answer("c3", Some("forged")),
+            ],
+            &runs,
+            None,
+            &witnesses,
+        )
+        .expect("nothing contradicts the pins");
+        let trace = GenerationTrace::of(&rows);
+
+        assert_eq!(
+            (rows[0].witnessed_answer, rows[0].witnessed_input),
+            (Some(true), Some(true))
+        );
+        assert_eq!(
+            (rows[1].witnessed_answer, rows[1].witnessed_input),
+            (Some(false), Some(false)),
+            "an answer the gateway never relayed, to a question about somewhere else"
+        );
+        assert_eq!(
+            (rows[2].witnessed_answer, rows[2].witnessed_input),
+            (Some(false), Some(false)),
+            "digests under a key that is not the witness's say nothing"
+        );
+        assert_eq!(
+            (
+                trace.witnessed_answer,
+                trace.witnessed_input,
+                trace.witnessed_prompt
+            ),
+            (Some(1), Some(1), Some(3))
+        );
+        assert!(trace.witnessed() && !trace.answers_witnessed());
+        assert!(
+            trace.unwitnessed_answers()[0].contains("made around the gateway"),
+            "{:?}",
+            trace.unwitnessed_answers()
+        );
+        assert!(!format!("{witnesses:?}").contains(&hex::encode(key)));
     }
 }
