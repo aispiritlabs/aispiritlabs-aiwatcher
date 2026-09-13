@@ -117,7 +117,41 @@ async fn an_experiment_is_its_context_s_results_each_against_the_baseline_with_w
         (cost.priced_calls, cost.prices[0].as_of.as_str()),
         (3, "2026-09-01")
     );
+    assert_eq!(
+        cost.priced_before_read, 3,
+        "committed long before the only price was read, and said to be"
+    );
     assert!(priced.rows[1].cost.is_none(), "nothing to price");
+
+    // A table that keeps its history prices the result at the entry in force
+    // on the day it was committed, however many entries came after.
+    let history = aiwatcher_core::prices::ModelPrices {
+        currency: "USD".into(),
+        prices: vec![
+            aiwatcher_core::prices::ModelPrice {
+                model: "gpt-4o".into(),
+                input_per_million: 5.0,
+                output_per_million: 15.0,
+                cached_input_per_million: None,
+                source: "https://openai.com/api/pricing".into(),
+                as_of: "1970-01-01".into(),
+            },
+            aiwatcher_core::prices::ModelPrice {
+                model: "gpt-4o".into(),
+                input_per_million: 2.5,
+                output_per_million: 10.0,
+                cached_input_per_million: None,
+                source: "https://openai.com/api/pricing".into(),
+                as_of: "2026-09-01".into(),
+            },
+        ],
+    };
+    let then = experiment.clone().priced(&history).rows[0]
+        .cost
+        .clone()
+        .expect("priced");
+    assert!((then.amount - (300.0 * 5.0 + 60.0 * 15.0) / 1e6).abs() < 1e-12);
+    assert_eq!((then.priced_before_read, then.prices.len()), (0, 1));
 
     assert!(
         registry

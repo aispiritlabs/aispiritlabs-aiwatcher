@@ -6,6 +6,13 @@
 //! which day — the same rule the dataset sources table keeps for licences. A
 //! cost computed from it carries those two facts beside the number, and a model
 //! with no entry is counted as unpriced rather than priced at nought.
+//!
+//! A table is a history: a model may have an entry per day its price was read,
+//! and a call is priced by the entry in force on the day it was made — the
+//! latest read on or before it. A call older than every entry for its model is
+//! priced by the earliest, and counted as priced by a price read after it, so a
+//! cost never reads as more certain than it is. The same result or period is
+//! then priced the same whichever day somebody looks.
 
 use std::collections::BTreeSet;
 
@@ -25,7 +32,8 @@ pub struct ModelPrice {
     pub cached_input_per_million: Option<f64>,
     /// Where the figures were read: the provider's own page.
     pub source: String,
-    /// The day they were read, `YYYY-MM-DD`.
+    /// The day they were read, `YYYY-MM-DD` — from which they are in force,
+    /// until the model's next entry.
     pub as_of: String,
 }
 
@@ -61,8 +69,8 @@ impl ModelPrices {
             };
             if price.model.is_empty() {
                 problems.push(format!("{named} names no model"));
-            } else if !seen.insert(price.model.as_str()) {
-                problems.push(format!("{named} is priced twice"));
+            } else if !seen.insert((price.model.as_str(), price.as_of.as_str())) {
+                problems.push(format!("{named} is priced twice on {}", price.as_of));
             }
             for (field, value) in [
                 ("input_per_million", Some(price.input_per_million)),
@@ -101,10 +109,38 @@ impl ModelPrices {
         }
     }
 
+    /// The entry that prices `model` on `day` (`YYYY-MM-DD`): the latest read
+    /// on or before it, or — for a day older than every entry — the earliest,
+    /// with `true` to say it was read after the day.
     #[must_use]
-    pub fn get(&self, model: &str) -> Option<&ModelPrice> {
-        self.prices.iter().find(|price| price.model == model)
+    pub fn price_on(&self, model: &str, day: &str) -> Option<(&ModelPrice, bool)> {
+        let entries = self.prices.iter().filter(|price| price.model == model);
+        let before = entries
+            .clone()
+            .filter(|price| price.as_of.as_str() <= day)
+            .max_by(|one, other| one.as_of.cmp(&other.as_of));
+        match before {
+            Some(price) => Some((price, false)),
+            None => entries
+                .min_by(|one, other| one.as_of.cmp(&other.as_of))
+                .map(|price| (price, true)),
+        }
     }
+}
+
+/// The day, `YYYY-MM-DD` in UTC, of a moment in Unix seconds — what a call is
+/// priced on.
+#[must_use]
+pub fn day_of(unix_seconds: i64) -> String {
+    let date = time::OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+        .date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    )
 }
 
 /// Model calls that named one model, and the tokens they reported.
@@ -149,10 +185,18 @@ pub struct TokenCost {
     /// Calls whose model it does not, which cost something nobody priced —
     /// never nought.
     pub unpriced_calls: u64,
+    /// Of the priced calls, those made before every price the table holds
+    /// for their model was read, and priced by the earliest.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub priced_before_read: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<String>,
     /// Where each price used was read, and when.
     pub prices: Vec<PriceUsed>,
+}
+
+fn is_nought(count: &u64) -> bool {
+    *count == 0
 }
 
 /// One price a cost used, with where and when it was read.
@@ -163,30 +207,64 @@ pub struct PriceUsed {
     pub as_of: String,
 }
 
-impl ModelPrices {
-    /// What this usage costs at this table.
+impl TokenCost {
+    /// Nothing, in this currency.
     #[must_use]
-    pub fn cost_of(&self, usage: &[ModelUsage]) -> TokenCost {
-        let mut cost = TokenCost {
-            currency: self.currency.clone(),
+    pub fn nothing(currency: &str) -> Self {
+        Self {
+            currency: currency.to_owned(),
             amount: 0.0,
             priced_calls: 0,
             unpriced_calls: 0,
+            priced_before_read: 0,
             unpriced_models: Vec::new(),
             prices: Vec::new(),
-        };
+        }
+    }
+
+    /// Add another cost in the same currency to this one.
+    pub fn add(&mut self, other: &Self) {
+        self.amount += other.amount;
+        self.priced_calls += other.priced_calls;
+        self.unpriced_calls += other.unpriced_calls;
+        self.priced_before_read += other.priced_before_read;
+        for model in &other.unpriced_models {
+            if !self.unpriced_models.contains(model) {
+                self.unpriced_models.push(model.clone());
+            }
+        }
+        for used in &other.prices {
+            if !self.prices.contains(used) {
+                self.prices.push(used.clone());
+            }
+        }
+        self.unpriced_models.sort();
+        self.prices
+            .sort_by(|one, other| (&one.model, &one.as_of).cmp(&(&other.model, &other.as_of)));
+    }
+}
+
+impl ModelPrices {
+    /// What this usage, made on `day` (`YYYY-MM-DD`), costs at this table.
+    #[must_use]
+    pub fn cost_on(&self, usage: &[ModelUsage], day: &str) -> TokenCost {
+        let mut cost = TokenCost::nothing(&self.currency);
         for model in usage {
-            match self.get(&model.model) {
-                Some(price) => {
+            match self.price_on(&model.model, day) {
+                Some((price, read_after)) => {
                     cost.amount +=
                         price.cost(model.input_tokens, model.output_tokens, model.cached_tokens);
                     cost.priced_calls += model.calls;
-                    if !cost.prices.iter().any(|used| used.model == price.model) {
-                        cost.prices.push(PriceUsed {
-                            model: price.model.clone(),
-                            source: price.source.clone(),
-                            as_of: price.as_of.clone(),
-                        });
+                    if read_after {
+                        cost.priced_before_read += model.calls;
+                    }
+                    let used = PriceUsed {
+                        model: price.model.clone(),
+                        source: price.source.clone(),
+                        as_of: price.as_of.clone(),
+                    };
+                    if !cost.prices.contains(&used) {
+                        cost.prices.push(used);
                     }
                 }
                 None => {
@@ -198,6 +276,20 @@ impl ModelPrices {
             }
         }
         cost
+    }
+
+    /// What usage made over several days costs, each day's at the prices in
+    /// force on it.
+    #[must_use]
+    pub fn cost_by_day<'a>(
+        &self,
+        days: impl IntoIterator<Item = (&'a str, &'a [ModelUsage])>,
+    ) -> TokenCost {
+        let mut total = TokenCost::nothing(&self.currency);
+        for (day, usage) in days {
+            total.add(&self.cost_on(usage, day));
+        }
+        total
     }
 }
 
@@ -248,6 +340,9 @@ mod tests {
                 price(),
                 ModelPrice {
                     source: "their website".into(),
+                    ..price()
+                },
+                ModelPrice {
                     as_of: "last week".into(),
                     ..price()
                 },
@@ -258,7 +353,7 @@ mod tests {
         assert!(
             problems
                 .iter()
-                .any(|problem| problem.contains("priced twice"))
+                .any(|problem| problem.contains("priced twice on 2026-09-01"))
         );
         assert!(problems.iter().any(|problem| problem.contains("source")));
         assert!(
@@ -266,5 +361,50 @@ mod tests {
                 .iter()
                 .any(|problem| problem.contains("YYYY-MM-DD"))
         );
+    }
+
+    #[test]
+    fn a_call_is_priced_by_the_entry_in_force_on_its_day_and_an_older_one_says_so() {
+        let table = ModelPrices {
+            currency: "USD".into(),
+            prices: vec![
+                price(),
+                ModelPrice {
+                    input_per_million: 1.0,
+                    output_per_million: 4.0,
+                    cached_input_per_million: None,
+                    as_of: "2026-10-01".into(),
+                    ..price()
+                },
+            ],
+        };
+        assert!(table.validate().is_ok(), "one model, two days");
+        let usage = [ModelUsage {
+            model: "gpt-4o".into(),
+            calls: 2,
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            cached_tokens: 0,
+        }];
+
+        let september = table.cost_on(&usage, "2026-09-15");
+        let october = table.cost_on(&usage, "2026-10-01");
+        let august = table.cost_on(&usage, "2026-08-31");
+
+        assert!((september.amount - 2.5).abs() < 1e-12);
+        assert!((october.amount - 1.0).abs() < 1e-12);
+        assert_eq!(october.prices[0].as_of, "2026-10-01");
+        assert_eq!(
+            (august.priced_calls, august.priced_before_read),
+            (2, 2),
+            "priced by the earliest entry, and said to be"
+        );
+        let both = table.cost_by_day([
+            ("2026-09-15", usage.as_slice()),
+            ("2026-10-02", usage.as_slice()),
+        ]);
+        assert!((both.amount - 3.5).abs() < 1e-12);
+        assert_eq!(both.prices.len(), 2, "each price used, with its day");
+        assert_eq!(day_of(1_790_812_800), "2026-10-01");
     }
 }

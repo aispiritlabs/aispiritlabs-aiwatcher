@@ -28568,6 +28568,12 @@
           "currency": {
             "type": "string"
           },
+          "priced_before_read": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of the priced calls, those made before every price the table holds\nfor their model was read, and priced by the earliest.",
+            "minimum": 0
+          },
           "priced_calls": {
             "type": "integer",
             "format": "int64",

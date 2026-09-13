@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::attrs::genai;
 use aiwatcher_core::ports::{AttrValue, CompletedSpan};
-use aiwatcher_core::prices::{ModelPrices, ModelUsage, TokenCost};
+use aiwatcher_core::prices::{ModelPrices, ModelUsage, TokenCost, day_of};
 
 use crate::readmodel::{RunStatus, RunSummary};
 
@@ -234,6 +234,9 @@ struct Accumulated {
     input_tokens: i64,
     output_tokens: i64,
     models: BTreeMap<String, ModelUsage>,
+    /// The same calls by the day their run started, which is what they are
+    /// priced on.
+    by_day: BTreeMap<String, Vec<ModelUsage>>,
     first_seen_at: Option<OffsetDateTime>,
     last_seen_at: Option<OffsetDateTime>,
 }
@@ -278,18 +281,32 @@ impl Accumulated {
                 self.ttft_ms
                     .push((first.at - span.start).whole_milliseconds() as i64);
             }
-            let model = text(span, genai::REQUEST_MODEL).unwrap_or("unknown");
+            let usage = ModelUsage {
+                model: text(span, genai::REQUEST_MODEL)
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                calls: 1,
+                input_tokens: number(span, genai::USAGE_INPUT_TOKENS),
+                output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),
+                cached_tokens: number(span, "gen_ai.usage.cached_tokens"),
+            };
             let entry = self
                 .models
-                .entry(model.to_owned())
+                .entry(usage.model.clone())
                 .or_insert_with(|| ModelUsage {
-                    model: model.to_owned(),
+                    model: usage.model.clone(),
                     ..ModelUsage::default()
                 });
             entry.calls += 1;
-            entry.input_tokens += number(span, genai::USAGE_INPUT_TOKENS);
-            entry.output_tokens += number(span, genai::USAGE_OUTPUT_TOKENS);
-            entry.cached_tokens += number(span, "gen_ai.usage.cached_tokens");
+            entry.input_tokens += usage.input_tokens;
+            entry.output_tokens += usage.output_tokens;
+            entry.cached_tokens += usage.cached_tokens;
+            ModelUsage::add_to(
+                self.by_day
+                    .entry(day_of(run.started_at.unix_timestamp()))
+                    .or_default(),
+                &usage,
+            );
         }
     }
 
@@ -301,6 +318,7 @@ impl Accumulated {
         prices: Option<&ModelPrices>,
     ) -> VariantObservations {
         let mut models = self.models;
+        let mut by_day = self.by_day;
         let (mut runs, mut succeeded, mut failed, mut measured) =
             (self.runs, self.succeeded, self.failed, self.measured_runs);
         let (mut llm_calls, mut input, mut output) =
@@ -321,6 +339,10 @@ impl Accumulated {
             run_ms.merge(&period.run_ms);
             call_ms.merge(&period.call_ms);
             ttft_ms.merge(&period.time_to_first_token_ms);
+            let day = by_day.entry(day_of(period.from)).or_default();
+            for model in &period.models {
+                ModelUsage::add_to(day, model);
+            }
             for model in &period.models {
                 let entry = models
                     .entry(model.model.clone())
@@ -352,7 +374,13 @@ impl Accumulated {
             histogram.summary()
         };
         let models: Vec<ModelUsage> = models.into_values().collect();
-        let cost = prices.map(|table| table.cost_of(&models));
+        let cost = prices.map(|table| {
+            table.cost_by_day(
+                by_day
+                    .iter()
+                    .map(|(day, usage)| (day.as_str(), usage.as_slice())),
+            )
+        });
         VariantObservations {
             variant_id: variant_id.to_owned(),
             runs,

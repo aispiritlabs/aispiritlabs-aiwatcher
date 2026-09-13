@@ -511,9 +511,10 @@ function Tokens({
 }
 
 /**
- * What calls cost at the deployment's price table, as the server priced them:
- * with the day each price was read for its model, and the calls no price
- * covered counted apart rather than as free.
+ * What calls cost at the deployment's price table, as the server priced them —
+ * each call at the price in force on its day: with the day each price used was
+ * read for its model, the calls priced by a price read after they were made,
+ * and the calls no price covered counted apart rather than as free.
  */
 function Cost({ cost }: { cost: TokenCost }) {
   return (
@@ -523,6 +524,9 @@ function Cost({ cost }: { cost: TokenCost }) {
             .map((price) => `${price.model} as of ${price.as_of}`)
             .join(', ')}`
         : 'no call was priced'}
+      {cost.priced_before_read
+        ? ` · ${cost.priced_before_read} made before any price for their model was read, priced by the earliest`
+        : ''}
       {cost.unpriced_calls > 0
         ? ` · ${cost.unpriced_calls} calls unpriced (${(cost.unpriced_models ?? []).join(', ')})`
         : ''}

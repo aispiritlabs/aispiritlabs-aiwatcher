@@ -136,17 +136,19 @@ impl ExperimentRow {
 impl Experiment {
     /// Price every row whose usage says which models its cases called.
     ///
-    /// At the table as it is now, which each cost names with its day: a price
-    /// is the deployment's, not the evidence's, so it is never written into a
-    /// result.
+    /// At the prices in force on the day each result was committed, which each
+    /// cost names with the day it was read: a price is the deployment's, not
+    /// the evidence's, so it is never written into a result — and a table that
+    /// keeps its history prices one result the same whichever day it is read.
     #[must_use]
     pub fn priced(mut self, prices: &aiwatcher_core::prices::ModelPrices) -> Self {
         for row in &mut self.rows {
+            let day = aiwatcher_core::prices::day_of(row.committed_at);
             row.cost = row
                 .usage
                 .as_ref()
                 .filter(|usage| !usage.models.is_empty())
-                .map(|usage| prices.cost_of(&usage.models));
+                .map(|usage| prices.cost_on(&usage.models, &day));
         }
         self
     }

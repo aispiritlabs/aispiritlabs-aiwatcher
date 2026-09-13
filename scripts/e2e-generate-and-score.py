@@ -359,8 +359,14 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
 # ── The server. ──────────────────────────────────────────────────────────────
 
 
+#: The day the stand-in's current price was read, and the day an older one was.
+PRICED_ON = time.strftime("%Y-%m-%d", time.gmtime())
+PRICED_BEFORE = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 30 * 86_400))
+
+
 def prices(home: Path) -> Path:
-    """The deployment's price table: the stand-in model, per million tokens."""
+    """The deployment's price table: the stand-in model, per million tokens — a
+    history of two entries, the older of which prices nothing measured today."""
     table = home / "prices.json"
     table.write_text(
         json.dumps(
@@ -369,11 +375,18 @@ def prices(home: Path) -> Path:
                 "prices": [
                     {
                         "model": "capitals-stand-in",
+                        "input_per_million": 9.0,
+                        "output_per_million": 9.0,
+                        "source": "https://example.com/capitals-stand-in/pricing",
+                        "as_of": PRICED_BEFORE,
+                    },
+                    {
+                        "model": "capitals-stand-in",
                         "input_per_million": 1.0,
                         "output_per_million": 2.0,
                         "source": "https://example.com/capitals-stand-in/pricing",
-                        "as_of": "2026-09-13",
-                    }
+                        "as_of": PRICED_ON,
+                    },
                 ],
             }
         )
@@ -845,7 +858,7 @@ def main() -> int:
             and started["candidate"]["execution"]["execution_id"] in timed
             and priced.get("priced_calls") == len(CAPITALS)
             and abs(priced.get("amount", 0) - expected_cost) < 1e-12
-            and [price.get("as_of") for price in priced.get("prices", [])] == ["2026-09-13"],
+            and [price.get("as_of") for price in priced.get("prices", [])] == [PRICED_ON],
             {"rows": sorted(rows), "usage": usage, "cost": priced, "timed": len(timed)},
         )
 
@@ -1095,7 +1108,7 @@ def main() -> int:
             and (windowed.get("call_ms") or {}).get("count") == served
             and cost.get("priced_calls") == served
             and abs(cost.get("amount", 0) - (6 * served * 1.0 + served * 2.0) / 1e6) < 1e-12
-            and [price.get("as_of") for price in cost.get("prices", [])] == ["2026-09-13"],
+            and [price.get("as_of") for price in cost.get("prices", [])] == [PRICED_ON],
             {
                 key: windowed.get(key)
                 for key in (

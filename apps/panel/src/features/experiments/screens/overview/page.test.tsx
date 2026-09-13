@@ -158,6 +158,7 @@ function serving() {
                 currency: 'USD',
                 amount: 0.008,
                 priced_calls: 18,
+                priced_before_read: 3,
                 unpriced_calls: 2,
                 unpriced_models: ['local-llama'],
                 prices: [
@@ -241,7 +242,7 @@ it('lists the contexts, and opens one as its variants beside the chosen baseline
   expect(screen.getByText('a call ≤ 400 ms / 900 ms / 1.50 s · first token 150 ms')).toBeTruthy();
   expect(
     screen.getByText(
-      /0\.008 USD for 18 priced calls, at gpt-4o as of 2026-09-01 · 2 calls unpriced \(local-llama\)/,
+      /0\.008 USD for 18 priced calls, at gpt-4o as of 2026-09-01 · 3 made before any price for their model was read, priced by the earliest · 2 calls unpriced \(local-llama\)/,
     ),
   ).toBeTruthy();
   expect(screen.getByText('no runs outside a measurement (4 measured)')).toBeTruthy();

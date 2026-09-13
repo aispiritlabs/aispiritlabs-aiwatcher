@@ -8895,6 +8895,11 @@ export type TokenCost = {
     amount: number;
     currency: string;
     /**
+     * Of the priced calls, those made before every price the table holds
+     * for their model was read, and priced by the earliest.
+     */
+    priced_before_read?: number;
+    /**
      * Calls whose model the table prices.
      */
     priced_calls: number;
