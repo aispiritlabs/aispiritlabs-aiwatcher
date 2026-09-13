@@ -747,6 +747,25 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         })
     }
 
+    async fn put_rows_as_spelled(
+        &self,
+        name: &str,
+        spelled: String,
+    ) -> Result<aiwatcher_core::ArtifactRef, PortError> {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&spelled).expect("json");
+        let stored = self.put_rows(name, rows).await?;
+        let body = spelled.into_bytes();
+        let digest = aiwatcher_jobs::digest(&body);
+        let mut objects = self.objects.lock().expect("not poisoned");
+        objects.remove(&stored.digest);
+        objects.insert(digest.clone(), body.clone());
+        Ok(aiwatcher_core::ArtifactRef {
+            digest,
+            size_bytes: Some(body.len() as u64),
+            ..stored
+        })
+    }
+
     async fn holds(&self, artifact: &aiwatcher_core::ArtifactRef) -> Result<bool, PortError> {
         Ok(self
             .objects
@@ -5820,6 +5839,43 @@ async fn a_workers_result_reaches_the_decider_and_starts_what_comes_next() {
         .await;
     assert_eq!(status, StatusCode::OK, "{next}");
     assert_eq!(next["step_id"], "review");
+}
+
+#[tokio::test]
+async fn rows_holding_an_integer_wider_than_64_bits_are_stored_as_the_worker_spelled_them() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w41").await;
+    let (_, claimed) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(claimed["step_id"], "stage");
+    let send = |rows: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/worker/claims/exec-w41/stage/1/outputs/rows?worker=laptop-1")
+            .header(header::AUTHORIZATION, format!("Bearer {WORKER_SECRET}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(r#"{{"rows": {rows}}}"#)))
+            .expect("request")
+    };
+
+    // Parsed, the id would be the double it rounds to, which nobody sent.
+    let wide = r#"[{"case_id": "c1", "answer": 123456789012345678901234567890}]"#;
+    let (status, stored) = fixture.request(send(wide)).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["digest"], aiwatcher_jobs::digest(wide.as_bytes()));
+
+    let narrow = r#"[{"case_id": "c1", "answer": 42}]"#;
+    let (status, stored) = fixture.request(send(narrow)).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_ne!(
+        stored["digest"],
+        aiwatcher_jobs::digest(narrow.as_bytes()),
+        "every other table is stored as this instance writes rows"
+    );
 }
 
 #[tokio::test]

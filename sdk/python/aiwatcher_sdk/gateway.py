@@ -16,11 +16,13 @@ version the application names (:data:`~aiwatcher_sdk.PROMPT_HEADER`)::
 It publishes neither the request nor the reply: a model, a version, a prompt
 reference, a flag, tokens, a latency — and keyed digests of each message, of
 the values the application says it rendered the prompt with where the gateway
-found exactly that rendering (:meth:`~aiwatcher_sdk.LlmCall.caller_body`), and
-of each reply. The key is derived from the gateway's own credential, which the
-deployment issued, so the deployment can ask whether an answer is a reply the
-gateway relayed and whether a case's input was in the request, while a reader
-of the log cannot test a guess against a one-word answer. Holding the
+found exactly that rendering (:meth:`~aiwatcher_sdk.LlmCall.caller_body`) —
+among the asked texts, and again made as a reply's are, so a value that is what
+a model already replied reads as that reply — and of each reply. The key is
+derived from the gateway's own credential, which the deployment issued, so the
+deployment can ask whether an answer is a reply the gateway relayed and whether
+a case's input was in the request, while a reader of the log cannot test a
+guess against a one-word answer. Holding the
 provider's key itself, so the application holds none, is what makes a call the
 gateway did not see a call the application could not make.
 """
@@ -95,10 +97,10 @@ def canonical_number(value: int | float) -> str:
     """A number as JavaScript's ``String(number)`` spells it — ``aiwatcher_core::witness::number``.
 
     The shortest digits that read back as the same double, positional from a
-    millionth up to 10²¹ and in exponent notation outside; an integer a double
-    or a 64-bit integer holds exactly is spelled exactly.
+    millionth up to 10²¹ and in exponent notation outside; an integer, however
+    wide, is spelled exactly, digit for digit.
     """
-    if isinstance(value, int) and -(2**63) <= value < 2**64:
+    if isinstance(value, int):
         return str(value)
     number = float(value)
     if number == 0 or not math.isfinite(number):
@@ -148,50 +150,179 @@ def canonical(value: Any) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+#: How many steps, or alternatives, one rule may hold, and how deep rules nest.
+MOST_STEPS = 16
+MOST_NESTING = 4
+
+
 def extracted(text: str, rule: Mapping[str, Any]) -> str | None:
     """What an application says it takes as its answer out of a reply's text.
 
-    ``{"json_pointer": "/label"}`` reads the reply as JSON and takes the value at
-    that pointer (RFC 6901) — text as itself, anything else in its canonical
-    form; ``{"between": ["Answer:", "\\n"]}`` takes what follows the first
-    occurrence of the first marker, up to the first occurrence of the second
-    after it (or the end, where the second is ``null``). ``None`` when the rule
-    is not one of those or finds nothing.
+    A rule is one step, a list of them taken in turn — ``{"steps": [...]}``,
+    each reading what the one before took — or alternatives,
+    ``{"first_of": [...]}``, the first of which that takes something non-blank.
+    The steps:
+
+    * ``{"json_pointer": "/label"}`` reads the text as JSON and takes the value
+      at that pointer (RFC 6901) — text as itself, anything else canonical;
+    * ``{"between": ["Answer:", "\\n"]}`` takes what follows the first
+      occurrence of the first marker up to the first occurrence of the second
+      after it — from the start where the first is ``null``, to the end where
+      the second is;
+    * ``{"after_last": "Answer:"}`` takes what follows the marker's last
+      occurrence;
+    * ``{"line": -1}`` takes one non-blank line, counted from the end when
+      negative;
+    * ``{"fenced": "json"}`` takes the body of the first fenced code block with
+      that language — any language where it is ``null``;
+    * ``{"strip": "\"'."}`` removes these characters, and white space, from
+      both ends;
+    * ``{"lower": true}`` lower-cases the text;
+    * ``{"number": true}`` reads the text as a JSON number and spells it as
+      :func:`canonical_number` does.
+
+    ``None`` when a rule is none of those, or a step finds nothing. Nothing here
+    runs a pattern a caller wrote: each step reads the text once. An application
+    takes its answer with this same function, so both take the same text.
     """
-    pointer = rule.get("json_pointer")
-    if isinstance(pointer, str) and (pointer == "" or pointer.startswith("/")):
-        try:
-            found: Any = json.loads(text)
-        except ValueError:
+    return _taken(text, rule, 0)
+
+
+def _taken(text: str, rule: Any, depth: int) -> str | None:
+    if not isinstance(rule, Mapping) or len(rule) != 1 or depth > MOST_NESTING:
+        return None
+    ((kind, argument),) = rule.items()
+    if kind in ("steps", "first_of"):
+        if not isinstance(argument, list) or not 0 < len(argument) <= MOST_STEPS:
             return None
-        for token in pointer.split("/")[1:] if pointer else []:
-            token = token.replace("~1", "/").replace("~0", "~")
-            if isinstance(found, Mapping) and token in found:
-                found = found[token]
-            elif isinstance(found, list) and token.isdigit() and int(token) < len(found):
-                found = found[int(token)]
-            else:
+        if kind == "first_of":
+            for alternative in argument:
+                taken = _taken(text, alternative, depth + 1)
+                if taken is not None and taken.strip(_WHITE_SPACE):
+                    return taken
+            return None
+        read = text
+        for step in argument:
+            took = _taken(read, step, depth + 1)
+            if took is None:
                 return None
-        return found if isinstance(found, str) else canonical(found)
-    between = rule.get("between")
-    if (
-        isinstance(between, list)
-        and len(between) == 2
-        and isinstance(between[0], str)
-        and between[0]
-        and (between[1] is None or (isinstance(between[1], str) and between[1]))
-    ):
-        start = text.find(between[0])
+            read = took
+        return read
+    step = _STEPS.get(str(kind))
+    return None if step is None else step(text, argument)
+
+
+def _json_pointer(text: str, pointer: Any) -> str | None:
+    if not isinstance(pointer, str) or not (pointer == "" or pointer.startswith("/")):
+        return None
+    try:
+        found: Any = json.loads(text)
+    except ValueError:
+        return None
+    for token in pointer.split("/")[1:] if pointer else []:
+        token = token.replace("~1", "/").replace("~0", "~")
+        if isinstance(found, Mapping) and token in found:
+            found = found[token]
+        elif isinstance(found, list) and token.isdigit() and int(token) < len(found):
+            found = found[int(token)]
+        else:
+            return None
+    return found if isinstance(found, str) else canonical(found)
+
+
+def _between(text: str, markers: Any) -> str | None:
+    if not (isinstance(markers, list) and len(markers) == 2) or markers == [None, None]:
+        return None
+    if not all(marker is None or (isinstance(marker, str) and marker) for marker in markers):
+        return None
+    begin, end = markers
+    rest = text
+    if begin is not None:
+        start = text.find(begin)
         if start < 0:
             return None
-        rest = text[start + len(between[0]) :]
-        if between[1] is not None:
-            end = rest.find(between[1])
-            if end < 0:
-                return None
-            rest = rest[:end]
-        return rest
+        rest = text[start + len(begin) :]
+    if end is not None:
+        stop = rest.find(end)
+        if stop < 0:
+            return None
+        rest = rest[:stop]
+    return rest
+
+
+def _after_last(text: str, marker: Any) -> str | None:
+    if not isinstance(marker, str) or not marker or marker not in text:
+        return None
+    return text.rpartition(marker)[2]
+
+
+def _line(text: str, index: Any) -> str | None:
+    if isinstance(index, bool) or not isinstance(index, int):
+        return None
+    lines = [line for line in text.splitlines() if line.strip(_WHITE_SPACE)]
+    return lines[index] if -len(lines) <= index < len(lines) else None
+
+
+def _fenced(text: str, language: Any) -> str | None:
+    if language is not None and (not isinstance(language, str) or not language):
+        return None
+    fence: str | None = None
+    wanted = False
+    body: list[str] = []
+    for line in text.splitlines():
+        bare = line.strip(_WHITE_SPACE)
+        if fence is None:
+            if bare.startswith(("```", "~~~")):
+                marker = bare[0]
+                fence = marker * (len(bare) - len(bare.lstrip(marker)))
+                info = bare[len(fence) :].strip(_WHITE_SPACE).split()
+                wanted = language is None or (bool(info) and info[0] == language)
+                body = []
+        elif bare.startswith(fence) and not bare.strip(fence[0]):
+            if wanted:
+                return "\n".join(body)
+            fence = None
+        else:
+            body.append(line)
     return None
+
+
+def _strip(text: str, characters: Any) -> str | None:
+    if not isinstance(characters, str) or not characters:
+        return None
+    return text.strip(_WHITE_SPACE + characters)
+
+
+def _lower(text: str, on: Any) -> str | None:
+    return text.lower() if on is True else None
+
+
+def _number(text: str, on: Any) -> str | None:
+    if on is not True:
+        return None
+
+    def refused(constant: str) -> float:
+        raise ValueError(constant)
+
+    try:
+        read = json.loads(text.strip(_WHITE_SPACE), parse_constant=refused)
+    except ValueError:
+        return None
+    if isinstance(read, bool) or not isinstance(read, (int, float)):
+        return None
+    return canonical_number(read)
+
+
+_STEPS: dict[str, Any] = {
+    "json_pointer": _json_pointer,
+    "between": _between,
+    "after_last": _after_last,
+    "line": _line,
+    "fenced": _fenced,
+    "strip": _strip,
+    "lower": _lower,
+    "number": _number,
+}
 
 
 @dataclass(frozen=True)
@@ -299,6 +430,17 @@ def _holds_only(template: str, variables: Mapping[str, Any], texts: Sequence[str
         if piece.strip(_WHITE_SPACE):
             rest = rest.replace(piece, "\n")
     return not rest.strip(_WHITE_SPACE)
+
+
+def _values(variables: Mapping[str, Any]) -> list[str]:
+    """Each distinct non-blank value, as text: itself where it is text, its
+    canonical JSON where it is not."""
+    texts: list[str] = []
+    for value in variables.values():
+        text = value if isinstance(value, str) else canonical(value)
+        if text.strip(_WHITE_SPACE) and text not in texts:
+            texts.append(text)
+    return texts
 
 
 def _digested(key: bytes, said: str, texts: Sequence[str]) -> list[str]:
@@ -448,7 +590,14 @@ class Gateway:
             return None
         texts = _texts_asked(body)
         rendered = variables is not None and _holds_rendered(template, variables, texts)
-        exact = rendered and variables is not None and _holds_only(template, variables, texts)
+        # Every value is accounted for by its digest, so a request rendering
+        # more than a witness digests is not one it can say is only the prompt.
+        exact = (
+            rendered
+            and variables is not None
+            and len(_values(variables)) <= MOST_DIGESTS
+            and _holds_only(template, variables, texts)
+        )
         messages = body.get("messages")
         literal = isinstance(messages, list) and holds_template(template, messages)
         return PromptFound(
@@ -469,6 +618,14 @@ class Gateway:
                 for value in variables.values()
             )
         return _digested(self.key, "asked", texts)
+
+    def digests_rendered(self, variables: Mapping[str, Any] | None) -> list[str]:
+        """Keyed digests of each value the template was found rendered with,
+        made as a reply's are: what the deployment accounts for each value by —
+        a part of the case's input, or what a call already replied."""
+        if self.key is None or not variables:
+            return []
+        return _digested(self.key, "replied", _values(variables))
 
     def digests_replied(
         self, relayed: Relayed, answer_from: Mapping[str, Any] | None = None
@@ -540,6 +697,7 @@ class Gateway:
         started: float,
         asked: Sequence[str] = (),
         answer_from: Mapping[str, Any] | None = None,
+        rendered: Sequence[str] = (),
     ) -> None:
         """One call, as the gateway saw it — with nothing that was said in it."""
         request: dict[str, Any] = {"provider": "aiwatcher-gateway"}
@@ -563,6 +721,8 @@ class Gateway:
                 outcome["response_model"] = relayed.served_model
             if asked:
                 outcome["asked_digests"] = list(asked)
+            if rendered:
+                outcome["rendered_digests"] = list(rendered)
             replied = self.digests_replied(relayed, answer_from)
             if replied:
                 outcome["replied_digests"] = replied
@@ -663,6 +823,9 @@ class Gateway:
                     started=started,
                     asked=asked,
                     answer_from=told.answer_from,
+                    rendered=gateway.digests_rendered(told.variables)
+                    if prompt is not None and prompt.rendered
+                    else (),
                 )
 
         return Handler

@@ -78,9 +78,11 @@ pub fn digest(key: &[u8; 32], said: Said, text: &str) -> String {
 
 /// A number as JavaScript's `String(number)` spells it: the shortest digits
 /// that read back as the same double, in positional notation from a millionth
-/// up to 10²¹ and in exponent notation outside. An integer JSON carries exactly
-/// is spelled exactly. Python's `repr` and Rust's formatting choose the same
-/// digits and spell them differently; this is the one spelling both write.
+/// up to 10²¹ and in exponent notation outside — and an integer digit for digit.
+/// Python's `repr` and Rust's formatting choose the same digits and spell them
+/// differently; this is the one spelling both write. A parsed [`Value`] holds
+/// an integer wider than 64 bits only as the double it rounds to, so one read
+/// from text is spelled with [`canonical_text`].
 #[must_use]
 pub fn number(value: &serde_json::Number) -> String {
     if value.is_i64() || value.is_u64() {
@@ -150,6 +152,183 @@ pub fn canonical(value: &Value) -> String {
     }
 }
 
+/// A JSON text as [`canonical`] spells the value it holds — except that every
+/// integer is spelled digit for digit however wide, where a parsed [`Value`]
+/// has already rounded one wider than 64 bits. `None` when it is not JSON.
+#[must_use]
+pub fn canonical_text(text: &str) -> Option<String> {
+    let mut reader = Reader::new(text);
+    reader.space();
+    let spelled = reader.value(0)?;
+    reader.space();
+    (reader.at == text.len()).then_some(spelled)
+}
+
+/// Whether a JSON text holds an integer a parsed [`Value`] cannot hold exactly:
+/// one wider than 64 bits. `false` for a text that is not JSON.
+#[must_use]
+pub fn spells_wide_integer(text: &str) -> bool {
+    let mut reader = Reader::new(text);
+    reader.space();
+    reader.value(0).is_some() && reader.wide
+}
+
+/// What an answer read from its JSON text is compared with a reply as — the
+/// same as [`answered_as`], with every integer digit for digit.
+#[must_use]
+pub fn answered_as_text(text: &str) -> Vec<String> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(value @ (Value::String(_) | Value::Null)) => answered_as(&value),
+        Ok(_) => canonical_text(text).into_iter().collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Reads a JSON text once, spelling each value canonically as it goes.
+struct Reader<'a> {
+    text: &'a str,
+    at: usize,
+    /// Whether it has read an integer wider than 64 bits.
+    wide: bool,
+}
+
+impl<'a> Reader<'a> {
+    /// As deep as `serde_json` reads before it refuses a text.
+    const DEEPEST: usize = 128;
+
+    const fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            at: 0,
+            wide: false,
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.text.as_bytes().get(self.at).copied()
+    }
+
+    fn space(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.at += 1;
+        }
+    }
+
+    fn eat(&mut self, byte: u8) -> bool {
+        let found = self.peek() == Some(byte);
+        self.at += usize::from(found);
+        found
+    }
+
+    fn value(&mut self, depth: usize) -> Option<String> {
+        if depth > Self::DEEPEST {
+            return None;
+        }
+        match self.peek()? {
+            b'{' => {
+                self.at += 1;
+                let mut fields = std::collections::BTreeMap::new();
+                self.space();
+                if !self.eat(b'}') {
+                    loop {
+                        self.space();
+                        let key = self.string()?;
+                        self.space();
+                        if !self.eat(b':') {
+                            return None;
+                        }
+                        self.space();
+                        let value = self.value(depth + 1)?;
+                        fields.insert(key, value);
+                        self.space();
+                        if self.eat(b'}') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return None;
+                        }
+                    }
+                }
+                let inner: Vec<String> = fields
+                    .into_iter()
+                    .map(|(key, value)| format!("{}:{value}", Value::String(key)))
+                    .collect();
+                Some(format!("{{{}}}", inner.join(",")))
+            }
+            b'[' => {
+                self.at += 1;
+                let mut items = Vec::new();
+                self.space();
+                if !self.eat(b']') {
+                    loop {
+                        self.space();
+                        items.push(self.value(depth + 1)?);
+                        self.space();
+                        if self.eat(b']') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return None;
+                        }
+                    }
+                }
+                Some(format!("[{}]", items.join(",")))
+            }
+            b'"' => self.string().map(|text| Value::String(text).to_string()),
+            b't' | b'f' | b'n' => ["true", "false", "null"].into_iter().find_map(|word| {
+                self.text[self.at..].starts_with(word).then(|| {
+                    self.at += word.len();
+                    word.to_owned()
+                })
+            }),
+            _ => self.number(),
+        }
+    }
+
+    /// A string token, unescaped by `serde_json` itself.
+    fn string(&mut self) -> Option<String> {
+        if self.peek() != Some(b'"') {
+            return None;
+        }
+        let bytes = self.text.as_bytes();
+        let mut end = self.at + 1;
+        loop {
+            match bytes.get(end)? {
+                b'\\' => end += 2,
+                b'"' => break,
+                _ => end += 1,
+            }
+        }
+        let token = self.text.get(self.at..=end)?;
+        self.at = end + 1;
+        serde_json::from_str(token).ok()
+    }
+
+    fn number(&mut self) -> Option<String> {
+        let start = self.at;
+        let bytes = self.text.as_bytes();
+        while bytes
+            .get(self.at)
+            .is_some_and(|byte| matches!(byte, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'))
+        {
+            self.at += 1;
+        }
+        let token = self.text.get(start..self.at)?;
+        let parsed: serde_json::Number = serde_json::from_str(token).ok()?;
+        if token.contains(['.', 'e', 'E']) {
+            return Some(number(&parsed));
+        }
+        if token.trim_start_matches('-') == "0" {
+            return Some("0".to_owned());
+        }
+        if parsed.is_i64() || parsed.is_u64() {
+            return Some(parsed.to_string());
+        }
+        self.wide = true;
+        Some(token.to_owned())
+    }
+}
+
 /// The texts an answer is compared with a reply as: itself, where it is text;
 /// its canonical JSON, where it is not.
 #[must_use]
@@ -181,6 +360,26 @@ pub fn asked_as(input: &Value) -> Vec<String> {
             texts
         }
     }
+}
+
+/// The texts a value a template was rendered with may be, when it came from a
+/// case's input: the input itself and every part of it — text as itself,
+/// anything else as its canonical JSON.
+#[must_use]
+pub fn carried_as(input: &Value) -> Vec<String> {
+    fn parts(value: &Value, into: &mut Vec<String>) {
+        into.extend(answered_as(value));
+        match value {
+            Value::Array(items) => items.iter().for_each(|item| parts(item, into)),
+            Value::Object(fields) => fields.values().for_each(|field| parts(field, into)),
+            _ => {}
+        }
+    }
+    let mut texts = Vec::new();
+    parts(input, &mut texts);
+    texts.sort();
+    texts.dedup();
+    texts
 }
 
 #[cfg(test)]
@@ -261,11 +460,57 @@ mod tests {
     }
 
     #[test]
+    fn a_text_is_spelled_as_its_value_is_and_an_integer_of_any_width_digit_for_digit() {
+        for text in [
+            r#"{"z": [1, "two", 0.1, 1e21, -0, 1.0], "a": {"é": "\n", "b": null}, "t": true}"#,
+            r#""Lima""#,
+            "[]",
+            "{}",
+            " 18446744073709551615 ",
+            r#"{"a": 1, "a": 2}"#,
+        ] {
+            let parsed: Value = serde_json::from_str(text).expect("JSON");
+            assert_eq!(canonical_text(text), Some(canonical(&parsed)), "{text}");
+            assert!(!spells_wide_integer(text), "{text}");
+        }
+        let wide = r#"{"id": 123456789012345678901234567890, "next": -18446744073709551617}"#;
+        assert_eq!(
+            canonical_text(wide).as_deref(),
+            Some(r#"{"id":123456789012345678901234567890,"next":-18446744073709551617}"#)
+        );
+        assert!(spells_wide_integer(wide));
+        assert_ne!(
+            canonical_text("123456789012345678901234567890"),
+            canonical_text("123456789012345678901234567891"),
+            "two integers a double cannot tell apart"
+        );
+        assert_eq!(answered_as_text(r#"" Lima ""#), [" Lima "]);
+        assert!(answered_as_text("null").is_empty());
+        assert_eq!(
+            answered_as_text("[123456789012345678901234567890]"),
+            ["[123456789012345678901234567890]"]
+        );
+        for broken in ["", "[1,", r#"{"a" 1}"#, "01", "[1] 2", "truth"] {
+            assert_eq!(canonical_text(broken), None, "{broken}");
+        }
+    }
+
+    #[test]
     fn a_value_is_compared_as_its_text_or_its_canonical_json_and_an_input_by_its_texts_too() {
         let structured = json!({"z": [1, "two"], "a": {"é": "\n"}});
         assert_eq!(canonical(&structured), r#"{"a":{"é":"\n"},"z":[1,"two"]}"#);
         assert_eq!(answered_as(&json!("Lima")), ["Lima"]);
         assert!(answered_as(&json!("  ")).is_empty());
+        assert_eq!(
+            carried_as(&json!({"question": "Peru?", "options": [1, "Lima"], "note": " "})),
+            [
+                "1",
+                "Lima",
+                "Peru?",
+                r#"[1,"Lima"]"#,
+                r#"{"note":" ","options":[1,"Lima"],"question":"Peru?"}"#,
+            ]
+        );
         assert_eq!(
             asked_as(&json!({"question": "What is the capital of Peru?"})),
             [

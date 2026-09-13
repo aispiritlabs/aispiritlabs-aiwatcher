@@ -97,6 +97,20 @@ impl Artifacts {
         let body = serde_json::to_vec(rows).map_err(|error| {
             ActivityError::user_code(format!("the rows do not encode: {error}"))
         })?;
+        self.put_spelled_rows(name, body).await
+    }
+
+    /// Store a table's bytes as they are — rows a caller spelled with an
+    /// integer a parsed row would round — named by their own hash.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivityError`] carrying the class that decides whether to retry.
+    pub async fn put_spelled_rows(
+        &self,
+        name: &str,
+        body: Vec<u8>,
+    ) -> Result<ArtifactRef, ActivityError> {
         let digest = aiwatcher_jobs::digest(&body);
         let key = data_key(ArtifactKind::Rows, &digest);
         let size = body.len() as u64;
@@ -365,6 +379,26 @@ impl aiwatcher_core::ports::AttemptArtifacts for Artifacts {
             .map_err(as_port_error)
     }
 
+    async fn put_rows_as_spelled(&self, name: &str, spelled: String) -> PortResult<ArtifactRef> {
+        let rows: Vec<Value> =
+            serde_json::from_str(&spelled).map_err(|error| PortError::Rejected {
+                target: TARGET,
+                message: format!("the rows are not a JSON array: {error}"),
+            })?;
+        if let Some(other) = rows.iter().find(|row| !row.is_object()) {
+            return Err(PortError::Rejected {
+                target: TARGET,
+                message: format!(
+                    "a row has to be an object with named columns, and this one is {}",
+                    kind_of(other)
+                ),
+            });
+        }
+        Artifacts::put_spelled_rows(self, name, spelled.into_bytes())
+            .await
+            .map_err(as_port_error)
+    }
+
     async fn holds(&self, artifact: &ArtifactRef) -> PortResult<bool> {
         Artifacts::holds(self, artifact)
             .await
@@ -476,6 +510,27 @@ mod tests {
         assert_eq!(first.digest, again.digest);
         assert!(first.uri.starts_with("object://artifacts/rows/"));
         assert_eq!(artifacts.read_rows(&first).await.expect("a read"), rows());
+    }
+
+    #[tokio::test]
+    async fn rows_spelled_with_a_wide_integer_are_kept_digit_for_digit_and_still_have_to_be_rows() {
+        use aiwatcher_core::ports::AttemptArtifacts;
+        let artifacts = artifacts();
+        let spelled = r#"[{"case_id": "c1", "answer": 123456789012345678901234567890}]"#;
+        let stored =
+            AttemptArtifacts::put_rows_as_spelled(&artifacts, "answers", spelled.to_owned())
+                .await
+                .expect("a put");
+        let bytes = artifacts.read_bytes(&stored).await.expect("a read");
+        assert_eq!(bytes, spelled.as_bytes());
+        assert_eq!(stored.digest, aiwatcher_jobs::digest(spelled.as_bytes()));
+
+        let refused =
+            AttemptArtifacts::put_rows_as_spelled(&artifacts, "answers", "[1]".to_owned()).await;
+        assert!(
+            matches!(refused, Err(PortError::Rejected { .. })),
+            "{refused:?}"
+        );
     }
 
     #[tokio::test]

@@ -1216,12 +1216,19 @@ class LlmCall(Scope):
         its own credential, keyed digests of the request's messages, of these
         values where it found them rendered, and of the reply. So a case's input
         among them and an answer that is the reply are a witness's word, and
-        none of it reaches the log as words.
+        none of it reaches the log as words. A value counts towards a witnessed
+        exchange only when it is the case's input or a part of it, or what a
+        call so made already replied: pass those as they are, since a value the
+        application derived, reformatted or added is its own word.
 
         ``answer_from`` says how the application takes its answer out of the
-        reply, when it is not the reply itself: ``{"json_pointer": "/label"}``
-        or ``{"between": ["Answer:", "\\n"]}``. The gateway takes it the same
-        way, so an answer read out of a reply is witnessed as that reply's.
+        reply, when it is not the reply itself — one step such as
+        ``{"json_pointer": "/label"}`` or ``{"between": ["Answer:", "\\n"]}``,
+        a list of them in turn (``{"steps": [{"fenced": "json"},
+        {"json_pointer": "/label"}]}``) or the first that finds something
+        (``{"first_of": [...]}``); :func:`aiwatcher_sdk.gateway.extracted` lists
+        every step and takes an answer exactly as the gateway will, so an answer
+        read out of a reply with it is witnessed as that reply's.
         """
         told: dict[str, Any] = {"variables": dict(variables)}
         if answer_from is not None:

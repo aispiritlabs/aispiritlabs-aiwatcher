@@ -375,6 +375,7 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
                 "model": "capitals",
                 "asked_digests": [digest, "What is the capital of Peru?"],
                 "replied_digests": [digest],
+                "rendered_digests": [digest, 7],
             }),
         ),
     ];
@@ -395,6 +396,10 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
     );
     assert_eq!(
         list("aiwatcher.witness.replied"),
+        Some(AttrValue::StrList(vec![digest.to_owned()]))
+    );
+    assert_eq!(
+        list("aiwatcher.witness.rendered"),
         Some(AttrValue::StrList(vec![digest.to_owned()]))
     );
 }

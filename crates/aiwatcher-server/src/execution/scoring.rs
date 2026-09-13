@@ -722,6 +722,28 @@ async fn read_answers(
         .collect()
 }
 
+/// Each answer's JSON as the generation step wrote it, by its case: an integer
+/// wider than 64 bits is still every digit it was sent with here, where a
+/// parsed answer holds the double it rounds to.
+async fn spelled_answers(
+    artifacts: &Artifacts,
+    written: &aiwatcher_core::ArtifactRef,
+) -> Result<std::collections::BTreeMap<String, String>, ActivityError> {
+    #[derive(serde::Deserialize)]
+    struct Spelled {
+        case_id: String,
+        answer: Box<serde_json::value::RawValue>,
+    }
+    let bytes = artifacts.read_bytes(written).await?;
+    Ok(serde_json::from_slice::<Vec<Spelled>>(&bytes)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| (row.case_id, row.answer.get().to_owned()))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// How long the traces step waits for the application's telemetry to reach
 /// the log: the SDK flushes every second, and the fold follows the log closely.
 const TELEMETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -934,6 +956,7 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             cached_tokens: number(span, "gen_ai.usage.cached_tokens"),
             asked: list(span, own::witness::ASKED),
             replied: list(span, own::witness::REPLIED),
+            rendered: list(span, own::witness::RENDERED),
         })
         .collect()
 }
@@ -984,6 +1007,7 @@ impl ActivityExecutor for TracesExecutor {
                 ))
             })?;
         let answers = read_answers(&self.artifacts, written).await?;
+        let witnesses = witnesses.spelled(spelled_answers(&self.artifacts, written).await?);
         let named: std::collections::BTreeSet<&str> = answers
             .iter()
             .filter_map(|answer| answer.run_id.as_deref())

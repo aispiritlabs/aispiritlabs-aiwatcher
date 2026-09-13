@@ -116,7 +116,7 @@ ring = "0.17.14"
 # somebody publishes cannot be a way to stall the run that reads it.
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
 # The PostgreSQL workflow store, optional and off by default — the `postgres`
 # feature of `aiwatcher-execution`, in the shape `laser` already has in
 # `aiwatcher-bus`. Default features off on purpose: sqlx's defaults pull

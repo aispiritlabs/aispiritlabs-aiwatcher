@@ -693,6 +693,7 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             for (key, attribute) in [
                 ("asked_digests", own::witness::ASKED),
                 ("replied_digests", own::witness::REPLIED),
+                ("rendered_digests", own::witness::RENDERED),
             ] {
                 let digests: Vec<String> = event
                     .data

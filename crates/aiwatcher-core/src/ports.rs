@@ -409,6 +409,14 @@ pub trait AttemptArtifacts: Send + Sync + std::fmt::Debug {
     /// reference by describing one.
     async fn put_rows(&self, name: &str, rows: Vec<serde_json::Value>) -> PortResult<ArtifactRef>;
 
+    /// Store rows as the caller spelled them, `spelled` being their JSON array.
+    ///
+    /// For a table holding an integer wider than 64 bits
+    /// ([`crate::witness::spells_wide_integer`]): a parsed row holds one only as
+    /// the double it rounds to, so writing it back from [`Self::put_rows`] would
+    /// store a number nobody sent. The same refusals, and the same digest rule.
+    async fn put_rows_as_spelled(&self, name: &str, spelled: String) -> PortResult<ArtifactRef>;
+
     /// Whether the bytes a reference names are actually there.
     ///
     /// What a settlement checks before it accepts a worker's outputs. A

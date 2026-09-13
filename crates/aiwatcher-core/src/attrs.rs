@@ -110,6 +110,11 @@ pub mod aiwatcher {
         pub const ASKED: &str = "aiwatcher.witness.asked";
         /// The texts the provider replied with.
         pub const REPLIED: &str = "aiwatcher.witness.replied";
+        /// Each value the named template was found rendered with, digested as
+        /// a reply is — so a value that is what a model already replied reads
+        /// as that reply, and one the application made reads as neither it nor
+        /// the case's input.
+        pub const RENDERED: &str = "aiwatcher.witness.rendered";
     }
 
     pub mod source {

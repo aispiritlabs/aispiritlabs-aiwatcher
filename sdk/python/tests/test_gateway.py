@@ -306,6 +306,8 @@ def test_a_number_is_spelled_the_one_way_both_languages_write_it() -> None:
         (42, "42"),
         (-7, "-7"),
         (2**64 - 1, "18446744073709551615"),
+        (2**64, "18446744073709551616"),
+        (-(10**30) - 1, "-1000000000000000000000000000001"),
     ]:
         assert canonical(value) == spelled, value
     assert canonical({"score": 0.5, "labels": ["a", 2.0]}) == '{"labels":["a",2],"score":0.5}'
@@ -320,6 +322,51 @@ def test_an_answer_is_taken_out_of_a_reply_by_a_pointer_or_between_two_markers()
     assert extracted("Answer: Lima", {"between": ["Answer:", None]}) == " Lima"
     assert extracted("no marker", {"between": ["Answer:", None]}) is None
     assert extracted("anything", {"regex": ".*"}) is None, "a rule it does not know takes nothing"
+
+
+def test_steps_take_an_answer_as_an_application_parses_one_and_alternatives_the_first_found() -> (
+    None
+):
+    reasoned = (
+        "Let me think.\nThe answer is below.\n```json\n"
+        '{"capital": "Lima", "confidence": 0.90}\n```\nAnswer: "LIMA".\nFinal answer: Lima'
+    )
+    assert extracted(reasoned, {"steps": [{"fenced": "json"}, {"json_pointer": "/capital"}]}) == (
+        "Lima"
+    )
+    assert extracted(reasoned, {"steps": [{"fenced": None}, {"json_pointer": "/confidence"}]}) == (
+        "0.9"
+    )
+    assert (
+        extracted(
+            reasoned,
+            {"steps": [{"between": ["Answer:", "\n"]}, {"strip": "\".'"}, {"lower": True}]},
+        )
+        == "lima"
+    )
+    assert extracted(reasoned, {"after_last": "ANSWER:"}) is None, "markers are matched as written"
+    assert extracted(reasoned, {"after_last": "Final answer:"}) == " Lima"
+    assert extracted(reasoned, {"line": -1}) == "Final answer: Lima"
+    assert extracted("Total\n  3.50  ", {"steps": [{"line": 1}, {"number": True}]}) == "3.5"
+    assert extracted("NaN", {"number": True}) is None
+    assert extracted("up to here\nrest", {"between": [None, "\n"]}) == "up to here"
+    assert (
+        extracted(
+            "Answer: Lima",
+            {
+                "first_of": [
+                    {"steps": [{"fenced": "json"}, {"json_pointer": "/capital"}]},
+                    {"between": ["Answer:", None]},
+                ]
+            },
+        )
+        == " Lima"
+    )
+    assert extracted(reasoned, {"steps": [{"fenced": "yaml"}]}) is None
+    assert extracted(reasoned, {"json_pointer": "/x", "between": ["a", None]}) is None, (
+        "a step is one rule, never two at once"
+    )
+    assert extracted(reasoned, {"steps": [{"line": 0}] * 17}) is None, "at most sixteen steps"
 
 
 class Explaining(Provider):
@@ -388,5 +435,9 @@ def test_an_answer_taken_out_of_the_reply_is_digested_and_extra_words_in_the_req
 
     honest, padded = completed(recording)
     assert witness_digest(KEY, "replied", "Lima") in honest["replied_digests"]
+    assert honest["rendered_digests"] == [
+        witness_digest(KEY, "replied", "Peru"),
+        witness_digest(KEY, "replied", "What is the capital of Peru?"),
+    ], "each value, made as a reply's digest is, so one a model replied reads as that reply"
     assert (honest["prompt_exact"], padded["prompt_exact"]) == (True, False)
     assert padded["prompt_verified"] is True, "the pinned prompt is still there"

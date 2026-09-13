@@ -1037,14 +1037,30 @@ async fn write_output(
     caller: Caller,
     Path((execution_id, step_id, attempt, name)): Path<(String, String, u32, String)>,
     axum::extract::Query(who): axum::extract::Query<WorkerBody>,
-    Json(body): Json<RowsBody>,
+    Json(body): Json<SpelledRows>,
 ) -> ApiResult<Json<ArtifactRef>> {
     let key = key_of(&execution_id, &step_id, attempt);
     held(&state, &caller, &who.worker, &key).await?;
 
-    let stored = artifacts(&state)?
-        .put_rows(&name, body.rows)
-        .await
-        .map_err(ApiError::WorkerArtifacts)?;
+    let spelled = body.rows.get();
+    let rows: Vec<Value> = serde_json::from_str(spelled)
+        .map_err(|error| ApiError::BadRequest(format!("`rows` is not a list of rows: {error}")))?;
+    // A row parsed here holds an integer wider than 64 bits as the double it
+    // rounds to; a table holding one is stored as it was sent.
+    let artifacts = artifacts(&state)?;
+    let stored = if aiwatcher_core::witness::spells_wide_integer(spelled) {
+        artifacts
+            .put_rows_as_spelled(&name, spelled.to_owned())
+            .await
+    } else {
+        artifacts.put_rows(&name, rows).await
+    }
+    .map_err(ApiError::WorkerArtifacts)?;
     Ok(Json(stored))
+}
+
+/// [`RowsBody`] as it arrives, its rows kept as they were spelled.
+#[derive(Debug, Deserialize)]
+struct SpelledRows {
+    rows: Box<serde_json::value::RawValue>,
 }

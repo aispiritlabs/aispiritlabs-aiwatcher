@@ -715,7 +715,8 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
         "prompt_name": "support-bot", "prompt_version": PROMPT,
         "prompt_verified": true, "prompt_exact": true,
         "replied_digests": [digest(&key, Said::Replied, r#"{"text":""}"#)],
-        "asked_digests": [digest(&key, Said::Asked, "question 0")]});
+        "asked_digests": [digest(&key, Said::Asked, "question 0")],
+        "rendered_digests": [digest(&key, Said::Replied, "question 0")]});
     folded_run(
         &read_model,
         "serve-1",

@@ -514,7 +514,7 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
       ) : null}
       {traces.witnessed_exchange != null ? (
         <p>
-          {`${traces.witnessed_exchange} of ${traces.answers} were one witnessed call's reply to a request holding their case's input and nothing but the pinned prompt and its values.`}
+          {`${traces.witnessed_exchange} of ${traces.answers} were one witnessed call's reply to a request that was nothing but the pinned prompt, rendered with their case's input or with what a call so made had replied.`}
         </p>
       ) : null}
       {traces.witnessed_input != null ? (
