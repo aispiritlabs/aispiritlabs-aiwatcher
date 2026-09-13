@@ -229,10 +229,6 @@ jobs:
     name: Pod gates (process, docker)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # The gates keep their server's log under a temporary directory, and
-      # this is where the upload below looks for it.
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -246,6 +242,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: sdk/python/uv.lock
       - uses: extractions/setup-just@v3
+
+      # The gates keep their server's log under a temporary directory, and the
+      # upload below looks for it there. `runner` is a step's context, not a
+      # job's, so it is set here rather than in the job's `env`.
+      - name: where the gates keep their logs
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       # Builds the plain binary; the docker gate after it finds it current and
       # builds only the worker image.
