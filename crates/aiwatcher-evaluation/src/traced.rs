@@ -1,29 +1,21 @@
 //! What the traces of generated answers show they were made with.
 //!
-//! `generated_with` is the task's word about the code and configuration it
-//! holds. A variant also pins a prompt, a model and a workflow, which a task
-//! resolves or runs rather than holds — so the witness for those is telemetry,
-//! folded by this deployment: each answer may name the run it was made in, and
-//! that run's model calls say which prompt version they rendered and which
-//! model version served them, and its declaration says which workflow shape it
-//! executed. The traces step reads those runs off the log before the score step
-//! reads an answer.
+//! A variant pins a prompt, a model and a workflow, which a task resolves or
+//! runs rather than holds, so the witness for those is telemetry this deployment
+//! folded: each answer may name the run it was made in, whose calls say which
+//! prompt and model versions served them and whose declaration says which
+//! workflow shape it executed. The traces step reads those runs before the
+//! score step reads an answer.
 //!
-//! It refuses what the traces contradict — a run naming another variant or
-//! another result, a call on another version of the pinned prompt, a call to
-//! the pinned model at another version, a run declaring the pinned workflow in
-//! another shape or stepping through a node it does not have — because those
-//! answers are not the variant's. What the traces merely do not show is
-//! reported and not refused: telemetry is best effort by design, and a run the
-//! log never received says nothing either way. The result carries how many
-//! answers were seen on each pin, and a gate may require all of them.
+//! It refuses what the traces contradict — another variant or result, another
+//! version of the pinned prompt or model, the pinned workflow in another shape
+//! or off its nodes — and counts what they merely do not show: telemetry is
+//! best effort, and a run the log never received says nothing either way.
 //!
-//! The application's telemetry comes from the same host as its answers, so an
-//! application that reported the pins while calling something else passes.
-//! What it cannot report for itself is another credential's word: a serving
-//! host that publishes its own run under its own token, naming the run whose
-//! call it served, is a second witness to which model version answered — and an
-//! answer that has one is counted apart, which a gate may require too.
+//! The application's telemetry comes from the host of its answers, so one that
+//! reported the pins while calling something else passes. What it cannot report
+//! for itself is another credential's word: a serving host's own run naming the
+//! call it served is a second witness, counted apart (ADR_0030, amended).
 
 use std::collections::BTreeMap;
 
