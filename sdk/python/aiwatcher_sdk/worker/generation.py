@@ -55,6 +55,11 @@ class Generation:
     variant: JsonObject
     #: What the declaration hands the task beside the variant.
     params: JsonObject
+    #: The variant's content address. The application's runs name it, with
+    #: ``evaluation_id`` beside it on their start
+    #: (``client.run(…, variant_id=run.variant_id, evaluation_id=run.evaluation_id)``),
+    #: so a trace says which variant made it and that a measurement did.
+    variant_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -157,7 +162,7 @@ type Answering = Callable[[Case, Generation], JsonValue | Generated | Declined]
 
 def generation_task(
     name: str, *, version: str, generated_with: Callable[[Generation], GeneratedWith]
-) -> Callable[[Answering], Task[[str, str, str, JsonObject, JsonObject], JsonObject]]:
+) -> Callable[[Answering], Task[[str, str, str, JsonObject, JsonObject, str], JsonObject]]:
     """Declare a task that answers every case of a scoring run, one call per case.
 
     ``generated_with`` says what this worker would answer the run's variant with;
@@ -173,13 +178,14 @@ def generation_task(
 
     def declare(
         answering: Answering,
-    ) -> Task[[str, str, str, JsonObject, JsonObject], JsonObject]:
+    ) -> Task[[str, str, str, JsonObject, JsonObject, str], JsonObject]:
         def generate(
             declaration: str,
             evaluation_id: str,
             repetition_id: str,
             variant: JsonObject,
             params: JsonObject,
+            variant_id: str,
         ) -> JsonObject:
             context = get_task_context()
             run = Generation(
@@ -188,6 +194,7 @@ def generation_task(
                 repetition_id=repetition_id,
                 variant=variant,
                 params=params,
+                variant_id=variant_id,
             )
             held = generated_with(run)
             disagreements = held.disagreements(variant)

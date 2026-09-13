@@ -2878,6 +2878,8 @@ impl Registry {
         Ok(Some(crate::ScoringRunView {
             cohort,
             approval_id: approval_id(prepared.variant_id(), prepared.context_id())?,
+            variant_id: prepared.variant_id().to_owned(),
+            context_id: prepared.context_id().to_owned(),
             admitted: self.admits(&manifest).await?,
             warnings: crate::warnings(&manifest, &card.scorecard, calibration.as_ref()),
             manifest,

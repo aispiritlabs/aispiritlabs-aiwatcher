@@ -40,6 +40,10 @@ What it checks:
 9. the experiment over that context sets the variants side by side: the
    candidate against the baseline, each with per-case latency and tokens over
    every case, and the whole run's duration from the log.
+10. what a variant was observed doing stands beside it: runs the application
+    served naming the candidate are counted with their durations and tokens,
+    while the runs it made answering the measurement's cases are counted apart
+    and in no figure — and the baseline, served nowhere, is observed nowhere.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -108,6 +112,9 @@ PROMPTS = {
 #: What the worker was handed, to check nothing it expected reached it.
 HANDED: list[dict[str, Any]] = []
 
+#: The application's own telemetry, pointed at the server once it is up.
+TELEMETRY: list[AiwatcherClient] = []
+
 
 # ── The application, and the task a worker hosts. ────────────────────────────
 
@@ -147,7 +154,20 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     capital = dict(CAPITALS)[country]
     if run.params.get("decline") == country:
         return Declined("the application would not say")
-    said = application(text, country, capital)
+    # The application's run for this case: the variant's, and a measurement's.
+    with (
+        TELEMETRY[0].run(
+            f"generate-{run.evaluation_id}-{case.case_id}-{time.time_ns()}",
+            variant_id=run.variant_id,
+            evaluation_id=run.evaluation_id,
+        ) as traced,
+        traced.agent("capitals") as agent,
+        agent.llm(
+            model="capitals-stand-in", prompt=(str(prompt["name"]), str(prompt["version"]))
+        ) as llm,
+    ):
+        said = application(text, country, capital)
+        llm.usage(prompt_tokens=len(question.split()), completion_tokens=len(said.split()))
     # The trace this answer was made in, derived as the SDK derives a run's.
     trace = hashlib.sha256(f"{run.evaluation_id}/{case.case_id}".encode()).hexdigest()[:32]
     # What a model would have counted: the question in, the words out.
@@ -381,6 +401,7 @@ def main() -> int:
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-e2e-generate-"))
     server = serve(home / "server")
+    TELEMETRY.append(AiwatcherClient(service="e2e-capitals", base_url=BASE))
     worker = Worker(
         BASE,
         queues=[QUEUE],
@@ -568,6 +589,46 @@ def main() -> int:
             and (usage.get("output_tokens") or {}).get("cases") == len(CAPITALS)
             and started["candidate"]["execution"]["execution_id"] in timed,
             {"rows": sorted(rows), "usage": usage, "timed": len(timed)},
+        )
+
+        # The candidate, deployed: the same application serving somebody, each
+        # run naming the variant the result was published as.
+        variant_id = candidate.get("variant_id", "")
+        production = AiwatcherClient(service="e2e-capitals", base_url=BASE, variant_id=variant_id)
+        served = 5
+        for request in range(served):
+            with (
+                production.run(f"served-{request}") as traced,
+                traced.agent("capitals") as agent,
+                agent.llm(model="capitals-stand-in") as llm,
+            ):
+                time.sleep(0.02)
+                llm.usage(prompt_tokens=6, completion_tokens=1)
+        production.flush()
+        TELEMETRY[0].flush()
+        observed: dict[str, Any] = {}
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            watched = ok(
+                *call("GET", f"/api/v1/experiments/{context_id}")[:2], "reading what was observed"
+            )
+            observed = {row["variant_id"]: row for row in watched["observed"]}
+            if (observed.get(variant_id) or {}).get("runs") == served:
+                break
+            time.sleep(0.3)
+        seen = observed.get(variant_id) or {}
+        baseline_seen = observed.get(rows.get("capitals-baseline", {}).get("variant_id", "")) or {}
+        check(
+            10,
+            "what the candidate was observed serving stands beside it, its measurement left out",
+            seen.get("runs") == served
+            and seen.get("failed") == 0
+            and (seen.get("duration_ms") or {}).get("runs") == served
+            and seen.get("input_tokens") == 6 * served
+            and seen.get("measured_runs", 0) >= len(CAPITALS)
+            and baseline_seen.get("runs") == 0
+            and baseline_seen.get("measured_runs", 0) >= len(CAPITALS),
+            {"candidate": seen, "baseline": baseline_seen},
         )
     finally:
         worker.stop()

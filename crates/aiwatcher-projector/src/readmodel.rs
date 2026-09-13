@@ -57,6 +57,16 @@ pub struct RunSummary {
     /// The orchestration this run executes, when the producer names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    /// The declared variant that answered in this run, when the producer names
+    /// one — the first an event of it carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_id: Option<String>,
+    /// The published result this run answered a case for, from `run.started`'s
+    /// `evaluation_id`: a run made for a measurement rather than for somebody
+    /// using the application, which is what keeps a benchmark out of what a
+    /// variant was observed doing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_id: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event folded into this row, ended or not.
@@ -99,6 +109,8 @@ impl RunSummary {
             agents: Vec::new(),
             runtimes: Vec::new(),
             workflow: None,
+            variant_id: None,
+            evaluation_id: None,
             started_at: event.metadata.occurred_at,
             last_event_at: event.metadata.occurred_at,
             ended_at: None,
@@ -140,9 +152,16 @@ impl RunSummary {
         if self.workflow.is_none() {
             self.workflow = event.metadata.workflow_id.clone();
         }
+        if self.variant_id.is_none() {
+            self.variant_id = event.metadata.variant_id.clone();
+        }
 
         let subject = event.event_type.subject();
         let phase = event.event_type.phase();
+
+        if subject == Subject::Run && phase == Some(Phase::Start) && self.evaluation_id.is_none() {
+            self.evaluation_id = event.data_str("evaluation_id").map(ToOwned::to_owned);
+        }
 
         if subject == Subject::Llm && phase == Some(Phase::Start) {
             self.llm_calls += 1;
@@ -238,6 +257,8 @@ pub struct RunFilter {
     /// Runs produced by this service. See `RunSummary::runtimes`.
     pub runtime: Option<String>,
     pub workflow: Option<String>,
+    /// Runs in which this declared variant answered.
+    pub variant_id: Option<String>,
     /// Runs sharing one trace. Normally one run, but a producer that supplies
     /// its own `trace_id` can span several — the only view that shows it.
     pub trace_id: Option<String>,
@@ -502,6 +523,12 @@ impl ReadModel {
             })
             .filter(|run| {
                 filter
+                    .variant_id
+                    .as_ref()
+                    .is_none_or(|wanted| run.variant_id.as_ref() == Some(wanted))
+            })
+            .filter(|run| {
+                filter
                     .trace_id
                     .as_ref()
                     .is_none_or(|wanted| &run.trace_id.to_hex() == wanted)
@@ -565,6 +592,22 @@ impl ReadModel {
         let state = self.state.read().await;
         let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
         crate::dimensions::compute(&runs, &state.spans, kind, filter, OffsetDateTime::now_utc())
+    }
+
+    /// What each of these variants was observed doing, from the runs that
+    /// name it. See [`crate::observations`].
+    pub async fn variant_observations(
+        &self,
+        variant_ids: &[&str],
+        window_seconds: Option<i64>,
+    ) -> Vec<crate::observations::VariantObservations> {
+        let state = self.state.read().await;
+        crate::observations::compute(
+            state.runs.values(),
+            variant_ids,
+            window_seconds,
+            OffsetDateTime::now_utc(),
+        )
     }
 
     /// Every retained span, flat and filterable. See [`crate::spans`].
@@ -768,6 +811,8 @@ mod tests {
             agents: Vec::new(),
             runtimes: Vec::new(),
             workflow: None,
+            variant_id: None,
+            evaluation_id: None,
             started_at: datetime!(2026-08-27 18:20:00 UTC),
             last_event_at: datetime!(2026-08-27 18:20:00 UTC),
             ended_at: None,
@@ -976,5 +1021,52 @@ mod tests {
             model.run("eval-1").await.is_none(),
             "nor is it an agent run"
         );
+    }
+
+    /// A run names its variant on its events and, when a measurement made it,
+    /// the result it answered for on its start — and a list narrowed to the
+    /// variant finds it, while what the variant was observed doing leaves the
+    /// measurement's run out.
+    #[tokio::test]
+    async fn a_run_s_variant_and_the_measurement_that_made_it_are_folded_from_its_events() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-13 09:00:00 UTC);
+        for (run_id, measured) in [("served", None), ("benchmark", Some("answers-v1"))] {
+            for (position, event_type) in [(1, EventType::RunStarted), (2, EventType::RunCompleted)]
+            {
+                let data = match (&event_type, measured) {
+                    (EventType::RunStarted, Some(evaluation)) => {
+                        serde_json::json!({ "evaluation_id": evaluation })
+                    }
+                    _ => serde_json::json!({}),
+                };
+                let mut envelope =
+                    EventEnvelope::new(event_type, run_id, at, Source::new("bot", Sdk::Python))
+                        .with_data(data);
+                envelope.variant_id = Some("v1".to_owned());
+                model
+                    .apply(&envelope.record(position, position, at, None))
+                    .await;
+            }
+        }
+
+        let page = model
+            .list_at(
+                &RunFilter {
+                    variant_id: Some("v1".to_owned()),
+                    ..RunFilter::default()
+                },
+                at,
+            )
+            .await;
+        assert_eq!(page.total_known, 2);
+        let benchmark = model.run("benchmark").await.expect("folded").summary;
+        assert_eq!(benchmark.variant_id.as_deref(), Some("v1"));
+        assert_eq!(benchmark.evaluation_id.as_deref(), Some("answers-v1"));
+
+        let observed = model.variant_observations(&["v1"], None).await;
+        assert_eq!((observed[0].runs, observed[0].measured_runs), (1, 1));
     }
 }

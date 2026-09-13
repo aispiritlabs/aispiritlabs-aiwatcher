@@ -10,6 +10,7 @@
 //! agent     run.agents               0..n
 //! runtime   run.runtimes             0..n   (the producing service)
 //! workflow  run.workflow             0..1
+//! variant   run.variant_id           0..1   (the declared variant that answered)
 //! trace     run.trace_id             exactly 1
 //! model     gen_ai.request.model     0..n   (from the run's spans)
 //! tool      gen_ai.tool.name         0..n   (from the run's spans)
@@ -40,6 +41,7 @@ pub enum DimensionKind {
     Agent,
     Runtime,
     Workflow,
+    Variant,
     Trace,
     Model,
     Tool,
@@ -63,6 +65,7 @@ impl DimensionKind {
             Self::Agent => "agent",
             Self::Runtime => "runtime",
             Self::Workflow => "workflow",
+            Self::Variant => "variant",
             Self::Trace => "trace",
             Self::Model => "model",
             Self::Tool => "tool",
@@ -209,6 +212,7 @@ fn keys_of(
         DimensionKind::Agent => run.agents.clone(),
         DimensionKind::Runtime => run.runtimes.clone(),
         DimensionKind::Workflow => run.workflow.clone().into_iter().collect(),
+        DimensionKind::Variant => run.variant_id.clone().into_iter().collect(),
         // Always exactly one: a trace id is derived from the run id when the
         // producer supplies none, so no run is ever untraced.
         DimensionKind::Trace => vec![run.trace_id.to_hex()],
@@ -333,6 +337,8 @@ mod tests {
             agents: vec!["researcher".to_owned()],
             runtimes: vec!["agent-service".to_owned()],
             workflow: None,
+            variant_id: None,
+            evaluation_id: None,
             started_at: started,
             last_event_at: started,
             ended_at: None,

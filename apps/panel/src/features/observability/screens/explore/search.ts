@@ -29,6 +29,7 @@ export const PIVOTS = [
   'agent',
   'runtime',
   'workflow',
+  'variant',
   'trace',
   'model',
   'tool',

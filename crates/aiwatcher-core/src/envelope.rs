@@ -160,6 +160,18 @@ pub struct EventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
 
+    /// Which declared variant answered in this run: the content address
+    /// Evaluation derives from a variant's pins (ADR_0030).
+    ///
+    /// A workflow groups runs by what is executed; this groups them by the
+    /// configuration that answered — the model, prompt and code a result was
+    /// published under — so what a variant did in production can stand beside
+    /// what it scored. Nothing here checks it names a variant anybody declared:
+    /// the log takes what a producer says, and a reader matching it against
+    /// published evidence is the one that finds out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_id: Option<String>,
+
     /// Producer-side counter within the run. Gaps here mean lost events; it is
     /// the only way to notice a producer that dropped a batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,6 +220,7 @@ impl EventEnvelope {
             workflow_id: None,
             workflow_run_id: None,
             agent_id: None,
+            variant_id: None,
             sequence: None,
             trace_id: None,
             span_id: None,
@@ -376,6 +389,7 @@ impl EventEnvelope {
                 workflow_id,
                 workflow_run_id,
                 agent_id: self.agent_id,
+                variant_id: self.variant_id,
                 sequence: self.sequence,
                 span_key,
                 schema_version: self.schema_version,
@@ -421,6 +435,10 @@ pub struct RecordedMetadata {
     pub workflow_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// See [`EventEnvelope::variant_id`]. Absent from every record written
+    /// before it, which reads as a run that named no variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
 
@@ -688,6 +706,37 @@ mod tests {
         let recorded = wire.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
 
         assert!(recorded.metadata.workflow_id.is_none());
+    }
+
+    #[test]
+    fn the_variant_a_run_names_is_recorded_on_every_event_of_it() {
+        let wire: EventEnvelope = serde_json::from_value(serde_json::json!({
+            "event_type": "llm.completed",
+            "occurred_at": "2026-08-27T18:20:11Z",
+            "run_id": "run-1",
+            "variant_id": "4f1c",
+            "source": { "service": "support-bot", "sdk": "python" },
+        }))
+        .expect("variant_id is part of the contract");
+
+        let recorded = wire.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
+
+        assert_eq!(recorded.metadata.variant_id.as_deref(), Some("4f1c"));
+    }
+
+    #[test]
+    fn a_record_written_before_variants_reads_as_naming_none() {
+        let recorded =
+            envelope(EventType::RunStarted).record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
+        let mut stored = serde_json::to_value(&recorded).expect("encodes");
+        stored["metadata"]
+            .as_object_mut()
+            .expect("an object")
+            .remove("variant_id");
+
+        let read: RecordedEvent = serde_json::from_value(stored).expect("still reads");
+
+        assert!(read.metadata.variant_id.is_none());
     }
 
     #[test]

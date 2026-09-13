@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   createMemoryHistory,
@@ -117,6 +117,31 @@ function serving() {
               nodes_pending: 0,
             },
           ],
+          observed: [
+            {
+              variant_id: 'candidate-variant',
+              runs: 20,
+              succeeded: 19,
+              failed: 1,
+              running: 0,
+              measured_runs: 4,
+              duration_ms: { runs: 20, p50: 800, p90: 2_000, p99: 4_000, max: 4_000 },
+              llm_calls: 20,
+              input_tokens: 2_000,
+              output_tokens: 300,
+            },
+            {
+              variant_id: 'baseline-variant',
+              runs: 0,
+              succeeded: 0,
+              failed: 0,
+              running: 0,
+              measured_runs: 4,
+              llm_calls: 0,
+              input_tokens: 0,
+              output_tokens: 0,
+            },
+          ],
         },
       }),
     },
@@ -155,11 +180,33 @@ it('lists the contexts, and opens one as its variants beside the chosen baseline
   expect(screen.getByText('not in the log')).toBeTruthy();
   expect(screen.getByText('+1.0000')).toBeTruthy();
 
-  const buttons = screen.getAllByRole('button', { name: 'Use as baseline' });
-  await userEvent.click(buttons[buttons.length - 1] as HTMLElement);
-  expect(router.state.location.search).toEqual({ context: CONTEXT, baseline: 'capitals-baseline' });
-  expect(await screen.findByText('baseline', { selector: 'span' })).toBeTruthy();
-  expect(server.calls.filter((call) => call.url.endsWith(`/experiments/${CONTEXT}`)).length).toBe(
-    2,
+  // What each variant was observed doing, apart from what it scored — and a
+  // variant seen only in its own measurement is not drawn as traffic.
+  const observed = screen.getByRole('link', { name: '20 runs · 1 failed' });
+  expect(observed.getAttribute('href')).toContain('by=variant');
+  expect(screen.getByText('800 ms / 2.00 s / 4.00 s')).toBeTruthy();
+  expect(
+    screen.getByText(
+      /over 20 finished · 2,000 \/ 300 tokens in 20 calls · 4 measured runs left out/,
+    ),
+  ).toBeTruthy();
+  expect(screen.getByText('no runs outside a measurement (4 measured)')).toBeTruthy();
+
+  await userEvent.click(screen.getByRole('button', { name: '1h' }));
+  expect(router.state.location.search).toEqual({ context: CONTEXT, window: 3600 });
+  // Another window is another read of the observations.
+  await waitFor(() =>
+    expect(server.calls.filter((call) => call.url.endsWith(`/experiments/${CONTEXT}`)).length).toBe(
+      2,
+    ),
   );
+
+  const buttons = await screen.findAllByRole('button', { name: 'Use as baseline' });
+  await userEvent.click(buttons[buttons.length - 1] as HTMLElement);
+  expect(router.state.location.search).toEqual({
+    context: CONTEXT,
+    baseline: 'capitals-baseline',
+    window: 3600,
+  });
+  expect(await screen.findByText('baseline', { selector: 'span' })).toBeTruthy();
 });

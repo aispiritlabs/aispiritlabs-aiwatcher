@@ -8667,6 +8667,19 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the log still holds.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
           }
         ],
         "responses": {
@@ -9707,6 +9720,18 @@
           {
             "name": "workflow",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "description": "Runs in which this declared variant answered.",
             "required": false,
             "schema": {
               "type": [
@@ -15729,6 +15754,7 @@
           "agent",
           "runtime",
           "workflow",
+          "variant",
           "trace",
           "model",
           "tool"
@@ -15991,6 +16017,39 @@
                 "description": "Absent only where no pass has ever finished — a fresh instance, or one\nwhose worker has never run. It is not \"nothing to do\"."
               }
             ]
+          }
+        }
+      },
+      "DurationSummary": {
+        "type": "object",
+        "description": "Finished runs' durations, by nearest rank, over this many runs.",
+        "required": [
+          "runs",
+          "p50",
+          "p90",
+          "p99",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "p50": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "p90": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "p99": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -16836,6 +16895,13 @@
                 "$ref": "#/components/schemas/TraceId"
               }
             ]
+          },
+          "variant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which declared variant answered in this run: the content address\nEvaluation derives from a variant's pins (ADR_0030).\n\nA workflow groups runs by what is executed; this groups them by the\nconfiguration that answered — the model, prompt and code a result was\npublished under — so what a variant did in production can stand beside\nwhat it scored. Nothing here checks it names a variant anybody declared:\nthe log takes what a producer says, and a reader matching it against\npublished evidence is the one that finds out."
           },
           "workflow_id": {
             "type": [
@@ -17866,7 +17932,8 @@
         "description": "One experiment, and the runs its results were measured by.",
         "required": [
           "experiment",
-          "executions"
+          "executions",
+          "observed"
         ],
         "properties": {
           "executions": {
@@ -17878,6 +17945,13 @@
           },
           "experiment": {
             "$ref": "#/components/schemas/Experiment"
+          },
+          "observed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VariantObservations"
+            },
+            "description": "What each variant the rows measured was observed doing: the runs on the\nlog that name it and that no measurement made, one row per variant\nwhether or not any did. A different sample from the evidence, on the\nlog's clock, and never folded into it."
           }
         }
       },
@@ -23728,6 +23802,13 @@
           "trace_id": {
             "$ref": "#/components/schemas/TraceId"
           },
+          "variant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See [`EventEnvelope::variant_id`]. Absent from every record written\nbefore it, which reads as a run that named no variant."
+          },
           "workflow_id": {
             "type": [
               "string",
@@ -24931,6 +25012,13 @@
               "null"
             ]
           },
+          "evaluation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The published result this run answered a case for, from `run.started`'s\n`evaluation_id`: a run made for a measurement rather than for somebody\nusing the application, which is what keeps a benchmark out of what a\nvariant was observed doing."
+          },
           "event_count": {
             "type": "integer",
             "format": "int64",
@@ -24982,6 +25070,13 @@
           },
           "trace_id": {
             "$ref": "#/components/schemas/TraceId"
+          },
+          "variant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared variant that answered in this run, when the producer names\none — the first an event of it carried."
           },
           "workflow": {
             "type": [
@@ -28566,6 +28661,92 @@
           }
         },
         "additionalProperties": false
+      },
+      "VariantObservations": {
+        "type": "object",
+        "description": "One variant's runs in the window.",
+        "required": [
+          "variant_id",
+          "runs",
+          "succeeded",
+          "failed",
+          "running",
+          "measured_runs",
+          "llm_calls",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "duration_ms": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DurationSummary",
+                "description": "How long a finished run took, end to end, by nearest rank. A run is one\nrequest answered, so this stands beside a result's per-case latency —\non another clock, over other inputs. Absent when none finished."
+              }
+            ]
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the runs' model calls reported. A call that reported no usage\ncounts nothing, which the call count beside it lets a reader see."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "measured_runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs naming it that answered a measurement's cases, left out of every\nother figure.",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs naming the variant that no measurement made.",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "variant_id": {
+            "type": "string"
+          }
+        }
       },
       "VersionOrigin": {
         "oneOf": [

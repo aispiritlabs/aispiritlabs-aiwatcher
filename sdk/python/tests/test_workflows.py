@@ -222,3 +222,39 @@ def test_every_event_of_one_traversal_shares_a_correlation(
 
     correlations = {event["correlation_id"] for event in transport.events}
     assert len(correlations) == 1
+
+
+def test_every_event_of_a_run_names_the_variant_its_client_is(
+    transport: RecordingTransport,
+) -> None:
+    # A deployment is one variant: said once, on the client, and on every
+    # event a run opened by it sends, agent and model call included.
+    client = AiwatcherClient(service="support-bot", transport=transport, variant_id="v-prod")
+    with client.run("run-1") as run, run.agent("answer") as agent, agent.llm(model="m"):
+        pass
+
+    assert transport.events
+    assert {event.get("variant_id") for event in transport.events} == {"v-prod"}
+    assert "evaluation_id" not in transport.of_type("run.started")[0]["data"]
+
+
+def test_a_run_answering_a_measurement_names_it_on_its_start_and_its_own_variant(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    # What keeps a benchmark out of what the variant was observed doing.
+    with client.run("case-1", variant_id="v-candidate", evaluation_id="answers-candidate"):
+        pass
+
+    started = transport.of_type("run.started")[0]
+    assert started["variant_id"] == "v-candidate"
+    assert started["data"] == {"evaluation_id": "answers-candidate"}
+    assert "evaluation_id" not in transport.of_type("run.completed")[0]["data"]
+
+
+def test_a_run_of_a_client_that_names_no_variant_sends_none(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    with client.run("run-1"):
+        pass
+
+    assert all("variant_id" not in event for event in transport.events)

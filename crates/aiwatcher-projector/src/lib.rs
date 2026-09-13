@@ -22,6 +22,7 @@ pub mod dimensions;
 pub mod evaluations;
 pub mod live;
 pub mod metrics;
+pub mod observations;
 pub mod pipeline;
 pub mod readmodel;
 pub mod retry;
@@ -40,6 +41,7 @@ pub use evaluations::{
 };
 pub use live::{LiveHub, ReplayGap};
 pub use metrics::{MetricsFilter, MetricsSummary};
+pub use observations::{DurationSummary, VariantObservations};
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
 pub use spans::{SpanFilter, SpanOutcome, SpanPage, SpanRow};

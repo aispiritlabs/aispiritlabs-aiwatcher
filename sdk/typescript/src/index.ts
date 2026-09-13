@@ -32,6 +32,8 @@ export interface EventEnvelope {
   workflow_id?: string;
   workflow_run_id?: string;
   agent_id?: string;
+  /** The declared variant answering in this run: Evaluation's `variant_id`. */
+  variant_id?: string;
   sequence?: number;
   trace_id?: string;
   span_id?: string;
@@ -170,6 +172,7 @@ interface Context {
    */
   workflowRunId?: string;
   agentId?: string;
+  variantId?: string;
   correlationId: string;
   causationId?: string;
 }
@@ -184,11 +187,19 @@ export interface ClientOptions {
   baseUrl?: string;
   /** See {@link HttpTransportOptions.token}. */
   token?: string;
+  /**
+   * The declared variant this deployment is: every run it opens names it
+   * unless the run says otherwise. Never read from the environment, so a
+   * worker measuring a variant does not put a benchmark's runs among what
+   * that variant was observed doing.
+   */
+  variantId?: string;
 }
 
 export class AiwatcherClient {
   readonly #transport: Transport;
   readonly #source: Source;
+  readonly #variantId: string | undefined;
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -199,6 +210,7 @@ export class AiwatcherClient {
             ...(options.token ? { token: options.token } : {}),
           })
         : new NullTransport());
+    this.#variantId = options.variantId;
     this.#source = {
       service: options.service,
       sdk: 'typescript',
@@ -236,6 +248,7 @@ export class AiwatcherClient {
         ...(context.workflowId ? { workflow_id: context.workflowId } : {}),
         ...(context.workflowRunId ? { workflow_run_id: context.workflowRunId } : {}),
         ...(context.agentId ? { agent_id: context.agentId } : {}),
+        ...(context.variantId ? { variant_id: context.variantId } : {}),
         ...(context.causationId ? { causation_id: context.causationId } : {}),
       },
     ]);
@@ -249,6 +262,11 @@ export class AiwatcherClient {
    * what is being executed, so the same orchestration is comparable across
    * sessions.
    *
+   * `variantId` names the declared variant answering in this run — the
+   * client's own when omitted. `evaluationId` says the run answers a case of
+   * that published result rather than somebody using the application, which
+   * keeps a benchmark out of what the variant was observed doing.
+   *
    * `run.failed` is emitted for any thrown value, including a cancellation —
    * a cancelled run that never reports an end looks identical to a hung one.
    */
@@ -260,10 +278,13 @@ export class AiwatcherClient {
           workflowId?: string;
           workflowRunId?: string;
           correlationId?: string;
+          variantId?: string;
+          evaluationId?: string;
         }
       | undefined,
     body: (run: RunScope) => Promise<T>,
   ): Promise<T> {
+    const variantId = options?.variantId ?? this.#variantId;
     const context: Context = {
       runId,
       correlationId: options?.correlationId ?? newId(),
@@ -272,8 +293,13 @@ export class AiwatcherClient {
       ...(options?.workflowId && options?.workflowRunId
         ? { workflowRunId: options.workflowRunId }
         : {}),
+      ...(variantId ? { variantId } : {}),
     };
-    this.emit('run.started', context);
+    this.emit(
+      'run.started',
+      context,
+      options?.evaluationId ? { evaluation_id: options.evaluationId } : {},
+    );
     try {
       const result = await body(new RunScope(this, context));
       this.emit('run.completed', context, { status: 'succeeded' });

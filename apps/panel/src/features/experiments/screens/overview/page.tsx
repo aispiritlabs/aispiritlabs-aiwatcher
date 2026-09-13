@@ -10,7 +10,9 @@ import type {
   LatencySummary,
   MetricDefinition,
   TokenSummary,
+  VariantObservations,
 } from '@/api/generated/types.gen';
+import { TimeRange, windowParam } from '@/shared/components/time-range';
 import { Badge, Card, EmptyState, IdChip, Spinner } from '@/shared/components/ui/primitives';
 import { ApiFailure, answerOf } from '@/shared/lib/result';
 import { cn, formatDuration, pinchId } from '@/shared/lib/utils';
@@ -26,8 +28,10 @@ import { cn, formatDuration, pinchId } from '@/shared/lib/utils';
  * delta it withheld is drawn as withheld. Nothing is averaged across rows: a
  * variant measured twice is two rows, because a mean of two p90s is no p90.
  *
- * Production observations are not here. A trace does not yet say which
- * variant produced it, so what the benchmark measured is all a row can claim.
+ * What a variant was observed doing is a third clock: the runs on the log that
+ * named it and that no measurement made, over the window in the URL. It is the
+ * server's fold of the log, one per variant rather than per row, and it is
+ * never set against a result's numbers as though the two were one sample.
  */
 
 const routeApi = getRouteApi('/experiments');
@@ -41,13 +45,13 @@ export function ExperimentsPage() {
         <p className="max-w-3xl text-sm text-muted-foreground">
           The variants measured on one pinned context — the same cases, split, card and scorer —
           with their quality, how many cases each covered, what the answers took and how long each
-          run ran. Measurements from a benchmark only: traces do not yet name the variant that
-          produced them, and no price source is configured, so tokens are counted and nothing is
+          run ran — and, beside them, what each variant was observed doing in runs that named it
+          outside a measurement. No price source is configured, so tokens are counted and nothing is
           priced.
         </p>
       </div>
       {search.context ? (
-        <OneExperiment context={search.context} baseline={search.baseline} />
+        <OneExperiment context={search.context} baseline={search.baseline} window={search.window} />
       ) : (
         <Contexts />
       )}
@@ -134,13 +138,24 @@ function measuredOn(entry: ExperimentEntry): string {
   }`;
 }
 
-function OneExperiment({ context, baseline }: { context: string; baseline?: string }) {
+function OneExperiment({
+  context,
+  baseline,
+  window,
+}: {
+  context: string;
+  baseline?: string;
+  window?: number;
+}) {
   const navigate = routeApi.useNavigate();
   const read = useQuery({
-    queryKey: ['experiment', context, baseline],
+    queryKey: ['experiment', context, baseline, window],
     queryFn: async () =>
       answerOf(
-        await getExperiment({ path: { context_id: context }, query: { baseline } }),
+        await getExperiment({
+          path: { context_id: context },
+          query: { baseline, window_seconds: windowParam(window) },
+        }),
         'could not read this experiment',
       ),
     retry: false,
@@ -171,8 +186,9 @@ function OneExperiment({ context, baseline }: { context: string; baseline?: stri
     );
   }
   if (read.isLoading || !read.data) return <Spinner />;
-  const { experiment, executions } = read.data;
+  const { experiment, executions, observed } = read.data;
   const timing = new Map(executions.map((execution) => [execution.workflow_run_id, execution]));
+  const observations = new Map(observed.map((variant) => [variant.variant_id, variant]));
   return (
     <div className="flex flex-col gap-3">
       {back}
@@ -186,7 +202,7 @@ function OneExperiment({ context, baseline }: { context: string; baseline?: stri
             <button
               type="button"
               className="text-primary hover:underline"
-              onClick={() => void navigate({ search: { context } })}
+              onClick={() => void navigate({ search: { context, window } })}
             >
               compare with nothing
             </button>
@@ -196,6 +212,15 @@ function OneExperiment({ context, baseline }: { context: string; baseline?: stri
             — choose a baseline to see each row&apos;s change.
           </span>
         )}
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-muted-foreground">observed in the</span>
+          <TimeRange
+            value={window ?? 0}
+            onChange={(seconds) =>
+              void navigate({ search: { context, baseline, window: seconds } })
+            }
+          />
+        </span>
       </Card>
       <Card className="overflow-x-auto p-3 text-xs">
         <table className="w-full text-left">
@@ -222,6 +247,12 @@ function OneExperiment({ context, baseline }: { context: string; baseline?: stri
               >
                 Run
               </th>
+              <th
+                className="font-normal"
+                title="Runs on the log that named this variant and that no measurement made, in the window — another sample, on the log's clock"
+              >
+                Observed
+              </th>
               <th />
             </tr>
           </thead>
@@ -235,8 +266,9 @@ function OneExperiment({ context, baseline }: { context: string; baseline?: stri
                 execution={
                   row.origin?.execution_id ? timing.get(row.origin.execution_id) : undefined
                 }
+                observed={observations.get(row.variant_id)}
                 onBaseline={() =>
-                  void navigate({ search: { context, baseline: row.evaluation_id } })
+                  void navigate({ search: { context, baseline: row.evaluation_id, window } })
                 }
               />
             ))}
@@ -257,12 +289,14 @@ function Row({
   metrics,
   isBaseline,
   execution,
+  observed,
   onBaseline,
 }: {
   row: ExperimentRow;
   metrics: MetricDefinition[];
   isBaseline: boolean;
   execution: ExecutionSummary | undefined;
+  observed: VariantObservations | undefined;
   onBaseline: () => void;
 }) {
   const counts = row.counts;
@@ -355,6 +389,9 @@ function Row({
         )}
       </td>
       <td>
+        <Observed observed={observed} />
+      </td>
+      <td>
         {isBaseline ? (
           <Badge tone="primary">baseline</Badge>
         ) : (
@@ -364,6 +401,47 @@ function Row({
         )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * The runs that named a variant outside a measurement. A count of nothing is
+ * drawn as nothing observed rather than as zeros, and the measurement's own
+ * runs are said to be left out, so a benchmark never reads as traffic.
+ */
+function Observed({ observed }: { observed: VariantObservations | undefined }) {
+  if (!observed || observed.runs === 0) {
+    return (
+      <span className="text-muted-foreground">
+        {observed && observed.measured_runs > 0
+          ? `no runs outside a measurement (${observed.measured_runs} measured)`
+          : 'no runs named it'}
+      </span>
+    );
+  }
+  const duration = observed.duration_ms;
+  return (
+    <>
+      <Link
+        to="/observability/explore"
+        search={{ by: 'variant', key: observed.variant_id }}
+        className="text-primary hover:underline"
+      >
+        {`${observed.runs} runs · ${observed.failed} failed`}
+      </Link>
+      {duration ? (
+        <div>{`${ms(duration.p50)} / ${ms(duration.p90)} / ${ms(duration.p99)}`}</div>
+      ) : null}
+      <div className="text-muted-foreground">
+        {[
+          duration ? `over ${duration.runs} finished` : 'none finished',
+          `${observed.input_tokens.toLocaleString()} / ${observed.output_tokens.toLocaleString()} tokens in ${observed.llm_calls} calls`,
+          observed.measured_runs > 0 ? `${observed.measured_runs} measured runs left out` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </div>
+    </>
   );
 }
 

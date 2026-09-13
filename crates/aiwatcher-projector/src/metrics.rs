@@ -586,6 +586,8 @@ mod tests {
             agents: vec!["researcher".to_owned()],
             runtimes: vec!["agent-service".to_owned()],
             workflow: None,
+            variant_id: None,
+            evaluation_id: None,
             started_at: started,
             last_event_at: started + time::Duration::seconds(2),
             ended_at: Some(started + time::Duration::seconds(2)),

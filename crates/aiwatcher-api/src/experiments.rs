@@ -6,10 +6,14 @@
 //! kept apart on purpose — a run's duration is every step and every retry, and
 //! a case's latency is one answer — and nothing here averages one result's
 //! percentiles with another's.
+//!
+//! What each variant was observed doing is a third clock: the runs that named
+//! it on the log, served to somebody using the application rather than made
+//! for a measurement, over the window asked for.
 
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{Experiment, ExperimentIndex};
-use aiwatcher_projector::ExecutionSummary;
+use aiwatcher_projector::{ExecutionSummary, VariantObservations};
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -72,6 +76,9 @@ async fn list_experiments(
 struct ExperimentQuery {
     /// A result in this context every other row is compared with.
     baseline: Option<String>,
+    /// How far back the observed runs reach, in seconds; absent or zero is
+    /// everything the log still holds.
+    window_seconds: Option<i64>,
 }
 
 /// One experiment, and the runs its results were measured by.
@@ -82,6 +89,11 @@ pub struct ExperimentView {
     /// no longer holds is absent, and its row keeps everything the evidence
     /// says.
     pub executions: Vec<ExecutionSummary>,
+    /// What each variant the rows measured was observed doing: the runs on the
+    /// log that name it and that no measurement made, one row per variant
+    /// whether or not any did. A different sample from the evidence, on the
+    /// log's clock, and never folded into it.
+    pub observed: Vec<VariantObservations>,
 }
 
 /// Every result published in one context, newest first, compared with the
@@ -124,8 +136,19 @@ async fn get_experiment(
             executions.push(detail.summary);
         }
     }
+    let mut variants: Vec<&str> = Vec::new();
+    for row in &experiment.rows {
+        if !variants.contains(&row.variant_id.as_str()) {
+            variants.push(&row.variant_id);
+        }
+    }
+    let observed = state
+        .read_model
+        .variant_observations(&variants, query.window_seconds)
+        .await;
     Ok(Json(ExperimentView {
         experiment,
         executions,
+        observed,
     }))
 }

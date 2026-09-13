@@ -320,7 +320,7 @@ async fn start_scoring_run(
     let started = state
         .executions()
         .start(
-            plan_for(&viewed.declaration, external),
+            plan_for(&viewed.declaration, &viewed.variant_id, external),
             StartRun {
                 // The declaration is the content address of the intention, so
                 // starting one twice is one run by construction and no header
@@ -476,7 +476,7 @@ async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResu
 /// revision and what its steps carry. One step scores saved answers; a run whose
 /// answers a worker generates is C1's template, three steps long — the cohort's
 /// inputs, the worker's answers, and the same score step reading them.
-fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
+fn plan_for(declared: &DeclaredRun, variant_id: &str, external: bool) -> ExecutionPlan {
     let spec = ScoreEvaluationSpec {
         declaration: declared.id.clone(),
     };
@@ -535,6 +535,13 @@ fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
             params.insert(
                 "evaluation_id".to_owned(),
                 serde_json::Value::String(declared.run.evaluation_id.clone()),
+            );
+            // The variant's content address, which the application's runs
+            // name beside `evaluation_id` — so they are this variant's, and a
+            // measurement's rather than what it was observed doing.
+            params.insert(
+                "variant_id".to_owned(),
+                serde_json::Value::String(variant_id.to_owned()),
             );
             params.insert(
                 "repetition_id".to_owned(),
@@ -691,22 +698,24 @@ mod tests {
             concurrency: None,
         };
         assert_eq!(
-            plan_for(&declared(chosen.clone(), false), false).steps[0].timeout_seconds,
+            plan_for(&declared(chosen.clone(), false), "variant", false).steps[0].timeout_seconds,
             600
         );
         assert_eq!(
-            plan_for(&declared(chosen, true), false).steps[0].timeout_seconds,
+            plan_for(&declared(chosen, true), "variant", false).steps[0].timeout_seconds,
             600
         );
         assert_eq!(
-            plan_for(&declared(Default::default(), false), false).steps[0].timeout_seconds,
+            plan_for(&declared(Default::default(), false), "variant", false).steps[0]
+                .timeout_seconds,
             SCORING_TIMEOUT_SECONDS
         );
         assert_eq!(
-            plan_for(&declared(Default::default(), true), false).steps[0].timeout_seconds,
+            plan_for(&declared(Default::default(), true), "variant", false).steps[0]
+                .timeout_seconds,
             JUDGED_TIMEOUT_SECONDS
         );
-        let external = plan_for(&declared(Default::default(), false), true);
+        let external = plan_for(&declared(Default::default(), false), "variant", true);
         assert_eq!(
             external.steps[0].runtime.kind().as_str(),
             "external_evaluation"
@@ -724,7 +733,7 @@ mod tests {
                     params: serde_json::Map::from_iter([("temperature".into(), 0.into())]),
                 },
             });
-        let plan = plan_for(&run, false);
+        let plan = plan_for(&run, "variant", false);
         let kinds: Vec<&str> = plan
             .steps
             .iter()

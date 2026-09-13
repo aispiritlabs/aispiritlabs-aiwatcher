@@ -43,6 +43,7 @@ const RUN_FILTER: Record<Exclude<Pivot, 'span'>, string> = {
   agent: 'agent_id',
   runtime: 'runtime',
   workflow: 'workflow',
+  variant: 'variant_id',
   trace: 'trace_id',
   model: 'model',
   tool: 'tool',
@@ -429,6 +430,7 @@ const PIVOT_FIELD: Record<Exclude<Pivot, 'span' | 'trace'>, string> = {
   agent: 'agent_id',
   runtime: 'source.service',
   workflow: 'workflow_id',
+  variant: 'variant_id',
   model: 'gen_ai.request.model on an LLM span',
   tool: 'gen_ai.tool.name on a tool span',
 };

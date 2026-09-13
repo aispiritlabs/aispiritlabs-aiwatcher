@@ -645,6 +645,11 @@ pub struct ScoringRunView {
     pub manifest: EvaluationManifest,
     /// The approval that admits this pair, whether or not it exists yet.
     pub approval_id: String,
+    /// The variant the result is published as: what an application serving it
+    /// names on its runs (`variant_id` on the envelope), so what it is observed
+    /// doing stands beside what it scored.
+    pub variant_id: String,
+    pub context_id: String,
     /// Whether a publication of this manifest would pass the operator's gate
     /// now. A fact at the moment of reading: a withdrawal changes it.
     pub admitted: bool,

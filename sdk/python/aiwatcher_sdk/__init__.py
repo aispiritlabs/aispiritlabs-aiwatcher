@@ -281,6 +281,8 @@ class Correlation:
     workflow_id: str | None = None
     workflow_run_id: str | None = None
     agent_id: str | None = None
+    #: The declared variant answering in this run (Evaluation's ``variant_id``).
+    variant_id: str | None = None
     correlation_id: str = field(default_factory=_new_id)
     causation_id: str | None = None
     parent_span_id: str | None = None
@@ -305,8 +307,15 @@ class AiwatcherClient:
         instance: str | None = None,
         base_url: str | None = None,
         token: str | None = None,
+        variant_id: str | None = None,
     ) -> None:
         resolved = base_url or os.environ.get("AIWATCHER_URL")
+        # A deployment is one variant, so it is said once here and every run
+        # this client opens names it — unless the run says otherwise. Never read
+        # from the environment: a worker measuring a variant imports the same
+        # application, and a variable it inherited would put a benchmark's runs
+        # among what that variant was observed doing.
+        self._variant_id = variant_id
         self._base_url = resolved
         # One credential for both clients below, because they reach the same
         # instance. It is only needed against one with single sign-on on: an
@@ -365,6 +374,8 @@ class AiwatcherClient:
             envelope["workflow_run_id"] = context.workflow_run_id
         if context.agent_id:
             envelope["agent_id"] = context.agent_id
+        if context.variant_id:
+            envelope["variant_id"] = context.variant_id
         if context.causation_id:
             envelope["causation_id"] = context.causation_id
         if span_id:
@@ -383,12 +394,20 @@ class AiwatcherClient:
         workflow_id: str | None = None,
         workflow_run_id: str | None = None,
         correlation_id: str | None = None,
+        variant_id: str | None = None,
+        evaluation_id: str | None = None,
     ) -> Generator[RunContext, None, None]:
         """One execution of an agent. Becomes one trace.
 
         `conversation_id` groups runs by who is talking; `workflow_id` groups
         them by what is being executed, so the same orchestration is comparable
         across sessions.
+
+        `variant_id` names the declared variant answering in this run — the
+        client's own when omitted — which is what lets Experiments set what it
+        was observed doing beside what it scored. `evaluation_id` says the run
+        answers a case of that published result rather than somebody using the
+        application, which keeps a benchmark out of those observations.
         """
         context = Correlation(
             run_id=run_id,
@@ -399,10 +418,13 @@ class AiwatcherClient:
             # spans several processes — one stage per pod is the case it
             # exists for.
             workflow_run_id=workflow_run_id if workflow_id else None,
+            variant_id=variant_id or self._variant_id,
             correlation_id=correlation_id or _new_id(),
         )
         run_context = RunContext(self, context)
-        self.emit("run.started", context)
+        self.emit(
+            "run.started", context, {"evaluation_id": evaluation_id} if evaluation_id else None
+        )
         try:
             yield run_context
         except BaseException as error:
@@ -847,6 +869,7 @@ class RunContext(Scope):
             workflow_id=self._context.workflow_id,
             workflow_run_id=self._context.workflow_run_id,
             agent_id=agent_id,
+            variant_id=self._context.variant_id,
             correlation_id=self._context.correlation_id,
             causation_id=self._context.correlation_id,
         )
@@ -899,6 +922,7 @@ class WorkflowContext(Scope):
             workflow_id=self._context.workflow_id,
             workflow_run_id=self._context.workflow_run_id,
             agent_id=agent_id,
+            variant_id=self._context.variant_id,
             correlation_id=self._context.correlation_id,
             causation_id=self._context.correlation_id,
         )

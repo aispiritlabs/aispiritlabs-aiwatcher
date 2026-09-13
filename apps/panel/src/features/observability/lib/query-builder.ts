@@ -20,8 +20,14 @@ import type { QueryEngineName } from '@/shared/lib/query';
 
 export type Grain = 'runs' | 'spans';
 
-/** An attribute somebody can click. Seven come from the log, one is a fixed word. */
-export type AttributeId = DimensionKind | 'status';
+/**
+ * An attribute somebody can click. Seven come from the log, one is a fixed word.
+ *
+ * Not the variant: the explorer pivots on it, but the query engines' catalog
+ * has no column for it, and a chip whose filter no engine can express is one
+ * the builder would have to drop the moment it was clicked.
+ */
+export type AttributeId = Exclude<DimensionKind, 'variant'> | 'status';
 
 /** How one grain reaches one attribute. Absent means that grain cannot answer it. */
 interface Reach {

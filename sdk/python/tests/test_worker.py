@@ -947,6 +947,7 @@ def generation_assignment(variant: dict[str, Any]) -> Any:
             "repetition_id": "measurement-1",
             "variant": variant,
             "params": {},
+            "variant_id": "v" * 64,
         },
         parameters={},
         inputs=[reference("cases")],
@@ -969,6 +970,7 @@ def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once
     @generation_task("support-bot.answer", version="3", generated_with=lambda _run: holding)
     def answer(case: Case, run: Generation) -> Any:
         seen.append((case.case_id, case.input, run.variant["experiment_id"]))
+        assert run.variant_id == "v" * 64
         if case.case_id == "case-2":
             return Generated({"text": "four"}, trace_id="ab" * 16, output_tokens=1)
         if case.case_id == "case-3":

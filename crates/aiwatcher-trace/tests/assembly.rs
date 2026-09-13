@@ -984,3 +984,41 @@ fn a_declared_workflow_produces_no_spans_but_its_nodes_do() {
         "and neither leaves anything open for the sweeper to close"
     );
 }
+
+/// A run naming its variant says so on every span of it, and a call to a
+/// registered model says which version served it.
+#[test]
+fn every_span_of_a_variant_s_run_names_it_and_a_call_names_its_model_version() {
+    let mut run = Run::new("run-variant");
+    let mut events = vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5).emit(
+            EventType::LlmStarted,
+            None,
+            json!({ "call_id": "call-1", "model": "capitals", "model_version": "v7" }),
+        ),
+        run.after(40).emit(
+            EventType::LlmCompleted,
+            None,
+            json!({ "call_id": "call-1", "model": "capitals", "model_version": "v7" }),
+        ),
+        run.after(5).emit(EventType::RunCompleted, None, json!({})),
+    ];
+    for event in &mut events {
+        event.metadata.variant_id = Some("4f1c".to_owned());
+    }
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &events);
+
+    assert!(!assembled.spans.is_empty());
+    for span in &assembled.spans {
+        assert_eq!(string_attr(span, "aiwatcher.variant.id"), Some("4f1c"));
+    }
+    assert_eq!(
+        string_attr(
+            find(&assembled.spans, "chat capitals"),
+            "aiwatcher.model.version"
+        ),
+        Some("v7")
+    );
+}

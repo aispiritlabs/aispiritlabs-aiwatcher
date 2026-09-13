@@ -2119,6 +2119,7 @@ export const DimensionKind = {
     AGENT: 'agent',
     RUNTIME: 'runtime',
     WORKFLOW: 'workflow',
+    VARIANT: 'variant',
     TRACE: 'trace',
     MODEL: 'model',
     TOOL: 'tool'
@@ -2233,6 +2234,17 @@ export type DurablePage = {
     evaluations: Array<DurableEvaluation>;
     next_cursor?: string | null;
     retention?: null | RetentionReport;
+};
+
+/**
+ * Finished runs' durations, by nearest rank, over this many runs.
+ */
+export type DurationSummary = {
+    max: number;
+    p50: number;
+    p90: number;
+    p99: number;
+    runs: number;
 };
 
 /**
@@ -2632,6 +2644,18 @@ export type EventEnvelope = {
     source: Source;
     span_id?: null | SpanId;
     trace_id?: null | TraceId;
+    /**
+     * Which declared variant answered in this run: the content address
+     * Evaluation derives from a variant's pins (ADR_0030).
+     *
+     * A workflow groups runs by what is executed; this groups them by the
+     * configuration that answered — the model, prompt and code a result was
+     * published under — so what a variant did in production can stand beside
+     * what it scored. Nothing here checks it names a variant anybody declared:
+     * the log takes what a producer says, and a reader matching it against
+     * published evidence is the one that finds out.
+     */
+    variant_id?: string | null;
     /**
      * Which orchestration this run is an execution of.
      *
@@ -3068,6 +3092,13 @@ export type ExperimentView = {
      */
     executions: Array<ExecutionSummary>;
     experiment: Experiment;
+    /**
+     * What each variant the rows measured was observed doing: the runs on the
+     * log that name it and that no measurement made, one row per variant
+     * whether or not any did. A different sample from the evidence, on the
+     * log's clock, and never folded into it.
+     */
+    observed: Array<VariantObservations>;
 };
 
 export type ExportCounts = {
@@ -6196,6 +6227,11 @@ export type RecordedMetadata = {
     stream_name: StreamName;
     stream_position: number;
     trace_id: TraceId;
+    /**
+     * See [`EventEnvelope::variant_id`]. Absent from every record written
+     * before it, which reads as a run that named no variant.
+     */
+    variant_id?: string | null;
     workflow_id?: string | null;
     /**
      * Resolved by [`EventEnvelope::workflow_run`]. `Some` exactly when
@@ -6976,6 +7012,13 @@ export type RunSummary = {
     duration_ms?: number | null;
     ended_at?: string | null;
     error?: string | null;
+    /**
+     * The published result this run answered a case for, from `run.started`'s
+     * `evaluation_id`: a run made for a measurement rather than for somebody
+     * using the application, which is what keeps a benchmark out of what a
+     * variant was observed doing.
+     */
+    evaluation_id?: string | null;
     event_count: number;
     input_tokens: number;
     /**
@@ -7008,6 +7051,11 @@ export type RunSummary = {
     status: RunStatus;
     tool_calls: number;
     trace_id: TraceId;
+    /**
+     * The declared variant that answered in this run, when the producer names
+     * one — the first an event of it carried.
+     */
+    variant_id?: string | null;
     /**
      * The orchestration this run executes, when the producer names one.
      */
@@ -8855,6 +8903,35 @@ export type VariantManifest = {
     schema_version: number;
     tools?: null | ArtifactRef;
     workflow?: null | VersionReference;
+};
+
+/**
+ * One variant's runs in the window.
+ */
+export type VariantObservations = {
+    duration_ms?: null | DurationSummary;
+    failed: number;
+    first_seen_at?: string | null;
+    /**
+     * What the runs' model calls reported. A call that reported no usage
+     * counts nothing, which the call count beside it lets a reader see.
+     */
+    input_tokens: number;
+    last_seen_at?: string | null;
+    llm_calls: number;
+    /**
+     * Runs naming it that answered a measurement's cases, left out of every
+     * other figure.
+     */
+    measured_runs: number;
+    output_tokens: number;
+    running: number;
+    /**
+     * Runs naming the variant that no measurement made.
+     */
+    runs: number;
+    succeeded: number;
+    variant_id: string;
 };
 
 /**
@@ -12770,6 +12847,11 @@ export type GetExperimentData = {
          * A result in this context every other row is compared with.
          */
         baseline?: string | null;
+        /**
+         * How far back the observed runs reach, in seconds; absent or zero is
+         * everything the log still holds.
+         */
+        window_seconds?: number | null;
     };
     url: '/api/v1/experiments/{context_id}';
 };
@@ -13187,6 +13269,10 @@ export type ListRunsData = {
          */
         runtime?: string | null;
         workflow?: string | null;
+        /**
+         * Runs in which this declared variant answered.
+         */
+        variant_id?: string | null;
         /**
          * Runs sharing one trace. Normally one run, but a producer that supplies
          * its own `trace_id` can span several — the only view that shows it.

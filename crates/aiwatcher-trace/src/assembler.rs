@@ -545,6 +545,9 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
     if let Some(agent) = &metadata.agent_id {
         out.push(attr(genai::AGENT_ID, agent.as_str()));
     }
+    if let Some(variant) = &metadata.variant_id {
+        out.push(attr(own::variant::ID, variant.as_str()));
+    }
     match event.event_type.subject() {
         Subject::Llm => out.push(attr(genai::OPERATION_NAME, genai::operation::CHAT)),
         Subject::Tool => out.push(attr(genai::OPERATION_NAME, genai::operation::EXECUTE_TOOL)),
@@ -609,6 +612,11 @@ fn request_attributes(event: &RecordedEvent) -> Vec<Attr> {
             genai::REQUEST_STOP_SEQUENCES.to_owned(),
             AttrValue::StrList(stop),
         ));
+    }
+    // The registry's version of the model that served the call, which a name
+    // alone does not say: the serving profile reports it as `model_version`.
+    if let Some(version) = event.data_str("model_version") {
+        out.push(attr(own::model::VERSION, version));
     }
     if let Some(prompt) = PromptRef::from_data(&event.data) {
         out.push(attr(own::prompt::VERSION_ID, prompt.version_id.to_string()));

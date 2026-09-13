@@ -140,6 +140,19 @@ pub mod aiwatcher {
         pub const VERSION_ID: &str = "aiwatcher.prompt.version_id";
     }
 
+    /// Which declared variant answered in the run: Evaluation's content
+    /// address of its pins. On every span of a run whose producer named one.
+    pub mod variant {
+        pub const ID: &str = "aiwatcher.variant.id";
+    }
+
+    /// Which version of a registered model served a call — the training
+    /// registry's version, beside `gen_ai.request.model`'s name. What a
+    /// variant pinning a model is held to.
+    pub mod model {
+        pub const VERSION: &str = "aiwatcher.model.version";
+    }
+
     pub mod processor {
         pub const ID: &str = "aiwatcher.processor.id";
         pub const CHECKPOINT: &str = "aiwatcher.processor.checkpoint";
