@@ -38,6 +38,11 @@ const QUERY_TIMEOUT_SECONDS: u64 = 300;
 /// A notebook is a subprocess somebody is halfway through writing.
 const NOTEBOOK_TIMEOUT_SECONDS: u64 = 900;
 /// Publishing writes one content-addressed version in this process.
+///
+/// The floor rather than the whole answer: the rows it reads are what the query
+/// before it produced, so a deployment that gave its queries longer has rows
+/// that take longer, and a publish is given the same. The write itself is never
+/// cut off by it — the executor holds [`crate::Committing`] across it.
 const PUBLISH_TIMEOUT_SECONDS: u64 = 120;
 /// A wait is dispatched nowhere, so no attempt timer is ever armed and this
 /// number is read by nothing. Zero rather than an invented quarter of an hour:
@@ -260,7 +265,11 @@ pub fn compile_curation(
                     inputs: reads_rows(rows_from.as_ref()),
                     outputs: Vec::new(),
                     retry: RetryPolicy::default(),
-                    timeout_seconds: PUBLISH_TIMEOUT_SECONDS,
+                    timeout_seconds: options
+                        .query_timeout_seconds
+                        .map_or(PUBLISH_TIMEOUT_SECONDS, |query| {
+                            query.max(PUBLISH_TIMEOUT_SECONDS)
+                        }),
                     // Publishing is idempotent by content, and a cache hit
                     // would skip writing a version that a second dataset name
                     // needs. Cheap, and never worth reusing.
@@ -760,6 +769,40 @@ mod tests {
             unset.plan_id, raised.plan_id,
             "a limit is part of what runs, so it is part of the plan's address"
         );
+    }
+
+    #[test]
+    fn a_publish_reading_a_long_query_is_given_as_long_as_that_query_and_never_less_than_its_floor()
+     {
+        // Enforced since the reactor watches every attempt: a publish that
+        // quietly took longer than two minutes over a big corpus's rows would
+        // now be a timeout, retried from the start.
+        let chain = || {
+            pipeline(vec![
+                block("read", source()),
+                block(
+                    "publish",
+                    BlockSpec::View {
+                        dataset: Some("clean".to_owned()),
+                    },
+                ),
+            ])
+        };
+        let with = |query_timeout_seconds| {
+            compile_curation(
+                &chain(),
+                CompileOptions {
+                    query_timeout_seconds,
+                    ..CompileOptions::default()
+                },
+            )
+            .expect("a plan")
+            .steps[1]
+                .timeout_seconds
+        };
+        assert_eq!(with(None), PUBLISH_TIMEOUT_SECONDS);
+        assert_eq!(with(Some(7200)), 7200);
+        assert_eq!(with(Some(30)), PUBLISH_TIMEOUT_SECONDS);
     }
 
     #[test]

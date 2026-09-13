@@ -116,9 +116,11 @@ pub struct Watch {
     /// How long an executor asked to stop has to return before its attempt is
     /// abandoned.
     ///
-    /// Thirty seconds, which is long enough for an executor that is writing
-    /// its result to finish writing it — a publication in progress is worth
-    /// more than a cancel a few seconds sooner.
+    /// Thirty seconds for an executor to notice. One that is past its last
+    /// look and writing what has to finish holds
+    /// [`Committing`](crate::activity::Committing), and is waited for however
+    /// long that takes: a publication in progress is worth more than a cancel
+    /// a few seconds sooner.
     pub grace: Duration,
 }
 
@@ -587,7 +589,8 @@ impl<S: WorkflowStore> Reactor<S> {
     ///
     /// The work and the watch race. The work finishing first is the ordinary
     /// case and its outcome is reported as it was. The watch finishing first
-    /// asks the attempt to stop and then waits, a bounded time, for the work
+    /// asks the attempt to stop and then waits, a bounded time unless it is
+    /// committing, for the work
     /// to say how it ended — an executor that stops cooperatively reports its
     /// own error, and one that finishes anyway reports its result, which the
     /// decider reads like any completion of a cancelling run.
@@ -610,26 +613,40 @@ impl<S: WorkflowStore> Reactor<S> {
             // Asking is best effort. The attempt still stops here.
             tracing::warn!(%error, %attempt, "the runtime could not be asked to stop");
         }
-        match tokio::time::timeout(self.watch.grace, &mut perform).await {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                let stopped = reason.as_error();
-                tracing::warn!(
-                    %attempt,
-                    ?reason,
-                    grace_seconds = self.watch.grace.as_secs(),
-                    "an attempt asked to stop did not return within its grace; abandoned"
-                );
-                Err(StepError::new(
-                    stopped.class,
-                    format!(
-                        "{}; it had not returned {}s after it was asked, and was abandoned",
-                        stopped.message,
-                        self.watch.grace.as_secs()
-                    ),
-                ))
+        loop {
+            if let Ok(outcome) = tokio::time::timeout(self.watch.grace, &mut perform).await {
+                return outcome;
+            }
+            if !claimed.context.stop.is_committing() {
+                return Err(self.abandoned(attempt, reason));
+            }
+            // Past its last look and writing something that has to finish:
+            // waited for, however long past the grace, and given a fresh grace
+            // once the commit ends for whatever the executor does after it.
+            tracing::info!(%attempt, ?reason, "an attempt asked to stop is committing; waiting for it");
+            tokio::select! {
+                outcome = &mut perform => return outcome,
+                () = claimed.context.stop.committed() => {}
             }
         }
+    }
+
+    fn abandoned(&self, attempt: &crate::claim::AttemptKey, reason: StopReason) -> StepError {
+        let stopped = reason.as_error();
+        tracing::warn!(
+            %attempt,
+            ?reason,
+            grace_seconds = self.watch.grace.as_secs(),
+            "an attempt asked to stop did not return within its grace; abandoned"
+        );
+        StepError::new(
+            stopped.class,
+            format!(
+                "{}; it had not returned {}s after it was asked, and was abandoned",
+                stopped.message,
+                self.watch.grace.as_secs()
+            ),
+        )
     }
 
     /// Resolves once the attempt should stop, and never otherwise.

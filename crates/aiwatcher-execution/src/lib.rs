@@ -57,7 +57,7 @@ pub mod testing;
 
 pub use activity::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
-    ExecutorRegistry, PriorAttempt, StopReason, StopSignal,
+    Committing, ExecutorRegistry, PriorAttempt, StopReason, StopSignal,
 };
 pub use artifact::{
     ArtifactCatalog, CacheEntry, CatalogedArtifact, MemoryArtifactCatalog, ObjectArtifactCatalog,

@@ -151,6 +151,34 @@ impl StopReason {
 pub struct StopSignal {
     token: tokio_util::sync::CancellationToken,
     reason: std::sync::Arc<std::sync::OnceLock<StopReason>>,
+    committing: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    committed: std::sync::Arc<tokio::sync::Notify>,
+}
+
+/// An attempt past the point where stopping would leave half of something.
+///
+/// Held around a write that has to finish once it began — a dataset version, a
+/// scoring run's evidence. While one is outstanding the reactor waits for the
+/// executor rather than abandoning it when the grace runs out: a deadline
+/// measures the work, and a publication cut off halfway is worth less than one
+/// finished a few seconds late. Dropping it ends the commit.
+#[derive(Debug)]
+#[must_use = "a commit lasts as long as its guard"]
+pub struct Committing {
+    signal: StopSignal,
+}
+
+impl Drop for Committing {
+    fn drop(&mut self) {
+        if self
+            .signal
+            .committing
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            self.signal.committed.notify_waiters();
+        }
+    }
 }
 
 impl StopSignal {
@@ -186,6 +214,41 @@ impl StopSignal {
     pub fn check(&self) -> Result<(), ActivityError> {
         self.requested()
             .map_or(Ok(()), |reason| Err(reason.as_error()))
+    }
+
+    /// The last look, and then a commit the reactor will wait for.
+    ///
+    /// # Errors
+    ///
+    /// [`StopReason::as_error`] when a stop was requested before the commit
+    /// began — then nothing was begun, and the attempt stops here.
+    pub fn committing(&self) -> Result<Committing, ActivityError> {
+        self.committing
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let guard = Committing {
+            signal: self.clone(),
+        };
+        // Counted before the look, so a stop landing between the two is either
+        // seen here or finds the commit already outstanding.
+        self.check()?;
+        Ok(guard)
+    }
+
+    /// Whether a commit is outstanding.
+    #[must_use]
+    pub fn is_committing(&self) -> bool {
+        self.committing.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
+    /// Resolves once no commit is outstanding.
+    pub async fn committed(&self) {
+        let notified = self.committed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_committing() {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -430,6 +493,25 @@ mod tests {
         ) -> Result<ActivityResult, ActivityError> {
             Ok(ActivityResult::default())
         }
+    }
+
+    #[test]
+    fn a_commit_is_refused_once_a_stop_arrived_and_counted_until_its_guard_drops() {
+        let signal = StopSignal::new();
+        let first = signal.committing().expect("nothing asked it to stop");
+        let second = signal.committing().expect("nor now");
+        drop(first);
+        assert!(signal.is_committing(), "one commit is still outstanding");
+        drop(second);
+        assert!(!signal.is_committing());
+
+        signal.stop(StopReason::TimedOut);
+        let refused = signal.committing().expect_err("a stop came first");
+        assert_eq!(refused.class, FailureClass::Timeout);
+        assert!(
+            !signal.is_committing(),
+            "a refused commit leaves nothing outstanding"
+        );
     }
 
     #[test]

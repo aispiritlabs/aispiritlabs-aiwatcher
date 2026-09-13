@@ -1095,6 +1095,64 @@ async fn an_attempt_that_ignores_the_stop_is_abandoned_once_its_grace_runs_out()
     assert!(error.message.contains("abandoned"), "{}", error.message);
 }
 
+/// A runtime that looks once, and then writes for two minutes it cannot stop.
+#[derive(Debug, Default)]
+struct Committer {
+    entered: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ActivityExecutor for Committer {
+    fn runtime(&self) -> RuntimeKind {
+        RuntimeKind::FlowPhp
+    }
+
+    async fn execute(
+        &self,
+        _command: &ActivityCommand,
+        context: &ActivityContext,
+    ) -> Result<ActivityResult, ActivityError> {
+        let _committing = context.stop.committing()?;
+        self.entered.notify_one();
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        Ok(ActivityResult::default())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_writing_what_has_to_finish_is_waited_for_past_its_grace() {
+    // Abandoning every attempt at the grace would cut a publication off
+    // halfway — a dataset version or a scoring run's evidence that the retry
+    // writes again from the start, to save a cancel a minute and a half.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let committer = Arc::new(Committer::default());
+    let reactor = Reactor::new(
+        ExecutionHandler::new(store.clone()),
+        ExecutorRegistry::new().with(Arc::clone(&committer) as Arc<dyn ActivityExecutor>),
+        "reactor-1".to_owned(),
+    );
+
+    let began = tokio::time::Instant::now();
+    let (performed, ()) = tokio::join!(reactor.poll_once(at(10)), async {
+        committer.entered.notified().await;
+        cancel(&store).await;
+    });
+
+    assert!(matches!(
+        performed.expect("a poll"),
+        Performed::Reported {
+            succeeded: true,
+            ..
+        }
+    ));
+    assert!(
+        began.elapsed() >= std::time::Duration::from_secs(120),
+        "waited for the whole write rather than the grace: {:?}",
+        began.elapsed()
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_step_past_its_own_timeout_is_stopped_and_reported_as_a_timeout() {
     // `timeout_seconds` was carried into every context and enforced by the

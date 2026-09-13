@@ -88,6 +88,11 @@ impl ActivityExecutor for PublishExecutor {
             .unwrap_or_default();
 
         let (pipeline, engine) = query_of(&context.plan, &command.key.step_id);
+        // Reading the rows may be stopped; writing the version they make is
+        // waited for, however far past the deadline. Cut off, it would be
+        // written again from the start by the retry, to save a cancel a few
+        // seconds.
+        let _committing = context.stop.committing()?;
         let published = self
             .datasets
             .publish(PublishDatasetRequest {

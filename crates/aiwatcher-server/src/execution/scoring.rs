@@ -392,8 +392,8 @@ impl ActivityExecutor for ScoreExecutor {
 
         // The last look. Past here the result is being published, and a
         // publication stopped halfway is worth less than one finished a few
-        // seconds after a cancel: the reactor's grace is for exactly this.
-        context.stop.check()?;
+        // seconds after a cancel, so the reactor waits for it however late.
+        let _committing = context.stop.committing()?;
         let mut judged = judged;
         judged.extend(scored_elsewhere);
         let scored = score_with(
