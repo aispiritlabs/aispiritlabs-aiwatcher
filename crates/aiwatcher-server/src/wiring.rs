@@ -675,12 +675,32 @@ pub async fn build(config: Config) -> Result<Runtime> {
         ..ProjectorConfig::default()
     };
 
+    // Hubs before registries: the annotation registry's import job needs
+    // somewhere to fetch bytes from, and a hub is the only thing in this
+    // process that has one.
+    let sources = build_dataset_sources(&config)?;
+    let hubs = build_dataset_hubs(&config, &sources)?;
+    let registries = build_registries(
+        &config,
+        hubs.clone()
+            .map(|hubs| hubs as Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>),
+    )
+    .await?;
     let outputs = Outputs {
         live: Arc::clone(&live) as _,
         traces,
         metrics: Arc::clone(&metrics),
         dead_letters,
         read_model: Arc::clone(&read_model),
+        // What variants were observed doing, written as the log passes each
+        // period, wherever there is an object store to write it to.
+        periods: registries.objects.clone().map(|store| {
+            Arc::new(aiwatcher_projector::PeriodOutput::new(
+                aiwatcher_projector::PeriodStore::new(store),
+                config.processor_id.clone(),
+                i64::try_from(config.observation_period.as_secs()).unwrap_or(3_600),
+            ))
+        }),
     };
 
     // Each arm produces the same three things; only the concrete types differ.
@@ -777,17 +797,6 @@ pub async fn build(config: Config) -> Result<Runtime> {
         }
     };
 
-    // Hubs before registries: the annotation registry's import job needs
-    // somewhere to fetch bytes from, and a hub is the only thing in this
-    // process that has one.
-    let sources = build_dataset_sources(&config)?;
-    let hubs = build_dataset_hubs(&config, &sources)?;
-    let registries = build_registries(
-        &config,
-        hubs.clone()
-            .map(|hubs| hubs as Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>),
-    )
-    .await?;
     let workflow_store = build_workflow_store(&config).await?;
     let state = AppState {
         read_model,

@@ -487,8 +487,9 @@ pub struct Config {
     /// prompt — a model server's or a gateway's token names. Empty, any
     /// credential other than the answer's own does.
     pub witnesses: Vec<String>,
-    /// How wide a period of what variants were observed doing is when it is
-    /// written down as it closes. An hour unless a deployment says otherwise.
+    /// How wide a period of what variants were observed doing is when the
+    /// projector writes it down as the log passes it. An hour unless a
+    /// deployment says otherwise; a fold saved for another width starts afresh.
     pub observation_period: Duration,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a

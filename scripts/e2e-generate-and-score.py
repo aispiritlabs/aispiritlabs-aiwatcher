@@ -72,7 +72,12 @@ What it checks:
     answer is counted self-witnessed, and a gate requiring a witness holds the
     result incomplete, saying to give the serving host a token of its own;
 17. a request naming the pinned prompt whose text does not hold its template
-    fails at the traces step on the gateway's word, and publishes nothing.
+    fails at the traces step on the gateway's word, and publishes nothing;
+18. the server stops with runs still in a period it has not written, starts
+    again on the same data and replays its log over the period fold's saved
+    state: the window counts every run once — the three before the restart
+    from their written period, and none twice. (A restart that does not
+    replay, as on Laser, is the projector's own test.)
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -387,7 +392,7 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    home.mkdir(parents=True)
+    home.mkdir(parents=True, exist_ok=True)
     env = {name: value for name, value in os.environ.items() if not name.startswith("AIWATCHER_")}
     env |= {
         "AIWATCHER_LISTEN": f"127.0.0.1:{port}",
@@ -845,10 +850,7 @@ def main() -> int:
         )
 
         # The candidate, deployed: the same application serving somebody, each
-        # run naming the variant the result was published as — a period after
-        # the one the server's fold began in, which is the first it can vouch
-        # for holding whole.
-        time.sleep(6)
+        # run naming the variant the result was published as.
         variant_id = candidate.get("variant_id", "")
         production = AiwatcherClient(
             service="e2e-capitals",
@@ -1067,8 +1069,8 @@ def main() -> int:
         # The same runs, through a window: once the periods they ended in are
         # written, they are counted from those — and only from those.
         windowed: dict[str, Any] = {}
-        # A period closes a second after its five, and the writer looks every
-        # five: twelve seconds after the last run, its period is written.
+        # A period closes once the log's clock has passed it by a second, and
+        # every run after the served ones moves that clock on.
         time.sleep(max(0.0, served_at + 12 - time.time()))
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -1177,6 +1179,59 @@ def main() -> int:
             )[0]
             == 404,
             {"state": drifted["execution"]["state"]["state_type"]},
+        )
+
+        # A restart with a period open: the fold's saved state carries it.
+        before = AiwatcherClient(
+            service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
+        )
+        for request in range(3):
+            with (
+                before.run(f"before-restart-{request}") as traced,
+                traced.agent("capitals") as agent,
+                agent.llm(model="capitals-stand-in") as llm,
+            ):
+                llm.usage(prompt_tokens=6, completion_tokens=1)
+        before.flush()
+        worker.stop()
+        serving.join(timeout=5)
+        server.terminate()
+        server.wait(timeout=30)
+        server = serve(home / "server")
+        after = AiwatcherClient(
+            service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
+        )
+        # Past the period the three ended in, so these close it.
+        time.sleep(7)
+        for request in range(2):
+            with (
+                after.run(f"after-restart-{request}") as traced,
+                traced.agent("capitals") as agent,
+                agent.llm(model="capitals-stand-in") as llm,
+            ):
+                llm.usage(prompt_tokens=6, completion_tokens=1)
+        after.flush()
+        restarted: dict[str, Any] = {}
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            watched = ok(
+                *call("GET", f"/api/v1/experiments/{context_id}?window_seconds=3600")[:2],
+                "reading what was observed after the restart",
+            )
+            restarted = next(
+                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+            )
+            if restarted.get("runs_from_periods") == served + 3 and restarted.get("runs") == (
+                served + 5
+            ):
+                break
+            time.sleep(1)
+        check(
+            18,
+            "a restart that replays the log over the fold's saved state counts every run once",
+            restarted.get("runs") == served + 5
+            and restarted.get("runs_from_periods") == served + 3,
+            {key: restarted.get(key) for key in ("runs", "runs_from_periods", "periods")},
         )
     finally:
         for relay in gateways:

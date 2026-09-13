@@ -147,6 +147,7 @@ impl Harness {
                 metrics: Arc::clone(&metrics) as _,
                 dead_letters: Arc::clone(&dead_letters) as _,
                 read_model: Arc::clone(&read_model),
+                periods: None,
             },
             config,
         ));
@@ -658,6 +659,7 @@ async fn a_restart_rebuilds_the_read_model_from_the_log() {
             metrics: Arc::new(RecordingMetricSink::default()) as _,
             dead_letters: Arc::new(InMemoryDeadLetters::new()) as _,
             read_model: Arc::clone(&read_model),
+            periods: None,
         },
         ProjectorConfig {
             flush_interval: Duration::from_millis(20),
@@ -896,4 +898,164 @@ async fn a_declared_workflow_is_folded_into_a_graph_and_never_into_a_trace() {
     assert_eq!(names, vec!["chain"], "got {names:?}");
 
     harness.stop().await;
+}
+
+/// A bucket that is a map, with the create-only write periods need.
+#[derive(Debug, Default)]
+struct Objects(tokio::sync::RwLock<std::collections::BTreeMap<String, Vec<u8>>>);
+
+#[async_trait::async_trait]
+impl aiwatcher_core::storage::ObjectStore for Objects {
+    async fn put(&self, key: &str, body: Vec<u8>) -> aiwatcher_core::ports::PortResult<()> {
+        self.0.write().await.insert(key.to_owned(), body);
+        Ok(())
+    }
+    async fn create(&self, key: &str, body: Vec<u8>) -> aiwatcher_core::ports::PortResult<bool> {
+        let mut objects = self.0.write().await;
+        if objects.contains_key(key) {
+            return Ok(false);
+        }
+        objects.insert(key.to_owned(), body);
+        Ok(true)
+    }
+    async fn get(&self, key: &str) -> aiwatcher_core::ports::PortResult<Option<Vec<u8>>> {
+        Ok(self.0.read().await.get(key).cloned())
+    }
+    async fn list(
+        &self,
+        prefix: &str,
+    ) -> aiwatcher_core::ports::PortResult<Vec<aiwatcher_core::storage::ObjectEntry>> {
+        Ok(self
+            .0
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .map(|(key, body)| aiwatcher_core::storage::ObjectEntry {
+                key: key.clone(),
+                size: body.len() as u64,
+                last_modified: None,
+            })
+            .collect())
+    }
+    async fn delete(&self, key: &str) -> aiwatcher_core::ports::PortResult<()> {
+        self.0.write().await.remove(key);
+        Ok(())
+    }
+}
+
+/// One served run naming variant `v1`, from `start` to `end` seconds past nine.
+fn served(run_id: &str, start: i64, end: i64) -> Vec<EventEnvelope> {
+    let hour = time::macros::datetime!(2026-09-13 09:00:00 UTC);
+    [
+        (EventType::RunStarted, start),
+        (EventType::RunCompleted, end),
+    ]
+    .into_iter()
+    .map(|(event_type, at)| {
+        let mut envelope = EventEnvelope::new(
+            event_type,
+            run_id,
+            hour + time::Duration::seconds(at),
+            Source::new("app", Sdk::Python),
+        );
+        envelope.variant_id = Some("v1".to_owned());
+        envelope
+    })
+    .collect()
+}
+
+/// Run a projector over the bus until it has read through `position`, then stop
+/// it the way a process stops.
+async fn project(
+    bus: &Arc<InMemoryBus>,
+    periods: Option<Arc<aiwatcher_projector::PeriodOutput>>,
+    position: u64,
+) {
+    let projector = Arc::new(Projector::new(
+        Arc::clone(bus),
+        Arc::clone(bus),
+        Outputs {
+            live: Arc::new(LiveHub::default()) as _,
+            traces: Arc::new(RecordingTraceStore::default()) as _,
+            metrics: Arc::new(RecordingMetricSink::default()) as _,
+            dead_letters: Arc::new(InMemoryDeadLetters::new()) as _,
+            read_model: Arc::new(ReadModel::default()),
+            periods,
+        },
+        ProjectorConfig {
+            flush_interval: Duration::from_millis(10),
+            rebuild_on_start: false,
+            ..ProjectorConfig::default()
+        },
+    ));
+    let shutdown = CancellationToken::new();
+    let handle = {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move { projector.run(shutdown).await.expect("runs") })
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let saved = bus.load("aiwatcher-projector").await.expect("reads");
+        if saved.and_then(|at| at.global_position()) >= Some(position) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+}
+
+/// A projector that resumes from its checkpoint — as one on Laser does — still
+/// writes every period, once, even when its fold was last saved behind that
+/// checkpoint: it resumes from the fold's position and skips what it holds.
+#[tokio::test]
+async fn observed_periods_survive_a_restart_that_does_not_replay_the_log() {
+    let bus = Arc::new(InMemoryBus::new());
+    let store = aiwatcher_projector::PeriodStore::new(Arc::new(Objects::default()));
+    let output = || {
+        Some(Arc::new(aiwatcher_projector::PeriodOutput::new(
+            store.clone(),
+            "aiwatcher-projector",
+            3_600,
+        )))
+    };
+
+    // First process: two runs in the first hour, one in flight across it.
+    bus.append([served("r1", 60, 70), served("r2", 120, 130)].concat())
+        .await
+        .expect("appends");
+    let mut across = served("across", 3_000, 3_700);
+    let across_end = across.pop().expect("its end");
+    bus.append(across).await.expect("appends");
+    project(&bus, output(), 5).await;
+
+    // A process with no fold moves the checkpoint on without it.
+    bus.append(vec![across_end]).await.expect("appends");
+    bus.append(served("r3", 3_600 + 100, 3_600 + 110))
+        .await
+        .expect("appends");
+    project(&bus, None, 8).await;
+
+    // The third resumes from the fold's position, behind the checkpoint, and a
+    // run in the third hour closes the second.
+    bus.append(served("r4", 7_200 + 400, 7_200 + 410))
+        .await
+        .expect("appends");
+    project(&bus, output(), 10).await;
+
+    let hour = time::macros::datetime!(2026-09-13 09:00:00 UTC).unix_timestamp();
+    let periods = store
+        .read(&["v1"], hour, hour + 7_200)
+        .await
+        .expect("reads");
+    let runs: Vec<(i64, u64, bool)> = periods
+        .iter()
+        .map(|period| (period.from - hour, period.runs, period.complete))
+        .collect();
+    assert_eq!(
+        runs,
+        [(0, 2, true), (3_600, 2, true)],
+        "r1 and r2 in the first hour, the run across it and r3 in the second, each once"
+    );
 }

@@ -444,13 +444,6 @@ struct State {
     /// Workflow graphs. Folded *alongside* runs rather than apart from them —
     /// see [`ReadModel::apply`].
     workflows: WorkflowState,
-    /// When the earliest event this fold holds happened: the log's oldest when
-    /// it was rebuilt, the first after a restart when it resumed. A period that
-    /// began before it is one this fold cannot vouch for.
-    folded_from: Option<OffsetDateTime>,
-    /// The latest a run this fold evicted, or shed the spans of, was heard
-    /// from. A period after it holds everything that ended in it.
-    evicted_through: Option<OffsetDateTime>,
 }
 
 /// The panel's projection of the log.
@@ -490,8 +483,6 @@ impl ReadModel {
             state.evaluations.apply(event, &self.config.evaluations);
             return;
         }
-        let at = event.metadata.occurred_at;
-        state.folded_from = Some(state.folded_from.map_or(at, |since| since.min(at)));
         let run_id = event.metadata.run_id.clone();
         if !state.runs.contains_key(&run_id) {
             state.order.push(run_id.clone());
@@ -738,30 +729,6 @@ impl ReadModel {
         )
     }
 
-    /// Every variant's runs that ended in `[from, to)`, as a record to write
-    /// down — or `None` when this fold cannot vouch it holds all of them: it
-    /// began folding after the period started, or it has evicted a run, or
-    /// shed a run's spans, that may have ended in it.
-    pub async fn observed_period(
-        &self,
-        from: OffsetDateTime,
-        to: OffsetDateTime,
-    ) -> Option<Vec<crate::observations::ObservedPeriod>> {
-        let state = self.state.read().await;
-        let folded = state.folded_from.is_some_and(|since| since <= from);
-        let kept = state.evicted_through.is_none_or(|through| through < from);
-        if !folded || !kept {
-            return None;
-        }
-        Some(crate::observations::period(
-            state.runs.values(),
-            &state.spans,
-            from.unix_timestamp(),
-            to.unix_timestamp(),
-            true,
-        ))
-    }
-
     /// Every retained span, flat and filterable. See [`crate::spans`].
     pub async fn spans(&self, filter: &crate::spans::SpanFilter) -> crate::spans::SpanPage {
         let state = self.state.read().await;
@@ -913,20 +880,7 @@ impl ReadModel {
             }
             if let Some(dropped) = state.spans.remove(&run_id) {
                 state.span_count = state.span_count.saturating_sub(dropped.len());
-                Self::note_eviction(state, &run_id);
             }
-        }
-    }
-
-    /// Remember how recent a run this fold let go of was, so no period it may
-    /// have ended in is written down as though this fold held everything.
-    fn note_eviction(state: &mut State, run_id: &str) {
-        if let Some(run) = state.runs.get(run_id) {
-            state.evicted_through = Some(
-                state
-                    .evicted_through
-                    .map_or(run.last_event_at, |through| through.max(run.last_event_at)),
-            );
         }
     }
 
@@ -944,7 +898,6 @@ impl ReadModel {
                 .get(&run_id)
                 .is_some_and(|run| run.status != RunStatus::Running);
             if excess > 0 && finished {
-                Self::note_eviction(state, &run_id);
                 state.runs.remove(&run_id);
                 if let Some(dropped) = state.spans.remove(&run_id) {
                     state.span_count = state.span_count.saturating_sub(dropped.len());
@@ -1340,59 +1293,5 @@ mod tests {
             })
             .collect();
         assert_eq!(found, [("served", Some("serving"))]);
-    }
-
-    /// A period is written only by a fold that can say it holds every run that
-    /// ended in it: one that began folding inside it, or let go of a run that
-    /// may have ended in it, writes nothing.
-    #[tokio::test]
-    async fn a_period_is_vouched_for_only_by_a_fold_that_holds_all_of_it() {
-        use aiwatcher_core::{EventEnvelope, Sdk, Source};
-
-        let model = ReadModel::new(ReadModelConfig {
-            max_runs: 2,
-            ..ReadModelConfig::default()
-        });
-        let hour = datetime!(2026-09-13 09:00:00 UTC);
-        let mut position = 0;
-        for (run_id, minute) in [("r1", 5), ("r2", 10), ("r3", 70)] {
-            for event_type in [EventType::RunStarted, EventType::RunCompleted] {
-                position += 1;
-                let at = hour + time::Duration::minutes(minute);
-                let mut envelope =
-                    EventEnvelope::new(event_type, run_id, at, Source::new("bot", Sdk::Python));
-                envelope.variant_id = Some("v1".to_owned());
-                model
-                    .apply(&envelope.record(position, position, at, None))
-                    .await;
-            }
-        }
-
-        let before = hour - time::Duration::hours(1);
-        assert!(
-            model.observed_period(before, hour).await.is_none(),
-            "it began folding inside the hour after this one"
-        );
-        assert!(
-            model
-                .observed_period(hour, hour + time::Duration::hours(1))
-                .await
-                .is_none(),
-            "it evicted r1, which ended in this hour"
-        );
-        let later = model
-            .observed_period(
-                hour + time::Duration::hours(1),
-                hour + time::Duration::hours(2),
-            )
-            .await
-            .expect("nothing it let go of ended after the first hour");
-        assert_eq!(
-            later
-                .iter()
-                .map(|record| (record.variant_id.as_str(), record.runs))
-                .collect::<Vec<_>>(),
-            [("v1", 1)]
-        );
     }
 }

@@ -9,10 +9,10 @@
 //! in no figure here: a benchmark is not an observation.
 //!
 //! Folded from the read model, like [`crate::dimensions`], and bounded by what
-//! it holds — so closed periods are also written down as they close
-//! ([`ObservedPeriod`], [`crate::periods`]), and a window reaching further back
-//! than the read model is answered from those, whole periods at a time, with
-//! the live fold for the runs no written period holds. A period keeps its
+//! it holds — so the projector also writes closed periods down as the log
+//! passes them ([`ObservedPeriod`], [`crate::period_fold`]), and a window
+//! reaching further back than the read model is answered from those, whole
+//! periods at a time, with the live fold for the runs no written period holds. A period keeps its
 //! durations as a histogram, so periods add up and still answer a percentile,
 //! within one bucket.
 
@@ -210,8 +210,12 @@ pub struct ObservedPeriod {
     pub first_seen_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<i64>,
-    /// Whether the fold that wrote it held every run that ended in the period
-    /// and every such run's spans.
+    /// Runs counted here whose end was dated in a period already written —
+    /// an end the log received after that period closed.
+    #[serde(default)]
+    pub late_runs: u64,
+    /// Whether the fold saw every run counted here from its start: one it
+    /// did not is counted with no duration.
     pub complete: bool,
 }
 
@@ -286,35 +290,6 @@ impl Accumulated {
             entry.input_tokens += number(span, genai::USAGE_INPUT_TOKENS);
             entry.output_tokens += number(span, genai::USAGE_OUTPUT_TOKENS);
             entry.cached_tokens += number(span, "gen_ai.usage.cached_tokens");
-        }
-    }
-
-    fn period(self, variant_id: &str, from: i64, to: i64, complete: bool) -> ObservedPeriod {
-        let histogram = |values: &[i64]| {
-            let mut histogram = DurationHistogram::default();
-            for value in values {
-                histogram.add(*value);
-            }
-            histogram
-        };
-        ObservedPeriod {
-            variant_id: variant_id.to_owned(),
-            from,
-            to,
-            runs: self.runs,
-            succeeded: self.succeeded,
-            failed: self.failed,
-            measured_runs: self.measured_runs,
-            run_ms: histogram(&self.run_ms),
-            call_ms: histogram(&self.call_ms),
-            time_to_first_token_ms: histogram(&self.ttft_ms),
-            llm_calls: self.llm_calls,
-            input_tokens: self.input_tokens,
-            output_tokens: self.output_tokens,
-            models: self.models.into_values().collect(),
-            first_seen_at: self.first_seen_at.map(OffsetDateTime::unix_timestamp),
-            last_seen_at: self.last_seen_at.map(OffsetDateTime::unix_timestamp),
-            complete,
         }
     }
 
@@ -481,33 +456,6 @@ pub fn compute<'a>(
                 .collect();
             row.observations(variant_id, &own, prices)
         })
-        .collect()
-}
-
-/// Every variant's runs that ended in `[from, to)`, one record each for the
-/// variants any run named.
-#[must_use]
-pub fn period<'a>(
-    runs: impl IntoIterator<Item = &'a RunSummary>,
-    spans: &HashMap<String, Vec<CompletedSpan>>,
-    from: i64,
-    to: i64,
-    complete: bool,
-) -> Vec<ObservedPeriod> {
-    let mut rows: BTreeMap<&str, Accumulated> = BTreeMap::new();
-    for run in runs {
-        let (Some(variant_id), true) = (
-            run.variant_id.as_deref(),
-            written(&[(from, to)], run.ended_at),
-        ) else {
-            continue;
-        };
-        rows.entry(variant_id)
-            .or_default()
-            .add(run, spans.get(&run.run_id));
-    }
-    rows.into_iter()
-        .map(|(variant_id, row)| row.period(variant_id, from, to, complete))
         .collect()
 }
 
@@ -737,8 +685,19 @@ mod tests {
             })
             .collect();
         let from = datetime!(2026-09-13 10:00:00 UTC).unix_timestamp();
-        let written = period(&runs[..2], &HashMap::new(), from, from + 3_600, true);
-        assert_eq!(written.len(), 1);
+        // What the period fold wrote for the first two, which ended in the hour.
+        let mut record = ObservedPeriod {
+            variant_id: "v1".to_owned(),
+            from,
+            to: from + 3_600,
+            runs: 2,
+            succeeded: 2,
+            complete: true,
+            ..ObservedPeriod::default()
+        };
+        record.run_ms.add(100);
+        record.run_ms.add(200);
+        let written = vec![record];
         // Two more runs ended in the same period, which the record holds, and
         // the read model since lost the first two.
         let [row] = compute(

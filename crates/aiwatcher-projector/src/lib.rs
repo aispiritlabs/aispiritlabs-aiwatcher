@@ -23,6 +23,7 @@ pub mod evaluations;
 pub mod live;
 pub mod metrics;
 pub mod observations;
+pub mod period_fold;
 pub mod periods;
 pub mod pipeline;
 pub mod readmodel;
@@ -43,6 +44,7 @@ pub use evaluations::{
 pub use live::{LiveHub, ReplayGap};
 pub use metrics::{MetricsFilter, MetricsSummary};
 pub use observations::{DurationHistogram, DurationSummary, ObservedPeriod, VariantObservations};
+pub use period_fold::PeriodOutput;
 pub use periods::PeriodStore;
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{NodeStep, ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};

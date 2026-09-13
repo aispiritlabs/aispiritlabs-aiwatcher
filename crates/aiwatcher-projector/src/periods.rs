@@ -1,18 +1,13 @@
 //! Closed periods of what variants were observed doing, written down.
 //!
 //! The read model is bounded by memory and by the log's retention, so what a
-//! variant was observed doing last month is gone from it. When a period
-//! closes, the serve role folds every variant's runs that ended in it into an
-//! [`ObservedPeriod`] and writes it here: one object per variant, and then a
-//! marker naming them — the marker is the commit, so a period is read only
-//! once every record it names is stored (`aiwatcher_jobs::ORDERING`'s rule).
-//! Each object is created once and never rewritten: two replicas folding one
-//! log reach the same record, and the first to store it is the one kept.
-//!
-//! A period this fold cannot vouch for — it began folding after the period
-//! started, or it let go of a run that may have ended in it — is not written.
-//! A later fold that holds it writes it; a period nobody could is absent, and
-//! the live fold answers for it for as long as it holds anything.
+//! variant was observed doing last month is gone from it. The projector's
+//! period fold ([`crate::period_fold`]) writes each closed period here: one
+//! object per variant, and then a marker naming them — the marker is the
+//! commit, so a period is read only once every record it names is stored
+//! (`aiwatcher_jobs::ORDERING`'s rule). Each object is created once and never
+//! rewritten, so a replay that closes a period again lands on the first
+//! record. The fold's own state is kept here too, under `fold/`.
 
 use std::sync::Arc;
 
@@ -57,6 +52,15 @@ fn marker_key(from: i64, to: i64) -> String {
     format!("{}period.json", folder(from, to))
 }
 
+/// Where a projector's fold keeps its state, by its processor ID.
+fn fold_key(processor_id: &str) -> String {
+    let named: String = processor_id
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{PREFIX}fold/{named}.json")
+}
+
 fn encoded<T: Serialize>(value: &T) -> Result<Vec<u8>, PortError> {
     serde_json::to_vec(value).map_err(|error| PortError::Rejected {
         target: "variant-observations",
@@ -77,6 +81,39 @@ impl PeriodStore {
     /// The store's own failure.
     pub async fn written(&self, from: i64, to: i64) -> Result<bool, PortError> {
         Ok(self.0.get(&marker_key(from, to)).await?.is_some())
+    }
+
+    /// The state a projector's fold saved, if it saved one.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure, or a state that no longer reads.
+    pub async fn load_fold(
+        &self,
+        processor_id: &str,
+    ) -> Result<Option<crate::period_fold::PeriodFold>, PortError> {
+        let Some(bytes) = self.0.get(&fold_key(processor_id)).await? else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| PortError::Rejected {
+                target: "variant-observations",
+                message: format!("the saved fold: {error}"),
+            })
+    }
+
+    /// Save a projector's fold state, over the one saved before.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure.
+    pub async fn save_fold(
+        &self,
+        processor_id: &str,
+        fold: &crate::period_fold::PeriodFold,
+    ) -> Result<(), PortError> {
+        self.0.put(&fold_key(processor_id), encoded(fold)?).await
     }
 
     /// Write one period's records, then its marker. `false` when another

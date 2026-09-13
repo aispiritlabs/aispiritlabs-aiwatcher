@@ -104,6 +104,9 @@ pub struct Outputs {
     pub metrics: Arc<dyn MetricSink>,
     pub dead_letters: Arc<dyn DeadLetterSink>,
     pub read_model: Arc<ReadModel>,
+    /// What variants were observed doing, period by period, with a state of
+    /// its own. `None` without an object store to write periods to.
+    pub periods: Option<Arc<crate::period_fold::PeriodOutput>>,
 }
 
 impl std::fmt::Debug for Outputs {
@@ -175,10 +178,25 @@ where
             .load(&self.config.processor_id)
             .await
             .map_err(ProjectorError::Bus)?;
+        // The period fold saves its state less often than a checkpoint is
+        // committed, so a resume starts from whichever is behind: what the
+        // fold already holds it skips, and nothing it lacks is passed by.
+        let folded = match &self.outputs.periods {
+            Some(periods) => periods.load().await,
+            None => None,
+        };
         let from = if self.config.rebuild_on_start {
             StartFrom::Beginning
         } else {
-            stored.map_or_else(|| self.config.cold_start.clone(), StartFrom::After)
+            let resume = match (stored, folded) {
+                (Some(stored), Some(through))
+                    if stored.global_position().is_some_and(|at| at > through) =>
+                {
+                    Some(Checkpoint::from_global_position(through))
+                }
+                (stored, _) => stored,
+            };
+            resume.map_or_else(|| self.config.cold_start.clone(), StartFrom::After)
         };
         tracing::info!(
             processor_id = self.config.processor_id,
@@ -213,6 +231,9 @@ where
                     pending.spans.extend(drained.spans);
                     pending.metrics.extend(drained.metrics);
                     self.flush(&mut pending).await;
+                    if let Some(periods) = &self.outputs.periods {
+                        periods.flush(true).await;
+                    }
                     return Ok(());
                 }
 
@@ -299,6 +320,9 @@ where
         }
 
         self.outputs.read_model.apply(event).await;
+        if let Some(periods) = &self.outputs.periods {
+            periods.apply(event).await;
+        }
 
         let assembled = self.assembler.lock().await.ingest(event);
         pending.spans.extend(assembled.spans);
@@ -359,11 +383,19 @@ where
             }
         }
 
+        // A closed period that could not be written holds the checkpoint too:
+        // the fold keeps it and tries again, and a restart before then resumes
+        // from the fold's own saved position, which is behind it.
+        let periods_written = match &self.outputs.periods {
+            Some(periods) => periods.flush(false).await,
+            None => true,
+        };
+
         // Commit last, and only if the durable write went through. A failed
         // span write leaves the checkpoint where it was, so a restart replays
         // those events — which the derived span ids make safe.
         if let Some(checkpoint) = checkpoint {
-            if span_write_failed {
+            if span_write_failed || !periods_written {
                 tracing::warn!(
                     %checkpoint,
                     "holding the checkpoint back so the failed batch is replayed"

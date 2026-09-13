@@ -91,10 +91,6 @@ pub async fn run(config: Config) -> Result<()> {
     // retention sweep. `None` when this deployment keeps no archive, which is
     // the default.
     let evaluation_task = aiwatcher_server::evaluation::spawn(&state, shutdown.clone());
-    // What variants were observed doing, written down as each period closes:
-    // the read model is here, and a window past what it holds reads these.
-    let observations_task =
-        aiwatcher_server::observations::spawn(&state, &config, shutdown.clone());
     let archive_task = aiwatcher_server::conversations::spawn(&state, &config, shutdown.clone());
 
     // The annotation registry's own background job: the import queue. `None`
@@ -133,9 +129,6 @@ pub async fn run(config: Config) -> Result<()> {
     execution.drain(GRACE).await;
     if let Some(task) = evaluation_task {
         task.await.context("evaluation retention worker")?;
-    }
-    if let Some(task) = observations_task {
-        task.await.context("observed period writer")?;
     }
     if let Some(task) = archive_task {
         match tokio::time::timeout(GRACE, task).await {
