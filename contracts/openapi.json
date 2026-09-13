@@ -19301,7 +19301,7 @@
           },
           "require_witness": {
             "type": "boolean",
-            "description": "Every generated answer on a pinned model must also have a serving\nhost's word for the version that served it, published under another\ncredential than the application's; fewer is `incomplete`. Off by\ndefault: only a host that reports its own runs can give one."
+            "description": "Every generated answer must also have a witness's word for what the\nvariant pins that a witness can show — a serving host's for the model\nversion, a gateway's for the prompt it found in the request — published\nunder another credential than the application's, and one the\ndeployment names in `AIWATCHER_WITNESSES` where it names any; fewer is\n`incomplete`. Off by default: only a host that reports its own runs can\ngive one."
           },
           "tolerance": {
             "type": "object",
@@ -19448,6 +19448,11 @@
             "description": "Of those, runs this deployment's log held, ended, when the step looked.",
             "minimum": 0
           },
+          "self_witnessed": {
+            "type": "integer",
+            "description": "Answers whose serving runs were published under their own run's\ncredential, which witnesses nothing: one token on two hosts.",
+            "minimum": 0
+          },
           "served": {
             "type": "array",
             "items": {
@@ -19462,6 +19467,21 @@
             ],
             "description": "Seen runs whose call on the pinned model version a run published under\nanother credential says it served; absent when the variant pins no model.",
             "minimum": 0
+          },
+          "witnessed_prompt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seen runs whose request such a run matched against the pinned prompt\nversion's template; absent when the variant pins no prompt.",
+            "minimum": 0
+          },
+          "witnesses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The credentials that witnessed any answer."
           },
           "workflow_undeclared": {
             "type": "boolean",

@@ -222,6 +222,9 @@ pub struct AppState {
     /// What models' tokens cost, as the deployment loaded it. `None` prices
     /// nothing.
     pub model_prices: Option<Arc<aiwatcher_core::prices::ModelPrices>>,
+    /// The credentials whose runs may witness a generated answer's model and
+    /// prompt. Empty, any credential other than the answer's own does.
+    pub witnesses: Vec<String>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen

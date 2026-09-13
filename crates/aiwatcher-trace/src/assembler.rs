@@ -635,6 +635,13 @@ fn request_attributes(event: &RecordedEvent) -> Vec<Attr> {
         if let Some(name) = prompt.name {
             out.push(attr(own::prompt::NAME, name.to_string()));
         }
+        if let Some(verified) = event
+            .data
+            .get("prompt_verified")
+            .and_then(serde_json::Value::as_bool)
+        {
+            out.push(attr(own::prompt::VERIFIED, verified));
+        }
     }
     out
 }

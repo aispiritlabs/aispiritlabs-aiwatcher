@@ -55,8 +55,14 @@ SCHEMA_VERSION = 1
 #: that run on its own (``client.run(…, caller_run_id=…)``).
 CALLER_RUN_HEADER = "Aiwatcher-Caller-Run"
 
+#: The header a request to a gateway carries to name the prompt version the
+#: call rendered, as ``name@version_id`` — which the gateway checks against the
+#: request's own text (``aiwatcher_sdk.gateway``).
+PROMPT_HEADER = "Aiwatcher-Prompt"
+
 __all__ = [
     "CALLER_RUN_HEADER",
+    "PROMPT_HEADER",
     "SCHEMA_VERSION",
     "AgentContext",
     "AiwatcherClient",
@@ -1175,14 +1181,21 @@ class LlmCall(Scope):
         return (time.monotonic() - self._started) * 1000
 
     def caller_headers(self) -> dict[str, str]:
-        """The header a model server reads to name the run whose call it served.
+        """The headers a model server or a gateway reads about this call.
 
-        Send it with the request this call makes; a server on
-        :mod:`aiwatcher_sdk.serving` publishes its own run naming this one, under
-        its own credential, which is a witness to the model version that
-        answered that the application's telemetry cannot be for itself.
+        Send them with the request this call makes. A server on
+        :mod:`aiwatcher_sdk.serving`, or :mod:`aiwatcher_sdk.gateway` in front of
+        a provider, publishes its own run naming this one, under its own
+        credential — a witness to the model version that answered, and for a
+        gateway to whether the request's text holds the prompt version this call
+        names, that the application's telemetry cannot be for itself.
         """
-        return {CALLER_RUN_HEADER: self._context.run_id}
+        headers = {CALLER_RUN_HEADER: self._context.run_id}
+        name = self._base.get("prompt_name")
+        version = self._base.get("prompt_version")
+        if name and version:
+            headers[PROMPT_HEADER] = f"{name}@{version}"
+        return headers
 
     def first_token(self) -> None:
         """Call once, when the first token arrives. Drives time-to-first-token."""

@@ -54,9 +54,11 @@ What it checks:
     though what it generated with agrees with every pin it holds;
 13. a variant that also pins a model nobody here registered and a workflow is
     seen, on every answer, executing the pinned workflow and calling the pinned
-    model — and a model server publishing its own run under its own credential,
-    naming the call it served, is a second witness to that model's version on
-    every one: the log records each run as published by the token that sent it;
+    model — and the gateway in front of the stand-in provider, publishing its own
+    run under the one credential the server names a witness, is a second
+    witness on every one to the model version the provider said served the call
+    and to the prompt version whose template it found in the request: the log
+    records each run as published by the token that sent it;
 14. an application that steps through a node the pinned workflow does not
     declare fails at the traces step naming the node, and publishes nothing —
     and so does one that starts `answer` before `retrieve`, which the pinned
@@ -65,12 +67,18 @@ What it checks:
     closes, and a window asked of the experiment reads those periods with the
     live runs no written period holds: still five runs, not ten, each model
     call timed, and priced at the deployment's table, which says where and
-    when the price was read.
+    when the price was read;
+16. a gateway holding the application's own token witnesses nothing: every
+    answer is counted self-witnessed, and a gate requiring a witness holds the
+    result incomplete, saying to give the serving host a token of its own;
+17. a request naming the pinned prompt whose text does not hold its template
+    fails at the traces step on the gateway's word, and publishes nothing.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
-carry its headers, and the application, the model server and the worker each
-publish with a token of their own, which is what makes the model server's word
-another credential's.
+carry its headers, and the application, the gateway and the worker each publish
+with a token of their own, which is what makes the gateway's word another
+credential's. The served variant's application calls a stand-in provider over
+HTTP, through `aiwatcher_sdk.gateway`.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -94,12 +102,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, AiwatcherClient  # noqa: E402
+from aiwatcher_sdk import AiwatcherClient  # noqa: E402
+from aiwatcher_sdk.gateway import Gateway  # noqa: E402
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
@@ -171,23 +181,65 @@ PROMPTS = {
 #: What the worker was handed, to check nothing it expected reached it.
 HANDED: list[dict[str, Any]] = []
 
-#: The application's own telemetry, pointed at the server once it is up, and
-#: the model server's, under a credential of its own.
+#: The application's own telemetry, pointed at the server once it is up.
 TELEMETRY: list[AiwatcherClient] = []
-SERVING: list[AiwatcherClient] = []
+#: The gateways in front of the stand-in provider: one holding a witness's
+#: token, and one holding the application's own.
+GATEWAYS: dict[str, str] = {}
 
 
-def model_server(caller: dict[str, str], model: dict[str, Any]) -> None:
-    """A model server answering one request: its own run, naming the caller's."""
-    with (
-        SERVING[0].run(f"serve-{time.time_ns()}", caller_run_id=caller[CALLER_RUN_HEADER]) as run,
-        run.agent("serving") as agent,
-        agent.llm(model=str(model["name"]), model_version=str(model["version"])),
-    ):
-        pass
-    # A server reports on its own clock; this one before it answers, so the
-    # stand-in says the same thing every time.
-    SERVING[0].flush()
+class Provider(BaseHTTPRequestHandler):
+    """A stand-in model provider: one word when its system message asks for one."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        system, question = (message["content"] for message in body["messages"])
+        country = question.removeprefix("What is the capital of ").removesuffix("?")
+        said = application(system, country, dict(CAPITALS)[country])
+        payload = json.dumps(
+            {
+                # The version it served, as a provider names its snapshot.
+                "model": MODEL["version"],
+                "choices": [{"message": {"role": "assistant", "content": said}}],
+                "usage": {
+                    "prompt_tokens": len(question.split()),
+                    "completion_tokens": len(said.split()),
+                },
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def through_gateway(
+    which: str, headers: dict[str, str], system: str, question: str
+) -> dict[str, Any]:
+    """One call to the provider, through a gateway."""
+    request = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
+        GATEWAYS[which] + "/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": MODEL["name"],
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": question},
+                ],
+            }
+        ).encode(),
+        method="POST",
+    )
+    request.add_header("content-type", "application/json")
+    for name, value in headers.items():
+        request.add_header(name, value)
+    with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+        reply: dict[str, Any] = json.loads(response.read())
+    return reply
 
 
 # ── The application, and the task a worker hosts. ────────────────────────────
@@ -221,7 +273,8 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     prompt = run.variant["prompt"]
     assert isinstance(prompt, dict)
     with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
-        text = prompts.get_version(str(prompt["name"]), str(prompt["version"])).text
+        version = prompts.get_version(str(prompt["name"]), str(prompt["version"]))
+    text = version.text
     assert isinstance(case.input, dict)
     question = str(case.input["question"])
     country = question.removeprefix("What is the capital of ").removesuffix("?")
@@ -234,11 +287,13 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     rendered = str(run.params.get("render_version") or prompt["version"])
     if rendered != prompt["version"]:
         with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
-            text = prompts.get_version(str(prompt["name"]), rendered).text
+            version = prompts.get_version(str(prompt["name"]), rendered)
+        text = version.text
     model = run.variant.get("model")
     if isinstance(model, dict):
         # The application as an execution of the workflow the variant pins,
-        # calling the pinned model on a server that reports its own runs.
+        # calling the pinned model through a gateway that reports its own runs
+        # — with the prompt rendered, unless the run was told to drift from it.
         steps = ["retrieve", "answer"]
         if run.params.get("stray"):
             steps.append("improvise")
@@ -259,15 +314,25 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     flow.node(node) as stage,
                     stage.agent("capitals") as agent,
                     agent.llm(
-                        model=str(model["name"]),
-                        model_version=str(model["version"]),
-                        prompt=(str(prompt["name"]), rendered),
+                        model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
                     ) as llm,
                 ):
-                    model_server(llm.caller_headers(), model)
-                    said = application(text, country, capital)
+                    system = (
+                        "Answer in one word."
+                        if run.params.get("drift")
+                        else version.render(country=country)
+                    )
+                    reply = through_gateway(
+                        "shared" if run.params.get("shared") else "witness",
+                        llm.caller_headers(),
+                        system,
+                        question,
+                    )
+                    said = str(reply["choices"][0]["message"]["content"])
                     llm.usage(
-                        prompt_tokens=len(question.split()), completion_tokens=len(said.split())
+                        prompt_tokens=reply["usage"]["prompt_tokens"],
+                        completion_tokens=reply["usage"]["completion_tokens"],
+                        model_version=reply["model"],
                     )
         return Generated(said, run_id=flow.correlation.run_id)
     with (
@@ -338,6 +403,8 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
         # for the stand-in model, read from a page on a day.
         "AIWATCHER_OBSERVATION_PERIOD_SECONDS": "5",
         "AIWATCHER_MODEL_PRICES": str(prices(home)),
+        # The one credential whose runs witness a generated answer.
+        "AIWATCHER_WITNESSES": "serving",
         "AIWATCHER_AUTH_MODE": "proxy",
         "AIWATCHER_AUTH_INGEST_TOKENS": ",".join(
             [
@@ -565,7 +632,20 @@ def main() -> int:
     TELEMETRY.append(
         AiwatcherClient(service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET)
     )
-    SERVING.append(AiwatcherClient(service="e2e-model-server", base_url=BASE, token=SERVING_SECRET))
+    provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    threading.Thread(target=provider.serve_forever, daemon=True).start()
+    gateways = []
+    for which, secret in (("witness", SERVING_SECRET), ("shared", APPLICATION_SECRET)):
+        relay = Gateway(
+            f"http://127.0.0.1:{provider.server_address[1]}",
+            AiwatcherClient(service=f"e2e-gateway-{which}", base_url=BASE, token=secret),
+            prompts=PromptRegistry(BASE, token=secret),
+            upstream_token="provider-key",  # noqa: S106 — the stand-in provider's
+        )
+        gateway = relay.server(port=0)
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        GATEWAYS[which] = f"http://127.0.0.1:{gateway.server_address[1]}"
+        gateways.append(gateway)
     worker = Worker(
         BASE,
         WORKER_SECRET,
@@ -823,6 +903,8 @@ def main() -> int:
                 "named": len(CAPITALS),
                 "seen": len(CAPITALS),
                 "on_prompt": len(CAPITALS),
+                # Nobody but the application saw these calls.
+                "witnessed_prompt": 0,
             }
             and traces["declining"].get("on_prompt") == len(CAPITALS) - 1,
             traces,
@@ -886,7 +968,6 @@ def main() -> int:
                 "starting the run on a served model and a pinned workflow",
             )["execution"]["execution_id"]
         )
-        SERVING[0].flush()
         evaluation = flowing["declaration"]["run"]["evaluation_id"]
         witnessed = (call("GET", f"/api/v1/evaluation-results/{evaluation}")[1] or {}).get(
             "traces"
@@ -895,12 +976,12 @@ def main() -> int:
         publishers = {
             run.get("published_by")
             for run in spans.get("runs", [])
-            if run["run_id"].startswith(("generate-capitals-candidate-served", "serve-"))
+            if run["run_id"].startswith(("generate-capitals-candidate-served", "gateway-"))
         }
         check(
             13,
-            "every answer is seen executing the pinned workflow on the pinned model, and a model "
-            "server's own run under another credential witnesses the version for each",
+            "every answer is seen executing the pinned workflow on the pinned model, and the "
+            "gateway's own run under the witness credential witnesses its model and prompt",
             flowed["execution"]["state"]["state_type"] == "completed"
             and witnessed
             == {
@@ -911,6 +992,8 @@ def main() -> int:
                 "on_model": len(CAPITALS),
                 "on_workflow": len(CAPITALS),
                 "witnessed_model": len(CAPITALS),
+                "witnessed_prompt": len(CAPITALS),
+                "witnesses": ["serving"],
             }
             and publishers == {"application", "serving"},
             {
@@ -1024,7 +1107,81 @@ def main() -> int:
                 )
             },
         )
+
+        # A gateway holding the application's own token.
+        sharing = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-6",
+            params={"shared": True},
+            served=True,
+            suffix="-served",
+        )
+        shared_run = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{sharing['declaration']['id']}/start")[:2],
+                "starting the run whose gateway holds the application's token",
+            )["execution"]["execution_id"]
+        )
+        sharing_id = sharing["declaration"]["run"]["evaluation_id"]
+        shared_traces = (call("GET", f"/api/v1/evaluation-results/{sharing_id}")[1] or {}).get(
+            "traces"
+        ) or {}
+        gated = (
+            call(
+                "POST",
+                f"/api/v1/evaluation-results/{sharing_id}/gate",
+                {"baseline": evaluation, "policy": {"require_witness": True}},
+            )[1]
+            or {}
+        )
+        check(
+            16,
+            "a gateway holding the application's own token witnesses nothing, and a gate "
+            "requiring a witness says so",
+            shared_run["execution"]["state"]["state_type"] == "completed"
+            and shared_traces.get("self_witnessed") == len(CAPITALS)
+            and shared_traces.get("witnessed_model") == 0
+            and gated.get("verdict") == "incomplete"
+            and any("a token of its own" in reason for reason in gated.get("reasons", [])),
+            {"traces": shared_traces, "gate": gated.get("reasons")},
+        )
+
+        # A request naming the pinned prompt with other words in it.
+        drifting = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-7",
+            params={"drift": True},
+            served=True,
+            suffix="-served",
+        )
+        drifted = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{drifting['declaration']['id']}/start")[:2],
+                "starting the run whose requests do not hold the pinned prompt",
+            )["execution"]["execution_id"]
+        )
+        check(
+            17,
+            "a request whose text does not hold the pinned prompt is refused on the gateway's word",
+            drifted["execution"]["state"]["state_type"] == "failed"
+            and "does not hold that version's template" in json.dumps(drifted["execution"])
+            and call(
+                "GET",
+                f"/api/v1/evaluation-results/{drifting['declaration']['run']['evaluation_id']}",
+            )[0]
+            == 404,
+            {"state": drifted["execution"]["state"]["state_type"]},
+        )
     finally:
+        for relay in gateways:
+            relay.shutdown()
+        provider.shutdown()
         worker.stop()
         serving.join(timeout=5)
         server.terminate()

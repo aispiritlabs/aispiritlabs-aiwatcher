@@ -483,6 +483,10 @@ pub struct Config {
     /// was read from and the day (`aiwatcher_core::prices`). Absent, nothing is
     /// priced: a cost with no source would read as one somebody checked.
     pub model_prices: Option<String>,
+    /// The credentials whose runs may witness a generated answer's model and
+    /// prompt — a model server's or a gateway's token names. Empty, any
+    /// credential other than the answer's own does.
+    pub witnesses: Vec<String>,
     /// How wide a period of what variants were observed doing is when it is
     /// written down as it closes. An hour unless a deployment says otherwise.
     pub observation_period: Duration,
@@ -704,6 +708,7 @@ impl Default for Config {
             workflow_runner_timeout: Duration::from_secs(10),
             dataset_sources: None,
             model_prices: None,
+            witnesses: Vec::new(),
             observation_period: Duration::from_secs(3_600),
             pod_templates: None,
             pod_namespace: None,
@@ -975,6 +980,9 @@ impl Config {
         }
         config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
         config.model_prices = var("AIWATCHER_MODEL_PRICES");
+        if let Some(raw) = var("AIWATCHER_WITNESSES") {
+            config.witnesses = list(&raw);
+        }
         if let Some(raw) = var("AIWATCHER_OBSERVATION_PERIOD_SECONDS") {
             let seconds = raw
                 .parse::<u64>()

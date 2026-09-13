@@ -3711,10 +3711,13 @@ export type GatePolicy = {
      */
     require_traces?: boolean;
     /**
-     * Every generated answer on a pinned model must also have a serving
-     * host's word for the version that served it, published under another
-     * credential than the application's; fewer is `incomplete`. Off by
-     * default: only a host that reports its own runs can give one.
+     * Every generated answer must also have a witness's word for what the
+     * variant pins that a witness can show — a serving host's for the model
+     * version, a gateway's for the prompt it found in the request — published
+     * under another credential than the application's, and one the
+     * deployment names in `AIWATCHER_WITNESSES` where it names any; fewer is
+     * `incomplete`. Off by default: only a host that reports its own runs can
+     * give one.
      */
     require_witness?: boolean;
     /**
@@ -3799,6 +3802,11 @@ export type GenerationTrace = {
      */
     seen: number;
     /**
+     * Answers whose serving runs were published under their own run's
+     * credential, which witnesses nothing: one token on two hosts.
+     */
+    self_witnessed?: number;
+    /**
      * What providers said served the calls, compared with nothing: a provider's
      * name for a model is an alias, a file or a dated snapshot.
      */
@@ -3808,6 +3816,15 @@ export type GenerationTrace = {
      * another credential says it served; absent when the variant pins no model.
      */
     witnessed_model?: number | null;
+    /**
+     * Seen runs whose request such a run matched against the pinned prompt
+     * version's template; absent when the variant pins no prompt.
+     */
+    witnessed_prompt?: number | null;
+    /**
+     * The credentials that witnessed any answer.
+     */
+    witnesses?: Array<string>;
     /**
      * The declaration of the pinned workflow names no node this step could
      * read, so no run can be seen executing it.

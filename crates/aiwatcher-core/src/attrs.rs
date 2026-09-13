@@ -142,6 +142,10 @@ pub mod aiwatcher {
     pub mod prompt {
         pub const NAME: &str = "aiwatcher.prompt.name";
         pub const VERSION_ID: &str = "aiwatcher.prompt.version_id";
+        /// Whether a host that saw the request's text found the named
+        /// version's template in it, with its variables filled — what a
+        /// gateway reports, and never the application about itself.
+        pub const VERIFIED: &str = "aiwatcher.prompt.verified";
     }
 
     /// Which declared variant answered in the run: Evaluation's content

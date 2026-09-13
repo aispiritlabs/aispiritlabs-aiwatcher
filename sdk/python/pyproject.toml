@@ -51,6 +51,7 @@ aiwatcher-runtime = "aiwatcher_sdk.runtime.__main__:main"
 aiwatcher-fetch = "aiwatcher_sdk.serving.fetch:main"
 aiwatcher-llama-cpp = "aiwatcher_sdk.serving.llama_cpp:main"
 aiwatcher-gate = "aiwatcher_sdk.gate:main"
+aiwatcher-gateway = "aiwatcher_sdk.gateway:main"
 
 [build-system]
 requires = ["hatchling"]

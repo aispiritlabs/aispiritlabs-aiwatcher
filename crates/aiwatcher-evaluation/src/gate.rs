@@ -43,10 +43,13 @@ pub struct GatePolicy {
     /// turns it on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_traces: bool,
-    /// Every generated answer on a pinned model must also have a serving
-    /// host's word for the version that served it, published under another
-    /// credential than the application's; fewer is `incomplete`. Off by
-    /// default: only a host that reports its own runs can give one.
+    /// Every generated answer must also have a witness's word for what the
+    /// variant pins that a witness can show — a serving host's for the model
+    /// version, a gateway's for the prompt it found in the request — published
+    /// under another credential than the application's, and one the
+    /// deployment names in `AIWATCHER_WITNESSES` where it names any; fewer is
+    /// `incomplete`. Off by default: only a host that reports its own runs can
+    /// give one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_witness: bool,
 }

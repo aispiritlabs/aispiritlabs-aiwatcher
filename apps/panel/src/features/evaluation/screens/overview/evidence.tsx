@@ -492,7 +492,20 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           published under another credential, is somebody else's. */}
       {traces.witnessed_model != null ? (
         <p>
-          {`${traces.witnessed_model} of ${traces.answers} had a serving host's own run, under another credential, saying it served the call on the pinned model version.`}
+          {`${traces.witnessed_model} of ${traces.answers} had a serving host's own run, under a witness's credential, saying it served the call on the pinned model version.`}
+        </p>
+      ) : null}
+      {traces.witnessed_prompt != null ? (
+        <p>
+          {`${traces.witnessed_prompt} of ${traces.answers} had a gateway's own run saying it found the pinned prompt's template in the request it relayed.`}
+        </p>
+      ) : null}
+      {(traces.witnesses ?? []).length > 0 ? (
+        <p>{`Witnessed by ${(traces.witnesses ?? []).join(', ')}.`}</p>
+      ) : null}
+      {traces.self_witnessed ? (
+        <p className="text-danger">
+          {`${traces.self_witnessed} answers' serving runs were published under the application's own credential, which witnesses nothing — the serving host needs a token of its own.`}
         </p>
       ) : null}
       {served.length > 0 ? (

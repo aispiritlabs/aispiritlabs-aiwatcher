@@ -73,6 +73,7 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
                 artifacts: artifacts.clone(),
                 read_model: Arc::clone(&state.read_model),
                 bundles: state.evaluation_bundles.clone(),
+                witnesses: state.witnesses.clone(),
                 wait: TELEMETRY_WAIT,
             })),
         None => registry,
@@ -742,6 +743,9 @@ pub struct TracesExecutor {
     /// Where the pair's bundle is read: the declaration of a pinned workflow,
     /// which a run's own declaration is compared with.
     bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
+    /// The credentials whose runs may witness an answer; empty, any other than
+    /// the answer's own.
+    witnesses: Vec<String>,
     wait: std::time::Duration,
 }
 
@@ -758,8 +762,16 @@ impl TracesExecutor {
             artifacts,
             read_model,
             bundles: None,
+            witnesses: Vec::new(),
             wait,
         }
+    }
+
+    /// Only these credentials' runs witness an answer.
+    #[must_use]
+    pub fn witnessed_by(mut self, witnesses: Vec<String>) -> Self {
+        self.witnesses = witnesses;
+        self
     }
 
     /// Where the declaration of a pinned workflow is read from.
@@ -892,6 +904,17 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             prompt_name: text(span, own::prompt::NAME),
             prompt_version: text(span, own::prompt::VERSION_ID),
             served_model: text(span, genai::RESPONSE_MODEL),
+            prompt_verified: span
+                .attributes
+                .iter()
+                .find_map(|(name, value)| match value {
+                    aiwatcher_core::ports::AttrValue::Bool(verified)
+                        if name == own::prompt::VERIFIED =>
+                    {
+                        Some(*verified)
+                    }
+                    _ => None,
+                }),
             published_by: text(span, own::source::PUBLISHED_BY),
             input_tokens: number(span, genai::USAGE_INPUT_TOKENS),
             output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),
@@ -962,6 +985,7 @@ impl ActivityExecutor for TracesExecutor {
             &answers,
             &runs,
             shape.as_ref(),
+            &self.witnesses,
         )
         .map_err(|contradictions| {
             ActivityError::user_code(format!(
