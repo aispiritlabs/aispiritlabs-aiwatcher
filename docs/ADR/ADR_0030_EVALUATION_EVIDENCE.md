@@ -13,7 +13,9 @@
   gateway for a provider and the prompt, the order a workflow leads, a result
   priced, and periods folded with a state of their own; and an answer bound to
   what a witness relayed, how often a node runs, a price history, and a window
-  answered by the period fold alone
+  answered by the period fold alone; and an answer taken out of its reply, a
+  request holding only the prompt, a window to the second, and a fold that does
+  not start over
 - **Date**: 2026-09-11
 
 ## Context
@@ -1358,3 +1360,47 @@ before the fold began, and how many runs were late. Without a window the answer
 is still the read model's. The fold's state is saved as generations under the
 position it reached, and the one furthest along is loaded, so two processes
 sharing a processor ID cannot set it back.
+
+## Amendment (2026-09-13, beyond): an answer taken out of its reply, a request holding only the prompt, a window to the second, and a fold that does not start over
+
+Four limits of the amendment above.
+
+**An answer read out of a reply is witnessed as that reply's.** An application
+may say, in the body field the gateway removes, how it takes its answer out of
+the reply before the reply arrives — `{"json_pointer": "/label"}` or
+`{"between": ["Answer:", null]}` — and the gateway takes it the same way and
+digests what it took beside the reply. The vocabulary is those two rules and
+nothing a caller can extend: a regular expression would be code a caller runs
+inside the gateway. Canonical JSON spells every number as JavaScript's
+`String(number)` in both languages, so a float digests the same on either side.
+
+**Words beside the prompt witness nothing.** The gateway says whether the
+request was nothing but the pinned template rendered and the values it was
+rendered with (`prompt_exact`). The traces step counts an exchange where one
+witnessed call relayed the answer to such a request holding the case's input,
+with the answer itself not among what was asked; `require_witnessed_answer`
+requires an exchange for every answer wherever the variant pins a prompt. An
+application that tells the witnessed model what to say — in another message, or
+as the answer handed over whole — has the reply witnessed and no exchange. What
+it can still do is put that answer inside a value the template renders, which
+is its own word.
+
+**A window counts to the second, and a late run where it ended.** A run whose
+end reaches the log after its period closed is held in the oldest open period
+by the period it ended in (`late`), and every period keeps its runs in up to 300
+slices by when they ended — a second at five-minute periods. A window counts the
+runs that ended from its start on: whole periods after the one its start falls
+in, that one by its slices, and each late run by the period it ended in, so a
+late run is counted where it ended and never where it arrived. A day and an hour
+add up their periods' figures and late runs, not their slices.
+
+**Neither a new width nor a lost state starts observations over.** A width
+configured anew takes over at the next hour, which every width divides, so a
+period of the old width and one of the new never overlap, runs in flight carry
+across, and hours and days keep adding up. The last three saved states are
+kept; a marker says where the fold was when its period closed, so a fold with no
+state left starts again from the last period written, reads the hour and the day
+that period lay in back from the store, and marks the period it resumed in
+incomplete — runs that had ended in periods not yet written are the gap. A
+price is read for each call on the day it ended, so a run across midnight pays
+both days.

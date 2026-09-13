@@ -318,3 +318,11 @@ credential can test a text against it, and the assembler keeps only values
 shaped like a digest — a producer's words in the same field stay off the span.
 Like `prompt_verified`, they mean nothing on an application's own call; what
 makes them a witness is the credential they were published under.
+
+## Amendment 2026-09-13, beyond: a request holding only the prompt
+
+`llm.*` data may carry `prompt_exact`, recorded as `aiwatcher.prompt.exact`
+beside `aiwatcher.prompt.verified`: whether the host that saw the request found
+its text to be nothing but the named template rendered and the values it was
+rendered with. A gateway's word like the other two, and only under its
+credential.

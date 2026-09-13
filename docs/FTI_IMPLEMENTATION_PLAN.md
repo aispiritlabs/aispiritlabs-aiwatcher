@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review. Sekcja 33 zamyka ograniczenia sekcji 32 — serwer modelu publikujący własny run pod własnym tokenem jest drugim świadkiem wersji modelu, workflow jest trzymany do kształtu przypiętej deklaracji, obserwacje przeżywają read model w zapisanych okresach, mierzą każde wywołanie i mają ceny ze źródłem, kalibracja odkłada po jednym przypadku, linia dopuszcza model spoza rejestru po skrócie paczki, a każdy przypadek wyniku ma pozycję i każdy przypadek review — split. Sekcja 34 zamyka ograniczenia sekcji 33 — świadkiem jest tylko poświadczenie nazwane przez wdrożenie, wspólny token jest nazwany, bramka przed dostawcą świadczy o modelu i prompcie, workflow jest trzymany do kolejności, wyniki mają ceny, a okresy składa projektor z własnym stanem, bez luki po restarcie i bez gubienia późnych końców. Sekcja 35 zamyka ograniczenia sekcji 34 — świadek mówi, że odpowiedź jest odpowiedzią przekazaną przez bramkę na żądanie z wejściem przypadku, workflow jest trzymany do liczby przejść i pętli, tabela cen ma historię, a okno liczy jeden fold okresów zwijanych w godziny i dni.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review. Sekcja 33 zamyka ograniczenia sekcji 32 — serwer modelu publikujący własny run pod własnym tokenem jest drugim świadkiem wersji modelu, workflow jest trzymany do kształtu przypiętej deklaracji, obserwacje przeżywają read model w zapisanych okresach, mierzą każde wywołanie i mają ceny ze źródłem, kalibracja odkłada po jednym przypadku, linia dopuszcza model spoza rejestru po skrócie paczki, a każdy przypadek wyniku ma pozycję i każdy przypadek review — split. Sekcja 34 zamyka ograniczenia sekcji 33 — świadkiem jest tylko poświadczenie nazwane przez wdrożenie, wspólny token jest nazwany, bramka przed dostawcą świadczy o modelu i prompcie, workflow jest trzymany do kolejności, wyniki mają ceny, a okresy składa projektor z własnym stanem, bez luki po restarcie i bez gubienia późnych końców. Sekcja 35 zamyka ograniczenia sekcji 34 — świadek mówi, że odpowiedź jest odpowiedzią przekazaną przez bramkę na żądanie z wejściem przypadku, workflow jest trzymany do liczby przejść i pętli, tabela cen ma historię, a okno liczy jeden fold okresów zwijanych w godziny i dni. Sekcja 36 zamyka ograniczenia sekcji 35 — odpowiedź wyciągnięta z repliki i żądanie z samym promptem są świadczone jako wymiana, liczby mają jeden zapis w obu językach, okno liczy od sekundy startu, spóźniony run tam, gdzie się skończył, zmiana szerokości i utrata stanu nie zaczynają obserwacji od nowa, węzeł ma limit startów, a wywołanie cenę ze swojego dnia.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -3045,4 +3045,112 @@ nasłuchiwało przed i po; własne serwery testowe są zatrzymane.
   w oknie dniem okresu, w którym się skończył — więc wywołania runu przez
   północ mają cenę jednego dnia; wynik — dniem zatwierdzenia, nie dniem
   każdego przypadku.
+- Dalej: etap D.
+
+## 36. Ograniczenia sekcji 35
+
+Użytkownik wskazał ograniczenia z 35.6: świadek odpowiedzi wymaga dosłownej
+odpowiedzi modelu albo jej kanonicznego JSON-u, przejdzie aplikacja, która przez
+bramkę każe modelowi powtórzyć odpowiedź zdobytą obok, a liczby
+zmiennoprzecinkowe w JSON-ie Python i Rust mogą zapisać inaczej; okno może
+zacząć liczyć do jednego okresu przed swoim początkiem, spóźniony run liczy się
+w okresie, w którym dotarł, a zmiana szerokości okresu albo utrata stanu foldu
+na Laserze zaczyna obserwacje od nowa; zadeklarowana pętla ani węzeł `repeats`
+nie mają limitu powtórzeń; run przechodzący przez północ jest wyceniany jednym
+dniem. Commity: `201c2c6` (limit startów węzła), `169b1ba` (cena z dnia
+wywołania), `4e0c3c0` (wyciąganie odpowiedzi, dokładne żądanie, liczby),
+`1b54909` (okno co do sekundy, spóźnione runy, szerokość, odzyskanie stanu),
+`3887119` (e2e) oraz commit tej sekcji. Reguły są w poprawkach
+[ADR 0001](ADR/ADR_0001_EVENT_ENVELOPE.md),
+[ADR 0012](ADR/ADR_0012_WORKFLOW_GRAPH.md) i
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) i w `CLAUDE.md`.
+
+### 36.1 Odpowiedź wyciągnięta z repliki
+
+Aplikacja może w polu ciała, które bramka usuwa, powiedzieć — zanim replika
+przyjdzie — jak wyciąga z niej odpowiedź: `{"json_pointer": "/label"}` albo
+`{"between": ["Answer:", null]}` (`LlmCall.caller_body(answer_from=…)`). Bramka
+wyciąga ją tak samo i publikuje jej skrót obok skrótu całej repliki, więc
+odpowiedź wyciągnięta z rozumowania modelu jest świadczona jako jego odpowiedź.
+Słownik to te dwie reguły; wyrażenie regularne byłoby kodem wywołującego
+uruchamianym w bramce. Kanoniczny JSON zapisuje każdą liczbę jak JavaScriptowe
+`String(number)` — najkrótsze cyfry, notacja pozycyjna od milionowej do 10²¹ —
+w obu językach, z tymi samymi wektorami testowymi.
+
+### 36.2 Żądanie z samym promptem
+
+Bramka mówi, czy tekst żądania to wyłącznie przypięty szablon wyrenderowany z
+podanymi wartościami i te wartości (`prompt_exact`, atrybut
+`aiwatcher.prompt.exact`). Krok `traces` liczy wymianę (`witnessed_exchange`):
+jedno świadczone wywołanie przekazało tę odpowiedź na żądanie, które zawierało
+wejście przypadku i nic poza promptem i jego wartościami, a sama odpowiedź nie
+była w żądaniu. `require_witnessed_answer` wymaga wymiany dla każdej odpowiedzi,
+gdy wariant przypina prompt. Aplikacja, która w dodatkowej wiadomości każe
+modelowi powiedzieć odpowiedź, ma świadka repliki i zero wymian.
+
+### 36.3 Okno co do sekundy i spóźniony run tam, gdzie się skończył
+
+Run, którego koniec dociera po zamknięciu jego okresu, jest trzymany w
+najstarszym otwartym okresie pod okresem, w którym się skończył (`late`), a każdy
+okres trzyma swoje runy w najwyżej 300 wycinkach według chwili końca — przy
+okresach 5-minutowych po sekundzie. Okno liczy runy zakończone od swojego
+początku: całe okresy po tym, w który wpada start, ten okres po wycinkach i
+każdy spóźniony run według okresu końca. `counted_from` jest więc początkiem okna,
+a spóźniony run nie trafia do okna tylko dlatego, że dotarł w nim. Godzina i
+dzień sumują liczby i spóźnione runy swoich okresów, bez wycinków.
+
+### 36.4 Szerokość okresu i utracony stan
+
+Nowa szerokość obowiązuje od następnej pełnej godziny (każda szerokość dzieli
+godzinę), więc okresy starej i nowej szerokości nigdy się nie nakładają, runy w
+locie przechodzą dalej, a godziny i dni dalej się sumują; fold trzyma historię
+szerokości. Zachowywane są trzy ostatnie zapisane stany. Znacznik okresu zapisuje
+pozycję foldu w chwili zamknięcia, początek obserwacji i historię szerokości,
+więc fold bez żadnego stanu startuje od ostatniego zapisanego okresu: odczytuje
+z magazynu godzinę i dzień, które ten okres jeszcze sumował, a okres, od którego
+wznawia, oznacza jako niepełny.
+
+### 36.5 Limit startów węzła i cena z dnia wywołania
+
+Węzeł deklaracji może mieć `"at_most": n`: run może go uruchomić najwyżej n
+razy, łącznie z ponowieniami, co ogranicza zadeklarowaną pętlę i węzeł
+`repeats`; kolejny start jest odrzucany z podaniem limitu. Limit wchodzi do skrótu
+kształtu tylko tam, gdzie jest zadeklarowany. Fold okresów trzyma wywołania runu
+według dnia zakończenia każdego wywołania, a odpowiedź bez okna — według dnia
+startu spanu, więc run przez północ płaci ceny obu dni.
+
+### 36.6 Odbiór
+
+`just check`: wszystkie kroki zielone (Rust: 1491 testów, panel: 297, SDK
+Pythona: 509, silnik agentic: 461, `tsc` i testy SDK TypeScript) poza `typos`,
+który zgłasza słowo w nieśledzonym `docs/design-skills-selection.md` równoległej
+sesji. Testy end-to-end, każdy na własnym serwerze:
+
+- `just e2e-generate` 21/21 — przez bramkę z tokenem `serving` każda z 4
+  odpowiedzi ma świadka modelu, promptu, odpowiedzi, pytania i wymiany; aplikacja,
+  która w dodatkowej wiadomości każe modelowi powiedzieć odpowiedź, ma 4
+  odpowiedzi świadczone jako replika i 0 wymian, a bramka CI z
+  `require_witnessed_answer` daje `incomplete` z przyczyną; aplikacja, której
+  model rozumuje przed `Answer:`, a ona wyciąga odpowiedź po znaczniku, ma 4
+  wymiany i bramka nie zgłasza braku świadka; restart liczy każdy run raz;
+- `just e2e-gate` 8/8, `just e2e-review` 8/8.
+
+Testy jednostkowe projektora pokazują okno liczone od sekundy startu, spóźniony
+run poza oknem, które zaczyna się po jego końcu, zmianę szerokości z 3600 na 300
+w połowie godziny z każdym runem policzonym raz oraz fold, który po utracie
+wszystkich stanów startuje od ostatniego zapisanego okresu i sumuje dzień z
+godzin sprzed i po utracie. Na `:8080` i `:18080` nic nie nasłuchiwało przed i
+po; własne serwery testowe są zatrzymane.
+
+### 36.7 Co zostaje
+
+- **Świadek**: aplikacja może włożyć odpowiedź zdobytą obok do wartości, z którą
+  renderuje szablon — to jej słowo. Odpowiedź przetworzona inaczej niż wskaźnikiem
+  JSON albo tekstem po znaczniku nie ma wymiany. Liczba całkowita poza zakresem
+  64 bitów jest zapisywana jak double.
+- **Okresy**: po utracie wszystkich stanów runy zakończone w okresach, których
+  fold jeszcze nie zapisał, a których zdarzenia są przed wznowieniem, przepadają
+  (okres jest oznaczony jako niepełny), a Laser musi jeszcze trzymać zdarzenia od
+  pozycji wznowienia. Okres o szerokości godziny trzyma wycinki co 12 sekund.
+- **Limit**: `at_most` liczy starty jednego węzła, nie obroty cyklu przez kilka.
 - Dalej: etap D.

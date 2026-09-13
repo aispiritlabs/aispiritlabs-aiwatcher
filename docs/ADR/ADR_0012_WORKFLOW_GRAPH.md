@@ -292,9 +292,13 @@ each edge out of it once, a start uses one of those, a failed start gives its
 back. A declared loop goes round as often as its nodes complete; a node started
 twice for one completion, or again when nothing leads back into it, is refused.
 
+A node may also declare `"at_most": n`: a run may start it that many times,
+retries included — the bound a declared loop and a repeating node otherwise
+lack. It is part of the digest only where declared.
+
 ### What would make this wrong
 
-A workflow whose repetition is a count rather than a flag — "at most three
-attempts at a plan" — has nowhere to say it here, and a run going round a
-declared loop a thousand times passes. The fold keeps 256 steps a run; a run
-that took more is counted as unseen on the workflow rather than checked in part.
+A bound counts starts of one node, not rounds of a cycle through several: a loop
+of two nodes is bounded by bounding either. The fold keeps 256 steps a run; a
+run that took more is counted as unseen on the workflow rather than checked in
+part.
