@@ -42,10 +42,7 @@ pub use evaluations::{
 };
 pub use live::{LiveHub, ReplayGap};
 pub use metrics::{MetricsFilter, MetricsSummary};
-pub use observations::{
-    DurationHistogram, DurationSummary, ObservedCost, ObservedModel, ObservedPeriod, PriceUsed,
-    VariantObservations,
-};
+pub use observations::{DurationHistogram, DurationSummary, ObservedPeriod, VariantObservations};
 pub use periods::PeriodStore;
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{NodeStep, ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};

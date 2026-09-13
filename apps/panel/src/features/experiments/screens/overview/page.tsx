@@ -9,6 +9,7 @@ import type {
   ExperimentRow,
   LatencySummary,
   MetricDefinition,
+  TokenCost,
   TokenSummary,
   VariantObservations,
 } from '@/api/generated/types.gen';
@@ -368,6 +369,7 @@ function Row({
           output={row.usage?.output_tokens}
           selected={selected}
         />
+        {row.cost ? <Cost cost={row.cost} /> : null}
       </td>
       <td>
         {execution ? (
@@ -457,18 +459,7 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
           .filter(Boolean)
           .join(' · ')}
       </div>
-      {cost ? (
-        <div className="text-muted-foreground">
-          {cost.priced_calls > 0
-            ? `${cost.amount.toLocaleString(undefined, { maximumSignificantDigits: 3 })} ${cost.currency} for ${cost.priced_calls} priced calls, at ${cost.prices
-                .map((price) => `${price.model} as of ${price.as_of}`)
-                .join(', ')}`
-            : 'no call was priced'}
-          {cost.unpriced_calls > 0
-            ? ` · ${cost.unpriced_calls} calls unpriced (${(cost.unpriced_models ?? []).join(', ')})`
-            : ''}
-        </div>
-      ) : null}
+      {cost ? <Cost cost={cost} /> : null}
     </>
   );
 }
@@ -516,6 +507,26 @@ function Tokens({
       <div>{`${side(input)} / ${side(output)}`}</div>
       <div className="text-muted-foreground">{`counted on ${cases} of ${selected} cases`}</div>
     </>
+  );
+}
+
+/**
+ * What calls cost at the deployment's price table, as the server priced them:
+ * with the day each price was read for its model, and the calls no price
+ * covered counted apart rather than as free.
+ */
+function Cost({ cost }: { cost: TokenCost }) {
+  return (
+    <div className="text-muted-foreground">
+      {cost.priced_calls > 0
+        ? `${cost.amount.toLocaleString(undefined, { maximumSignificantDigits: 3 })} ${cost.currency} for ${cost.priced_calls} priced calls, at ${cost.prices
+            .map((price) => `${price.model} as of ${price.as_of}`)
+            .join(', ')}`
+        : 'no call was priced'}
+      {cost.unpriced_calls > 0
+        ? ` · ${cost.unpriced_calls} calls unpriced (${(cost.unpriced_models ?? []).join(', ')})`
+        : ''}
+    </div>
   );
 }
 

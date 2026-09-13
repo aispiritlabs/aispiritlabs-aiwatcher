@@ -128,6 +128,10 @@ async fn get_experiment(
                 None => format!("experiment {context_id}"),
             })
         })?;
+    let experiment = match state.model_prices.as_deref() {
+        Some(prices) => experiment.priced(prices),
+        None => experiment,
+    };
     let mut executions = Vec::new();
     let named: std::collections::BTreeSet<&str> = experiment
         .rows

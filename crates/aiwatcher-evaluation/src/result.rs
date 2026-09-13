@@ -59,6 +59,12 @@ pub struct CaseUsage {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// The same calls by the model each named, which is what a price table
+    /// prices: a producer's word for a recording, and for generated answers
+    /// what their run's spans reported. Absent from every case written before
+    /// it, so no shard moves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<aiwatcher_core::prices::ModelUsage>,
 }
 
 /// What a result's answers took, over its own cases, derived when it is
@@ -76,6 +82,9 @@ pub struct ResultUsage {
     pub input_tokens: Option<TokenSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<TokenSummary>,
+    /// Every case's calls by model, summed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<aiwatcher_core::prices::ModelUsage>,
 }
 
 /// One result's per-case latency, by nearest rank.
@@ -127,10 +136,20 @@ impl ResultUsage {
             }),
             input_tokens: tokens(|usage| usage.input_tokens),
             output_tokens: tokens(|usage| usage.output_tokens),
+            models: {
+                let mut models = Vec::new();
+                for usage in cases.iter().filter_map(|case| case.usage.as_ref()) {
+                    for model in &usage.models {
+                        aiwatcher_core::prices::ModelUsage::add_to(&mut models, model);
+                    }
+                }
+                models
+            },
         };
         (usage.latency_ms.is_some()
             || usage.input_tokens.is_some()
-            || usage.output_tokens.is_some())
+            || usage.output_tokens.is_some()
+            || !usage.models.is_empty())
         .then_some(usage)
     }
 }
@@ -297,6 +316,7 @@ mod tests {
                         latency_ms: Some(at as f64 * 100.0),
                         input_tokens: (at <= 3).then_some(10),
                         output_tokens: None,
+                        models: Vec::new(),
                     }),
                 )
             })

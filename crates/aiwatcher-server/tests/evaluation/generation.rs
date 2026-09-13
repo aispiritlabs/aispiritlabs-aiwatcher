@@ -580,6 +580,15 @@ async fn the_traces_of_generated_answers_say_how_many_ran_on_the_pinned_prompt_a
         Some(aiwatcher_core::TraceId::derive("run-on-the-pin").to_hex()),
         "the case leads to the trace its run was seen in, which the answer never named"
     );
+    assert_eq!(
+        seen.measurement.usage.as_ref().map(|usage| usage
+            .models
+            .iter()
+            .map(|model| (model.model.as_str(), model.calls))
+            .collect::<Vec<_>>()),
+        Some(vec![("support-model", 1)]),
+        "and its usage says which model its run called, which is what prices it"
+    );
 }
 
 #[tokio::test]

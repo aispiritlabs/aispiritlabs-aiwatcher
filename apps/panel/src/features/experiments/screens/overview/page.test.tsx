@@ -92,6 +92,19 @@ function serving() {
                   latency_ms: { cases: 4, p50: 120, p90: 400, p99: 1500, max: 1500 },
                   output_tokens: { cases: 4, total: 40 },
                 },
+                cost: {
+                  currency: 'USD',
+                  amount: 0.0004,
+                  priced_calls: 4,
+                  unpriced_calls: 0,
+                  prices: [
+                    {
+                      model: 'capitals-stand-in',
+                      source: 'https://example.com/pricing',
+                      as_of: '2026-09-13',
+                    },
+                  ],
+                },
                 comparison: {
                   comparability: 'comparable',
                   reasons: [],
@@ -204,6 +217,10 @@ it('lists the contexts, and opens one as its variants beside the chosen baseline
   expect(screen.getByText('120 ms / 400 ms / 1.50 s')).toBeTruthy();
   expect(screen.getByText('over 4 of 4 cases')).toBeTruthy();
   expect(screen.getByText('— / 40')).toBeTruthy();
+  // A result's cases priced by the model they called, with the day of the price.
+  expect(
+    screen.getByText('0.0004 USD for 4 priced calls, at capitals-stand-in as of 2026-09-13'),
+  ).toBeTruthy();
   expect(screen.getByText('not measured')).toBeTruthy();
   expect(screen.getByText('10.60 s')).toBeTruthy();
   expect(screen.getByText('not in the log')).toBeTruthy();

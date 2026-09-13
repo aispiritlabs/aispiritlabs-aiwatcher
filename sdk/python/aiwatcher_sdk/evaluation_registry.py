@@ -239,12 +239,28 @@ class Scorecard(TypedDict):
     description: NotRequired[str]
 
 
+class ModelUsage(TypedDict):
+    """One model's calls in a case, and what they reported using."""
+
+    model: str
+    calls: NotRequired[int]
+    input_tokens: NotRequired[int]
+    output_tokens: NotRequired[int]
+    cached_tokens: NotRequired[int]
+
+
 class CaseUsage(TypedDict, total=False):
-    """What answering one case took, as the producer measured it; absent is not zero."""
+    """What answering one case took, as the producer measured it; absent is not zero.
+
+    ``models`` says which models its calls named, which is what a deployment's
+    price table prices a result's rows by; for generated answers aiwatcher fills
+    it from the run's own spans when the task said nothing.
+    """
 
     latency_ms: float
     input_tokens: int
     output_tokens: int
+    models: list[ModelUsage]
 
 
 class RecordedAnswer(TypedDict):

@@ -40,7 +40,9 @@ What it checks:
    answered, naming both digests, and publishes nothing.
 9. the experiment over that context sets the variants side by side: the
    candidate against the baseline, each with per-case latency and tokens over
-   every case, and the whole run's duration from the log.
+   every case, and the whole run's duration from the log — and each result's
+   cases priced by the model their runs' calls named, at the deployment's
+   table, with the day the price was read.
 10. what a variant was observed doing stands beside it: runs the application
     served naming the candidate are counted with their durations and tokens,
     while the runs it made answering the measurement's cases are counted apart
@@ -744,7 +746,10 @@ def main() -> int:
         rows = {row["evaluation_id"]: row for row in viewed["experiment"]["rows"]}
         candidate = rows.get("capitals-candidate", {})
         usage = candidate.get("usage") or {}
+        priced = candidate.get("cost") or {}
         timed = {execution["workflow_run_id"] for execution in viewed["executions"]}
+        # Six words in and one out per case, on the stand-in at 1 and 2 per million.
+        expected_cost = (6 * len(CAPITALS) * 1.0 + len(CAPITALS) * 2.0) / 1e6
         check(
             9,
             "the experiment sets the variants side by side with what their answers took",
@@ -752,8 +757,11 @@ def main() -> int:
             and (candidate.get("comparison") or {}).get("comparability") == "comparable"
             and (usage.get("latency_ms") or {}).get("cases") == len(CAPITALS)
             and (usage.get("output_tokens") or {}).get("cases") == len(CAPITALS)
-            and started["candidate"]["execution"]["execution_id"] in timed,
-            {"rows": sorted(rows), "usage": usage, "timed": len(timed)},
+            and started["candidate"]["execution"]["execution_id"] in timed
+            and priced.get("priced_calls") == len(CAPITALS)
+            and abs(priced.get("amount", 0) - expected_cost) < 1e-12
+            and [price.get("as_of") for price in priced.get("prices", [])] == ["2026-09-13"],
+            {"rows": sorted(rows), "usage": usage, "cost": priced, "timed": len(timed)},
         )
 
         # The candidate, deployed: the same application serving somebody, each

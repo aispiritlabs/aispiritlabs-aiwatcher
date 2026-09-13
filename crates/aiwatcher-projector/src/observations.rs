@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::attrs::genai;
 use aiwatcher_core::ports::{AttrValue, CompletedSpan};
-use aiwatcher_core::prices::ModelPrices;
+use aiwatcher_core::prices::{ModelPrices, ModelUsage, TokenCost};
 
 use crate::readmodel::{RunStatus, RunSummary};
 
@@ -59,11 +59,11 @@ pub struct VariantObservations {
     pub output_tokens: i64,
     /// The same calls by the model they named, from their spans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<ObservedModel>,
+    pub models: Vec<ModelUsage>,
     /// What those calls cost at the deployment's price table. Absent when the
     /// deployment loaded none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost: Option<ObservedCost>,
+    pub cost: Option<TokenCost>,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
@@ -186,40 +186,6 @@ impl DurationHistogram {
     }
 }
 
-/// Model calls that named one model, and what they reported using.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ObservedModel {
-    pub model: String,
-    pub calls: u64,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cached_tokens: i64,
-}
-
-/// What calls cost at the deployment's prices, and what the figure rests on.
-#[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
-pub struct ObservedCost {
-    pub currency: String,
-    pub amount: f64,
-    /// Calls whose model the table prices.
-    pub priced_calls: u64,
-    /// Calls whose model it does not, which cost something nobody priced —
-    /// never nought.
-    pub unpriced_calls: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unpriced_models: Vec<String>,
-    /// Where each price used was read, and when.
-    pub prices: Vec<PriceUsed>,
-}
-
-/// One price a cost used, with where and when it was read.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-pub struct PriceUsed {
-    pub model: String,
-    pub source: String,
-    pub as_of: String,
-}
-
 /// One variant's runs that ended in one closed period, as written down when the
 /// period closed — the record that outlives the read model.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -239,7 +205,7 @@ pub struct ObservedPeriod {
     pub input_tokens: i64,
     pub output_tokens: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<ObservedModel>,
+    pub models: Vec<ModelUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,7 +229,7 @@ struct Accumulated {
     llm_calls: u64,
     input_tokens: i64,
     output_tokens: i64,
-    models: BTreeMap<String, ObservedModel>,
+    models: BTreeMap<String, ModelUsage>,
     first_seen_at: Option<OffsetDateTime>,
     last_seen_at: Option<OffsetDateTime>,
 }
@@ -312,9 +278,9 @@ impl Accumulated {
             let entry = self
                 .models
                 .entry(model.to_owned())
-                .or_insert_with(|| ObservedModel {
+                .or_insert_with(|| ModelUsage {
                     model: model.to_owned(),
-                    ..ObservedModel::default()
+                    ..ModelUsage::default()
                 });
             entry.calls += 1;
             entry.input_tokens += number(span, genai::USAGE_INPUT_TOKENS);
@@ -383,9 +349,9 @@ impl Accumulated {
             for model in &period.models {
                 let entry = models
                     .entry(model.model.clone())
-                    .or_insert_with(|| ObservedModel {
+                    .or_insert_with(|| ModelUsage {
                         model: model.model.clone(),
-                        ..ObservedModel::default()
+                        ..ModelUsage::default()
                     });
                 entry.calls += model.calls;
                 entry.input_tokens += model.input_tokens;
@@ -410,8 +376,8 @@ impl Accumulated {
             }
             histogram.summary()
         };
-        let models: Vec<ObservedModel> = models.into_values().collect();
-        let cost = prices.map(|table| cost_of(table, &models));
+        let models: Vec<ModelUsage> = models.into_values().collect();
+        let cost = prices.map(|table| table.cost_of(&models));
         VariantObservations {
             variant_id: variant_id.to_owned(),
             runs,
@@ -434,36 +400,6 @@ impl Accumulated {
             incomplete_periods: periods.iter().filter(|period| !period.complete).count(),
         }
     }
-}
-
-fn cost_of(table: &ModelPrices, models: &[ObservedModel]) -> ObservedCost {
-    let mut cost = ObservedCost {
-        currency: table.currency.clone(),
-        amount: 0.0,
-        priced_calls: 0,
-        unpriced_calls: 0,
-        unpriced_models: Vec::new(),
-        prices: Vec::new(),
-    };
-    for model in models {
-        match table.get(&model.model) {
-            Some(price) => {
-                cost.amount +=
-                    price.cost(model.input_tokens, model.output_tokens, model.cached_tokens);
-                cost.priced_calls += model.calls;
-                cost.prices.push(PriceUsed {
-                    model: price.model.clone(),
-                    source: price.source.clone(),
-                    as_of: price.as_of.clone(),
-                });
-            }
-            None => {
-                cost.unpriced_calls += model.calls;
-                cost.unpriced_models.push(model.model.clone());
-            }
-        }
-    }
-    cost
 }
 
 fn text<'a>(span: &'a CompletedSpan, key: &str) -> Option<&'a str> {

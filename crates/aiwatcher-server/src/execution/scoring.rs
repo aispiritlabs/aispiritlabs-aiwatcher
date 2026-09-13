@@ -258,10 +258,19 @@ impl ScoreExecutor {
                 // A case leads to the trace its run was seen in, when the
                 // application did not name one itself.
                 for answer in &mut answers {
-                    if answer.trace_id.is_none()
-                        && let Some(row) = rows.iter().find(|row| row.case_id == answer.case_id)
-                    {
+                    let Some(row) = rows.iter().find(|row| row.case_id == answer.case_id) else {
+                        continue;
+                    };
+                    if answer.trace_id.is_none() {
                         answer.trace_id.clone_from(&row.trace_id);
+                    }
+                    // What the run's calls reported, by model, where the task
+                    // said nothing about which models it called.
+                    if !row.models.is_empty() {
+                        let usage = answer.usage.get_or_insert_with(Default::default);
+                        if usage.models.is_empty() {
+                            usage.models.clone_from(&row.models);
+                        }
                     }
                 }
                 Some(GenerationTrace::of(&rows))
@@ -851,6 +860,17 @@ impl TracesExecutor {
     }
 }
 
+/// A whole-number attribute of a span, or nought.
+fn number(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> i64 {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            aiwatcher_core::ports::AttrValue::Int(number) if name == key => Some(*number),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 /// A run's model calls, as their spans say.
 fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
     use aiwatcher_core::attrs::{aiwatcher as own, genai};
@@ -873,6 +893,9 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             prompt_version: text(span, own::prompt::VERSION_ID),
             served_model: text(span, genai::RESPONSE_MODEL),
             published_by: text(span, own::source::PUBLISHED_BY),
+            input_tokens: number(span, genai::USAGE_INPUT_TOKENS),
+            output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),
+            cached_tokens: number(span, "gen_ai.usage.cached_tokens"),
         })
         .collect()
 }

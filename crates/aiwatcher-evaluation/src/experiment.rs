@@ -79,6 +79,11 @@ pub struct ExperimentRow {
     pub reproducible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ResultUsage>,
+    /// What its cases' model calls cost at the deployment's price table, from
+    /// the tokens by model its usage holds. Absent without a table, or when no
+    /// case said which model it called.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<aiwatcher_core::prices::TokenCost>,
     /// Against the baseline; absent on the baseline itself and when none was
     /// chosen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,7 +127,27 @@ impl ExperimentRow {
             metrics: result.metrics,
             reproducible: result.reproducible,
             usage: result.usage,
+            cost: None,
             comparison,
         }
+    }
+}
+
+impl Experiment {
+    /// Price every row whose usage says which models its cases called.
+    ///
+    /// At the table as it is now, which each cost names with its day: a price
+    /// is the deployment's, not the evidence's, so it is never written into a
+    /// result.
+    #[must_use]
+    pub fn priced(mut self, prices: &aiwatcher_core::prices::ModelPrices) -> Self {
+        for row in &mut self.rows {
+            row.cost = row
+                .usage
+                .as_ref()
+                .filter(|usage| !usage.models.is_empty())
+                .map(|usage| prices.cost_of(&usage.models));
+        }
+        self
     }
 }

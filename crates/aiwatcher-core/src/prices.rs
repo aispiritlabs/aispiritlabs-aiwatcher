@@ -107,6 +107,100 @@ impl ModelPrices {
     }
 }
 
+/// Model calls that named one model, and the tokens they reported.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModelUsage {
+    pub model: String,
+    #[serde(default)]
+    pub calls: u64,
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// Of the input, how many a provider served from its cache.
+    #[serde(default)]
+    pub cached_tokens: i64,
+}
+
+impl ModelUsage {
+    /// Add `usage` to the row for its model, keeping the rows ordered by model.
+    pub fn add_to(rows: &mut Vec<Self>, usage: &Self) {
+        match rows.binary_search_by(|row| row.model.cmp(&usage.model)) {
+            Ok(at) => {
+                let row = &mut rows[at];
+                row.calls += usage.calls;
+                row.input_tokens += usage.input_tokens;
+                row.output_tokens += usage.output_tokens;
+                row.cached_tokens += usage.cached_tokens;
+            }
+            Err(at) => rows.insert(at, usage.clone()),
+        }
+    }
+}
+
+/// What tokens cost at a deployment's price table, and what the figure rests on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TokenCost {
+    pub currency: String,
+    pub amount: f64,
+    /// Calls whose model the table prices.
+    pub priced_calls: u64,
+    /// Calls whose model it does not, which cost something nobody priced —
+    /// never nought.
+    pub unpriced_calls: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
+    /// Where each price used was read, and when.
+    pub prices: Vec<PriceUsed>,
+}
+
+/// One price a cost used, with where and when it was read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PriceUsed {
+    pub model: String,
+    pub source: String,
+    pub as_of: String,
+}
+
+impl ModelPrices {
+    /// What this usage costs at this table.
+    #[must_use]
+    pub fn cost_of(&self, usage: &[ModelUsage]) -> TokenCost {
+        let mut cost = TokenCost {
+            currency: self.currency.clone(),
+            amount: 0.0,
+            priced_calls: 0,
+            unpriced_calls: 0,
+            unpriced_models: Vec::new(),
+            prices: Vec::new(),
+        };
+        for model in usage {
+            match self.get(&model.model) {
+                Some(price) => {
+                    cost.amount +=
+                        price.cost(model.input_tokens, model.output_tokens, model.cached_tokens);
+                    cost.priced_calls += model.calls;
+                    if !cost.prices.iter().any(|used| used.model == price.model) {
+                        cost.prices.push(PriceUsed {
+                            model: price.model.clone(),
+                            source: price.source.clone(),
+                            as_of: price.as_of.clone(),
+                        });
+                    }
+                }
+                None => {
+                    cost.unpriced_calls += model.calls;
+                    if !cost.unpriced_models.contains(&model.model) {
+                        cost.unpriced_models.push(model.model.clone());
+                    }
+                }
+            }
+        }
+        cost
+    }
+}
+
 impl ModelPrice {
     /// What these tokens cost. Cached tokens are counted inside input, as a
     /// provider reports them, and priced at the cached rate where there is one.

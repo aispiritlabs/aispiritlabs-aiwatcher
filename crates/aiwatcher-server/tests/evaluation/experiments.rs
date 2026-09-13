@@ -12,6 +12,13 @@ fn measured(id: &str, variant: &str, passed: usize, latencies: &[f64]) -> Publis
             latency_ms: Some(*latency),
             input_tokens: Some(100),
             output_tokens: Some(10 * (n as u64 + 1)),
+            models: vec![aiwatcher_core::prices::ModelUsage {
+                model: "gpt-4o".into(),
+                calls: 1,
+                input_tokens: 100,
+                output_tokens: 10 * (n as i64 + 1),
+                cached_tokens: 0,
+            }],
         });
     }
     request
@@ -86,6 +93,31 @@ async fn an_experiment_is_its_context_s_results_each_against_the_baseline_with_w
         experiment.rows[1].usage.is_none(),
         "a result nobody measured says nothing rather than zero"
     );
+
+    // Priced at a table, from the tokens by model its cases said they called.
+    let priced = experiment
+        .clone()
+        .priced(&aiwatcher_core::prices::ModelPrices {
+            currency: "USD".into(),
+            prices: vec![aiwatcher_core::prices::ModelPrice {
+                model: "gpt-4o".into(),
+                input_per_million: 2.5,
+                output_per_million: 10.0,
+                cached_input_per_million: None,
+                source: "https://openai.com/api/pricing".into(),
+                as_of: "2026-09-01".into(),
+            }],
+        });
+    let cost = priced.rows[0]
+        .cost
+        .as_ref()
+        .expect("three cases named gpt-4o");
+    assert!((cost.amount - (300.0 * 2.5 + 60.0 * 10.0) / 1e6).abs() < 1e-12);
+    assert_eq!(
+        (cost.priced_calls, cost.prices[0].as_of.as_str()),
+        (3, "2026-09-01")
+    );
+    assert!(priced.rows[1].cost.is_none(), "nothing to price");
 
     assert!(
         registry

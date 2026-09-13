@@ -1299,6 +1299,13 @@ export type CaseUsage = {
      * the several a case made. Never the whole run's time.
      */
     latency_ms?: number | null;
+    /**
+     * The same calls by the model each named, which is what a price table
+     * prices: a producer's word for a recording, and for generated answers
+     * what their run's spans reported. Absent from every case written before
+     * it, so no shard moves.
+     */
+    models?: Array<ModelUsage>;
     output_tokens?: number | null;
 };
 
@@ -3131,6 +3138,7 @@ export type ExperimentIndex = {
 export type ExperimentRow = {
     committed_at: number;
     comparison?: null | RowComparison;
+    cost?: null | TokenCost;
     counts?: null | ResultCounts;
     evaluation_id: string;
     metrics: {
@@ -5253,6 +5261,20 @@ export type ModelPage = {
 };
 
 /**
+ * Model calls that named one model, and the tokens they reported.
+ */
+export type ModelUsage = {
+    /**
+     * Of the input, how many a provider served from its cache.
+     */
+    cached_tokens?: number;
+    calls?: number;
+    input_tokens?: number;
+    model: string;
+    output_tokens?: number;
+};
+
+/**
  * One registered model version.
  */
 export type ModelVersion = {
@@ -5366,39 +5388,6 @@ export const NodeStatus = {
  * a node the graph declares and nothing has started.
  */
 export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
-
-/**
- * What calls cost at the deployment's prices, and what the figure rests on.
- */
-export type ObservedCost = {
-    amount: number;
-    currency: string;
-    /**
-     * Calls whose model the table prices.
-     */
-    priced_calls: number;
-    /**
-     * Where each price used was read, and when.
-     */
-    prices: Array<PriceUsed>;
-    /**
-     * Calls whose model it does not, which cost something nobody priced —
-     * never nought.
-     */
-    unpriced_calls: number;
-    unpriced_models?: Array<string>;
-};
-
-/**
- * Model calls that named one model, and what they reported using.
- */
-export type ObservedModel = {
-    cached_tokens: number;
-    calls: number;
-    input_tokens: number;
-    model: string;
-    output_tokens: number;
-};
 
 /**
  * What happens to a step whose question nobody answered in time.
@@ -6773,6 +6762,10 @@ export type ResultStatus = typeof ResultStatus[keyof typeof ResultStatus];
 export type ResultUsage = {
     input_tokens?: null | TokenSummary;
     latency_ms?: null | LatencySummary;
+    /**
+     * Every case's calls by model, summed.
+     */
+    models?: Array<ModelUsage>;
     output_tokens?: null | TokenSummary;
 };
 
@@ -8873,6 +8866,28 @@ export type TimerBody = {
     cancel: CancelTimerBody;
 };
 
+/**
+ * What tokens cost at a deployment's price table, and what the figure rests on.
+ */
+export type TokenCost = {
+    amount: number;
+    currency: string;
+    /**
+     * Calls whose model the table prices.
+     */
+    priced_calls: number;
+    /**
+     * Where each price used was read, and when.
+     */
+    prices: Array<PriceUsed>;
+    /**
+     * Calls whose model it does not, which cost something nobody priced —
+     * never nought.
+     */
+    unpriced_calls: number;
+    unpriced_models?: Array<string>;
+};
+
 export type TokenSummary = {
     cases: number;
     total: number;
@@ -9180,7 +9195,7 @@ export type VariantManifest = {
  */
 export type VariantObservations = {
     call_ms?: null | DurationSummary;
-    cost?: null | ObservedCost;
+    cost?: null | TokenCost;
     duration_ms?: null | DurationSummary;
     failed: number;
     first_seen_at?: string | null;
@@ -9204,7 +9219,7 @@ export type VariantObservations = {
     /**
      * The same calls by the model they named, from their spans.
      */
-    models?: Array<ObservedModel>;
+    models?: Array<ModelUsage>;
     output_tokens: number;
     /**
      * Written periods these figures include. Nought when the window asked for

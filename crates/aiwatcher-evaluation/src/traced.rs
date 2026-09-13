@@ -38,6 +38,10 @@ pub struct TracedCall {
     pub served_model: Option<String>,
     /// The credential both ends of the call's span were published under.
     pub published_by: Option<String>,
+    /// What the call reported using.
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
 }
 
 /// A run an answer names, as the log folded it once it had ended and every
@@ -104,6 +108,10 @@ pub struct TracedAnswer {
     /// What providers said served the run's calls, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub served_models: Vec<String>,
+    /// The run's calls by the model each named, with what they reported
+    /// using: what a price table prices a generated case by.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<aiwatcher_core::prices::ModelUsage>,
     /// The variant pins a workflow whose declaration this step could read no
     /// node of, so no run was seen executing it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -336,6 +344,7 @@ pub fn trace_answers(
             on_workflow: variant.workflow.as_ref().map(|_| false),
             witnessed_model: variant.model.as_ref().map(|_| false),
             served_models: Vec::new(),
+            models: Vec::new(),
             workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
         };
         if let (Some(run_id), Some(run)) = (&answer.run_id, traced) {
@@ -361,6 +370,16 @@ pub fn trace_answers(
                 ));
             }
             for call in &run.calls {
+                aiwatcher_core::prices::ModelUsage::add_to(
+                    &mut row.models,
+                    &aiwatcher_core::prices::ModelUsage {
+                        model: call.model.clone().unwrap_or_else(|| "unknown".to_owned()),
+                        calls: 1,
+                        input_tokens: call.input_tokens,
+                        output_tokens: call.output_tokens,
+                        cached_tokens: call.cached_tokens,
+                    },
+                );
                 if let Some(served) = &call.served_model
                     && !row.served_models.contains(served)
                 {
@@ -533,6 +552,9 @@ mod tests {
             prompt_version: Some("p".repeat(64)),
             served_model: None,
             published_by: Some("worker".to_owned()),
+            input_tokens: 12,
+            output_tokens: 3,
+            cached_tokens: 0,
         }
     }
 
@@ -588,6 +610,24 @@ mod tests {
             }
         );
         assert!(!trace.complete());
+        assert_eq!(
+            rows[1].models,
+            [
+                aiwatcher_core::prices::ModelUsage {
+                    model: "capitals-model".to_owned(),
+                    calls: 1,
+                    input_tokens: 12,
+                    output_tokens: 3,
+                    cached_tokens: 0,
+                },
+                aiwatcher_core::prices::ModelUsage {
+                    model: "router".to_owned(),
+                    calls: 1,
+                    ..Default::default()
+                },
+            ],
+            "each call by the model it named, what it reported beside it"
+        );
         assert_eq!(
             trace.shortfall(),
             vec![

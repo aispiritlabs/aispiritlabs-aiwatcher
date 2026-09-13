@@ -14402,6 +14402,13 @@
             "format": "double",
             "description": "One case's answer, end to end in the application: one inference, or\nthe several a case made. Never the whole run's time."
           },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelUsage"
+            },
+            "description": "The same calls by the model each named, which is what a price table\nprices: a producer's word for a recording, and for generated answers\nwhat their run's spans reported. Absent from every case written before\nit, so no shard moves."
+          },
           "output_tokens": {
             "type": [
               "integer",
@@ -18050,6 +18057,17 @@
               {
                 "$ref": "#/components/schemas/RowComparison",
                 "description": "Against the baseline; absent on the baseline itself and when none was\nchosen."
+              }
+            ]
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TokenCost",
+                "description": "What its cases' model calls cost at the deployment's price table, from\nthe tokens by model its usage holds. Absent without a table, or when no\ncase said which model it called."
               }
             ]
           },
@@ -22078,6 +22096,37 @@
           }
         }
       },
+      "ModelUsage": {
+        "type": "object",
+        "description": "Model calls that named one model, and the tokens they reported.",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of the input, how many a provider served from its cache."
+          },
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "model": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "ModelVersion": {
         "type": "object",
         "description": "One registered model version.",
@@ -22297,84 +22346,6 @@
           "succeeded",
           "failed"
         ]
-      },
-      "ObservedCost": {
-        "type": "object",
-        "description": "What calls cost at the deployment's prices, and what the figure rests on.",
-        "required": [
-          "currency",
-          "amount",
-          "priced_calls",
-          "unpriced_calls",
-          "prices"
-        ],
-        "properties": {
-          "amount": {
-            "type": "number",
-            "format": "double"
-          },
-          "currency": {
-            "type": "string"
-          },
-          "priced_calls": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Calls whose model the table prices.",
-            "minimum": 0
-          },
-          "prices": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PriceUsed"
-            },
-            "description": "Where each price used was read, and when."
-          },
-          "unpriced_calls": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Calls whose model it does not, which cost something nobody priced —\nnever nought.",
-            "minimum": 0
-          },
-          "unpriced_models": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "ObservedModel": {
-        "type": "object",
-        "description": "Model calls that named one model, and what they reported using.",
-        "required": [
-          "model",
-          "calls",
-          "input_tokens",
-          "output_tokens",
-          "cached_tokens"
-        ],
-        "properties": {
-          "cached_tokens": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "calls": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "input_tokens": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "model": {
-            "type": "string"
-          },
-          "output_tokens": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
       },
       "OnTimeout": {
         "oneOf": [
@@ -24823,6 +24794,13 @@
                 "$ref": "#/components/schemas/LatencySummary"
               }
             ]
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelUsage"
+            },
+            "description": "Every case's calls by model, summed."
           },
           "output_tokens": {
             "oneOf": [
@@ -28547,6 +28525,51 @@
         ],
         "description": "One thing to do to this execution's timers.\n\nA tagged pair rather than a struct with a `cancel` flag, because the two\ncarry different fields and a body that could name a `due_at` while\ncancelling would be a shape with a meaningless half."
       },
+      "TokenCost": {
+        "type": "object",
+        "description": "What tokens cost at a deployment's price table, and what the figure rests on.",
+        "required": [
+          "currency",
+          "amount",
+          "priced_calls",
+          "unpriced_calls",
+          "prices"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "priced_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls whose model the table prices.",
+            "minimum": 0
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceUsed"
+            },
+            "description": "Where each price used was read, and when."
+          },
+          "unpriced_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls whose model it does not, which cost something nobody priced —\nnever nought.",
+            "minimum": 0
+          },
+          "unpriced_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "TokenSummary": {
         "type": "object",
         "required": [
@@ -29275,7 +29298,7 @@
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/ObservedCost",
+                "$ref": "#/components/schemas/TokenCost",
                 "description": "What those calls cost at the deployment's price table. Absent when the\ndeployment loaded none."
               }
             ]
@@ -29334,7 +29357,7 @@
           "models": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ObservedModel"
+              "$ref": "#/components/schemas/ModelUsage"
             },
             "description": "The same calls by the model they named, from their spans."
           },
