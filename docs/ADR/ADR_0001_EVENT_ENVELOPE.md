@@ -268,3 +268,31 @@ derived ID, is written as `aiwatcher.variant.id` on every span, and a record
 without it reads as a run that named none. Nothing checks it against a
 declaration: the log takes what a producer says, as it does for every other
 correlation field.
+
+## Amendment 2026-09-13, later: who published an event, and which call a run served
+
+Two facts join the record, and only one of them is a producer's to write.
+
+**`published_by` is the ingest route's, never the wire's.** `RecordedMetadata`
+gains the credential the HTTP ingest authenticated the batch under — an ingest
+token's name, a person's subject. The envelope carries the field in memory and
+neither reads nor writes it in JSON, so a producer that sends one is ignored, a
+broker never delivers one, and the route that checked the credential is the
+only writer. A span names its publisher (`aiwatcher.source.published_by`) only
+where one credential sent both of its ends: an end another credential sent is
+neither's word. This is what makes one publisher's report distinguishable from
+another's — a serving host's own run from the application's run about it — and
+it changes no derived ID. An event a broker delivered names no publisher, since
+nothing here authenticated who published it.
+
+**`caller_run_id` is data on `run.started`.** A run that served another run's
+model call — a model server answering a request that carried the
+`Aiwatcher-Caller-Run` header — names that run. It is a correlation a producer
+writes, like `evaluation_id`, and the read model keeps it on the run so the run
+a call was made in can be joined to the run that served it.
+
+**What would make this wrong.** `published_by` is only as strong as the
+credential behind it: two producers sharing one ingest token are one publisher
+here. And a deployment that publishes only through a broker has no publisher on
+any record until the broker authenticates producers and the adapter carries
+what it learnt.

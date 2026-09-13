@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review. Sekcja 33 zamyka ograniczenia sekcji 32 — serwer modelu publikujący własny run pod własnym tokenem jest drugim świadkiem wersji modelu, workflow jest trzymany do kształtu przypiętej deklaracji, obserwacje przeżywają read model w zapisanych okresach, mierzą każde wywołanie i mają ceny ze źródłem, kalibracja odkłada po jednym przypadku, linia dopuszcza model spoza rejestru po skrócie paczki, a każdy przypadek wyniku ma pozycję i każdy przypadek review — split.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -2690,3 +2690,144 @@ Na `:8080` i `:18080` nic nie nasłuchiwało przed i po.
   porównania); wiersze nadal nie mają kolumny `split`.
 - Dalej: etap D.
 
+## 33. Ograniczenia sekcji 32
+
+Użytkownik wskazał sześć ograniczeń z 32.7: trace to nadal słowo aplikacji,
+workflow nie jest niczym sprawdzany, a wersję modelu widać tylko tam, gdzie
+wywołanie ją zgłasza; obserwacje sięgają tylko tak daleko jak read model, mierzą
+czas całego runu i nie mają cen; przy małym zbiorze dwie połowy kalibracji to
+mało; linia wymaga modelu z paczką w rejestrze tego wdrożenia; pierwszy przypadek
+wyniku nie ma pozycji z trasy przypadków; wiersze datasetu nie mają kolumny
+`split`. Commity: `9ff76f0` (pozycja każdego przypadku), `89363fd` (split),
+`675730d` (model spoza rejestru), `7b0f71a` (kalibracja po przypadku), `77b4ff1`
+(świadek i kształt workflow), `e71d578` (obserwacje poza read modelem i ceny)
+oraz commit tej sekcji. Reguły są w poprawkach
+[ADR 0001](ADR/ADR_0001_EVENT_ENVELOPE.md) i
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) i w Guardrails `CLAUDE.md`.
+
+### 33.1 Drugi świadek: kto opublikował zdarzenie i czyje wywołanie obsłużył run
+
+Log zapisuje, kto opublikował każde zdarzenie: trasa ingestu wpisuje
+`published_by` — nazwę tokenu albo podmiot osoby, pod którym uwierzytelniła
+partię. Pole nie jest czytane z JSON-a ani do niego pisane, więc producent nie może
+go ustawić, a broker go nie niesie. Span nazywa wydawcę
+(`aiwatcher.source.published_by`) tylko wtedy, gdy oba jego końce wysłało to samo
+poświadczenie. Run, który obsłużył wywołanie innego runu, nazywa go na starcie
+(`caller_run_id`); profil serwujący czyta go z nagłówka `Aiwatcher-Caller-Run`,
+który aplikacja dostaje z `LlmCall.caller_headers()`. Krok `evaluation_traces`
+czyta runy, które mówią, że obsłużyły wywołanie runu odpowiedzi, czeka też na ich
+koniec, i liczy odpowiedź jako **poświadczoną**, gdy wywołanie na przypiętym
+modelu w przypiętej wersji opublikował inny token niż run odpowiedzi. Run
+serwujący opublikowany tokenem aplikacji nic nie znaczy. Świadek podający inną
+wersję odmawia odpowiedzi. Wynik ma `witnessed_model`, polityka bramki
+`require_witness`, a to, co dostawca zgłosił jako model odpowiadający
+(`gen_ai.response.model`), jest liczone w `served` i z niczym nieporównywane.
+
+### 33.2 Workflow trzymany do kształtu przypiętej deklaracji
+
+Read model składa z własnego `workflow.declared` runu skrót kształtu — ID węzłów
+i krawędzie, nigdy wersję wybraną przez producenta (`aiwatcher_core::topology`) —
+i zapamiętuje węzły, przez które run przeszedł. Krok czyta przypięty
+`workflow.json` z bundle'a pary (sprawdzając skrót) i odmawia runu, który
+zadeklarował przypięty workflow w innym kształcie albo przeszedł przez węzeł,
+którego deklaracja nie ma. Run bez deklaracji nie jest widziany na workflow, a
+deklaracja bez węzłów jest opisana jako taka, na której żadnego runu nie da się
+zobaczyć. `on_workflow` wchodzi do `complete`, więc `require_traces` go wymaga.
+`Generation.traced_workflow` w SDK otwiera taki run.
+
+### 33.3 Kalibracja odkłada po jednym przypadku
+
+Dopóki zbiór ma najwyżej 200 przypadków, każdy przypadek jest osobnym foldem:
+próg dopasowany na wszystkich pozostałych jest oceniany na odłożonym. Większy
+zbiór jest dzielony na dziesięć foldów przypadków skrótem ID. `held_out` podaje
+liczbę dopasowanych progów oraz najmniejszy i największy. Dopasowany próg ma
+własny przedział `fitted_pass_interval`: środkowe 95% progów z 1000 ponownych
+losowań przypadków ze zwracaniem, zasianych skrótem przypadków, więc ponowienie
+daje te same bajty. Dopasowanie to jedno przejście po posortowanych liczbach;
+test porównuje je z oceną każdego progu na losowych zbiorach w obu kierunkach.
+Wynik zmierzony dwiema połowami nadal się czyta, z dwoma progami.
+
+### 33.4 Linia z modelem spoza rejestru
+
+Wersja modelu wariantu, której rejestr treningów nie ma, jest czytana jako skrót
+sha256 `model-package.json`, który pipeline wysyła jak wagi. Paczka musi dawać ten
+skrót i przejść kontrolę ADR 0023, a artefakty z niej są nazywane dopiero, gdy
+jest zastage'owana — linia pyta adapter ponownie ze zastage'owanymi członkami, aż
+nie pojawi się nic nowego. Dopuszczenie trzyma paczkę dającą skrót wersji do jej
+własnych bajtów, a każdą inną do rejestru; wersja rejestru jest skrótem innej
+krotki, więc się nie mylą.
+
+### 33.5 Pozycja każdego przypadku i split
+
+Trasa przypadków daje każdemu przypadkowi `at`, pierwszemu też, a lista
+przypadków wyniku w panelu otwiera ocenę przypadku i propozycję jak wiersz
+porównania. Propozycja i akcja oczekiwanej odpowiedzi niosą `split`, publikacja
+wpisuje kolumnę `split`, a kohorta splitu wersji curation bierze wiersze tego
+splitu i wiersze bez splitu, w kolejności właściciela. Wersja bez kolumny daje te
+same skróty co wcześniej. Wiersze bez splitu w wersji, gdzie inne go mają,
+wchodzą do kohorty każdego splitu — zostawione, nie odmawiane, i liczone w
+`unsplit` wyprowadzonej kohorty; formularz Measure mówi to słowami.
+
+### 33.6 Obserwacje poza read modelem, czas wywołań i ceny
+
+Rola serve zapisuje każdy zamknięty okres (godzina, `AIWATCHER_OBSERVATION_PERIOD_SECONDS`)
+jako rekord per wariant (create-only) i marker, który go zatwierdza — tylko gdy
+jej read model może zaręczyć, że ma każdy run zakończony w okresie: zaczął
+składać przed okresem i nie wyrzucił runu ani spanów, które mogły się w nim
+skończyć. Okno w Experiments czyta zapisane okresy leżące w całości w oknie i
+runy z read modelu, które nie skończyły się w żadnym z nich, więc run jest liczony
+raz; odpowiedź podaje `runs_from_periods`. Czasy są histogramem o kubełkach
+szerokości ósmej części podwojenia, więc okresy się sumują, a percentyl z nich
+jest oznaczony jako kubełkowy. Obserwacje mierzą każde wywołanie i czas do
+pierwszego tokenu, trzymają tokeny per model i wyceniają je tabelą
+`AIWATCHER_MODEL_PRICES`: jedna waluta, każda cena ze stroną i dniem odczytu,
+tabela bez nich odmawiana przy starcie, wywołanie bez ceny liczone jako
+niewycenione, nigdy darmowe. Panel pokazuje czas wywołania, koszt z datą cen i
+liczbę runów z zapisanych okresów.
+
+### 33.7 Odbiór
+
+`just check` zielony po commitach (Rust: 1461 testów, panel: 297, SDK Pythona:
+497, silnik agentic: 461, `tsc` i testy SDK TypeScript). Testy end-to-end, każdy
+na własnym serwerze i własnym porcie:
+
+- `just e2e-generate` 15/15 — serwer za zastępczym proxy z trzema tokenami
+  (aplikacja, serwer modelu, worker); wariant przypinający model spoza rejestru i
+  workflow ma każdą z 4 odpowiedzi na przypiętym prompcie, modelu i workflow, a
+  każdą poświadczył run serwera modelu, a runy są zapisane jako opublikowane przez
+  `application` i `serving`; aplikacja przechodząca przez węzeł `improvise` kończy
+  się błędem na kroku `traces` z nazwą węzła i nic nie publikuje; pięć runów
+  produkcyjnych czytanych w oknie godziny pochodzi z zapisanego okresu (5 z 5, nie
+  10), każde wywołanie ma czas, a koszt 0,00004 USD liczy się z ceny z dniem
+  2026-09-13;
+- `just e2e-gate` 8/8 — wariant z modelem spoza rejestru przechodzi przez linię po
+  skrócie swojej paczki (kod 0, approval z `bundle_digest`), a job bez paczki
+  kończy się kodem 3 z nazwą `model-package.json` i trasą;
+- `just e2e-review` 8/8 — przypadek zatwierdzony ze splitem `test`: kohorta `test`
+  nowej wersji ma 5 przypadków, `dev` 4, obie z `unsplit` 4; pierwszy przypadek
+  wyniku (Chile, „Valparaíso") zaproponowany po własnym `at` z trasy przypadków.
+
+Na `:8080` i `:18080` nic nie nasłuchiwało przed i po; własne serwery testowe są
+zatrzymane.
+
+### 33.8 Co zostaje
+
+- **Świadek** jest tylko tak mocny jak poświadczenia: dwa hosty z jednym tokenem
+  to jeden wydawca, a zdarzenia z brokera nie mają wydawcy. Zewnętrzny dostawca
+  modelu nie publikuje runów, więc jego wywołania mają najwyżej `served` z
+  odpowiedzi aplikacji. Prompt nadal nie ma świadka poza aplikacją.
+- **Workflow** jest trzymany do kształtu i węzłów, nie do kolejności ani liczby
+  przejść; deklaracja bez węzłów nie daje nic do sprawdzenia.
+- **Okresy** zapisuje tylko fold, który je w całości trzyma: po restarcie bez
+  przebudowy (Laser) okresy sprzed restartu, których poprzedni proces nie zapisał,
+  zostają puste; koniec runu, który dotrze po zamknięciu okresu (dziesiąta część
+  szerokości, najwyżej pięć minut), nie trafia do żadnego zapisanego okresu.
+  Percentyle z okresów są kubełkowe.
+- **Ceny** wyceniają obserwacje; użycie w wynikach nie nazywa modelu i zostaje
+  niewycenione. Tabela jest jedna na wdrożenie i nie ma historii cen.
+- **Kalibracja**: przedział progu z losowań to percentyle, bez korekty
+  obciążenia; foldy po przypadku przy dużym zbiorze to nadal jeden podział na
+  dziesięć.
+- **Split**: wiersze bez splitu wchodzą do każdej kohorty; nic nie wymusza, żeby
+  przypadki `dev` i `test` były rozłączne w tym samym datasecie poza tą kolumną.
+- Dalej: etap D.

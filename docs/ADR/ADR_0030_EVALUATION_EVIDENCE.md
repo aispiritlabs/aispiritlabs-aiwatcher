@@ -6,7 +6,10 @@
   deployment asks, what that judge is shown and keeps, a judge over the
   archive told to everyone, and a bundle digest over what a bundle adds;
   amended 2026-09-13 with a framework's metrics behind a scorer service, a
-  cohort derived from a dataset version, and a run's settings and stop
+  cohort derived from a dataset version, and a run's settings and stop; a
+  variant on the trace and answers held to it; and a second witness, the
+  workflow's shape, folds by case, a model addressed by its package, and
+  observations kept past the read model
 - **Date**: 2026-09-11
 
 ## Context
@@ -1182,3 +1185,74 @@ session with no question are refused; a question must say whose words it is.
 Proposals are indexed by their target after the revision is written, and `GET
 /evaluation-reviews/of-target` answers every review of one target whichever
 dataset it joins, which a case's judgements show.
+
+## Amendment (2026-09-13, closing): a second witness, the workflow's shape, folds by case, a model addressed by its package, and observations past the read model
+
+Six limits of the amendment above, closed without moving a context or a result
+written before it.
+
+**A generated answer may have a witness that is not the application.** The
+traces were the application's word from the worker's host. The log now records
+who published each event (ADR_0001, amended), and a run that served another
+run's call names it (`caller_run_id`). The traces step reads, for each answer's
+run, the runs that say they served one of its calls, and counts the answer as
+**witnessed** when a call on the pinned model at the pinned version was
+published under another credential than the answer's run; the same credential's
+serving run is its own word and counts for nothing. A witness saying another
+version refuses the answers. `GenerationTrace.witnessed_model` counts them, and a
+gate policy's `require_witness` holds anything short of all `incomplete`. A
+serving host still has to report — `aiwatcher_sdk.serving` does, from the header
+`LlmCall.caller_headers()` gives the application — and a provider outside the
+deployment does not; what a provider said served each call
+(`gen_ai.response.model`) is counted in `served` and compared with nothing, a
+judge's `served` for a generator.
+
+**A variant's workflow is held to its declaration.** A run's own
+`workflow.declared` is folded into a digest of its shape — node IDs and edges,
+never the producer's version string (`aiwatcher_core::topology`) — and the nodes
+it stepped through are kept. The traces step reads the pinned `workflow.json`
+from the pair's bundle, held to its digest, and refuses a run that declared the
+pinned workflow in another shape or stepped through a node that declaration
+lacks; a run that declared nothing is not seen on it, and a declaration naming
+no node is said to be one no run can be seen executing. `on_workflow` counts
+them into `complete`. `Generation.traced_workflow` opens such a run.
+
+**A small calibration set is held out a case at a time.** Two halves left each
+fit half of a set that was small to begin with. While a set holds at most 200
+cases, every case is a fold — each bar fitted on all the others and scored on
+the one left out — and a larger set is dealt into ten folds of cases by digest;
+`held_out` says how many bars were fitted and the lowest and highest.
+`fitted_pass_interval` is the fitted bar's own interval: the middle 95% of the
+bars 1000 redraws of the set's cases fit, the redraws seeded from a digest of
+those cases so a retry folds the same bytes. A fit is one pass over the sorted
+numbers. A result measured with two halves still reads, with its two bars.
+
+**A line admits a model this deployment never registered.** A variant's model
+version the training registry does not hold is read as the sha256 of the
+`model-package.json` a pipeline sends, like the weights; it must hash to the
+version and pass ADR_0023's package checks, and the artifacts it lists are named
+once it is staged — the adapter is asked again with what the line has staged
+until nothing new is named. Admission holds a package that hashes to the
+version to its own bytes and any other to the registry, as before; a registry
+version is a digest of another tuple, so the two are never mistaken.
+
+**A result's every case has a position, and a reviewed case names its split.**
+The case route gives each case its own `at`, the first included, so a case is
+proposed from a result's case list as from a comparison row. A proposal and the
+expected-answer action carry a split, published in a `split` column; a curation
+cohort of a split takes the rows naming it and the rows naming none, in the
+owner's order, so a version without the column derives the digests it did. A
+row naming none joins every split's cohort, which is kept rather than refused
+and counted in the derived cohort's `unsplit`.
+
+**What a variant was observed doing outlives the read model.** The serve role
+writes each closed period — an hour unless configured — as a create-only record
+per variant and a marker that commits them, only when its fold can vouch it
+holds every run that ended in the period. A window reads the written periods
+lying wholly inside it and the runs the read model holds that ended in none of
+them, so a run is counted once; durations are histograms an eighth of a doubling
+wide, so periods add and a percentile over them says it is bucketed. Each model
+call is timed with its first token, tokens are kept per model, and a deployment's
+price table prices them — one currency, every price with the page it was read
+from and the day, refused at start-up without either — with unpriced calls
+counted, never free. A result's usage names no model, so it is not priced.

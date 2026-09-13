@@ -545,19 +545,23 @@ e2e-optimise:
 # A baseline and a candidate generate their answers on a worker, are held to the
 # traces of their runs and scored on one derived cohort, then compared and set
 # beside what the candidate was observed serving (FTI C1, C2): cases → generate →
-# traces → score, twice, against a server of its own.
+# traces → score, twice, against a server of its own behind a stand-in proxy with
+# three tokens — so a model server's own run is a second witness, a pinned
+# workflow is held to its shape, and observations are read back from written
+# periods and priced.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 
 # A regression gate in CI (FTI C3): an admin admits a line once, then jobs at
 # several commits run `aiwatcher-gate` and exit pass, regression, incomplete and
-# error — one of them a variant naming a registered model and a workflow.
+# error — among them a variant naming a registered model and a workflow, and one
+# naming a model nobody registered, by its package's digest.
 e2e-gate:
     ./scripts/e2e-gate.py
 
 # Feedback into a regression case (FTI C4): a trace proposed, an expected answer
-# written and approved, a new version of the curation dataset holding it, and a
-# result's case proposed in the words the result holds.
+# written and approved, a new version of the curation dataset holding it in its
+# split, and a result's first case proposed in the words the result holds.
 e2e-review:
     ./scripts/e2e-review.py
 

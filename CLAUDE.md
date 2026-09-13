@@ -64,9 +64,9 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces, scored, compared and observed
-just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too
-just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases, a result's case in its own words
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces, witnessed by a model server, scored, compared, observed and priced
+just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
+just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
@@ -162,7 +162,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close (`periods`, the one module here that writes an object store), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
@@ -881,11 +881,16 @@ what runs a real graph.
   are the evidence's `usage`, measured by the producer and summarised per result
   at publication, while a run's duration is the log fold's, for as long as the
   log keeps it. A variant measured twice is two rows, because a mean of two p90s
-  is no p90, and nothing is priced until a price has a source. A third clock is
-  what each variant was **observed** doing: the server's fold of the runs that
-  named its `variant_id` and that no measurement made, over the window in the
-  URL, one per variant and never folded into a row's numbers — a variant seen
-  only in its own measurement reads as observed nowhere.
+  is no p90. A third clock is what each variant was **observed** doing: the
+  server's fold of the runs that named its `variant_id` and that no measurement
+  made, over the window in the URL, one per variant and never folded into a
+  row's numbers — a variant seen only in its own measurement reads as observed
+  nowhere. It times each model call and its first token, and a window reaching
+  past the read model reads the periods written as they closed, which the
+  column says with how many runs came from them and that the percentiles are
+  bucketed. What the calls cost is the server's, at the deployment's price
+  table, drawn with the day and the model each price was read for and the calls
+  nothing priced; a result's own usage names no model and stays unpriced.
 - `evaluation`'s **Case review** panel is where feedback becomes a regression
   case: a proposal names the trace or case it was seen on and the dataset it
   joins, and the queue writes expected answers, approves, rejects and publishes
@@ -893,8 +898,11 @@ what runs a real graph.
   rendered as it came, a 403 on somebody else's words as the admin role it
   needs. A case's judgements show the reviews of that case, whichever dataset
   each joins, from `GET /evaluation-reviews/of-target`, and propose it by the
-  position its comparison row carries: the server reads the question and the
-  answer, so nothing is retyped and nothing is composed in the browser.
+  position its row carries — on a comparison, or on a result's own case list,
+  where every case has one: the server reads the question and the answer, so
+  nothing is retyped and nothing is composed in the browser. A proposal and an
+  expected answer may name the split the case joins; one naming none joins every
+  split's cohort, which Measure says in words.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -1936,9 +1944,10 @@ the review.
   how often the two verdicts matched over every item, with the Wilson interval,
   as a judge's agreement is counted, beside how far the metric orders answers as
   the people do, with its interval, and the bar these people would have
-  supported — found on the same items, so shown and never applied, beside
-  `held_out`: that fit made on half the set and scored on the other half, both
-  ways round, with the halves dealt by case. The service turns every framework's phoning home off
+  supported — found on the same items, so shown and never applied, with where
+  it lands over redraws of the set's cases, beside `held_out`: that fit made
+  without each case and scored on the case left out — ten folds of cases past
+  200. The service turns every framework's phoning home off
   before importing it, wants a bearer token on both routes — off localhost it
   refuses to start without one — and in a cluster the chart generates that
   token and lets the pod reach DNS and its model alone.
@@ -2042,10 +2051,14 @@ the review.
   references it resolves, so their witness is the application's trace: an
   answer names its `run_id`, and `evaluation_traces` — in the serve role, where
   the log's fold is — refuses answers whose run names another variant or result,
-  whose call rendered another version of the pinned prompt, or whose pinned
-  model served at another version, and counts what the traces do not show
-  rather than refusing it; a gate's `require_traces` is where fewer than all
-  fails. Not over the conversation
+  whose call rendered another version of the pinned prompt, whose pinned model
+  served at another version, or that declared the pinned workflow in another
+  shape or stepped through a node its declaration lacks, and counts what the
+  traces do not show rather than refusing it; a gate's `require_traces` is where
+  fewer than all fails. A serving host's own run naming the call it served
+  (`caller_run_id`), published under another credential than the answer's run,
+  is a witness to the model version, and `require_witness` requires one for
+  every answer. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2059,7 +2072,8 @@ the review.
   /evaluation-reviews/publish` writes the approved cases as a new version of that
   curation dataset, the version before the proposals marked with it. A published
   case does not change. A result's case holds its own words: proposed by where
-  it sits (the `at` a comparison row carries, never a search through shards),
+  it sits (the `at` its row carries on the case route or a comparison, never a
+  search through shards),
   its question and answer are read from the result and marked `measured`; a
   trace holds none, so its proposal writes them. The conversation archive is not
   a source: its words leave the seal only through a corpus export.
@@ -2119,6 +2133,25 @@ the review.
   clients take a variant only as an argument, never from the environment, so a
   worker importing the deployed application does not inherit its variant and
   report a benchmark as traffic.
+- **Never read who published an event from the event.** `published_by` is what
+  the ingest route authenticated — an ingest token's name, a person's subject —
+  and the envelope neither reads nor writes it on the wire, so a producer that
+  names a publisher is ignored and a broker delivers none. A span names one only
+  where one credential sent both ends. A witness is only a witness under another
+  credential: a serving run the application's own token published is the
+  application's word again (ADR_0001, amended).
+- **Never write down a period a fold cannot vouch for.** What a variant was
+  observed doing is written period by period, create-only, by the serve role —
+  and only for a period its read model holds whole: one it began folding before,
+  in which it evicted no run and shed no spans that may have ended there. A
+  window counts a run that ended in a written period from that record and never
+  from the read model as well. A period nobody could vouch for is absent, never
+  zero.
+- **Never price a call without the page and the day.** A price is an entry a
+  deployment loads (`AIWATCHER_MODEL_PRICES`), one currency for the table, and an
+  entry without the page it was read from or the day is refused at start-up. A
+  call no entry covers is counted unpriced, never priced at nought, and nothing
+  here fetches a price.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an
@@ -2180,7 +2213,10 @@ the review.
   refused for evidence a producer measured and over the conversation archive. A
   variant naming a model or a workflow brings what those imply, as the adapter
   names it: the model's package derived from the training registry, and the
-  weights and the workflow's declaration a pipeline sent by digest.
+  weights and the workflow's declaration a pipeline sent by digest. A model the
+  registry does not hold is addressed by its own package: the variant's version
+  is the sha256 of the `model-package.json` a pipeline sends, and the artifacts
+  it lists are named once it is staged.
 - **Never let the adapter's bytes be the registry's business.** An operator
   stages a bundle through `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}`
   (admin) and it lands in `evaluation-bundles/`, the adapter's own prefix
