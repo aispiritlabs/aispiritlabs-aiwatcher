@@ -65,6 +65,7 @@ just e2e-processes    # the same four as four processes on this host: no cluster
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just e2e-generate     # a baseline and a candidate generate answers on a worker, are scored and compared
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error
+just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
@@ -875,6 +876,12 @@ what runs a real graph.
   at publication, while a run's duration is the log fold's, for as long as the
   log keeps it. A variant measured twice is two rows, because a mean of two p90s
   is no p90, and nothing is priced until a price has a source.
+- `evaluation`'s **Case review** panel is where feedback becomes a regression
+  case: a proposal names the trace or case it was seen on and the dataset it
+  joins, and the queue writes expected answers, approves, rejects and publishes
+  the approved as a new version — every rule the server's, every refusal
+  rendered as it came, a 403 on somebody else's words as the admin role it
+  needs.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -2020,6 +2027,17 @@ the review.
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
+- **Never make a judgement a case on its own.** Feedback on a trace, a low
+  judgement, a complaint — each is a *proposal* (`POST /evaluation-reviews`),
+  addressed by the dataset it would join and the thing it was seen on, so
+  proposing the same trace again lands on the review under way. It becomes a
+  case only through people: somebody writes the expected answer, somebody
+  approves it — an edit takes the approval away, and approving somebody else's
+  words (`observed`) takes the admin role — and `POST
+  /evaluation-reviews/publish` writes the approved cases as a new version of that
+  curation dataset, the version before the proposals marked with it. A published
+  case does not change. The conversation archive is not a source: its words
+  leave the seal only through a corpus export.
 - **Never ask anybody to stage a cohort this deployment can derive.** A
   curation version's, an annotation export's and a conversation corpus's cases
   are already derived from their owners at admission, so `POST

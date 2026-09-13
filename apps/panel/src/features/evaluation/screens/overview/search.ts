@@ -44,6 +44,15 @@ export const searchSchema = z.object({
   evidence: z.string().optional(),
   /** Whether the operator's half — which pairs this instance admits — is open. */
   approvals: z.boolean().optional(),
+  /** Whether case review — feedback on its way to being a regression case — is open. */
+  reviews: z.boolean().optional(),
+  /** The curation dataset those cases join. */
+  review_dataset: z.string().optional(),
+  /** Where a proposal was seen, carried from the case or trace it was noticed on. */
+  review_trace: z.string().optional(),
+  review_evaluation: z.string().optional(),
+  review_case: z.string().optional(),
+  review_repetition: z.string().optional(),
   /** Whether the form that starts a measurement is open. */
   measure: z.boolean().optional(),
   /** Whether the cards a measurement is declared against, and the form that publishes one, are open. */

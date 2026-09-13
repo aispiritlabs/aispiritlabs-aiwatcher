@@ -546,6 +546,11 @@ e2e-generate:
 e2e-gate:
     ./scripts/e2e-gate.py
 
+# Feedback into a regression case (FTI C4): a trace proposed, an expected answer
+# written and approved, and a new version of the curation dataset holding it.
+e2e-review:
+    ./scripts/e2e-review.py
+
 # One turn of a composed graph, drawn against the shape it declared: the two
 # searchers the router passed over stay `Pending`, the hand-offs are messages
 # between agents, and an agent's span nests under its node though its tracer

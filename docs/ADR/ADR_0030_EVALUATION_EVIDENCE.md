@@ -1087,3 +1087,22 @@ tolerance, or a critical case not measured or worse, beside any average),
 does not compare, or the candidate is not readable). `aiwatcher-gate` in the SDK
 is the recipe around it and exits 0 to 3; `examples/ci-gate` is a deterministic
 job, and `just e2e-gate` proves each verdict against a server of its own.
+
+**Feedback becomes a case through people, into a dataset version.** C4 closes the
+loop from production back to tests, and the one thing it may not do is turn a
+judgement into ground truth by itself. A proposal (`CaseProposal`) names the
+curation dataset it would join, the target it was seen on — a trace, a span, a
+session or a case, the assessment target's own vocabulary — the question, what
+was answered, why, and whose words they are: `written` by a reviewer, or
+`observed` and copied from somebody using the application. Its ID is derived
+from the dataset and the target, so a second proposal of the same thing lands on
+the review under way. Each action is a create-only revision: an expected answer
+written (`ready`; an edit of an approved one is `ready` again), approved — by an
+admin when the words are observed — or rejected with a reason. Publishing reads
+the dataset's current version, refuses one whose rows are not cases, appends one
+row per approved case as `review-<id>` with the question and the expected answer
+people wrote, writes the next version with `produced_by:
+evaluation-reviews/<dataset>`, and only then marks the proposals published in
+it; a published case does not change. The conversation archive is not a
+source: its words leave the seal, retention and erasure only through a corpus
+export, and a proposal holds what its proposer supplied.

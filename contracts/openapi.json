@@ -5679,6 +5679,250 @@
         }
       }
     },
+    "/api/v1/evaluation-reviews": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every proposal for one dataset, oldest first, at its current revision.",
+        "operationId": "list_reviews",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "description": "The curation dataset the cases join.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseReviewPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Propose a case. Proposing what was noticed on the same target for the same\ndataset again answers the review already under way, 200 rather than 201.",
+        "operationId": "propose_case",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseProposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposedCase"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposedCase"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-reviews/publish": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Publish every approved case as a new version of its dataset: the current\nversion's rows, then one row per case, `review-…` by its ID.",
+        "description": "A dataset whose rows are not cases — `case_id`, `input`, `expected` — is\nrefused rather than given rows of a second shape. Publishing the same\napproved set again lands on the same version.",
+        "operationId": "publish_reviews",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "description": "The curation dataset the cases join.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedReviews"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-reviews/{id}/actions": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Write an expected answer, approve or reject. Approving words somebody using\nthe application said — `observed` content — takes the admin role.",
+        "operationId": "review_case",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dataset",
+            "in": "query",
+            "description": "The curation dataset the cases join.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseReviewAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseReviewItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-rubrics": {
       "get": {
         "tags": [
@@ -13695,6 +13939,246 @@
             "type": "string"
           }
         }
+      },
+      "CaseProposal": {
+        "type": "object",
+        "description": "What somebody proposes as a case.",
+        "required": [
+          "dataset",
+          "target",
+          "question",
+          "content"
+        ],
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What was answered, when the proposer has it."
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The standing judgement that raised it, when one did."
+          },
+          "content": {
+            "$ref": "#/components/schemas/CaseReviewContent"
+          },
+          "dataset": {
+            "type": "string",
+            "description": "The curation dataset the case would join."
+          },
+          "note": {
+            "type": "string",
+            "description": "Why, in the proposer's words: the feedback, or what went wrong."
+          },
+          "question": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentTarget",
+            "description": "Where it was seen."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CaseReviewAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Write what the answer should have been. An approved proposal edited is\napproved no longer: what was approved is not what it now says.",
+            "required": [
+              "expected",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "expect"
+                ]
+              },
+              "expected": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "approve"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "reject"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "What a reviewer does to a proposal."
+      },
+      "CaseReviewContent": {
+        "type": "string",
+        "description": "Whose words a proposal holds.",
+        "enum": [
+          "written",
+          "observed"
+        ]
+      },
+      "CaseReviewItem": {
+        "type": "object",
+        "description": "One proposal at its current revision.",
+        "required": [
+          "id",
+          "dataset",
+          "target",
+          "question",
+          "content",
+          "proposed_by",
+          "proposed_at",
+          "state",
+          "revision",
+          "recorded_by",
+          "recorded_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/CaseReviewContent"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "proposed_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "proposed_by": {
+            "type": "string"
+          },
+          "published_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The dataset version it was published in."
+          },
+          "question": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recorded_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recorded_by": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/CaseReviewState"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentTarget"
+          }
+        }
+      },
+      "CaseReviewPage": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "items"
+        ],
+        "properties": {
+          "dataset": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseReviewItem"
+            },
+            "description": "Oldest proposal first."
+          }
+        }
+      },
+      "CaseReviewState": {
+        "type": "string",
+        "enum": [
+          "proposed",
+          "ready",
+          "approved",
+          "rejected",
+          "published"
+        ]
       },
       "CaseSide": {
         "type": "string",
@@ -22543,6 +23027,22 @@
         ],
         "description": "A version without its text.\n\nThe list view's row. Kept separate so listing a prompt with two hundred\nversions does not transfer two hundred prompts."
       },
+      "ProposedCase": {
+        "type": "object",
+        "required": [
+          "review",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this landed on a review already under way for that target."
+          },
+          "review": {
+            "$ref": "#/components/schemas/CaseReviewItem"
+          }
+        }
+      },
       "Provenance": {
         "type": "object",
         "description": "Where this turn came from, in the telemetry that is still on the log.\n\nEvery field is a join back. The archive expires on its own clock, and when\nit does these ids are what is left — which is the point of keeping them out\nof the encrypted half. \"This run used a model that answered badly\" stays\nanswerable after the words are gone.",
@@ -22888,6 +23388,25 @@
           },
           "dataset": {
             "$ref": "#/components/schemas/DatasetSummary"
+          }
+        }
+      },
+      "PublishedReviews": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "published"
+        ],
+        "properties": {
+          "dataset": {
+            "$ref": "#/components/schemas/PublishedDataset"
+          },
+          "published": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseReviewItem"
+            },
+            "description": "The proposals that version holds, marked with it."
           }
         }
       },

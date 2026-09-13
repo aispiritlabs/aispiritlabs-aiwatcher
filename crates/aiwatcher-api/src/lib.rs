@@ -42,6 +42,7 @@ pub mod live;
 pub mod metrics;
 pub mod openapi;
 pub mod prompts;
+pub mod reviews;
 pub mod routes;
 pub mod runs;
 pub mod schedules;

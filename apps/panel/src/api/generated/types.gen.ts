@@ -1132,6 +1132,103 @@ export type CasePage = {
 };
 
 /**
+ * What somebody proposes as a case.
+ */
+export type CaseProposal = {
+    /**
+     * What was answered, when the proposer has it.
+     */
+    answer?: string | null;
+    /**
+     * The standing judgement that raised it, when one did.
+     */
+    assessment?: string | null;
+    content: CaseReviewContent;
+    /**
+     * The curation dataset the case would join.
+     */
+    dataset: string;
+    /**
+     * Why, in the proposer's words: the feedback, or what went wrong.
+     */
+    note?: string;
+    question: string;
+    /**
+     * Where it was seen.
+     */
+    target: AssessmentTarget;
+};
+
+/**
+ * What a reviewer does to a proposal.
+ */
+export type CaseReviewAction = {
+    action: 'expect';
+    expected: string;
+} | {
+    action: 'approve';
+} | {
+    action: 'reject';
+    reason: string;
+};
+
+/**
+ * Whose words a proposal holds.
+ */
+export const CaseReviewContent = { WRITTEN: 'written', OBSERVED: 'observed' } as const;
+
+/**
+ * Whose words a proposal holds.
+ */
+export type CaseReviewContent = typeof CaseReviewContent[keyof typeof CaseReviewContent];
+
+/**
+ * One proposal at its current revision.
+ */
+export type CaseReviewItem = {
+    answer?: string | null;
+    assessment?: string | null;
+    content: CaseReviewContent;
+    dataset: string;
+    decided_by?: string | null;
+    expected?: string | null;
+    expected_by?: string | null;
+    id: string;
+    note?: string;
+    proposed_at: number;
+    proposed_by: string;
+    /**
+     * The dataset version it was published in.
+     */
+    published_in?: string | null;
+    question: string;
+    reason?: string | null;
+    recorded_at: number;
+    recorded_by: string;
+    revision: number;
+    state: CaseReviewState;
+    target: AssessmentTarget;
+};
+
+export type CaseReviewPage = {
+    dataset: string;
+    /**
+     * Oldest proposal first.
+     */
+    items: Array<CaseReviewItem>;
+};
+
+export const CaseReviewState = {
+    PROPOSED: 'proposed',
+    READY: 'ready',
+    APPROVED: 'approved',
+    REJECTED: 'rejected',
+    PUBLISHED: 'published'
+} as const;
+
+export type CaseReviewState = typeof CaseReviewState[keyof typeof CaseReviewState];
+
+/**
  * What part of a case a metric reads.
  */
 export const CaseSide = {
@@ -5704,6 +5801,14 @@ export type PromptVersionSummary = VersionOrigin & {
     version_id: PromptVersionId;
 };
 
+export type ProposedCase = {
+    /**
+     * False when this landed on a review already under way for that target.
+     */
+    created: boolean;
+    review: CaseReviewItem;
+};
+
 /**
  * Where this turn came from, in the telemetry that is still on the log.
  *
@@ -5915,6 +6020,14 @@ export type PublishedDataset = {
      */
     created: boolean;
     dataset: DatasetSummary;
+};
+
+export type PublishedReviews = {
+    dataset: PublishedDataset;
+    /**
+     * The proposals that version holds, marked with it.
+     */
+    published: Array<CaseReviewItem>;
 };
 
 export type PythonTaskSpec = {
@@ -11473,6 +11586,105 @@ export type GateResultResponses = {
 };
 
 export type GateResultResponse = GateResultResponses[keyof GateResultResponses];
+
+export type ListReviewsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/evaluation-reviews';
+};
+
+export type ListReviewsErrors = {
+    501: ErrorBody;
+};
+
+export type ListReviewsError = ListReviewsErrors[keyof ListReviewsErrors];
+
+export type ListReviewsResponses = {
+    200: CaseReviewPage;
+};
+
+export type ListReviewsResponse = ListReviewsResponses[keyof ListReviewsResponses];
+
+export type ProposeCaseData = {
+    body: CaseProposal;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-reviews';
+};
+
+export type ProposeCaseErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ProposeCaseError = ProposeCaseErrors[keyof ProposeCaseErrors];
+
+export type ProposeCaseResponses = {
+    200: ProposedCase;
+    201: ProposedCase;
+};
+
+export type ProposeCaseResponse = ProposeCaseResponses[keyof ProposeCaseResponses];
+
+export type PublishReviewsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/evaluation-reviews/publish';
+};
+
+export type PublishReviewsErrors = {
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishReviewsError = PublishReviewsErrors[keyof PublishReviewsErrors];
+
+export type PublishReviewsResponses = {
+    200: PublishedReviews;
+};
+
+export type PublishReviewsResponse = PublishReviewsResponses[keyof PublishReviewsResponses];
+
+export type ReviewCaseData = {
+    body: CaseReviewAction;
+    path: {
+        id: string;
+    };
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/evaluation-reviews/{id}/actions';
+};
+
+export type ReviewCaseErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReviewCaseError = ReviewCaseErrors[keyof ReviewCaseErrors];
+
+export type ReviewCaseResponses = {
+    200: CaseReviewItem;
+};
+
+export type ReviewCaseResponse = ReviewCaseResponses[keyof ReviewCaseResponses];
 
 export type ListRubricsData = {
     body?: never;

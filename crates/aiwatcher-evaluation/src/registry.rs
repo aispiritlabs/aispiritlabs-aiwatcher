@@ -646,6 +646,66 @@ impl Registry {
         self.approve(manifest, &approved_by, now).await.map(Some)
     }
 
+    /// Propose a case for a dataset; answers the review and whether this
+    /// proposal started it rather than landing on one already under way.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] naming the field that is not one.
+    pub async fn propose_case(
+        &self,
+        proposal: &crate::CaseProposal,
+        proposed_by: &str,
+        now: i64,
+    ) -> Result<(crate::ReviewItem, bool)> {
+        crate::review::propose(&self.store, proposal, proposed_by, now).await
+    }
+
+    /// Write an expected answer, approve or reject; `None` when there is no
+    /// such proposal in that dataset.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for an action its state refuses, and
+    /// [`EvaluationError::Unavailable`] `Forbidden` for approving somebody
+    /// else's words without the admin role.
+    pub async fn review_case(
+        &self,
+        dataset: &str,
+        id: &str,
+        action: &crate::ReviewAction,
+        subject: &str,
+        admin: bool,
+        now: i64,
+    ) -> Result<Option<crate::ReviewItem>> {
+        crate::review::act(&self.store, dataset, id, action, subject, admin, now).await
+    }
+
+    /// Every proposal for one dataset, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn reviews(&self, dataset: &str) -> Result<crate::ReviewPage> {
+        crate::review::page(&self.store, dataset).await
+    }
+
+    /// Mark approved proposals as published in a dataset version, after that
+    /// version was written.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Contested`] when another write kept winning.
+    pub async fn reviews_published(
+        &self,
+        items: &[crate::ReviewItem],
+        version: &str,
+        subject: &str,
+        now: i64,
+    ) -> Result<Vec<crate::ReviewItem>> {
+        crate::review::published(&self.store, items, version, subject, now).await
+    }
+
     /// Every pair this instance has admitted, withdrawn ones included: an
     /// approval that vanished from the list would read as one nobody made.
     pub async fn approvals(&self) -> Result<Vec<Approval>> {

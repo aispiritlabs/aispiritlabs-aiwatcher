@@ -15,6 +15,7 @@ mod manifest;
 mod reference;
 mod registry;
 mod result;
+mod review;
 mod rubric;
 mod scorecard;
 mod scoring;
@@ -47,6 +48,7 @@ pub use registry::{
     SourceEvidence,
 };
 pub use result::*;
+pub use review::{CaseProposal, ReviewAction, ReviewContent, ReviewItem, ReviewPage, ReviewState};
 pub use store::EvidenceCipher;
 
 pub use context::{

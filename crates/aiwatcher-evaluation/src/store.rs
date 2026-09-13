@@ -107,6 +107,18 @@ pub(crate) fn line(id: &str) -> String {
 pub(crate) fn line_withdrawal(id: &str) -> String {
     format!("{LINES}{id}/withdrawn.json")
 }
+/// Reviews are authored, grow with people rather than traffic, and stay out of
+/// the sweep's way beside the other authored prefixes. The dataset name is a
+/// person's text, so it is hashed.
+pub(crate) fn reviews(dataset: &str) -> String {
+    format!("evaluation-reviews/{}/", hash(dataset.as_bytes()))
+}
+pub(crate) fn review(dataset: &str, id: &str) -> String {
+    format!("{}{id}/", reviews(dataset))
+}
+pub(crate) fn review_revision(dataset: &str, id: &str, revision: u32) -> String {
+    format!("{}{revision:010}.json", review(dataset, id))
+}
 /// A variant's pinned bytes, keyed by their digest: whoever sends them, they
 /// are the bytes a pin names or they are nothing.
 pub(crate) fn variant_artifact(digest: &str) -> String {

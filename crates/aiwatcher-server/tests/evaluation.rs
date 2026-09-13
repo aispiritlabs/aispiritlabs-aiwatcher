@@ -32,6 +32,9 @@ mod experiments;
 #[path = "evaluation/gate.rs"]
 mod gate;
 
+#[path = "evaluation/reviews.rs"]
+mod reviews;
+
 #[path = "evaluation/external.rs"]
 mod external;
 

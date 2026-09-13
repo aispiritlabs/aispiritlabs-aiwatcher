@@ -18,6 +18,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { Approvals } from './approvals';
+import { Reviews } from './reviews';
 import { Scorecards } from './scorecards';
 import { Measure } from './measure';
 import { ComparabilityControl } from './comparability';
@@ -225,6 +226,14 @@ export function EvaluationPage() {
           </Button>
           <Button
             size="sm"
+            variant={search.reviews ? 'default' : 'outline'}
+            aria-pressed={search.reviews === true}
+            onClick={() => select({ reviews: search.reviews ? undefined : true })}
+          >
+            Case review
+          </Button>
+          <Button
+            size="sm"
             variant={search.approvals ? 'default' : 'outline'}
             aria-pressed={search.approvals === true}
             onClick={() => select({ approvals: search.approvals ? undefined : true })}
@@ -255,6 +264,18 @@ export function EvaluationPage() {
       ) : null}
       {search.scorecards ? <Scorecards /> : null}
       {search.approvals ? <Approvals /> : null}
+      {search.reviews ? (
+        <Reviews
+          seed={{
+            dataset: search.review_dataset,
+            trace: search.review_trace,
+            evaluation: search.review_evaluation,
+            case: search.review_case,
+            repetition: search.review_repetition,
+          }}
+          onDataset={(review_dataset) => select({ review_dataset })}
+        />
+      ) : null}
 
       <LocalViews
         screen="evaluation"
@@ -811,7 +832,6 @@ export function ReportDetail({
     </div>
   );
 }
-
 
 function Metrics({
   metrics,
