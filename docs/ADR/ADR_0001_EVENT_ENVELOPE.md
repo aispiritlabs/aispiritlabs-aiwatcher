@@ -360,3 +360,25 @@ publishes `tool.*` on its own run naming the caller's, with
 `arguments_digests` and `returned_digests` (`aiwatcher.witness.arguments`,
 `aiwatcher.witness.returned`): each part of the arguments, and what came back,
 as a reply's digest is made. None of it is a word said in the call.
+
+## Amendment 2026-09-13, last: a client's count of runs, and what a witness says a reply could not be read
+
+A run's start may carry `run_sequence`: the client's count of the runs it
+opened naming the run's variant and answering no measurement, from nought, one
+count per variant. A count inside a run shows an event that never arrived only
+where another event of that run did; a run whose every event was lost left
+nothing to count in. The period fold reads a number passed over as a run whose
+start never reached it — a run lost whole among them — on any log (ADR_0030,
+amended). A client's first start the fold reads counts nothing before it, since
+a fold that began midway cannot tell a count it came to late from one that lost
+its beginning. A measurement's run is in no count, because what it answered is
+a result's rather than a variant's traffic. Each client numbers an event and
+hands it to its transport in one step, so events from two threads reach the
+transport in the order they were counted: out of order, the later number read
+as the earlier one lost.
+
+A gateway's call may carry `took_nothing` (`aiwatcher.witness.took_nothing`):
+the caller said how it takes its answer out, and that way took nothing out of
+any reply. A tool's host may publish the same `tool.*` a gateway's relay does
+(`aiwatcher_sdk.gateway.ToolWitness`), under the gateway's own credential so its
+digests are made under the same key. None of it is a word said in the call.

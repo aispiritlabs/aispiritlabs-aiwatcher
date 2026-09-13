@@ -6,7 +6,7 @@
   The decision stands — a declaration is still the source that is right on
   every path. Amended 2026-09-11 (below): how the panel lays the graph out;
   amended 2026-09-13: a node that repeats, and where a run enters a shape;
-  and edges that share one bound.
+  and edges that share one bound, which must be one cycle's ways back.
 - **Date**: 2026-08-29
 
 ## Context
@@ -315,10 +315,22 @@ single edge is that edge's own `at_most`, however it is spelled; and a start
 that followed an edge uses the bounded edge with the most left under every bound
 it is in. Part of the digest only where declared.
 
+A shared bound counts a cycle's rounds, so every edge under it has to be a way
+back of one cycle: its target reaches its source along the declared edges, and
+all of them lie in one strongly connected part of the shape.
+`Topology::misbounded` names a bound on an edge that leads nowhere back —
+followed once per completion of its source, going round nothing — and one
+spread over separate cycles, which are the rounds of neither. The traces step
+refuses a pinned declaration holding one, naming it, and the Python SDK refuses
+to declare one. A bound of one edge is that edge's own `at_most` and is not
+asked: on an edge out of a node that repeats, it bounds how often the run fans
+out.
+
 ### What would make this wrong
 
 A bound counts starts that a completion led to, so it bounds rounds only of the
-cycles its edges are on: an author who shares a bound between the wrong edges
-bounds the wrong thing, and nothing checks that the edges are a cycle's ways
-back. The fold keeps 256 steps a run; a run that took more is counted as unseen
-on the workflow rather than checked in part.
+cycles its edges are on. A shared bound over two ways back that round one part
+of the shape but different cycles in it — two loops through a common node — is
+admitted and counts both together, which is what its author wrote and may not be
+what they meant. The fold keeps 256 steps a run; a run that took more is counted
+as unseen on the workflow rather than checked in part.

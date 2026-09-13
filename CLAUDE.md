@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed or made around it — scored, compared, observed, priced, journaled and restarted
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen or made around it — scored, compared, observed, priced, journaled, restarted and a run lost whole
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -749,7 +749,9 @@ which the gateway takes the same way, with the function the caller takes it with
 (`gateway.extracted`), and which of its values it took out of another in those
 steps (`derived`), which the gateway takes out again. It relays the deployment's
 tools the same way, at `/tools/<name>` to the URL the deployment named and never
-one a caller names, digesting each part of the arguments and what came back. It
+one a caller names, digesting each part of the arguments and what came back — and
+a tool the application calls directly is witnessed on its own host by
+`ToolWitness`, under the gateway's credential so its digests share the key. It
 is the telemetry
 client's half — the standard library and nothing else — and it publishes neither
 the request nor the reply: only keyed digests of each message, of the values it
@@ -920,8 +922,9 @@ there.
   where they ended, written or still held — which the column says with where
   counting began, how many runs came from written periods and reached the log
   late, what the log no longer held when the fold came to it, the events the
-  runs' clients numbered that never arrived, and that the percentiles are
-  bucketed. What calls cost is the server's, at the deployment's price
+  runs' clients numbered that never arrived and the runs whose start never did,
+  and that the percentiles are bucketed. What calls cost is the server's, at the
+  deployment's price
   table, each call at the price in force on its day — a variant's observed calls
   and each row's cases, by the models their usage names — drawn with the day and
   the model each price was read for, the calls priced before any price was read,
@@ -1958,7 +1961,8 @@ the review.
   and a guessed unit reads as a stated one. A scorer compares numbers as they
   were written — exact decimals from the JSON each side was kept in, a text that
   is nothing but a number read as that number — and turns a distance into a
-  double only to publish it. When an existing
+  double only to publish it; a case keeps that JSON as `actual_spelled` where
+  its parsed `actual` holds a number only as the nearest double. When an existing
   scorer's answer changes for some input, `SCORING_VERSION` moves, because
   `context.scorer` names the code that read the card and `context.suite` names
   the card — two owners, two references.
@@ -2108,22 +2112,27 @@ the review.
   input; one call doing both for a request that was nothing but the pinned
   prompt, the answer not in it, rendered with values each accounted for — the
   case's input or a part of it, the reply of another call so made, what a tool
-  the gateway relayed returned to arguments so accounted for, or a value taken
-  out of one of those in steps the gateway repeated — is an exchange, which an
-  application answering around the gateway, telling the model what to say or
-  handing it a value it made cannot show, and `require_witnessed_answer`
-  requires one per answer. A label's word counts only where the variant's
-  generation config pins that `answer_from`, and an answer made of several
-  replies only where each part the pinned response schema names is one; an
-  answer is compared from the JSON the generation wrote, so an integer digit
-  for digit. A run's
+  the gateway relayed or a tool's host witnessed under its credential returned
+  to arguments so accounted for, or a value taken out of one of those in steps
+  the gateway repeated — is an exchange, which an application answering around
+  the gateway, telling the model what to say or handing it a value it made
+  cannot show, and `require_witnessed_answer` requires one per answer. A label's
+  word counts only where the variant's generation config pins that
+  `answer_from`, an answer made of several replies only where each part the
+  pinned response schema names is one, replies joined into one text only in
+  the words it pins as `answer_joined`, and a reply chosen among others that
+  went into nothing a witness saw only where the way it pins as `answer_chosen`
+  — the first relayed, or the most of exactly `n` — picks it; an answer is
+  compared from the JSON the generation wrote, so an integer digit for
+  digit. A run's
   steps are held to the order the pinned declaration leads and to how often: a
   node starts once per completion leading into it, a failed start gives its turn
   back, a declared loop goes round as often as it completes, a node declared
   `repeats` runs once per item, one declared `at_most` starts no more than
   that, and an edge declared `at_most` is followed no more than that — the
   rounds of a cycle through it, a retry not counted — as are edges sharing one
-  of the declaration's `bounds`, between them. Not over the conversation
+  of the declaration's `bounds`, between them, which must be one cycle's ways
+  back or the pinned declaration is refused naming the bound. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2228,14 +2237,17 @@ the review.
   anew takes over at the next hour, so two widths never cover one span. On a
   log that numbers every event, a position the log no longer holds when the
   fold comes to it is first looked for in the journal — a consumer of its own,
-  on a connection of its own, keeping each stretch it read, with only what the
-  fold reads of each event, for as many days as the deployment says — and what
+  on a connection of its own and in every role, keeping each stretch it read,
+  with only what the fold reads of each event, for as many days as the
+  deployment says — and what
   no page covers is written down with the span of time it may have lain in, the
   periods it reaches say they are incomplete, and a window over it says how many
   events it may be short of. On any log, a number a client skipped in its own
   count of a run's events is an event the fold never read: the run is counted
   with what arrived, its period says it is incomplete, and a window counts the
-  lost events — never a silence.
+  lost events — never a silence. A number it skipped in its count of the runs it
+  opened for a variant is a run whose start never arrived, a run lost whole
+  among them, counted where the next start did.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start

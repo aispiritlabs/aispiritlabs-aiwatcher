@@ -19,7 +19,9 @@
   integers digit for digit, a log that no longer holds what a fold reads, and
   every width sliced by the second; and a value taken out of another, a tool's
   result, a label the variant pins, an answer made of parts, numbers scored as
-  written, a gap refilled, and a count every client keeps
+  written, a gap refilled, and a count every client keeps; and replies joined
+  in pinned words, a choice among replies, a tool witnessed where it runs, an
+  answer as written, and runs lost whole
 - **Date**: 2026-09-11
 
 ## Context
@@ -1524,3 +1526,54 @@ covers are written down. Every SDK client numbers its events per run (ADR_0001,
 amended), and the fold counts the numbers it never read for each run it tracked:
 the run is counted with what arrived, its period says it is incomplete, and a
 window returns `lost_events` beside the log's gaps.
+
+## Amendment (2026-09-13, last): replies joined in pinned words, a choice among replies, a tool witnessed where it runs, an answer as written, and runs lost whole
+
+Five limits of the amendment above.
+
+**Replies joined into one text count in the words the variant pins.** The
+generation config may pin `answer_joined`: `{"separator": ", "}`, replies one
+after another with those words between each two, or `{"template": "{{ capital
+}} is in {{ country }}."}`, a reply in each placeholder and the template's own
+words around them — a template with two placeholders side by side joins nothing,
+since it could be split anywhere. A text answer is an exchange when some split
+of it along the pinned words — every split is tried, so a reply holding the
+words itself is still found — makes each piece the reply of an accounted call
+whose request did not hold it. The words are the variant's, the same for every
+case, so they carry nothing a case could need; words the application chose per
+case are still its own.
+
+**A reply chosen among others is the application's choice unless the variant
+pins how it chooses.** The replies that count are those the run's witnessed
+calls gave that went into nothing else a witness saw: no call it relayed was
+rendered with one or took a value out of one, and no tool it relayed was handed
+one. Where every such reply is the answer's, nothing was chosen. Where one is
+not, the answer is no exchange — `chosen` on the row, counted on the trace and
+said to a gate — unless the generation config pins `answer_chosen` and that way
+picks it, over replies all made of nothing the application added and for an
+answer that is one reply: `"first"` wants the answer's to be the reply the
+witness relayed first, alone; `{"most_of": n}` wants exactly `n` such replies
+and the answer's given more often than any other. A reply the answer's own way
+of taking it read nothing out of (`took_nothing`, ADR_0001 amended) is one the
+application could not read, and no choice; one that a different way read
+nothing out of is still a reply the application saw. `"last"` is not a way:
+asking until a reply pleases and keeping the last is the choice itself.
+
+**A tool is witnessed where it runs.** `ToolWitness` publishes, from a tool's own
+host, the digests the gateway's relay publishes. Under the gateway's credential
+its digests are made under the gateway's key, so a value a relayed call was
+rendered with is accounted as that tool's result exactly as a relayed one is; a
+host holding the token is trusted as the gateway is. Under any other credential
+its digests say nothing about what a relayed call was rendered with, since a
+digest under one key cannot be compared with one under another.
+
+**A case says what was answered as it was written.** Where the answer's JSON
+holds a number a parsed answer keeps only as the double nearest it, the case
+keeps that JSON as `actual_spelled` beside `actual`, the panel shows it, and a
+review proposing the case takes its words from it. Absent from every other
+case, so no shard written before it moves.
+
+**A run lost whole is counted.** A client numbers the runs it opens for a
+variant (ADR_0001, amended); the period fold counts a number passed over as a
+run whose start never reached it, in the period the next start of that count
+reached, which says it is incomplete, and a window returns `lost_runs`.

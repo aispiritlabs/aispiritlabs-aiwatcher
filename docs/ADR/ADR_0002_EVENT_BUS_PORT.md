@@ -183,3 +183,18 @@ its numbers go one after the last (a JetStream stream sequence does; a Kafka
 partition's offsets do not once compaction leaves holes), and the adapter says
 no otherwise. A log that cannot say it still shows what never arrived through
 each producer's own count (ADR_0001, amended).
+
+## Amendment 2026-09-13, last: the journal in every role
+
+The journal ran where work was drained. In a split deployment that left the
+`serve` half — the one accepting events — without one whenever the `work` half
+was down, and a log evicting what nobody read is a gap nothing refills. It runs
+in every role now, both halves under the one processor ID with `-journal` beside
+it, so a log with consumer groups gives the partition to one of them and hands
+it to the other when that one stops: while anything that accepts events is up, a
+journal reads them. Redelivered stretches cost nothing, since a page covers only
+positions it read and the fold skips what it has folded. When the journal comes
+to a position past the one after its last — the log evicted what no journal
+read — it says so, naming the positions. What stays a gap is a stretch nothing
+read before it was evicted: every process down for longer than retention, or a
+producer writing to the broker directly while none is up.
