@@ -485,6 +485,8 @@ enum Misstep {
     /// it had used — a second pass nothing sent it on, or a loop the
     /// declaration does not have.
     Again { node: String, from: Vec<String> },
+    /// A start past the number the declaration allows the node.
+    Beyond { node: String, at_most: u64 },
 }
 
 /// Each node's starts the declaration does not lead to, each node once.
@@ -496,19 +498,38 @@ enum Misstep {
 /// declared `repeats` needs only its first. So a branch runs one side, a join
 /// is reached from whichever side ran, a declared loop goes round as often as
 /// its nodes complete, and a node run twice for one completion, or again when
-/// nothing leads back into it, is named.
+/// nothing leads back into it, is named — as is a start past the node's
+/// declared `at_most`, counting every start, retries included.
 fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
     let entries = shape.entries();
     let mut entered = vec![false; entries.len()];
     let mut sent: BTreeMap<&str, u64> = BTreeMap::new();
     let mut using: BTreeMap<&str, u64> = BTreeMap::new();
     let mut started = std::collections::BTreeSet::new();
+    let mut starts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut found: Vec<Misstep> = Vec::new();
+    let named = |found: &[Misstep], node: &str| {
+        found.iter().any(|misstep| match misstep {
+            Misstep::Before { node: named, .. }
+            | Misstep::Again { node: named, .. }
+            | Misstep::Beyond { node: named, .. } => named == node,
+        })
+    };
     for step in steps {
         match step {
             StepSeen::Started(node) => {
                 let node = node.as_str();
                 let first = started.insert(node);
+                let count = starts.entry(node).or_default();
+                *count += 1;
+                if let Some(bound) = shape.at_most.get(node).filter(|bound| *count > **bound)
+                    && !named(&found, node)
+                {
+                    found.push(Misstep::Beyond {
+                        node: node.to_owned(),
+                        at_most: *bound,
+                    });
+                }
                 if shape.repeats.contains(node) && !first {
                     continue;
                 }
@@ -529,12 +550,7 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
                     *using.entry(node).or_default() += 1;
                     continue;
                 }
-                let named = found.iter().any(|misstep| match misstep {
-                    Misstep::Before { node: named, .. } | Misstep::Again { node: named, .. } => {
-                        named == node
-                    }
-                });
-                if named {
+                if named(&found, node) {
                     continue;
                 }
                 let from: Vec<String> = shape
@@ -807,6 +823,11 @@ pub fn trace_answers(
                             Misstep::Again { node, from } if from.is_empty() => format!(
                                 "the run started {node} again, and nothing in the declaration of \
                                  {} the variant pins leads back into it",
+                                pinned.name
+                            ),
+                            Misstep::Beyond { node, at_most } => format!(
+                                "the run started {node} more than {at_most} times, and the \
+                                 declaration of {} the variant pins allows it at most that many",
                                 pinned.name
                             ),
                             Misstep::Again { node, from } => format!(
@@ -1399,6 +1420,67 @@ mod tests {
             early[0].contains("before retrieve had completed"),
             "{early:?}"
         );
+    }
+
+    #[test]
+    fn a_declared_bound_holds_a_loop_and_a_repeating_node_to_as_many_starts() {
+        let pinned = Topology::read(&serde_json::json!({
+            "nodes": [
+                {"id": "plan", "at_most": 2},
+                "act",
+                {"id": "summarise", "repeats": true, "at_most": 3}
+            ],
+            "edges": [["plan", "act"], ["act", "plan"], ["act", "summarise"]]
+        }))
+        .expect("a shape");
+
+        let rows = traversed(
+            &pinned,
+            &[
+                "plan:s",
+                "plan:c",
+                "act:s",
+                "act:c",
+                "plan:s",
+                "plan:c",
+                "act:s",
+                "act:c",
+                "summarise:s",
+                "summarise:s",
+                "summarise:s",
+            ],
+        )
+        .expect("twice round the loop, and three items");
+        assert_eq!(rows[0].on_workflow, Some(true));
+
+        let looped = traversed(
+            &pinned,
+            &[
+                "plan:s", "plan:c", "act:s", "act:c", "plan:s", "plan:c", "act:s", "act:c",
+                "plan:s",
+            ],
+        )
+        .expect_err("a third time round");
+        assert!(
+            looped[0].contains("started plan more than 2 times"),
+            "{looped:?}"
+        );
+        let repeated = traversed(
+            &pinned,
+            &[
+                "plan:s",
+                "plan:c",
+                "act:s",
+                "act:c",
+                "summarise:s",
+                "summarise:s",
+                "summarise:s",
+                "summarise:s",
+            ],
+        )
+        .expect_err("a fourth item");
+        assert_eq!(repeated.len(), 1, "{repeated:?}");
+        assert!(repeated[0].contains("started summarise more than 3 times"));
     }
 
     #[test]

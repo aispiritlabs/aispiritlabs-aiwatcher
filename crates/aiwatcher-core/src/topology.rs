@@ -9,9 +9,10 @@
 //! rather than a version string with a version string.
 //!
 //! A node may say it `repeats` — a stage run once per item, as many times as
-//! the run has items — which changes what a run may do on the shape, so it is
-//! part of the digest; a declaration with no such node digests as it always
-//! did.
+//! the run has items — and how many times at most it may start (`at_most`),
+//! which bounds a declared loop and a repeating node alike. Both change what a
+//! run may do on the shape, so both are part of the digest; a declaration
+//! without either digests as it always did.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,6 +27,9 @@ pub struct Topology {
     /// Nodes declared `"repeats": true`: once something leads into one, it
     /// may run any number of times, side by side.
     pub repeats: BTreeSet<String>,
+    /// Nodes declared `"at_most": n`: how many times a run may start one,
+    /// retries included.
+    pub at_most: BTreeMap<String, u64>,
 }
 
 impl Topology {
@@ -36,6 +40,7 @@ impl Topology {
     #[must_use]
     pub fn read(declaration: &Value) -> Option<Self> {
         let mut repeats = BTreeSet::new();
+        let mut at_most = BTreeMap::new();
         let nodes: BTreeSet<String> = declaration
             .get("nodes")?
             .as_array()?
@@ -49,6 +54,13 @@ impl Topology {
                         .filter(|id| !id.is_empty())?;
                     if fields.get("repeats").and_then(Value::as_bool) == Some(true) {
                         repeats.insert(id.to_owned());
+                    }
+                    if let Some(bound) = fields
+                        .get("at_most")
+                        .and_then(Value::as_u64)
+                        .filter(|n| *n > 0)
+                    {
+                        at_most.insert(id.to_owned(), bound);
                     }
                     Some(id.to_owned())
                 }
@@ -85,12 +97,13 @@ impl Topology {
             nodes,
             edges,
             repeats,
+            at_most,
         })
     }
 
     /// The sha256 of the shape: sorted node IDs and sorted edges — and the
-    /// repeating nodes, where there are any — labelled so no other digest in
-    /// this system can be mistaken for it.
+    /// repeating nodes and the bounds, where there are any — labelled so no
+    /// other digest in this system can be mistaken for it.
     #[must_use]
     pub fn digest(&self) -> String {
         let edges: Vec<[&str; 2]> = self
@@ -98,18 +111,26 @@ impl Topology {
             .iter()
             .map(|(from, to)| [from.as_str(), to.as_str()])
             .collect();
-        let canonical = if self.repeats.is_empty() {
-            serde_json::json!([1, "aiwatcher.workflow.topology", self.nodes, edges])
-        } else {
-            serde_json::json!([
-                1,
-                "aiwatcher.workflow.topology",
-                self.nodes,
-                edges,
-                self.repeats
-            ])
-        };
-        hex::encode(Sha256::digest(canonical.to_string().as_bytes()))
+        let mut canonical = vec![
+            serde_json::json!(1),
+            serde_json::json!("aiwatcher.workflow.topology"),
+            serde_json::json!(self.nodes),
+            serde_json::json!(edges),
+        ];
+        if !self.repeats.is_empty() || !self.at_most.is_empty() {
+            canonical.push(serde_json::json!(self.repeats));
+        }
+        if !self.at_most.is_empty() {
+            let bounds: Vec<(&str, u64)> = self
+                .at_most
+                .iter()
+                .map(|(node, bound)| (node.as_str(), *bound))
+                .collect();
+            canonical.push(serde_json::json!(bounds));
+        }
+        hex::encode(Sha256::digest(
+            serde_json::Value::Array(canonical).to_string().as_bytes(),
+        ))
     }
 
     /// Where a run may enter the shape: each set is a part nothing outside it
@@ -212,6 +233,17 @@ mod tests {
         );
         assert_eq!(repeating.repeats, BTreeSet::from(["answer".to_owned()]));
         assert_ne!(plain.digest(), repeating.digest());
+        let bounded = Topology::read(&json!({
+            "nodes": ["retrieve", {"id": "answer", "repeats": true, "at_most": 3}],
+            "edges": [["retrieve", "answer"]]
+        }))
+        .expect("a shape");
+        assert_eq!(bounded.at_most.get("answer"), Some(&3));
+        assert_ne!(
+            bounded.digest(),
+            repeating.digest(),
+            "a bound is part of the shape"
+        );
     }
 
     #[test]
