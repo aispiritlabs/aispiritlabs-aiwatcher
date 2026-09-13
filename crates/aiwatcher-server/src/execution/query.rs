@@ -218,7 +218,10 @@ impl QueryClient {
             )
             .await?;
         if answered.status == StatusCode::NOT_FOUND {
-            tracing::debug!(key, "the query engine serves no cancel route; it runs to its own ceiling");
+            tracing::debug!(
+                key,
+                "the query engine serves no cancel route; it runs to its own ceiling"
+            );
         }
         Ok(())
     }

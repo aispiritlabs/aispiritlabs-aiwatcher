@@ -266,7 +266,10 @@ impl ActivityExecutor for MarimoExecutor {
         let key = command.idempotency_key();
         let response = self
             .client
-            .post(format!("{}/ml-pipeline/executions/{key}/cancel", self.endpoint))
+            .post(format!(
+                "{}/ml-pipeline/executions/{key}/cancel",
+                self.endpoint
+            ))
             .timeout(CANCEL_TIMEOUT)
             .send()
             .await

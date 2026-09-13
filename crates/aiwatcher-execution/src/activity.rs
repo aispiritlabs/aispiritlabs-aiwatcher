@@ -532,7 +532,11 @@ mod tests {
         assert_eq!(signal.or_stopped(refused()).class, FailureClass::UserCode);
         signal.stop(StopReason::RunStopping);
         let stopped = signal.or_stopped(refused());
-        assert_eq!(stopped.class, FailureClass::Policy, "never retried as user code");
+        assert_eq!(
+            stopped.class,
+            FailureClass::Policy,
+            "never retried as user code"
+        );
     }
 
     #[test]

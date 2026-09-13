@@ -571,12 +571,13 @@ impl ScorerSpec {
             && let (Some(calibration), Some(declared)) = (external.calibration, external.declared)
         {
             let field = format!("scorecard.scorers.{}.scorer", self.metric);
-            let rubric = rubrics
-                .get(&calibration.rubric)
-                .ok_or_else(|| EvaluationError::Invalid {
-                    field: format!("{field}.calibration.rubric"),
-                    reason: "names a rubric version this registry has not published".into(),
-                })?;
+            let rubric =
+                rubrics
+                    .get(&calibration.rubric)
+                    .ok_or_else(|| EvaluationError::Invalid {
+                        field: format!("{field}.calibration.rubric"),
+                        reason: "names a rubric version this registry has not published".into(),
+                    })?;
             calibration.check(&field, declared, rubric)?;
         }
         let (unit, direction, aggregation) =

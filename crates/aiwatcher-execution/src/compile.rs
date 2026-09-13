@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn a_publish_reading_a_long_query_is_given_as_long_as_that_query_and_never_less_than_its_floor()
-     {
+    {
         // Enforced since the reactor watches every attempt: a publish that
         // quietly took longer than two minutes over a big corpus's rows would
         // now be a timeout, retried from the start.

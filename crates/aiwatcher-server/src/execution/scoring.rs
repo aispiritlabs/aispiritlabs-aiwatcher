@@ -281,93 +281,92 @@ impl ActivityExecutor for ScoreExecutor {
 
         // A scorer service's numbers, before the judge's: both are handed to
         // the fold in one map, and neither asks anything of the other.
-        let (scored_elsewhere, external_report, external_asked) = if card
-            .scorecard
-            .asks_a_scorer_service()
-        {
-            let Some((scorers, ceiling)) = &self.scorers else {
-                return Err(ActivityError::user_code(
-                    "this card asks a scorer service, and this process holds none",
-                ));
-            };
-            context.stop.check()?;
-            // Held to the card before anything is asked: a service now running
-            // another release, or grading with another model, would measure
-            // something else under this card's name.
-            let live = scorers.catalog().await.map_err(scorer_failure)?;
-            for (index, spec) in card.scorecard.scorers.iter().enumerate() {
-                if let Some(external) = spec.scorer.external() {
-                    aiwatcher_evaluation::resolve_external(
-                        &live,
-                        &format!("scorecard.scorers[{index}].scorer"),
-                        external.adapter,
-                        external.metric,
-                        external.parameters,
-                        external.declared,
-                    )
-                    .map_err(|error| ActivityError::user_code(error.to_string()))?;
-                }
-            }
-            let calibrated = match &external_taken {
-                Some(taken) => Some(
-                    evaluations
-                        .calibrated(
-                            &taken.calibration,
-                            card.scorecard.scorers.iter().any(|spec| {
-                                spec.scorer
-                                    .external()
-                                    .is_some_and(|external| external.calibration.is_some())
-                                    && spec.input_path.is_some()
-                            }),
-                            &subject,
-                            now,
+        let (scored_elsewhere, external_report, external_asked) =
+            if card.scorecard.asks_a_scorer_service() {
+                let Some((scorers, ceiling)) = &self.scorers else {
+                    return Err(ActivityError::user_code(
+                        "this card asks a scorer service, and this process holds none",
+                    ));
+                };
+                context.stop.check()?;
+                // Held to the card before anything is asked: a service now running
+                // another release, or grading with another model, would measure
+                // something else under this card's name.
+                let live = scorers.catalog().await.map_err(scorer_failure)?;
+                for (index, spec) in card.scorecard.scorers.iter().enumerate() {
+                    if let Some(external) = spec.scorer.external() {
+                        aiwatcher_evaluation::resolve_external(
+                            &live,
+                            &format!("scorecard.scorers[{index}].scorer"),
+                            external.adapter,
+                            external.metric,
+                            external.parameters,
+                            external.declared,
                         )
-                        .await
-                        .map_err(refusal)?,
-                ),
-                None => None,
+                        .map_err(|error| ActivityError::user_code(error.to_string()))?;
+                    }
+                }
+                let calibrated = match &external_taken {
+                    Some(taken) => Some(
+                        evaluations
+                            .calibrated(
+                                &taken.calibration,
+                                card.scorecard.scorers.iter().any(|spec| {
+                                    spec.scorer
+                                        .external()
+                                        .is_some_and(|external| external.calibration.is_some())
+                                        && spec.input_path.is_some()
+                                }),
+                                &subject,
+                                now,
+                            )
+                            .await
+                            .map_err(refusal)?,
+                    ),
+                    None => None,
+                };
+                let asking = external_questions(
+                    &card.scorecard,
+                    &cohort,
+                    &answers,
+                    external_taken
+                        .as_ref()
+                        .zip(calibrated.as_ref())
+                        .map(|(taken, calibrated)| (&taken.calibration, calibrated)),
+                );
+                let remembering: Arc<dyn ExternalScorers> =
+                    Arc::new(super::scorers::Remembering::new(
+                        Arc::clone(scorers),
+                        Arc::clone(&self.evaluations),
+                        spec.declaration.clone(),
+                    ));
+                let replies = super::scorers::score_all(
+                    &remembering,
+                    asking
+                        .questions
+                        .iter()
+                        .map(|question| question.call.clone())
+                        .collect(),
+                    paced(run.settings.concurrency, *ceiling),
+                    &context.stop,
+                )
+                .await
+                .map_err(|failure| match context.stop.requested() {
+                    Some(reason) => reason.as_error(),
+                    None => scorer_failure(failure),
+                })?;
+                let (scored, report) = external_replies(
+                    run,
+                    &card.scorecard,
+                    &rubrics,
+                    external_taken.as_ref().map(|taken| &taken.calibration),
+                    &asking,
+                    &replies,
+                );
+                (scored, report, asking.questions.len())
+            } else {
+                (Judged::new(), None, 0)
             };
-            let asking = external_questions(
-                &card.scorecard,
-                &cohort,
-                &answers,
-                external_taken
-                    .as_ref()
-                    .zip(calibrated.as_ref())
-                    .map(|(taken, calibrated)| (&taken.calibration, calibrated)),
-            );
-            let remembering: Arc<dyn ExternalScorers> = Arc::new(super::scorers::Remembering::new(
-                Arc::clone(scorers),
-                Arc::clone(&self.evaluations),
-                spec.declaration.clone(),
-            ));
-            let replies = super::scorers::score_all(
-                &remembering,
-                asking
-                    .questions
-                    .iter()
-                    .map(|question| question.call.clone())
-                    .collect(),
-                paced(run.settings.concurrency, *ceiling),
-                &context.stop,
-            )
-            .await
-            .map_err(|failure| match context.stop.requested() {
-                Some(reason) => reason.as_error(),
-                None => scorer_failure(failure),
-            })?;
-            let (scored, report) = external_replies(
-                run,
-                &card.scorecard,
-                &rubrics,
-                external_taken.as_ref().map(|taken| &taken.calibration),
-                &asking,
-                &replies,
-            );
-            (scored, report, asking.questions.len())
-        } else {
-            (Judged::new(), None, 0)
-        };
 
         let (judged, report, asked) = match (&run.judge, &self.judge) {
             (None, _) => (Judged::new(), None, 0),

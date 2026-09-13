@@ -792,12 +792,21 @@ mod tests {
         let flag = rubric(Scale::Flag, MetricDirection::Higher);
         let higher = graded(MetricDirection::Higher);
 
-        assert!(calibration(0.7, Some("good")).check("s", &higher, &levels).is_ok());
+        assert!(
+            calibration(0.7, Some("good"))
+                .check("s", &higher, &levels)
+                .is_ok()
+        );
         assert!(calibration(0.7, None).check("s", &higher, &flag).is_ok());
         for (refused, declared, rubric, why) in [
             (calibration(0.7, None), &higher, &levels, "pass_level"),
             (calibration(0.7, Some("great")), &higher, &levels, "great"),
-            (calibration(0.7, Some("good")), &higher, &flag, "names no level"),
+            (
+                calibration(0.7, Some("good")),
+                &higher,
+                &flag,
+                "names no level",
+            ),
             (calibration(1.5, None), &higher, &flag, "range"),
             (
                 calibration(0.7, None),
@@ -808,11 +817,17 @@ mod tests {
             (
                 calibration(0.7, None),
                 &higher,
-                &rubric(Scale::Numeric { min: 1.0, max: 5.0 }, MetricDirection::Higher),
+                &rubric(
+                    Scale::Numeric { min: 1.0, max: 5.0 },
+                    MetricDirection::Higher,
+                ),
                 "numeric",
             ),
         ] {
-            let reason = refused.check("s", declared, rubric).unwrap_err().to_string();
+            let reason = refused
+                .check("s", declared, rubric)
+                .unwrap_err()
+                .to_string();
             assert!(reason.contains(why), "{why}: {reason}");
         }
     }
@@ -820,8 +835,14 @@ mod tests {
     #[test]
     fn a_verdict_is_a_pass_on_the_better_side_of_the_bar_on_both_sides() {
         let bar = calibration(0.7, Some("fair"));
-        assert_eq!(bar.verdict(&graded(MetricDirection::Higher), 0.7), Some(1.0));
-        assert_eq!(bar.verdict(&graded(MetricDirection::Higher), 0.69), Some(0.0));
+        assert_eq!(
+            bar.verdict(&graded(MetricDirection::Higher), 0.7),
+            Some(1.0)
+        );
+        assert_eq!(
+            bar.verdict(&graded(MetricDirection::Higher), 0.69),
+            Some(0.0)
+        );
         assert_eq!(bar.verdict(&graded(MetricDirection::Lower), 0.2), Some(1.0));
 
         let fewer_is_better = rubric(
