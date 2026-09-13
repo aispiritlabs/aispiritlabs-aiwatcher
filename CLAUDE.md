@@ -839,7 +839,10 @@ what runs a real graph.
   compiled scorers, a judge's rubric, a framework's metric picked from the
   catalog the work role recorded with a field per parameter, and the people it is
   held against — and sends nothing the server derives: no `declared`, no
-  direction. Its **Measure** form is the start of a scoring run, and it derives
+  direction. A card's versions open under it, newest first, and a new version
+  starts from any of them; what changed between two is
+  `GET /evaluation-scorecards/{name}/diff`, because what a metric was derived to
+  be on each side is in no version for a browser to compare. Its **Measure** form is the start of a scoring run, and it derives
   nothing either: the variant is a published result's, the answers are a
   recording, the archive's or a worker's task generating them — with a baseline,
   a second declaration differing in its variant and ID alone, followed beside it

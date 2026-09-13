@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { serve, withQueries } from '@/test/server';
+import { type Route, serve, withQueries } from '@/test/server';
 
 import { Scorecards } from './scorecards';
 
@@ -41,8 +41,9 @@ const CATALOG = {
   },
 };
 
-function serving(catalog: { status: number; body: unknown }) {
+function serving(catalog: { status: number; body: unknown }, extra: Route[] = []) {
   return serve([
+    ...extra,
     { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
     {
       method: 'GET',
@@ -250,6 +251,86 @@ it('holds a framework metric against scores out of five at the score a person pa
     rubric: { name: 'stars', version: RUBRIC },
     pass_at: 0.6,
     pass_score: 4,
+  });
+});
+
+it("shows a card's versions and the server's diff, and starts a new version from an old one", async () => {
+  const OLDER = 'a'.repeat(64);
+  const version = (at: string, published_at: number, ignore_case: boolean) => ({
+    version: at,
+    published_at,
+    published_by: 'ada',
+    scorecard: {
+      name: 'answer-quality',
+      scorers: [
+        {
+          metric: 'exact',
+          answer_path: '/text',
+          scorer: { kind: 'exact_match', ignore_case, trim: false },
+        },
+      ],
+    },
+  });
+  const server = serving({ status: 200, body: CATALOG }, [
+    {
+      method: 'GET',
+      path: '/evaluation-scorecards/answer-quality/versions',
+      answer: {
+        status: 200,
+        body: {
+          name: 'answer-quality',
+          versions: [version(VERSION, 1_800_000_000, true), version(OLDER, 1_700_000_000, false)],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-scorecards/answer-quality/diff',
+      answer: {
+        status: 200,
+        body: {
+          name: 'answer-quality',
+          from: OLDER,
+          to: VERSION,
+          metrics: [
+            {
+              metric: 'exact',
+              change: 'changed',
+              fields: [{ path: '/scorer/ignore_case', before: false, after: true }],
+              before: { name: 'exact', unit: 'ratio', direction: 'higher', aggregation: 'rate' },
+              after: { name: 'exact', unit: 'ratio', direction: 'higher', aggregation: 'rate' },
+            },
+          ],
+        },
+      },
+    },
+  ]);
+  render(withQueries(<Scorecards />));
+  await userEvent.click(await screen.findByRole('button', { name: 'Versions' }));
+
+  expect(await screen.findByText('/scorer/ignore_case: false → true')).toBeTruthy();
+  expect(screen.getByText(/compares with nothing measured under the other/)).toBeTruthy();
+  expect(server.calls.some((call) => call.url.endsWith('/answer-quality/diff'))).toBe(true);
+
+  const starts = screen.getAllByRole('button', { name: 'Start a new version from this' });
+  await userEvent.click(starts[1] as HTMLElement);
+  expect((screen.getByLabelText('Card name') as HTMLInputElement).value).toBe('answer-quality');
+  expect((screen.getByLabelText('Scorer 1 metric') as HTMLInputElement).value).toBe('exact');
+  expect((screen.getByLabelText('Scorer 1 ignores case') as HTMLInputElement).checked).toBe(false);
+  await userEvent.click(screen.getByLabelText('Scorer 1 ignores case'));
+  await userEvent.click(screen.getByRole('button', { name: 'Publish card' }));
+
+  await waitFor(() => expect(server.countOf('POST', '/evaluation-scorecards')).toBe(1));
+  const sent = server.calls.find((call) => call.method === 'POST')?.body as Record<string, any>;
+  expect(sent).toEqual({
+    name: 'answer-quality',
+    scorers: [
+      {
+        metric: 'exact',
+        answer_path: '/text',
+        scorer: { kind: 'exact_match', ignore_case: true, trim: false },
+      },
+    ],
   });
 });
 

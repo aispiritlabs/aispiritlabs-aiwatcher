@@ -2176,6 +2176,47 @@ impl Registry {
         crate::scorecard::all(&self.store).await
     }
 
+    /// Every version of one card, newest first; `None` when it was never
+    /// published.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scorecard_versions(&self, name: &str) -> Result<Option<crate::ScorecardVersions>> {
+        text(name, "scorecard")?;
+        let versions = crate::scorecard::versions(&self.store, name).await?;
+        Ok((!versions.is_empty()).then(|| crate::ScorecardVersions {
+            name: name.to_owned(),
+            versions,
+        }))
+    }
+
+    /// What changed from one version of a card to another; `None` when either
+    /// is not a version of it.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store or a rubric cannot be read.
+    pub async fn scorecard_diff(
+        &self,
+        name: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Option<crate::ScorecardDiff>> {
+        text(name, "scorecard")?;
+        let (Some(before), Some(after)) = (
+            crate::scorecard::version(&self.store, name, from).await?,
+            crate::scorecard::version(&self.store, name, to).await?,
+        ) else {
+            return Ok(None);
+        };
+        let mut rubrics = self.rubrics_for(&before.scorecard).await?;
+        for (reference, rubric) in self.rubrics_for(&after.scorecard).await?.entries() {
+            rubrics = rubrics.with(&reference, rubric);
+        }
+        crate::scorecard_diff(&before, &after, &rubrics).map(Some)
+    }
+
     /// One scorecard, at the version asked for or at the head.
     ///
     /// # Errors

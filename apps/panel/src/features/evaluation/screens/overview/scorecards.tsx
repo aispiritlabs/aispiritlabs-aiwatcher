@@ -17,16 +17,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
 
 import {
+  diffScorecard,
   getRubric,
   getScorerCatalog,
   listRubrics,
   listScorecards,
+  listScorecardVersions,
   publishScorecard,
 } from '@/api/generated/sdk.gen';
 import type {
+  MetricDefinition,
   RecordedCatalog,
   RubricHead,
   Scorecard,
+  ScorecardFieldChange,
   ScorecardVersion,
   Scorer,
   ScorerCatalogMetric,
@@ -104,6 +108,68 @@ function blank(): Row {
     calibrationLevel: '',
     calibrationScore: '',
   };
+}
+
+/**
+ * A published scorer as the form holds it, so a new version starts from what a
+ * card already says. Only the fields its kind reads are filled; what the
+ * server pinned (`declared`) is left behind, because publishing pins it again.
+ */
+function rowOf(spec: ScorerSpec): Row {
+  const row: Row = {
+    ...blank(),
+    metric: spec.metric,
+    kind: spec.scorer.kind,
+    answerPath: spec.answer_path ?? '',
+    expectedPath: spec.expected_path ?? '',
+    showsInput: spec.input_path !== undefined && spec.input_path !== null,
+    inputPath: spec.input_path ?? '',
+  };
+  const scorer = spec.scorer;
+  switch (scorer.kind) {
+    case 'exact_match':
+      return { ...row, ignoreCase: scorer.ignore_case ?? false, trim: scorer.trim ?? false };
+    case 'contains':
+      return { ...row, ignoreCase: scorer.ignore_case ?? false };
+    case 'regex_match':
+      return { ...row, pattern: scorer.pattern };
+    case 'numeric_within':
+      return { ...row, tolerance: String(scorer.tolerance) };
+    case 'absolute_error':
+      return { ...row, unit: scorer.unit };
+    case 'forbidden':
+      return { ...row, text: scorer.text, ignoreCase: scorer.ignore_case ?? false };
+    case 'judge':
+      return {
+        ...row,
+        rubric: `${scorer.rubric.name}@${scorer.rubric.version}`,
+        passLevel: scorer.pass_level ?? '',
+      };
+    case 'external': {
+      const calibration = scorer.calibration;
+      return {
+        ...row,
+        adapter: scorer.adapter,
+        frameworkMetric: scorer.metric,
+        parameters: Object.fromEntries(
+          Object.entries(scorer.parameters ?? {}).map(([name, value]) => [
+            name,
+            Array.isArray(value) ? value.join(', ') : String(value),
+          ]),
+        ),
+        calibrate: Boolean(calibration),
+        calibrationRubric: calibration
+          ? `${calibration.rubric.name}@${calibration.rubric.version}`
+          : '',
+        passAt: calibration ? String(calibration.pass_at) : '',
+        calibrationLevel: calibration?.pass_level ?? '',
+        calibrationScore:
+          calibration?.pass_score === undefined || calibration.pass_score === null
+            ? ''
+            : String(calibration.pass_score),
+      };
+    }
+  }
 }
 
 function reference(pinned: string) {
@@ -231,6 +297,8 @@ function readsExpected(row: Row, reads: ScorerCatalogMetric['reads'] | undefined
 }
 
 export function Scorecards() {
+  const [start, setStart] = React.useState<ScorecardVersion | undefined>();
+  const [opened, setOpened] = React.useState<string | undefined>();
   const cards = useQuery({
     queryKey: ['evaluation-scorecards'],
     queryFn: async () => answerOf(await listScorecards(), 'could not read the scorecards'),
@@ -265,6 +333,15 @@ export function Scorecards() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{head.name}</span>
                 <IdChip label="version" value={pinchId(head.version, 8, 6)} full={head.version} />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  type="button"
+                  aria-expanded={opened === head.name}
+                  onClick={() => setOpened(opened === head.name ? undefined : head.name)}
+                >
+                  {opened === head.name ? 'Hide versions' : 'Versions'}
+                </Button>
               </div>
               <span className="text-muted-foreground">
                 {head.metrics
@@ -278,21 +355,196 @@ export function Scorecards() {
                   )
                   .join(' · ')}
               </span>
+              {opened === head.name ? <History name={head.name} onStart={setStart} /> : null}
             </li>
           ))}
         </ul>
       )}
-      <Author />
+      <Author key={start?.version ?? 'blank'} start={start} onClear={() => setStart(undefined)} />
     </Card>
   );
 }
 
-function Author() {
+/**
+ * A card's versions, newest first, and what changed between two of them.
+ *
+ * The difference is the server's: beside the fields that moved it says what
+ * each metric was derived to be on both sides, which no version holds. A
+ * result measured under one version compares with nothing measured under the
+ * other, whatever changed.
+ */
+function History({
+  name,
+  onStart,
+}: {
+  name: string;
+  onStart: (version: ScorecardVersion) => void;
+}) {
+  const versions = useQuery({
+    queryKey: ['evaluation-scorecard-versions', name],
+    queryFn: async () =>
+      answerOf(
+        await listScorecardVersions({ path: { name } }),
+        'could not read the versions of this card',
+      ),
+    retry: false,
+  });
+  const all = versions.data?.versions ?? [];
+  const [chosen, setChosen] = React.useState<{ from?: string; to?: string }>({});
+  const to = chosen.to ?? all[0]?.version;
+  const from = chosen.from ?? all[1]?.version;
+  const diff = useQuery({
+    queryKey: ['evaluation-scorecard-diff', name, from, to],
+    enabled: Boolean(from && to && from !== to),
+    queryFn: async () =>
+      answerOf(
+        await diffScorecard({ path: { name }, query: { from: from ?? '', to: to ?? '' } }),
+        'could not compare these versions',
+      ),
+    retry: false,
+  });
+  if (versions.error) {
+    return (
+      <p className="text-danger">
+        {versions.error instanceof Error ? versions.error.message : String(versions.error)}
+      </p>
+    );
+  }
+  if (versions.isLoading) return <Spinner />;
+  const label = (version: ScorecardVersion) =>
+    `${pinchId(version.version, 8, 6)} · ${version.published_by} · ${publishedOn(version.published_at)}`;
+  return (
+    <div className="flex flex-col gap-2 rounded border border-border/60 p-2">
+      <ol className="flex flex-col gap-1">
+        {all.map((version) => (
+          <li key={version.version} className="flex flex-wrap items-center gap-2">
+            <IdChip label="version" value={pinchId(version.version, 8, 6)} full={version.version} />
+            <span className="text-muted-foreground">
+              {version.published_by}, {publishedOn(version.published_at)} ·{' '}
+              {version.scorecard.scorers.map((spec) => spec.metric).join(', ')}
+            </span>
+            <Button size="sm" variant="outline" type="button" onClick={() => onStart(version)}>
+              Start a new version from this
+            </Button>
+          </li>
+        ))}
+      </ol>
+      {all.length > 1 ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1">
+              Compare
+              <select
+                aria-label={`${name} compare from`}
+                className={FIELD}
+                value={from}
+                onChange={(event) => setChosen({ from: event.target.value, to })}
+              >
+                {all.map((version) => (
+                  <option key={version.version} value={version.version}>
+                    {label(version)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1">
+              with
+              <select
+                aria-label={`${name} compare to`}
+                className={FIELD}
+                value={to}
+                onChange={(event) => setChosen({ from, to: event.target.value })}
+              >
+                {all.map((version) => (
+                  <option key={version.version} value={version.version}>
+                    {label(version)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {from === to ? (
+            <p className="text-muted-foreground">Choose two different versions.</p>
+          ) : diff.error ? (
+            <p className="text-danger">
+              {diff.error instanceof Error ? diff.error.message : String(diff.error)}
+            </p>
+          ) : diff.data ? (
+            <div className="flex flex-col gap-1">
+              <p className="text-muted-foreground">
+                A result measured under one of these compares with nothing measured under the other.
+              </p>
+              {diff.data.description ? <FieldLine change={diff.data.description} /> : null}
+              {diff.data.metrics.length === 0 && !diff.data.description ? (
+                <p>Nothing a metric is or how it is scored changed.</p>
+              ) : null}
+              <ul className="flex flex-col gap-1">
+                {diff.data.metrics.map((change) => (
+                  <li key={`${change.change}-${change.metric}`} className="flex flex-col">
+                    <span>
+                      <span className="font-medium">{change.metric}</span> {change.change}
+                      {change.before && change.after && !sameDefinition(change.before, change.after)
+                        ? ` — was ${definitionOf(change.before)}, is ${definitionOf(change.after)}`
+                        : change.after && !change.before
+                          ? ` — ${definitionOf(change.after)}`
+                          : change.before && !change.after
+                            ? ` — was ${definitionOf(change.before)}`
+                            : ''}
+                    </span>
+                    {change.fields.map((field) => (
+                      <FieldLine key={field.path} change={field} />
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : diff.isLoading ? (
+            <Spinner />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A version's day and minute: versions of one card are days apart as often as minutes. */
+function publishedOn(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
+function FieldLine({ change }: { change: ScorecardFieldChange }) {
+  const shown = (value: unknown) => (value === undefined ? 'absent' : JSON.stringify(value));
+  return (
+    <span className="pl-3 font-mono text-muted-foreground">
+      {change.path}: {shown(change.before)} → {shown(change.after)}
+    </span>
+  );
+}
+
+function definitionOf(definition: MetricDefinition): string {
+  const by = definition.measured_by;
+  return `${definition.unit}, ${definition.direction}, ${definition.aggregation}${
+    by
+      ? `, by ${by.adapter.name} ${by.adapter.version}${by.model ? ` grading with ${by.model.name}` : ''}`
+      : ''
+  }`;
+}
+
+function sameDefinition(one: MetricDefinition, other: MetricDefinition): boolean {
+  return definitionOf(one) === definitionOf(other);
+}
+
+function Author({ start, onClear }: { start?: ScorecardVersion; onClear: () => void }) {
   const editor = useRoleDecision('editor');
   const queries = useQueryClient();
-  const [name, setName] = React.useState('');
-  const [description, setDescription] = React.useState('');
-  const [rows, setRows] = React.useState<Row[]>([blank()]);
+  const [name, setName] = React.useState(start?.scorecard.name ?? '');
+  const [description, setDescription] = React.useState(start?.scorecard.description ?? '');
+  const [rows, setRows] = React.useState<Row[]>(
+    start ? start.scorecard.scorers.map(rowOf) : [blank()],
+  );
   const catalog = useQuery({
     queryKey: ['evaluation-scorer-catalog'],
     queryFn: async () =>
@@ -313,7 +565,10 @@ function Author() {
       };
       return answerOf(await publishScorecard({ body: card }), 'the scorecard was refused');
     },
-    onSuccess: () => void queries.invalidateQueries({ queryKey: ['evaluation-scorecards'] }),
+    onSuccess: () => {
+      void queries.invalidateQueries({ queryKey: ['evaluation-scorecards'] });
+      void queries.invalidateQueries({ queryKey: ['evaluation-scorecard-versions'] });
+    },
   });
   const change = (index: number, patch: Partial<Row>) =>
     setRows((current) => current.map((row, at) => (at === index ? { ...row, ...patch } : row)));
@@ -326,6 +581,16 @@ function Author() {
         publish.mutate();
       }}
     >
+      {start ? (
+        <p className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          Starting from {start.scorecard.name} at
+          <IdChip label="version" value={pinchId(start.version, 8, 6)} full={start.version} />— what
+          you publish is a new version, and the one you started from stays as it was.
+          <Button size="sm" variant="ghost" type="button" onClick={onClear}>
+            Start blank
+          </Button>
+        </p>
+      ) : null}
       <div className="grid gap-2 md:grid-cols-2">
         <label className="flex flex-col gap-1">
           Card name

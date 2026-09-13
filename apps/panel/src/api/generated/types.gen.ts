@@ -7032,6 +7032,43 @@ export type Scorecard = {
     scorers: Array<ScorerSpec>;
 };
 
+export const ScorecardChange = {
+    ADDED: 'added',
+    REMOVED: 'removed',
+    CHANGED: 'changed'
+} as const;
+
+export type ScorecardChange = typeof ScorecardChange[keyof typeof ScorecardChange];
+
+/**
+ * What changed between two versions of one card.
+ *
+ * Which metrics came and went and which fields of a scorer moved are what a
+ * reader could see by laying two documents side by side. What they could not
+ * is the part a version does not hold: which way a metric is better, its unit
+ * and what measured it are derived, so a change there is reported here from
+ * the derivation rather than left for a browser to work out again. Any change
+ * at all is a new card version, and a result measured under one compares
+ * with nothing measured under the other.
+ */
+export type ScorecardDiff = {
+    description?: null | ScorecardFieldChange;
+    from: string;
+    /**
+     * Only the metrics that changed: those in `to` first, in its order, then
+     * those `to` dropped.
+     */
+    metrics: Array<ScorecardMetricChange>;
+    name: string;
+    to: string;
+};
+
+export type ScorecardFieldChange = {
+    after?: unknown;
+    before?: unknown;
+    path: string;
+};
+
 /**
  * Which version a caller that named no version gets. Derived from the
  * versions, which are the truth — and moved by publishing, never edited.
@@ -7042,6 +7079,19 @@ export type ScorecardHead = {
     name: string;
     updated_at: number;
     version: string;
+};
+
+export type ScorecardMetricChange = {
+    after?: null | MetricDefinition;
+    before?: null | MetricDefinition;
+    change: ScorecardChange;
+    /**
+     * Every field of the scorer's declaration that differs, by JSON pointer
+     * into it. Empty for a metric added or removed, whose whole declaration
+     * is `after` or `before`.
+     */
+    fields: Array<ScorecardFieldChange>;
+    metric: string;
 };
 
 export type ScorecardPage = {
@@ -7060,6 +7110,14 @@ export type ScorecardVersion = {
      */
     scorecard: Scorecard;
     version: string;
+};
+
+export type ScorecardVersions = {
+    name: string;
+    /**
+     * Newest first.
+     */
+    versions: Array<ScorecardVersion>;
 };
 
 /**
@@ -11293,6 +11351,59 @@ export type GetScorecardResponses = {
 };
 
 export type GetScorecardResponse = GetScorecardResponses[keyof GetScorecardResponses];
+
+export type DiffScorecardData = {
+    body?: never;
+    path: {
+        name: string;
+    };
+    query: {
+        /**
+         * The version read as before.
+         */
+        from: string;
+        /**
+         * The version read as after.
+         */
+        to: string;
+    };
+    url: '/api/v1/evaluation-scorecards/{name}/diff';
+};
+
+export type DiffScorecardErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type DiffScorecardError = DiffScorecardErrors[keyof DiffScorecardErrors];
+
+export type DiffScorecardResponses = {
+    200: ScorecardDiff;
+};
+
+export type DiffScorecardResponse = DiffScorecardResponses[keyof DiffScorecardResponses];
+
+export type ListScorecardVersionsData = {
+    body?: never;
+    path: {
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-scorecards/{name}/versions';
+};
+
+export type ListScorecardVersionsErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListScorecardVersionsError = ListScorecardVersionsErrors[keyof ListScorecardVersionsErrors];
+
+export type ListScorecardVersionsResponses = {
+    200: ScorecardVersions;
+};
+
+export type ListScorecardVersionsResponse = ListScorecardVersionsResponses[keyof ListScorecardVersionsResponses];
 
 export type GetScorerCatalogData = {
     body?: never;

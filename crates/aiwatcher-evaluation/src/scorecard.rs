@@ -126,6 +126,13 @@ impl Rubrics {
         self
     }
 
+    /// Every rubric held, by the version it was read at.
+    pub(crate) fn entries(self) -> impl Iterator<Item = (VersionReference, Rubric)> {
+        self.0
+            .into_iter()
+            .map(|((name, version), rubric)| (VersionReference { name, version }, rubric))
+    }
+
     #[must_use]
     pub fn get(&self, reference: &VersionReference) -> Option<&Rubric> {
         self.0
@@ -848,6 +855,202 @@ pub(crate) async fn version(
     version: &str,
 ) -> Result<Option<ScorecardVersion>> {
     store.read(&store::scorecard_version(name, version)).await
+}
+
+/// Every version of one card, newest first.
+///
+/// Read whole: a card is authored, so its versions grow with somebody
+/// publishing and never with traffic, and a reader choosing one to start from
+/// or to compare needs what each says rather than a list of digests.
+pub(crate) async fn versions(store: &Store, name: &str) -> Result<Vec<ScorecardVersion>> {
+    let mut versions = Vec::new();
+    for entry in store.0.list(&store::scorecard_versions(name)).await? {
+        if let Some(version) = store.read::<ScorecardVersion>(&entry.key).await?
+            && version.scorecard.name == name
+        {
+            versions.push(version);
+        }
+    }
+    versions.sort_by(|a, b| {
+        b.published_at
+            .cmp(&a.published_at)
+            .then_with(|| a.version.cmp(&b.version))
+    });
+    Ok(versions)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ScorecardVersions {
+    pub name: String,
+    /// Newest first.
+    pub versions: Vec<ScorecardVersion>,
+}
+
+/// What changed between two versions of one card.
+///
+/// Which metrics came and went and which fields of a scorer moved are what a
+/// reader could see by laying two documents side by side. What they could not
+/// is the part a version does not hold: which way a metric is better, its unit
+/// and what measured it are derived, so a change there is reported here from
+/// the derivation rather than left for a browser to work out again. Any change
+/// at all is a new card version, and a result measured under one compares
+/// with nothing measured under the other.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ScorecardDiff {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<FieldChange>,
+    /// Only the metrics that changed: those in `to` first, in its order, then
+    /// those `to` dropped.
+    pub metrics: Vec<MetricChange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScorecardChange)]
+#[serde(rename_all = "snake_case")]
+pub enum Change {
+    Added,
+    Removed,
+    Changed,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScorecardMetricChange)]
+pub struct MetricChange {
+    pub metric: String,
+    pub change: Change,
+    /// Every field of the scorer's declaration that differs, by JSON pointer
+    /// into it. Empty for a metric added or removed, whose whole declaration
+    /// is `after` or `before`.
+    pub fields: Vec<FieldChange>,
+    /// What the metric was derived to be on each side, where it was there —
+    /// both present and equal when only how it is scored moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<MetricDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<MetricDefinition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScorecardFieldChange)]
+pub struct FieldChange {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<serde_json::Value>,
+}
+
+/// The differences between two card versions, each side's metrics derived
+/// against the rubrics it names.
+///
+/// # Errors
+///
+/// [`EvaluationError::Invalid`] when a side no longer derives or encodes.
+pub fn diff(
+    from: &ScorecardVersion,
+    to: &ScorecardVersion,
+    rubrics: &Rubrics,
+) -> Result<ScorecardDiff> {
+    let derived =
+        |version: &ScorecardVersion| -> Result<BTreeMap<String, (ScorerSpec, MetricDefinition)>> {
+            Ok(version
+                .scorecard
+                .scorers
+                .iter()
+                .cloned()
+                .zip(version.scorecard.metrics(rubrics)?)
+                .map(|(spec, definition)| (spec.metric.clone(), (spec, definition)))
+                .collect())
+        };
+    let (before, after) = (derived(from)?, derived(to)?);
+    let mut metrics = Vec::new();
+    for spec in &to.scorecard.scorers {
+        let (spec, definition) = &after[&spec.metric];
+        match before.get(&spec.metric) {
+            None => metrics.push(MetricChange {
+                metric: spec.metric.clone(),
+                change: Change::Added,
+                fields: Vec::new(),
+                before: None,
+                after: Some(definition.clone()),
+            }),
+            Some((was, was_defined)) => {
+                let mut fields = Vec::new();
+                fields_of(
+                    "",
+                    Some(&serde_json::to_value(was)?),
+                    Some(&serde_json::to_value(spec)?),
+                    &mut fields,
+                );
+                if !fields.is_empty() || was_defined != definition {
+                    metrics.push(MetricChange {
+                        metric: spec.metric.clone(),
+                        change: Change::Changed,
+                        fields,
+                        before: Some(was_defined.clone()),
+                        after: Some(definition.clone()),
+                    });
+                }
+            }
+        }
+    }
+    for spec in &from.scorecard.scorers {
+        if !after.contains_key(&spec.metric) {
+            metrics.push(MetricChange {
+                metric: spec.metric.clone(),
+                change: Change::Removed,
+                fields: Vec::new(),
+                before: Some(before[&spec.metric].1.clone()),
+                after: None,
+            });
+        }
+    }
+    Ok(ScorecardDiff {
+        name: to.scorecard.name.clone(),
+        from: from.version.clone(),
+        to: to.version.clone(),
+        description: (from.scorecard.description != to.scorecard.description).then(|| {
+            let said =
+                |text: &str| (!text.is_empty()).then(|| serde_json::Value::String(text.to_owned()));
+            FieldChange {
+                path: "/description".into(),
+                before: said(&from.scorecard.description),
+                after: said(&to.scorecard.description),
+            }
+        }),
+        metrics,
+    })
+}
+
+/// Walks two JSON values together and records every leaf that differs: an
+/// object is compared field by field, anything else — an array included — as
+/// one value.
+fn fields_of(
+    path: &str,
+    before: Option<&serde_json::Value>,
+    after: Option<&serde_json::Value>,
+    out: &mut Vec<FieldChange>,
+) {
+    if let (Some(serde_json::Value::Object(was)), Some(serde_json::Value::Object(is))) =
+        (before, after)
+    {
+        let keys: BTreeSet<&String> = was.keys().chain(is.keys()).collect();
+        for key in keys {
+            let escaped = key.replace('~', "~0").replace('/', "~1");
+            fields_of(&format!("{path}/{escaped}"), was.get(key), is.get(key), out);
+        }
+        return;
+    }
+    if before != after {
+        out.push(FieldChange {
+            path: path.to_owned(),
+            before: before.cloned(),
+            after: after.cloned(),
+        });
+    }
 }
 
 pub(crate) async fn all(store: &Store) -> Result<Vec<ScorecardHead>> {

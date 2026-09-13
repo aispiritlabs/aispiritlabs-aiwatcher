@@ -160,6 +160,9 @@ pub(crate) fn scoring_run(id: &str) -> String {
 pub(crate) fn scorecard_head(name: &str) -> String {
     format!("{SCORECARDS}{}/head.json", hash(name.as_bytes()))
 }
+pub(crate) fn scorecard_versions(name: &str) -> String {
+    format!("{SCORECARDS}{}/versions/", hash(name.as_bytes()))
+}
 pub(crate) fn scorecard_version(name: &str, version: &str) -> String {
     format!(
         "{SCORECARDS}{}/versions/{version}.json",

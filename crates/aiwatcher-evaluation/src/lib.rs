@@ -62,8 +62,9 @@ pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, Var
 pub use reference::{DatasetKind, DatasetReference, VersionReference};
 pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
 pub use scorecard::{
-    External, Rubrics, Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer,
-    ScorerSpec,
+    Change as ScorecardChange, External, FieldChange, MetricChange, Rubrics, Score, Scorecard,
+    ScorecardDiff, ScorecardHead, ScorecardPage, ScorecardVersion, ScorecardVersions, Scorer,
+    ScorerSpec, diff as scorecard_diff,
 };
 pub use scoring::{
     Answers, ArchiveWord, Asked, Asking, COHORT_INPUTS, Calibrated, Cohort, CohortCases,

@@ -5980,6 +5980,126 @@
         }
       }
     },
+    "/api/v1/evaluation-scorecards/{name}/diff": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What changed from one version of a card to another: the metrics added,\nremoved and changed, each changed field of a scorer by JSON pointer, and\nwhat each metric was derived to be on both sides — the part a version does\nnot hold.",
+        "operationId": "diff_scorecard",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The version read as before.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The version read as after.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardDiff"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-scorecards/{name}/versions": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every version of one card, newest first — each whole, so a form can start\nfrom any of them and a reader can pick two to compare.",
+        "operationId": "list_scorecard_versions",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardVersions"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-scorers": {
       "get": {
         "tags": [
@@ -24163,6 +24283,65 @@
         },
         "additionalProperties": false
       },
+      "ScorecardChange": {
+        "type": "string",
+        "enum": [
+          "added",
+          "removed",
+          "changed"
+        ]
+      },
+      "ScorecardDiff": {
+        "type": "object",
+        "description": "What changed between two versions of one card.\n\nWhich metrics came and went and which fields of a scorer moved are what a\nreader could see by laying two documents side by side. What they could not\nis the part a version does not hold: which way a metric is better, its unit\nand what measured it are derived, so a change there is reported here from\nthe derivation rather than left for a browser to work out again. Any change\nat all is a new card version, and a result measured under one compares\nwith nothing measured under the other.",
+        "required": [
+          "name",
+          "from",
+          "to",
+          "metrics"
+        ],
+        "properties": {
+          "description": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScorecardFieldChange"
+              }
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorecardMetricChange"
+            },
+            "description": "Only the metrics that changed: those in `to` first, in its order, then\nthose `to` dropped."
+          },
+          "name": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "ScorecardFieldChange": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "after": {},
+          "before": {},
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "ScorecardHead": {
         "type": "object",
         "description": "Which version a caller that named no version gets. Derived from the\nversions, which are the truth — and moved by publishing, never edited.",
@@ -24190,6 +24369,50 @@
             "format": "int64"
           },
           "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ScorecardMetricChange": {
+        "type": "object",
+        "required": [
+          "metric",
+          "change",
+          "fields"
+        ],
+        "properties": {
+          "after": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricDefinition"
+              }
+            ]
+          },
+          "before": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricDefinition",
+                "description": "What the metric was derived to be on each side, where it was there —\nboth present and equal when only how it is scored moved."
+              }
+            ]
+          },
+          "change": {
+            "$ref": "#/components/schemas/ScorecardChange"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorecardFieldChange"
+            },
+            "description": "Every field of the scorer's declaration that differs, by JSON pointer\ninto it. Empty for a metric added or removed, whose whole declaration\nis `after` or `before`."
+          },
+          "metric": {
             "type": "string"
           }
         }
@@ -24231,6 +24454,25 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ScorecardVersions": {
+        "type": "object",
+        "required": [
+          "name",
+          "versions"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorecardVersion"
+            },
+            "description": "Newest first."
           }
         }
       },

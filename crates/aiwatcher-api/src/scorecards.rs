@@ -7,7 +7,9 @@
 //! versioned by its content and a run names the concrete version.
 
 use aiwatcher_auth::Role;
-use aiwatcher_evaluation::{Scorecard, ScorecardPage, ScorecardVersion};
+use aiwatcher_evaluation::{
+    Scorecard, ScorecardDiff, ScorecardPage, ScorecardVersion, ScorecardVersions,
+};
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -19,7 +21,13 @@ use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(publish_scorecard, list_scorecards, get_scorecard))]
+#[openapi(paths(
+    publish_scorecard,
+    list_scorecards,
+    get_scorecard,
+    list_scorecard_versions,
+    diff_scorecard
+))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -35,6 +43,14 @@ pub fn router() -> Router<AppState> {
             get(list_scorecards).post(publish_scorecard),
         )
         .route("/api/v1/evaluation-scorecards/{name}", get(get_scorecard))
+        .route(
+            "/api/v1/evaluation-scorecards/{name}/versions",
+            get(list_scorecard_versions),
+        )
+        .route(
+            "/api/v1/evaluation-scorecards/{name}/diff",
+            get(diff_scorecard),
+        )
 }
 
 fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
@@ -114,4 +130,59 @@ async fn get_scorecard(
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("scorecard {name}")))
+}
+
+/// Every version of one card, newest first — each whole, so a form can start
+/// from any of them and a reader can pick two to compare.
+#[utoipa::path(get, path = "/api/v1/evaluation-scorecards/{name}/versions",
+    params(("name" = String, Path)),
+    responses((status = 200, body = ScorecardVersions), (status = 404, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn list_scorecard_versions(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+) -> ApiResult<Json<ScorecardVersions>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .scorecard_versions(&name)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("scorecard {name}")))
+}
+
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+struct DiffQuery {
+    /// The version read as before.
+    from: String,
+    /// The version read as after.
+    to: String,
+}
+
+/// What changed from one version of a card to another: the metrics added,
+/// removed and changed, each changed field of a scorer by JSON pointer, and
+/// what each metric was derived to be on both sides — the part a version does
+/// not hold.
+#[utoipa::path(get, path = "/api/v1/evaluation-scorecards/{name}/diff",
+    params(("name" = String, Path), DiffQuery),
+    responses((status = 200, body = ScorecardDiff), (status = 404, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn diff_scorecard(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+    Query(query): Query<DiffQuery>,
+) -> ApiResult<Json<ScorecardDiff>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .scorecard_diff(&name, &query.from, &query.to)
+        .await?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "scorecard {name} at {} and {}",
+                query.from, query.to
+            ))
+        })
 }

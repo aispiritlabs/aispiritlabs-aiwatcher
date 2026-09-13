@@ -174,3 +174,115 @@ async fn a_card_nobody_declared_is_absent_rather_than_empty() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn a_card_s_versions_read_newest_first_and_their_diff_names_what_a_metric_became() {
+    let registry = store();
+    let first = registry
+        .publish_scorecard(
+            &card(vec![
+                spec("exact", exactly()),
+                spec(
+                    "leaked",
+                    Scorer::Forbidden {
+                        text: "ssn".into(),
+                        ignore_case: true,
+                    },
+                ),
+            ]),
+            "ada",
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+    let second = registry
+        .publish_scorecard(
+            &card(vec![
+                spec(
+                    "exact",
+                    Scorer::ExactMatch {
+                        ignore_case: true,
+                        trim: false,
+                    },
+                ),
+                spec(
+                    "off_by",
+                    Scorer::AbsoluteError {
+                        unit: "minutes".into(),
+                    },
+                ),
+            ]),
+            "grace",
+            1_700_003_600,
+        )
+        .await
+        .unwrap();
+
+    let versions = registry
+        .scorecard_versions("answer-quality")
+        .await
+        .unwrap()
+        .expect("a published card has versions");
+    assert_eq!(
+        versions
+            .versions
+            .iter()
+            .map(|version| version.version.as_str())
+            .collect::<Vec<_>>(),
+        [second.version.as_str(), first.version.as_str()]
+    );
+    assert!(
+        registry
+            .scorecard_versions("nobody-published")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let diff = registry
+        .scorecard_diff("answer-quality", &first.version, &second.version)
+        .await
+        .unwrap()
+        .expect("both are versions of the card");
+    let changes: Vec<(&str, ScorecardChange)> = diff
+        .metrics
+        .iter()
+        .map(|change| (change.metric.as_str(), change.change))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            ("exact", ScorecardChange::Changed),
+            ("off_by", ScorecardChange::Added),
+            ("leaked", ScorecardChange::Removed),
+        ]
+    );
+    assert_eq!(
+        diff.metrics[0].fields,
+        [FieldChange {
+            path: "/scorer/ignore_case".into(),
+            before: Some(serde_json::json!(false)),
+            after: Some(serde_json::json!(true)),
+        }]
+    );
+    let off_by = diff.metrics[1].after.as_ref().expect("derived");
+    assert_eq!(
+        (off_by.unit.as_str(), off_by.direction),
+        ("minutes", MetricDirection::Lower),
+        "what the added metric is, derived rather than left to the reader"
+    );
+    assert_eq!(
+        diff.metrics[2]
+            .before
+            .as_ref()
+            .map(|before| before.direction),
+        Some(MetricDirection::Lower)
+    );
+    assert!(
+        registry
+            .scorecard_diff("answer-quality", &first.version, &"0".repeat(64))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
