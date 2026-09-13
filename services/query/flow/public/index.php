@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * The Flow query service: the first of the query engines (AW-3).
  *
- * Six routes and no framework. The panel talks to this directly rather than through the Rust
+ * Seven routes and no framework. The panel talks to this directly rather than through the Rust
  * API: aiwatcher's binary has no idea this exists, which is what lets the service be absent
  * without the rest of the panel noticing (see ADR_0008).
  *
@@ -19,11 +19,9 @@ declare(strict_types=1);
  *   POST /query/executions/{id}/cancel  stop the query running under that key
  *
  * `/query` is the contract every engine serves, and healthz and datasets say which engine
- * this is. The same six routes also answer under `/flow`, the prefix they had while Flow
- * was the only engine, for one release: a server or a panel rolled out on either side of
- * this image still reaches it.
+ * this is.
  *
- * The last two are what managed execution needs, and all it needs. `execution_id` is
+ * The last three are what managed execution needs, and all it needs. `execution_id` is
  * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran and
  * what the result hashed to — never the rows. ADR 0014 refused this service an S3 client and
  * that refusal stands: the rows go to the artifact the *reactor* uploads.

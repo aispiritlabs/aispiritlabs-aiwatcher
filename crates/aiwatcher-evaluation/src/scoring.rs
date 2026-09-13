@@ -633,15 +633,19 @@ fn external_warnings(manifest: &EvaluationManifest, card: &Scorecard) -> Vec<Str
             said.push(match (calibrated, &manifest.context.external_calibration) {
                 (Some(calibrated), Some(pin)) => format!(
                     "`{}` is graded by {} {} through {} {}: a model's word, which re-reading will \
-                     not reproduce. How often its verdicts are people's under {} {} is measured \
-                     on {} and published beside it.",
+                     not reproduce. How often its verdicts are people's under {} (version {}) is \
+                     measured on {} and published beside it.",
                     metric.name,
                     model.name,
                     model.version,
                     measure.adapter.name,
                     measure.adapter.version,
                     calibrated.rubric.name,
-                    calibrated.rubric.version,
+                    calibrated
+                        .rubric
+                        .version
+                        .get(..12)
+                        .unwrap_or(&calibrated.rubric.version),
                     pin.calibration_dataset.name
                 ),
                 _ => format!(
