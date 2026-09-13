@@ -157,6 +157,69 @@ pub struct Generation {
 
 /// What the generation step writes: one row per case it answered.
 pub const GENERATED_ANSWERS: &str = "answers";
+/// What the generation step also writes: one row saying what it answered with.
+pub const GENERATED_WITH: &str = "generated_with";
+
+/// What a worker's task says it generated with: the digest of each artifact
+/// of the variant's it holds as bytes, as the one row of `generated_with`.
+///
+/// The variant pins its code and generation config by content, and the task is
+/// the only party holding either — a worker built from an older commit, or
+/// handed another config, answers under the variant's name with something
+/// else, and the numbers publish as the variant's. So the task reports the
+/// digests of what it holds and the score step holds them to the pins before
+/// it reads an answer. It is the worker's word, checked for agreement and not
+/// proved: a task that echoed the pins would pass, and nothing here can tell.
+/// The model, prompt and workflow are references a task resolves through a
+/// registry, not bytes it holds, and are not reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedWith {
+    pub code: String,
+    pub generation_config: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<String>,
+}
+
+impl GeneratedWith {
+    /// Every place what the task generated with is not what the variant pins,
+    /// each naming both digests; empty when they agree.
+    #[must_use]
+    pub fn disagreements(&self, variant: &VariantManifest) -> Vec<String> {
+        let pinned = |artifact: &Option<ArtifactRef>| artifact.as_ref().map(|a| a.digest.clone());
+        [
+            (
+                "code",
+                Some(variant.code.digest.clone()),
+                Some(self.code.clone()),
+            ),
+            (
+                "generation_config",
+                Some(variant.generation_config.digest.clone()),
+                Some(self.generation_config.clone()),
+            ),
+            (
+                "response_schema",
+                pinned(&variant.response_schema),
+                self.response_schema.clone(),
+            ),
+            ("tools", pinned(&variant.tools), self.tools.clone()),
+        ]
+        .into_iter()
+        .filter(|(_, pinned, held)| pinned != held)
+        .map(|(field, pinned, held)| {
+            let said = |digest: Option<String>| digest.unwrap_or_else(|| "nothing".to_owned());
+            format!(
+                "{field}: the variant pins {} and the task generated with {}",
+                said(pinned),
+                said(held)
+            )
+        })
+        .collect()
+    }
+}
 /// What the cases step writes for the generation step to read.
 pub const COHORT_INPUTS: &str = "cases";
 
@@ -1449,6 +1512,46 @@ mod tests {
         assert!(archive.contains("archive's words"), "{archive}");
         let stray = serde_json::from_value::<Answers>(
             json!({"generated_by": {"task": "a@1", "queue": "q", "code": "print(1)"}}),
+        )
+        .unwrap_err();
+        assert!(stray.to_string().contains("unknown field"), "{stray}");
+    }
+
+    #[test]
+    fn what_a_task_generated_with_is_held_to_every_artifact_the_variant_pins() {
+        let declared = run(
+            DatasetKind::Curation,
+            Answers::Archive(ArchiveWord::Archive),
+        );
+        let variant = declared.variant;
+        let agreeing = GeneratedWith {
+            code: variant.code.digest.clone(),
+            generation_config: variant.generation_config.digest.clone(),
+            response_schema: None,
+            tools: None,
+        };
+        assert!(agreeing.disagreements(&variant).is_empty());
+
+        let older = GeneratedWith {
+            code: "0".repeat(64),
+            tools: Some("1".repeat(64)),
+            ..agreeing
+        };
+        let said = older.disagreements(&variant);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said[0].starts_with("code: the variant pins ") && said[0].ends_with(&"0".repeat(64)),
+            "{said:?}"
+        );
+        assert_eq!(
+            said[1],
+            format!(
+                "tools: the variant pins nothing and the task generated with {}",
+                "1".repeat(64)
+            )
+        );
+        let stray = serde_json::from_value::<GeneratedWith>(
+            json!({"code": "a", "generation_config": "b", "model": "c"}),
         )
         .unwrap_err();
         assert!(stray.to_string().contains("unknown field"), "{stray}");

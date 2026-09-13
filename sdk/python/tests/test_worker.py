@@ -11,6 +11,7 @@ import types
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -918,12 +919,54 @@ def test_asking_is_raised_rather_than_returned_so_a_task_cannot_carry_on() -> No
     assert api.reports[0]["outcome"] == "parked"
 
 
+CODE = b"def answer(case): ..."
+GENERATION_CONFIG = b'{"temperature": 0}'
+
+
+def pinned_variant() -> dict[str, Any]:
+    return {
+        "experiment_id": "candidate",
+        "code": {"name": "code", "uri": "file://app.py", "digest": sha256(CODE).hexdigest()},
+        "generation_config": {
+            "name": "generation",
+            "uri": "file://generation.json",
+            "digest": sha256(GENERATION_CONFIG).hexdigest(),
+        },
+    }
+
+
+def generation_assignment(variant: dict[str, Any]) -> Any:
+    return assignment(
+        step_id="generate",
+        context_id="import-1/generate/1",
+        task_ref="support-bot.answer@3",
+        queue="evaluation",
+        params={
+            "declaration": "d" * 64,
+            "evaluation_id": "candidate-1",
+            "repetition_id": "measurement-1",
+            "variant": variant,
+            "params": {},
+        },
+        parameters={},
+        inputs=[reference("cases")],
+    )
+
+
 def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once() -> None:
-    from aiwatcher_sdk.worker import Case, Declined, Generated, Generation, generation_task
+    from aiwatcher_sdk.worker import (
+        Case,
+        Declined,
+        Generated,
+        GeneratedWith,
+        Generation,
+        generation_task,
+    )
 
     seen: list[tuple[str, Any, Any]] = []
+    holding = GeneratedWith.of(code=CODE, generation_config=GENERATION_CONFIG)
 
-    @generation_task("support-bot.answer", version="3")
+    @generation_task("support-bot.answer", version="3", generated_with=lambda _run: holding)
     def answer(case: Case, run: Generation) -> Any:
         seen.append((case.case_id, case.input, run.variant["experiment_id"]))
         if case.case_id == "case-2":
@@ -932,23 +975,7 @@ def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once
             return Declined("the application would not say")
         return {"text": f"answer to {case.input}"}
 
-    api = WorkerApi(
-        assignment(
-            step_id="generate",
-            context_id="import-1/generate/1",
-            task_ref="support-bot.answer@3",
-            queue="evaluation",
-            params={
-                "declaration": "d" * 64,
-                "evaluation_id": "candidate-1",
-                "repetition_id": "measurement-1",
-                "variant": {"experiment_id": "candidate"},
-                "params": {},
-            },
-            parameters={},
-            inputs=[reference("cases")],
-        )
-    )
+    api = WorkerApi(generation_assignment(pinned_variant()))
     api.artifacts["cases"] = [
         {"case_id": "case-1", "input": {"question": "capital"}},
         {"case_id": "case-2", "input": {"question": "2+2"}},
@@ -975,6 +1002,50 @@ def test_a_generation_task_answers_every_case_it_was_handed_and_writes_them_once
         {"case_id": "case-1", "answer": {"text": "answer to {'question': 'capital'}"}},
         {"case_id": "case-2", "answer": {"text": "four"}, "trace_id": "ab" * 16},
     ]
+    assert api.artifacts["generated_with"] == [
+        {
+            "code": sha256(CODE).hexdigest(),
+            "generation_config": sha256(GENERATION_CONFIG).hexdigest(),
+        }
+    ]
     assert api.reports[0]["outcome"] == "completed"
-    written = [request for request in api.requests if "/outputs/" in request.url.path]
-    assert len(written) == 1, "the answers are written once, at the end"
+    written = [request.url.path for request in api.requests if "/outputs/" in request.url.path]
+    assert [path.rsplit("/", 1)[1] for path in written] == ["answers", "generated_with"], (
+        "the answers are written once, at the end"
+    )
+
+
+def test_a_worker_holding_other_code_than_the_variant_pins_answers_nothing() -> None:
+    from aiwatcher_sdk.worker import Case, GeneratedWith, Generation, generation_task
+
+    asked: list[str] = []
+    older = GeneratedWith.of(
+        code=b"def answer(case): return 'older'", generation_config=GENERATION_CONFIG
+    )
+
+    @generation_task("support-bot.answer", version="3", generated_with=lambda _run: older)
+    def answer(case: Case, run: Generation) -> Any:
+        asked.append(case.case_id)
+        return {"text": "an answer the variant never gave"}
+
+    api = WorkerApi(generation_assignment(pinned_variant()))
+    api.artifacts["cases"] = [{"case_id": "case-1", "input": {"question": "capital"}}]
+    process = Worker(
+        "http://aiwatcher.invalid",
+        "queue-token",
+        queues=["evaluation"],
+        tasks=[answer],
+        name="worker-1",
+        client=httpx.Client(transport=httpx.MockTransport(api.handle)),
+        telemetry=AiwatcherClient(service="test", transport=NullTransport()),
+    )
+    with process:
+        assert process.run_once()
+
+    assert asked == [], "no case is answered, so no model is asked"
+    report = api.reports[0]
+    assert report["outcome"] == "failed"
+    assert report["class"] == "user_code"
+    assert sha256(CODE).hexdigest() in report["message"]
+    assert older.code in report["message"]
+    assert "answers" not in api.artifacts

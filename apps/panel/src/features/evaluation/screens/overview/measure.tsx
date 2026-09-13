@@ -540,7 +540,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string, baseline?: st
           Generated now, by a worker&apos;s task
           <span className="text-muted-foreground">
             — handed each case&apos;s input and never what it expected; told the variant it answers
-            as.
+            as, and refused unless it generated with the code and config the variant pins.
           </span>
         </label>
         {chosenAnswers === 'generated' ? (

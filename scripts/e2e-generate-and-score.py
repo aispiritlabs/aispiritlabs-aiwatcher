@@ -34,7 +34,9 @@ What it checks:
 5. the case the repetition declined is unscored, not a zero: coverage drops,
    and its comparison with the baseline is withheld as unverified;
 6. a result names its execution and step, and a case names its trace;
-7. starting a declaration again lands on the run it started, not a second one.
+7. starting a declaration again lands on the run it started, not a second one;
+8. a variant pinning code the worker does not hold fails before a case is
+   answered, naming both digests, and publishes nothing.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -69,6 +71,7 @@ from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
     Declined,
     Generated,
+    GeneratedWith,
     Generation,
     JsonValue,
     Worker,
@@ -113,7 +116,21 @@ def application(prompt: str, country: str, capital: str) -> str:
     return f"The capital of {country} is {capital}, as it happens."
 
 
-@generation_task("e2e.capitals.answer", version="1")
+def code_of(which: str) -> bytes:
+    return f"# the {which} application\n".encode()
+
+
+def generation_of(which: str) -> bytes:
+    return json.dumps({"temperature": 0, "variant": which}).encode()
+
+
+def holding(run: Generation) -> GeneratedWith:
+    """What this worker was built with for the variant it is asked about."""
+    which = str(run.variant["experiment_id"])
+    return GeneratedWith.of(code=code_of(which), generation_config=generation_of(which))
+
+
+@generation_task("e2e.capitals.answer", version="1", generated_with=holding)
 def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     context = get_task_context()
     HANDED.extend(context.read_artifact("cases") if not HANDED else [])
@@ -283,15 +300,17 @@ def declare(
     *,
     repetition: str = "measurement-1",
     params: dict[str, Any] | None = None,
+    code: bytes | None = None,
 ) -> dict[str, Any]:
     """Declare one variant's run, admit its pair, and return the view."""
     with PromptRegistry(BASE) as prompts:
         version = prompts.publish(PROMPT, PROMPTS[which], author="e2e").version_id
-    code = f"# the {which} application\n".encode()
-    generation = json.dumps({"temperature": 0, "variant": which}).encode()
+    code = code_of(which) if code is None else code
+    generation = generation_of(which)
     run = {
         "evaluation_id": f"capitals-{which}"
-        + ("" if repetition == "measurement-1" else f"-{repetition}"),
+        + ("" if repetition == "measurement-1" else f"-{repetition}")
+        + ("" if code == code_of(which) else "-unheld"),
         "repetition_id": repetition,
         "variant": {
             "schema_version": 1,
@@ -378,6 +397,13 @@ def main() -> int:
             card,
             repetition="measurement-2",
             params={"decline": "Kenya"},
+        )
+        unheld = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            code=b"# a commit this worker was never built from\n",
         )
         started = {
             which: ok(
@@ -494,6 +520,28 @@ def main() -> int:
             and again["execution"]["execution_id"]
             == started["candidate"]["execution"]["execution_id"],
             again["created"],
+        )
+
+        refused = ok(
+            *call("POST", f"/api/v1/evaluation-runs/{unheld['declaration']['id']}/start")[:2],
+            "starting the unheld run",
+        )
+        stale = followed(refused["execution"]["execution_id"])
+        told = json.dumps(stale["execution"])
+        pinned = unheld["declaration"]["run"]["variant"]["code"]["digest"]
+        held = hashlib.sha256(code_of("candidate")).hexdigest()
+        published = call(
+            "GET",
+            f"/api/v1/evaluation-results/{unheld['declaration']['run']['evaluation_id']}",
+        )[0]
+        check(
+            8,
+            "a variant pinning code the worker does not hold is refused before an answer",
+            stale["execution"]["state"]["state_type"] == "failed"
+            and pinned in told
+            and held in told
+            and published == 404,
+            {"state": stale["execution"]["state"]["state_type"], "result": published},
         )
     finally:
         worker.stop()

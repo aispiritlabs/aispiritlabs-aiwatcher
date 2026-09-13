@@ -1997,10 +1997,14 @@ the review.
   the score step. A generator that could read them could answer by copying, and
   nothing in the numbers would say so. The score step reads the rows the
   completed generation attempt wrote, from its own input, so a retry never asks
-  the application again; a case the task declined is unscored, never zero. Not
-  over the conversation archive, whose questions would reach a worker outside its
-  seal. A baseline is a second declaration differing in its variant and ID alone,
-  which is what gives the two one context.
+  the application again; a case the task declined is unscored, never zero. The
+  task also writes `generated_with` — the digests of the code and generation
+  config it holds — and the score step refuses answers it is missing from or
+  disagrees with the variant's pins: a worker built from another commit answers
+  under the variant's name with something else. Not over the conversation
+  archive, whose questions would reach a worker outside its seal. A baseline is a
+  second declaration differing in its variant and ID alone, which is what gives
+  the two one context.
 - **Never ask anybody to stage a cohort this deployment can derive.** A
   curation version's, an annotation export's and a conversation corpus's cases
   are already derived from their owners at admission, so `POST

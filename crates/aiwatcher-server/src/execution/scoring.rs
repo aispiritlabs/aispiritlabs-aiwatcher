@@ -26,8 +26,9 @@ use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
-    DatasetKind, EvaluationError, EvidenceState, ExternalScorers, JudgeFailure, JudgeModel, Judged,
-    PublishEvaluation, RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin,
+    DatasetKind, EvaluationError, EvidenceState, ExternalScorers, GENERATED_ANSWERS,
+    GENERATED_WITH, GeneratedWith, JudgeFailure, JudgeModel, Judged, PublishEvaluation,
+    RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin, VariantManifest,
     external_questions, external_replies, questions, replies, score_with,
 };
 use aiwatcher_execution::{
@@ -158,14 +159,16 @@ impl ScoreExecutor {
         self
     }
 
-    /// The answers a worker generated, as the rows the step before this wrote.
+    /// The answers a worker generated, as the rows the step before this wrote —
+    /// read once what the task generated them with agrees with the variant.
     ///
-    /// Read from this attempt's own input, which the run pinned when the
+    /// Read from this attempt's own inputs, which the run pinned when the
     /// generation step completed: a retry of this step reads the same answers,
     /// and never asks the application again.
     async fn generated(
         &self,
         command: &ActivityCommand,
+        variant: &VariantManifest,
     ) -> Result<Vec<RecordedAnswer>, ActivityError> {
         let Some(artifacts) = &self.artifacts else {
             return Err(ActivityError::user_code(
@@ -173,13 +176,52 @@ impl ScoreExecutor {
                  read them from",
             ));
         };
-        let Some(input) = command.inputs.first() else {
-            return Err(ActivityError::user_code(
-                "this run's answers were generated, and the generation step produced none",
-            ));
+        let input = |name: &str| {
+            command
+                .inputs
+                .iter()
+                .find(|input| input.name == name)
+                .ok_or_else(|| {
+                    ActivityError::user_code(format!(
+                        "this run's answers were generated, and the generation step wrote no \
+                         `{name}`"
+                    ))
+                })
         };
+        let with = artifacts
+            .read_rows(input(GENERATED_WITH)?)
+            .await?
+            .into_iter()
+            .map(|row| {
+                serde_json::from_value::<GeneratedWith>(serde_json::Value::Object(
+                    row.into_iter().collect(),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                ActivityError::user_code(format!(
+                    "the generation step's `{GENERATED_WITH}` is not what it generated with \
+                     ({{\"code\", \"generation_config\", \"response_schema\"?, \"tools\"?}}): \
+                     {error}"
+                ))
+            })?;
+        let [with] = with.as_slice() else {
+            return Err(ActivityError::user_code(format!(
+                "the generation step's `{GENERATED_WITH}` holds {} rows, and says what it \
+                 generated with in one",
+                with.len()
+            )));
+        };
+        let disagreements = with.disagreements(variant);
+        if !disagreements.is_empty() {
+            return Err(ActivityError::user_code(format!(
+                "the task did not generate with what the variant pins, so its answers are not \
+                 the variant's — {}",
+                disagreements.join("; ")
+            )));
+        }
         artifacts
-            .read_rows(input)
+            .read_rows(input(GENERATED_ANSWERS)?)
             .await?
             .into_iter()
             .enumerate()
@@ -282,7 +324,7 @@ impl ActivityExecutor for ScoreExecutor {
             .await
             .map_err(refusal)?;
         let answers = match run.answers.generation() {
-            Some(_) => self.generated(command).await?,
+            Some(_) => self.generated(command, &run.variant).await?,
             None => evaluations
                 .answers(run, &cohort.expected)
                 .await

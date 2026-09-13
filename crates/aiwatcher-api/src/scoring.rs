@@ -546,7 +546,12 @@ fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
                             step: CASES_STEP.to_owned(),
                             output: aiwatcher_evaluation::COHORT_INPUTS.to_owned(),
                         }],
-                        outputs: vec![rows(aiwatcher_evaluation::GENERATED_ANSWERS)],
+                        // The answers, and what the task generated them with — which
+                        // the score step holds to the variant before reading one.
+                        outputs: vec![
+                            rows(aiwatcher_evaluation::GENERATED_ANSWERS),
+                            rows(aiwatcher_evaluation::GENERATED_WITH),
+                        ],
                         retry: RetryPolicy::default(),
                         timeout_seconds: declared
                             .run
@@ -556,10 +561,17 @@ fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
                         // A model's answers are not a function of their inputs.
                         cache: CachePolicy::Never,
                     },
-                    score(vec![InputBinding::Step {
-                        step: GENERATE_STEP.to_owned(),
-                        output: aiwatcher_evaluation::GENERATED_ANSWERS.to_owned(),
-                    }]),
+                    score(
+                        [
+                            aiwatcher_evaluation::GENERATED_ANSWERS,
+                            aiwatcher_evaluation::GENERATED_WITH,
+                        ]
+                        .map(|output| InputBinding::Step {
+                            step: GENERATE_STEP.to_owned(),
+                            output: output.to_owned(),
+                        })
+                        .to_vec(),
+                    ),
                 ],
                 vec![
                     PlanEdge {
@@ -711,11 +723,20 @@ mod tests {
             }]
         );
         assert_eq!(
+            plan.steps[1]
+                .outputs
+                .iter()
+                .map(|output| output.name.as_str())
+                .collect::<Vec<_>>(),
+            ["answers", "generated_with"],
+            "a generation is not complete until it says what it generated with"
+        );
+        assert_eq!(
             plan.steps[2].inputs,
-            [InputBinding::Step {
+            ["answers", "generated_with"].map(|output| InputBinding::Step {
                 step: GENERATE_STEP.to_owned(),
-                output: "answers".to_owned()
-            }],
+                output: output.to_owned()
+            }),
             "the score step reads what the worker wrote"
         );
         assert_eq!(plan.edges.len(), 2);

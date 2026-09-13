@@ -70,6 +70,32 @@ async fn declared(registry: &Registry) -> DeclaredRun {
     declared
 }
 
+/// The row a task writes to say what it generated with: what the variant pins,
+/// or `code` in its place.
+async fn generated_with(
+    artifacts: &Artifacts,
+    declared: &DeclaredRun,
+    code: Option<&str>,
+) -> aiwatcher_core::ArtifactRef {
+    let variant = &declared.run.variant;
+    artifacts
+        .put_rows(
+            "generated_with",
+            &vec![BTreeMap::from([
+                (
+                    "code".to_owned(),
+                    json!(code.unwrap_or(&variant.code.digest)),
+                ),
+                (
+                    "generation_config".to_owned(),
+                    json!(variant.generation_config.digest),
+                ),
+            ])],
+        )
+        .await
+        .unwrap()
+}
+
 fn step(
     declaration: &str,
     id: &str,
@@ -155,7 +181,7 @@ async fn a_worker_is_handed_each_cases_input_and_its_answers_are_scored_like_a_r
         &declared.id,
         "score",
         aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec()),
-        vec![answers],
+        vec![answers, generated_with(&artifacts, &declared, None).await],
     );
     let reported = ScoreExecutor::new(Arc::clone(&registry))
         .reading_from(artifacts.clone())
@@ -222,7 +248,7 @@ async fn a_row_the_worker_wrote_that_is_not_an_answer_fails_the_step_naming_it()
                 declaration: declared.id.clone(),
             },
         ),
-        vec![answers],
+        vec![answers, generated_with(&artifacts, &declared, None).await],
     );
     let refused = ScoreExecutor::new(Arc::clone(&registry))
         .reading_from(artifacts)
@@ -231,6 +257,71 @@ async fn a_row_the_worker_wrote_that_is_not_an_answer_fails_the_step_naming_it()
         .unwrap_err();
     assert_eq!(refused.class, FailureClass::UserCode);
     assert!(refused.message.contains("row 0"), "{}", refused.message);
+    assert!(
+        registry
+            .get("generated-run", "reader", now())
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing was published"
+    );
+}
+
+#[tokio::test]
+async fn answers_a_task_generated_with_other_code_than_the_variant_pins_are_never_scored() {
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let artifacts = Artifacts::new(Arc::new(MemoryObjectStore::new()));
+    let declared = declared(&registry).await;
+    let answers = artifacts
+        .put_rows(
+            "answers",
+            &vec![BTreeMap::from([
+                ("case_id".to_owned(), json!("case-00000")),
+                ("answer".to_owned(), json!({"text": ""})),
+            ])],
+        )
+        .await
+        .unwrap();
+    let spec = aiwatcher_execution::plan::ScoreEvaluationSpec {
+        declaration: declared.id.clone(),
+    };
+    let score = |inputs| {
+        step(
+            &declared.id,
+            "score",
+            aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec.clone()),
+            inputs,
+        )
+    };
+    let executor = ScoreExecutor::new(Arc::clone(&registry)).reading_from(artifacts.clone());
+
+    // A worker built from another commit: its answers are not the variant's.
+    let older = "0".repeat(64);
+    let (command, context) = score(vec![
+        answers.clone(),
+        generated_with(&artifacts, &declared, Some(&older)).await,
+    ]);
+    let refused = executor.execute(&command, &context).await.unwrap_err();
+    assert_eq!(refused.class, FailureClass::UserCode);
+    assert!(
+        refused.message.contains(&older)
+            && refused.message.contains(&declared.run.variant.code.digest),
+        "names both: {}",
+        refused.message
+    );
+
+    // A task that never said what it generated with.
+    let (command, context) = score(vec![answers]);
+    let silent = executor.execute(&command, &context).await.unwrap_err();
+    assert_eq!(silent.class, FailureClass::UserCode);
+    assert!(
+        silent.message.contains("wrote no `generated_with`"),
+        "{}",
+        silent.message
+    );
     assert!(
         registry
             .get("generated-run", "reader", now())

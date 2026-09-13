@@ -1018,6 +1018,17 @@ reads the rows it wrote from its own input. What makes the answers honest:
   and a comparison with it is withheld as unverified.
 - **Not over the conversation archive.** Each case's question would reach a
   worker as a row outside the archive's seal, retention and erasure.
+- **A task says what it generated with, and is held to the variant's pins.** Only
+  the worker holds the code and generation config the variant pins by digest, and
+  one built from another commit would answer under the variant's name with
+  something else. So the generation step writes `generated_with` — the digest of
+  the code, the generation config, and the response schema and tools when the
+  variant pins them — and the score step refuses answers whose `generated_with`
+  is missing or disagrees, naming both digests. The SDK's `generation_task`
+  asks first and fails before a case is answered. It is the worker's word checked
+  for agreement, not a proof: a task that echoed the pins would pass. The model,
+  prompt and workflow are references a task resolves through a registry rather
+  than bytes it holds, and are not reported.
 
 A baseline and a candidate are two declarations that differ in their variant and
 evaluation ID alone, so their contexts match and the comparison above applies.

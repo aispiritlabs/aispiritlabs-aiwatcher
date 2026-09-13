@@ -22,6 +22,7 @@ from aiwatcher_sdk.worker.generation import (
     Case,
     Declined,
     Generated,
+    GeneratedWith,
     Generation,
     generation_task,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "Declined",
     "Fail",
     "Generated",
+    "GeneratedWith",
     "Generation",
     "InputAnswer",
     "InputRequired",
