@@ -12,11 +12,16 @@
 //! under way rather than beside it. Each action is a revision, written
 //! create-only, so two reviewers acting at once agree on what happened.
 //!
-//! The words are the proposer's to supply. What a person using the application
-//! said is theirs, so a proposal says which it is — `written` by a reviewer, or
-//! `observed` and copied — and only an admin approves an observed one into a
-//! dataset. The conversation archive is not a source: its words leave the seal,
-//! retention and erasure only through a corpus export.
+//! The words are the proposer's to supply, or the result's to give. What a person
+//! using the application said is theirs, so a proposal says which it is —
+//! `written` by a reviewer, or `observed` and copied — and only an admin
+//! approves an observed one into a dataset. A case of a published result holds
+//! its own words: the question its cohort asked and what the variant answered,
+//! both this deployment's data already, so a proposal naming where the case sits
+//! is filled from there and is `measured`. A trace holds none — the Collector
+//! keeps a prompt and a completion off it — and the conversation archive is not
+//! a source: its words leave the seal, retention and erasure only through a
+//! corpus export.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +44,10 @@ pub enum ReviewContent {
     /// Copied from what somebody using the application said. Theirs, so only an
     /// admin decides it becomes a case.
     Observed,
+    /// Read from a published result's case: the question its cohort asked and
+    /// what the variant answered. Neither is somebody's words that were not
+    /// this deployment's data already.
+    Measured,
 }
 
 /// What somebody proposes as a case.
@@ -49,17 +58,54 @@ pub struct CaseProposal {
     pub dataset: String,
     /// Where it was seen.
     pub target: AssessmentTarget,
-    pub question: String,
-    /// What was answered, when the proposer has it.
+    /// The question, in the proposer's words or copied. Absent to have it read
+    /// from the result a case target names, at `at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// What was answered, when the proposer has it. Read with the question when
+    /// that is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// Where the case sits in its result: the cursor `GET
+    /// /evaluation-results/{id}/cases` issued, as a comparison row carries it.
+    /// Opaque, handed back as it came; never a search through the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
     /// Why, in the proposer's words: the feedback, or what went wrong.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     /// The standing judgement that raised it, when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assessment: Option<String>,
+    /// Whose words the question is. Required when the proposal carries one;
+    /// words read from a result are `measured` whatever this says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ReviewContent>,
+}
+
+/// The words a proposal starts with, as the registry settled them: the
+/// proposer's, or a result's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Words {
+    pub question: String,
+    pub answer: Option<String>,
     pub content: ReviewContent,
+}
+
+/// The proposals under way on one target, whichever dataset each would join.
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = CaseReviewsOfTarget)]
+pub struct TargetReviews {
+    pub target: AssessmentTarget,
+    /// Oldest proposal first.
+    pub items: Vec<ReviewItem>,
+}
+
+/// One entry of the target index: where a proposal lives.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Indexed {
+    dataset: String,
+    id: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -175,16 +221,68 @@ async fn current(store: &Store, dataset: &str, id: &str) -> Result<Option<Review
     }
 }
 
+/// The review already under way for this dataset and target, if one is.
+pub(crate) async fn existing(
+    store: &Store,
+    dataset: &str,
+    target: &AssessmentTarget,
+) -> Result<Option<ReviewItem>> {
+    text(dataset, "dataset")?;
+    let found = current(store, dataset, &proposal_id(dataset, target)?).await?;
+    if let Some(item) = &found {
+        index(store, item).await?;
+    }
+    Ok(found)
+}
+
+/// Point the proposal's target at it. Written after the revision, and again on
+/// every later proposal of the same target, so a crash between the two is
+/// mended by the next person to propose it.
+async fn index(store: &Store, item: &ReviewItem) -> Result<()> {
+    store
+        .create(
+            &store::review_target(&item.target.address()?, &item.dataset),
+            &Indexed {
+                dataset: item.dataset.clone(),
+                id: item.id.clone(),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Every proposal seen on one target, at its current revision, oldest first.
+pub(crate) async fn for_target(store: &Store, target: &AssessmentTarget) -> Result<TargetReviews> {
+    let mut items = Vec::new();
+    for entry in store
+        .0
+        .list(&store::review_targets(&target.address()?))
+        .await?
+    {
+        if let Some(indexed) = store.read::<Indexed>(&entry.key).await?
+            && let Some(item) = current(store, &indexed.dataset, &indexed.id).await?
+        {
+            items.push(item);
+        }
+    }
+    items.sort_by(|a, b| a.proposed_at.cmp(&b.proposed_at).then(a.id.cmp(&b.id)));
+    Ok(TargetReviews {
+        target: target.clone(),
+        items,
+    })
+}
+
 /// Propose a case; answers the review and whether this proposal started it.
 pub(crate) async fn propose(
     store: &Store,
     proposal: &CaseProposal,
+    words: Words,
     proposed_by: &str,
     now: i64,
 ) -> Result<(ReviewItem, bool)> {
     text(&proposal.dataset, "dataset")?;
-    bounded(&proposal.question, "question")?;
-    if let Some(answer) = &proposal.answer {
+    bounded(&words.question, "question")?;
+    if let Some(answer) = &words.answer {
         bounded(answer, "answer")?;
     }
     require(
@@ -194,17 +292,18 @@ pub(crate) async fn propose(
     )?;
     let id = proposal_id(&proposal.dataset, &proposal.target)?;
     if let Some(existing) = current(store, &proposal.dataset, &id).await? {
+        index(store, &existing).await?;
         return Ok((existing, false));
     }
     let item = ReviewItem {
         id: id.clone(),
         dataset: proposal.dataset.clone(),
         target: proposal.target.clone(),
-        question: proposal.question.clone(),
-        answer: proposal.answer.clone(),
+        question: words.question,
+        answer: words.answer,
         note: proposal.note.clone(),
         assessment: proposal.assessment.clone(),
-        content: proposal.content,
+        content: words.content,
         proposed_by: proposed_by.to_owned(),
         proposed_at: now,
         state: ReviewState::Proposed,
@@ -221,11 +320,13 @@ pub(crate) async fn propose(
         .create(&store::review_revision(&proposal.dataset, &id, 1), &item)
         .await?
     {
+        index(store, &item).await?;
         return Ok((item, true));
     }
     let existing = current(store, &proposal.dataset, &id)
         .await?
         .ok_or(EvaluationError::Contested)?;
+    index(store, &existing).await?;
     Ok((existing, false))
 }
 

@@ -119,6 +119,19 @@ pub(crate) fn review(dataset: &str, id: &str) -> String {
 pub(crate) fn review_revision(dataset: &str, id: &str, revision: u32) -> String {
     format!("{}{revision:010}.json", review(dataset, id))
 }
+/// The proposals seen on one target, one entry per dataset they would join:
+/// an index written after the revision it points at, so a case's judgements
+/// can say what is already under review without reading every dataset's queue.
+pub(crate) fn review_targets(target_address: &str) -> String {
+    format!("evaluation-review-targets/{target_address}/")
+}
+pub(crate) fn review_target(target_address: &str, dataset: &str) -> String {
+    format!(
+        "{}{}.json",
+        review_targets(target_address),
+        hash(dataset.as_bytes())
+    )
+}
 /// A variant's pinned bytes, keyed by their digest: whoever sends them, they
 /// are the bytes a pin names or they are nothing.
 pub(crate) fn variant_artifact(digest: &str) -> String {

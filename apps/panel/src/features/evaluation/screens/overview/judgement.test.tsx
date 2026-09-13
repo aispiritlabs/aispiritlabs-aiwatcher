@@ -5,6 +5,7 @@ import type { Assessment, RubricHead, RubricVersion } from '@/api/generated/type
 import { serve, withQueries } from '@/test/server';
 
 import { CaseJudgement } from './judgement';
+import { OpenCaseReview } from './reviews';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -57,7 +58,9 @@ function only(assessments: Assessment[], rubrics: RubricHead[] = [HEAD], auth?: 
       path: '/auth/config',
       answer: { status: 200, body: { enabled: auth !== undefined } },
     },
-    ...(auth ? [{ method: 'GET' as const, path: '/auth/me', answer: { status: 200, body: auth } }] : []),
+    ...(auth
+      ? [{ method: 'GET' as const, path: '/auth/me', answer: { status: 200, body: auth } }]
+      : []),
     {
       method: 'GET',
       path: '/evaluation-assessments',
@@ -138,4 +141,78 @@ it('tells a reader which role records a judgement instead of a button that fails
   // answer is "nobody has said no yet", which is not a refusal to render.
   const record = await screen.findByTitle(/needs the editor role/);
   expect((record as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('says where a case is under review, and proposes it by where it sits with no words retyped', async () => {
+  const review = {
+    id: 'r'.repeat(64),
+    dataset: 'regressions',
+    target: {
+      kind: 'case',
+      evaluation_id: 'after',
+      case_id: 'two-plus-two',
+      repetition_id: 'measurement-1',
+    },
+    question: 'What is two plus two?',
+    answer: '5',
+    content: 'measured',
+    proposed_by: 'ada',
+    proposed_at: 1789200000,
+    state: 'ready',
+    expected: '4',
+    revision: 2,
+    recorded_by: 'grace',
+    recorded_at: 1789200000,
+  };
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/evaluation-assessments',
+      answer: { status: 200, body: { target_id: 'target-1', assessments: [] } },
+    },
+    { method: 'GET', path: '/evaluation-rubrics', answer: { status: 200, body: { rubrics: [] } } },
+    {
+      method: 'GET',
+      path: '/evaluation-reviews/of-target',
+      answer: { status: 200, body: { target: review.target, items: [review] } },
+    },
+    {
+      method: 'POST',
+      path: '/evaluation-reviews',
+      answer: { status: 201, body: { review, created: true } },
+    },
+  ]);
+  const opened: string[] = [];
+  render(
+    withQueries(
+      <OpenCaseReview.Provider value={(dataset) => opened.push(dataset)}>
+        <CaseJudgement
+          evaluationId="after"
+          caseId="two-plus-two"
+          repetitionId="measurement-1"
+          at="v1:3"
+        />
+      </OpenCaseReview.Provider>,
+    ),
+  );
+
+  fireEvent.click(await screen.findByRole('button', { name: 'regressions' }));
+  expect(opened).toEqual(['regressions']);
+  expect(screen.getByText(/expected “4”/)).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText('Dataset to propose it to'), {
+    target: { value: 'capitals' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Propose as a case' }));
+  await screen.findByRole('button', { name: 'Propose as a case' });
+  const sent = server.calls.find(
+    (call) => call.method === 'POST' && call.url.endsWith('/evaluation-reviews'),
+  );
+  // Where the case sits, and nothing the server reads for itself.
+  expect(sent?.body).toEqual({
+    dataset: 'capitals',
+    target: review.target,
+    at: 'v1:3',
+  });
 });

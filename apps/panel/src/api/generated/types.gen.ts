@@ -1136,14 +1136,21 @@ export type CasePage = {
  */
 export type CaseProposal = {
     /**
-     * What was answered, when the proposer has it.
+     * What was answered, when the proposer has it. Read with the question when
+     * that is.
      */
     answer?: string | null;
     /**
      * The standing judgement that raised it, when one did.
      */
     assessment?: string | null;
-    content: CaseReviewContent;
+    /**
+     * Where the case sits in its result: the cursor `GET
+     * /evaluation-results/{id}/cases` issued, as a comparison row carries it.
+     * Opaque, handed back as it came; never a search through the result.
+     */
+    at?: string | null;
+    content?: null | CaseReviewContent;
     /**
      * The curation dataset the case would join.
      */
@@ -1152,7 +1159,11 @@ export type CaseProposal = {
      * Why, in the proposer's words: the feedback, or what went wrong.
      */
     note?: string;
-    question: string;
+    /**
+     * The question, in the proposer's words or copied. Absent to have it read
+     * from the result a case target names, at `at`.
+     */
+    question?: string | null;
     /**
      * Where it was seen.
      */
@@ -1175,7 +1186,11 @@ export type CaseReviewAction = {
 /**
  * Whose words a proposal holds.
  */
-export const CaseReviewContent = { WRITTEN: 'written', OBSERVED: 'observed' } as const;
+export const CaseReviewContent = {
+    WRITTEN: 'written',
+    OBSERVED: 'observed',
+    MEASURED: 'measured'
+} as const;
 
 /**
  * Whose words a proposal holds.
@@ -1227,6 +1242,17 @@ export const CaseReviewState = {
 } as const;
 
 export type CaseReviewState = typeof CaseReviewState[keyof typeof CaseReviewState];
+
+/**
+ * The proposals under way on one target, whichever dataset each would join.
+ */
+export type CaseReviewsOfTarget = {
+    /**
+     * Oldest proposal first.
+     */
+    items: Array<CaseReviewItem>;
+    target: AssessmentTarget;
+};
 
 /**
  * What part of a case a metric reads.
@@ -11787,6 +11813,35 @@ export type ProposeCaseResponses = {
 };
 
 export type ProposeCaseResponse = ProposeCaseResponses[keyof ProposeCaseResponses];
+
+export type ReviewsOfTargetData = {
+    body?: never;
+    path?: never;
+    query: {
+        kind: TargetKind;
+        trace_id?: string;
+        span_id?: string;
+        session_id?: string;
+        as_of?: number;
+        evaluation_id?: string;
+        case_id?: string;
+        repetition_id?: string;
+    };
+    url: '/api/v1/evaluation-reviews/of-target';
+};
+
+export type ReviewsOfTargetErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReviewsOfTargetError = ReviewsOfTargetErrors[keyof ReviewsOfTargetErrors];
+
+export type ReviewsOfTargetResponses = {
+    200: CaseReviewsOfTarget;
+};
+
+export type ReviewsOfTargetResponse = ReviewsOfTargetResponses[keyof ReviewsOfTargetResponses];
 
 export type PublishReviewsData = {
     body?: never;

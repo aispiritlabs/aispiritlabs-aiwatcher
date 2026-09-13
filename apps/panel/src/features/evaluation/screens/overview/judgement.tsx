@@ -13,11 +13,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
 
-import { getRubric, listAssessments, listRubrics, recordAssessment } from '@/api/generated/sdk.gen';
-import type { Assessment, AssessmentValue, RubricVersion, Scale } from '@/api/generated/types.gen';
+import {
+  getRubric,
+  listAssessments,
+  listRubrics,
+  proposeCase,
+  recordAssessment,
+  reviewsOfTarget,
+} from '@/api/generated/sdk.gen';
+import type {
+  Assessment,
+  AssessmentValue,
+  CaseReviewItem,
+  RubricVersion,
+  Scale,
+} from '@/api/generated/types.gen';
 import { Badge, Button, EmptyState, Spinner } from '@/shared/components/ui/primitives';
 import { needsRole, useRoleDecision } from '@/shared/lib/auth';
 import { answerOf, ApiFailure } from '@/shared/lib/result';
+
+import { OpenCaseReview } from './reviews';
 
 /** The three answers a scale admits, as one line of text. */
 function saidAs(value: AssessmentValue): string {
@@ -36,10 +51,13 @@ export function CaseJudgement({
   evaluationId,
   caseId,
   repetitionId,
+  at,
 }: {
   evaluationId: string;
   caseId: string;
   repetitionId: string;
+  /** Where the case sits in its result, as the case route issued it. */
+  at?: string | undefined;
 }) {
   const editor = useRoleDecision('editor');
   const target = {
@@ -97,7 +115,130 @@ export function CaseJudgement({
           disabled={editor === false}
         />
       )}
+      <UnderReview target={target} at={at} disabled={editor === false} />
     </div>
+  );
+}
+
+/**
+ * Where this case already is on its way to becoming a regression case, and the
+ * way to put it there.
+ *
+ * The reviews are the server's, found by the case they were seen on whichever
+ * dataset each joins. Proposing sends where the case sits and no words: the
+ * server reads the question its cohort asked and what was answered from the
+ * result, so nobody retypes either, and the proposal says it was read.
+ */
+function UnderReview({
+  target,
+  at,
+  disabled,
+}: {
+  target: { kind: 'case'; evaluation_id: string; case_id: string; repetition_id: string };
+  at: string | undefined;
+  disabled: boolean;
+}) {
+  const queries = useQueryClient();
+  const open = React.useContext(OpenCaseReview);
+  const [dataset, setDataset] = React.useState('');
+  const key = ['evaluation-reviews-of', target.evaluation_id, target.case_id, target.repetition_id];
+  const reviews = useQuery({
+    queryKey: key,
+    queryFn: async () =>
+      answerOf(await reviewsOfTarget({ query: { ...target } }), 'could not read its reviews'),
+    retry: false,
+  });
+  const propose = useMutation({
+    mutationFn: async () =>
+      answerOf(
+        await proposeCase({
+          body: {
+            dataset: dataset.trim(),
+            target,
+            ...(at ? { at } : {}),
+          },
+        }),
+        'the proposal was refused',
+      ),
+    onSuccess: () => {
+      setDataset('');
+      void queries.invalidateQueries({ queryKey: key });
+    },
+  });
+  const items = reviews.data?.items ?? [];
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="font-medium">Case review</p>
+      {items.length === 0 ? (
+        reviews.isLoading ? null : (
+          <p className="text-muted-foreground">Not proposed as a regression case.</p>
+        )
+      ) : (
+        <ul className="flex flex-col gap-0.5">
+          {items.map((item) => (
+            <ReviewLine key={`${item.dataset}/${item.id}`} item={item} open={open} />
+          ))}
+        </ul>
+      )}
+      {at ? (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            propose.mutate();
+          }}
+        >
+          <input
+            aria-label="Dataset to propose it to"
+            placeholder="dataset"
+            value={dataset}
+            onChange={(event) => setDataset(event.target.value)}
+            className="rounded-md border border-border bg-background px-2 py-1"
+          />
+          <Button
+            size="sm"
+            type="submit"
+            variant="outline"
+            disabled={disabled || !dataset.trim() || propose.isPending}
+            title={disabled ? needsRole('editor') : undefined}
+          >
+            {propose.isPending ? 'proposing…' : 'Propose as a case'}
+          </Button>
+          {propose.error ? (
+            <span className="text-danger">{(propose.error as Error).message}</span>
+          ) : null}
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewLine({
+  item,
+  open,
+}: {
+  item: CaseReviewItem;
+  open: ((dataset: string) => void) | undefined;
+}) {
+  return (
+    <li className="flex flex-wrap items-baseline gap-2">
+      <Badge tone={item.state === 'rejected' ? 'danger' : 'primary'}>{item.state}</Badge>
+      {open ? (
+        <button
+          type="button"
+          className="text-primary hover:underline"
+          onClick={() => open(item.dataset)}
+        >
+          {item.dataset}
+        </button>
+      ) : (
+        <span>{item.dataset}</span>
+      )}
+      <span className="text-muted-foreground">
+        proposed by {item.proposed_by} · {on(item.proposed_at)}
+        {item.expected ? ` · expected “${item.expected}”` : ''}
+      </span>
+    </li>
   );
 }
 
@@ -144,9 +285,7 @@ function Answers({
           <Button
             key={level}
             size="sm"
-            variant={
-              value?.type === 'level' && value.value === level ? 'default' : 'outline'
-            }
+            variant={value?.type === 'level' && value.value === level ? 'default' : 'outline'}
             onClick={() => onChange({ type: 'level', value: level })}
           >
             {level}
@@ -179,9 +318,7 @@ function Answers({
       max={scale.max}
       step="any"
       value={value?.type === 'number' ? value.value : ''}
-      onChange={(event) =>
-        onChange({ type: 'number', value: Number(event.target.value) })
-      }
+      onChange={(event) => onChange({ type: 'number', value: Number(event.target.value) })}
       className="w-24 rounded-md border border-border bg-background px-2 py-1"
     />
   );
@@ -261,9 +398,7 @@ function Record({
           <Spinner />
         )}
       </span>
-      {form.data ? (
-        <p className="text-muted-foreground">{form.data.rubric.question}</p>
-      ) : null}
+      {form.data ? <p className="text-muted-foreground">{form.data.rubric.question}</p> : null}
       <textarea
         aria-label="Why"
         rows={2}

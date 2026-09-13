@@ -10,7 +10,10 @@
 
 use aiwatcher_auth::Role;
 use aiwatcher_datasets::{PublishDatasetRequest, PublishedDataset};
-use aiwatcher_evaluation::{CaseProposal, ReviewAction, ReviewItem, ReviewPage, ReviewState};
+use aiwatcher_evaluation::{
+    AssessmentTargetQuery, CaseProposal, ReviewAction, ReviewItem, ReviewPage, ReviewState,
+    TargetReviews,
+};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -26,7 +29,13 @@ use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(list_reviews, propose_case, review_case, publish_reviews))]
+#[openapi(paths(
+    list_reviews,
+    reviews_of_target,
+    propose_case,
+    review_case,
+    publish_reviews
+))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -42,6 +51,10 @@ pub fn router() -> Router<AppState> {
             get(list_reviews).post(propose_case),
         )
         .route("/api/v1/evaluation-reviews/publish", post(publish_reviews))
+        .route(
+            "/api/v1/evaluation-reviews/of-target",
+            get(reviews_of_target),
+        )
         .route("/api/v1/evaluation-reviews/{id}/actions", post(review_case))
 }
 
@@ -76,6 +89,23 @@ async fn list_reviews(
     Ok(Json(evaluations(&state)?.reviews(&query.dataset).await?))
 }
 
+/// Every proposal seen on one target — a trace, a span, a session or a case
+/// of a result — whichever dataset each would join, at its current revision.
+/// What a case's judgements read to say the case is already under review.
+#[utoipa::path(get, path = "/api/v1/evaluation-reviews/of-target", params(AssessmentTargetQuery),
+    responses((status = 200, body = TargetReviews), (status = 400, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn reviews_of_target(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(query): Query<AssessmentTargetQuery>,
+) -> ApiResult<Json<TargetReviews>> {
+    caller.require(Role::Viewer)?;
+    Ok(Json(
+        evaluations(&state)?.reviews_of(&query.target()?).await?,
+    ))
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ProposedCase {
     pub review: ReviewItem,
@@ -85,6 +115,10 @@ pub struct ProposedCase {
 
 /// Propose a case. Proposing what was noticed on the same target for the same
 /// dataset again answers the review already under way, 200 rather than 201.
+///
+/// Without a question, a case target is read at `at` — the position a
+/// comparison row carries — for what the cohort asked and what the variant
+/// answered, and the proposal is `measured`. A trace holds no words to read.
 #[utoipa::path(post, path = "/api/v1/evaluation-reviews", request_body = CaseProposal,
     responses((status = 201, body = ProposedCase), (status = 200, body = ProposedCase),
     (status = 400, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),

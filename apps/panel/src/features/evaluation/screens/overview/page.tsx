@@ -18,7 +18,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { Approvals } from './approvals';
-import { Reviews } from './reviews';
+import { OpenCaseReview, Reviews } from './reviews';
 import { Scorecards } from './scorecards';
 import { Measure } from './measure';
 import { ComparabilityControl } from './comparability';
@@ -405,14 +405,18 @@ export function EvaluationPage() {
         </div>
 
         {search.evidence ? (
-          <EvidencePane
-            evaluationId={search.evidence}
-            gaps={damaged.has(search.evidence) ? (retention ?? undefined) : undefined}
-            baseline={search.compare}
-            onCompare={(compare) => select({ compare, cases: undefined })}
-            cases={search.cases}
-            onCases={(cases) => select({ cases })}
-          />
+          <OpenCaseReview.Provider
+            value={(dataset) => select({ reviews: true, review_dataset: dataset })}
+          >
+            <EvidencePane
+              evaluationId={search.evidence}
+              gaps={damaged.has(search.evidence) ? (retention ?? undefined) : undefined}
+              baseline={search.compare}
+              onCompare={(compare) => select({ compare, cases: undefined })}
+              cases={search.cases}
+              onCases={(cases) => select({ cases })}
+            />
+          </OpenCaseReview.Provider>
         ) : (
           <ReportPane
             evaluationId={search.report}

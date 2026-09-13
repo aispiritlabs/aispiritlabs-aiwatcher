@@ -49,7 +49,9 @@ pub use registry::{
     SourceEvidence,
 };
 pub use result::*;
-pub use review::{CaseProposal, ReviewAction, ReviewContent, ReviewItem, ReviewPage, ReviewState};
+pub use review::{
+    CaseProposal, ReviewAction, ReviewContent, ReviewItem, ReviewPage, ReviewState, TargetReviews,
+};
 pub use store::EvidenceCipher;
 pub use traced::{
     GENERATION_TRACES, GenerationTrace, TracedAnswer, TracedCall, TracedRun, trace_answers,

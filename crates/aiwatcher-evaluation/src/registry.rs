@@ -703,6 +703,10 @@ impl Registry {
     /// Propose a case for a dataset; answers the review and whether this
     /// proposal started it rather than landing on one already under way.
     ///
+    /// A proposal without a question names a case of a published result and
+    /// where it sits there, and its words are read from that result: what the
+    /// cohort asked, and what the variant answered.
+    ///
     /// # Errors
     ///
     /// [`EvaluationError::Invalid`] naming the field that is not one.
@@ -712,7 +716,156 @@ impl Registry {
         proposed_by: &str,
         now: i64,
     ) -> Result<(crate::ReviewItem, bool)> {
-        crate::review::propose(&self.store, proposal, proposed_by, now).await
+        use crate::review::Words;
+        // Landing on a review under way reads nothing: the words it has stand.
+        if let Some(existing) =
+            crate::review::existing(&self.store, &proposal.dataset, &proposal.target).await?
+        {
+            return Ok((existing, false));
+        }
+        let words = match (&proposal.question, proposal.content) {
+            (Some(question), Some(content)) => Words {
+                question: question.clone(),
+                answer: proposal.answer.clone(),
+                content,
+            },
+            (Some(_), None) => {
+                return Err(EvaluationError::Invalid {
+                    field: "content".into(),
+                    reason: "says whose words the question is: `written` by a reviewer, or \
+                             `observed` and copied from somebody using the application"
+                        .into(),
+                });
+            }
+            (None, _) => self.case_words(proposal, proposed_by, now).await?,
+        };
+        crate::review::propose(&self.store, proposal, words, proposed_by, now).await
+    }
+
+    /// The question and answer of the result case a proposal names, read at
+    /// the position it names.
+    async fn case_words(
+        &self,
+        proposal: &crate::CaseProposal,
+        subject: &str,
+        now: i64,
+    ) -> Result<crate::review::Words> {
+        let crate::AssessmentTarget::Case {
+            evaluation_id,
+            case_id,
+            repetition_id,
+        } = &proposal.target
+        else {
+            return Err(EvaluationError::Invalid {
+                field: "question".into(),
+                reason: "a trace, a span or a session holds no words here — the Collector keeps \
+                         prompts and completions off them — so write the question"
+                    .into(),
+            });
+        };
+        let at = proposal
+            .at
+            .as_deref()
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "at".into(),
+                reason: "names where the case sits in its result — the `at` a comparison row \
+                         carries — or the proposal writes its question"
+                    .into(),
+            })?;
+        let invalid = |field: &str, reason: String| EvaluationError::Invalid {
+            field: field.into(),
+            reason,
+        };
+        let result = self
+            .get(evaluation_id, subject, now)
+            .await?
+            .ok_or_else(|| {
+                invalid(
+                    "target",
+                    format!("no result is published as {evaluation_id}"),
+                )
+            })?;
+        let manifest = result
+            .manifest
+            .ok_or(EvaluationError::Unavailable(result.state))?;
+        require(
+            manifest.context.dataset.kind != crate::DatasetKind::Conversations,
+            "target",
+            "is a case of conversation evidence, and the archive is not a source of cases: its \
+             words leave the seal only through a corpus export",
+        )?;
+        let page = self
+            .cases(
+                evaluation_id,
+                &result.receipt.version,
+                Some(at),
+                Some(1),
+                subject,
+                now,
+            )
+            .await?
+            .ok_or_else(|| {
+                invalid(
+                    "target",
+                    format!("no result is published as {evaluation_id}"),
+                )
+            })?;
+        let case = page
+            .cases
+            .into_iter()
+            .next()
+            .filter(|case| {
+                case.measurement.case_id == *case_id
+                    && case.measurement.repetition_id == *repetition_id
+            })
+            .ok_or_else(|| {
+                invalid(
+                    "at",
+                    format!("does not point at {case_id} ({repetition_id}) in {evaluation_id}"),
+                )
+            })?;
+        let asked = self
+            .cohort_cases(&manifest, subject)
+            .await?
+            .inputs
+            .remove(case_id)
+            .ok_or_else(|| {
+                invalid(
+                    "question",
+                    format!(
+                        "the cohort keeps no input for {case_id}, so there is no question to \
+                         read; write it"
+                    ),
+                )
+            })?;
+        let words = |value: &serde_json::Value| match value {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Object(fields) => match fields.get("question") {
+                Some(serde_json::Value::String(text)) => text.clone(),
+                _ => value.to_string(),
+            },
+            other => other.to_string(),
+        };
+        Ok(crate::review::Words {
+            question: words(&asked),
+            answer: case.measurement.actual.as_ref().map(|actual| match actual {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            }),
+            content: crate::ReviewContent::Measured,
+        })
+    }
+
+    /// The proposals under way on one target, whichever dataset each joins.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn reviews_of(
+        &self,
+        target: &crate::AssessmentTarget,
+    ) -> Result<crate::TargetReviews> {
+        crate::review::for_target(&self.store, target).await
     }
 
     /// Write an expected answer, approve or reject; `None` when there is no

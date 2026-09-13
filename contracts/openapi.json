@@ -5725,6 +5725,7 @@
           "evaluation"
         ],
         "summary": "Propose a case. Proposing what was noticed on the same target for the same\ndataset again answers the review already under way, 200 rather than 201.",
+        "description": "Without a question, a case target is read at `at` — the position a\ncomparison row carries — for what the cohort asked and what the variant\nanswered, and the proposal is `measured`. A trace holds no words to read.",
         "operationId": "propose_case",
         "requestBody": {
           "content": {
@@ -5753,6 +5754,114 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProposedCase"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-reviews/of-target": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every proposal seen on one target — a trace, a span, a session or a case\nof a result — whichever dataset each would join, at its current revision.\nWhat a case's judgements read to say the case is already under review.",
+        "operationId": "reviews_of_target",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TargetKind"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "evaluation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repetition_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseReviewsOfTarget"
                 }
               }
             }
@@ -13970,9 +14079,7 @@
         "description": "What somebody proposes as a case.",
         "required": [
           "dataset",
-          "target",
-          "question",
-          "content"
+          "target"
         ],
         "properties": {
           "answer": {
@@ -13980,7 +14087,7 @@
               "string",
               "null"
             ],
-            "description": "What was answered, when the proposer has it."
+            "description": "What was answered, when the proposer has it. Read with the question when\nthat is."
           },
           "assessment": {
             "type": [
@@ -13989,8 +14096,23 @@
             ],
             "description": "The standing judgement that raised it, when one did."
           },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the case sits in its result: the cursor `GET\n/evaluation-results/{id}/cases` issued, as a comparison row carries it.\nOpaque, handed back as it came; never a search through the result."
+          },
           "content": {
-            "$ref": "#/components/schemas/CaseReviewContent"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseReviewContent",
+                "description": "Whose words the question is. Required when the proposal carries one;\nwords read from a result are `measured` whatever this says."
+              }
+            ]
           },
           "dataset": {
             "type": "string",
@@ -14001,7 +14123,11 @@
             "description": "Why, in the proposer's words: the feedback, or what went wrong."
           },
           "question": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The question, in the proposer's words or copied. Absent to have it read\nfrom the result a case target names, at `at`."
           },
           "target": {
             "$ref": "#/components/schemas/AssessmentTarget",
@@ -14071,7 +14197,8 @@
         "description": "Whose words a proposal holds.",
         "enum": [
           "written",
-          "observed"
+          "observed",
+          "measured"
         ]
       },
       "CaseReviewItem": {
@@ -14204,6 +14331,26 @@
           "rejected",
           "published"
         ]
+      },
+      "CaseReviewsOfTarget": {
+        "type": "object",
+        "description": "The proposals under way on one target, whichever dataset each would join.",
+        "required": [
+          "target",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseReviewItem"
+            },
+            "description": "Oldest proposal first."
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentTarget"
+          }
+        }
       },
       "CaseSide": {
         "type": "string",

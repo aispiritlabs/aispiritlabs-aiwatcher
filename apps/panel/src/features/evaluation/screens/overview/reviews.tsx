@@ -33,6 +33,17 @@ import { pinchId } from '@/shared/lib/utils';
 
 const FIELD = 'rounded border border-border bg-background p-1.5';
 
+/**
+ * How a case's judgements open Case review on a dataset's queue.
+ *
+ * A context rather than a prop, because the judgements sit several panes deep
+ * inside the evidence and only the page knows the URL the queue lives in; where
+ * nothing provides it, the review is named without a way there.
+ */
+export const OpenCaseReview = React.createContext<((dataset: string) => void) | undefined>(
+  undefined,
+);
+
 /** Where a proposal was seen, as the URL carries it from a case or a trace. */
 export type ReviewSeed = {
   dataset?: string;
@@ -364,6 +375,7 @@ function Item({
         <Badge tone={TONE[item.state]}>{item.state}</Badge>
         <span className="font-medium">{item.question}</span>
         {item.content === 'observed' ? <Badge tone="warning">somebody&apos;s words</Badge> : null}
+        {item.content === 'measured' ? <Badge tone="neutral">read from the result</Badge> : null}
       </div>
       <div className="text-muted-foreground">
         {[

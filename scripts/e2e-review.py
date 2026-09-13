@@ -17,7 +17,13 @@ notices the application named Mombasa for Kenya's capital in a trace, and:
 4. publishing the same approved set again lands on that version;
 5. a cohort derived from the new version holds five cases, the reviewed one
    with its question and the answer people wrote;
-6. the review says which version it was published in, and refuses to change.
+6. the review says which version it was published in, and refuses to change;
+7. a case of a published result — measured on the first version, where the
+   application named Cusco for Peru — is proposed by where it sits and
+   nothing else: the question its cohort asked and what was answered are read
+   from the result, the proposal says it was, and the case finds its review;
+8. a trace holds no words, so a proposal of one without a question is refused
+   saying to write it.
 
     cargo build --bin aiwatcher   # once
     just e2e-review
@@ -91,6 +97,91 @@ def call(method: str, path: str, body: Any = None) -> tuple[int, Any]:
         return status, json.loads(content) if content else None
     except json.JSONDecodeError:
         return status, None
+
+
+def measured(dataset: dict[str, Any]) -> tuple[str, str]:
+    """A result over `dataset`: its evaluation ID and version."""
+    code = {"application": "capitals"}
+    generation = {"temperature": 0}
+    workflow = {"name": "capitals-app", "steps": ["answer"]}
+
+    def pinned(name: str, content: Any) -> dict[str, Any]:
+        encoded = json.dumps(content).encode()
+        return {
+            "name": name,
+            "uri": f"file://{name}",
+            "digest": hashlib.sha256(encoded).hexdigest(),
+            "size_bytes": len(encoded),
+            "content_type": "application/json",
+        }
+
+    derived = call("POST", "/api/v1/evaluation-cohorts", {"dataset": dataset, "split": "test"})[1]
+    card = call(
+        "POST",
+        "/api/v1/evaluation-scorecards",
+        {
+            "name": "capitals-exact",
+            "scorers": [
+                {
+                    "metric": "exact",
+                    "expected_path": "/answer",
+                    "scorer": {"kind": "exact_match", "trim": True},
+                }
+            ],
+        },
+    )[1]
+    said = {"France": "Paris", "Japan": "Tokyo", "Peru": "Cusco", "Chile": "Santiago"}
+    recording = call(
+        "PUT",
+        "/api/v1/evaluation-recordings/answers.json",
+        {
+            "answers": [
+                {"case_id": f"capital-{country.lower()}", "answer": answer}
+                for country, answer in said.items()
+            ]
+        },
+    )[1]
+    run = {
+        "evaluation_id": "capitals-measured",
+        "repetition_id": "measurement-1",
+        "variant": {
+            "schema_version": 1,
+            "experiment_id": "capitals-app",
+            "dataset": dataset,
+            "workflow": {
+                "name": "capitals-app",
+                "version": hashlib.sha256(json.dumps(workflow).encode()).hexdigest(),
+            },
+            "code": pinned("application.json", code),
+            "generation_config": pinned("generation.json", generation),
+        },
+        "cohort": derived["cohort"],
+        "scorecard": {"name": card["scorecard"]["name"], "version": card["version"]},
+        "answers": recording,
+    }
+    view = call("POST", "/api/v1/evaluation-runs", run)[1]
+    approval = view["approval_id"]
+    for name, content in (
+        ("manifest.json", view["manifest"]),
+        ("application.json", code),
+        ("generation.json", generation),
+        ("workflow.json", workflow),
+    ):
+        call("PUT", f"/api/v1/evaluation-approvals/{approval}/bundle/{name}", content)
+    admitted = call("POST", "/api/v1/evaluation-approvals", view["manifest"])
+    if admitted[0] not in (200, 201):
+        raise SystemExit(f"admitting the pair answered {admitted[0]}: {admitted[1]}")
+    started = call("POST", f"/api/v1/evaluation-runs/{view['declaration']['id']}/start")[1]
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        state = call("GET", f"/api/v1/executions/{started['execution']['execution_id']}")[1]
+        if state["execution"]["state"]["state_type"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.2)
+    result = call("GET", "/api/v1/evaluation-results/capitals-measured")
+    if result[0] != 200:
+        raise SystemExit(f"the measurement published nothing: {state}")
+    return "capitals-measured", result[1]["receipt"]["version"]
 
 
 def main() -> int:
@@ -237,6 +328,71 @@ def main() -> int:
             and item["published_in"] == latest.get("version")
             and changed[0] == 400,
             {"state": item["state"], "refused": changed[0]},
+        )
+
+        evaluation, version = measured(
+            {
+                "kind": "curation",
+                "name": "capitals",
+                "version": first["dataset"]["latest"]["version"],
+            }
+        )
+        # Where Peru sits in the result, as the case route issues positions —
+        # what a comparison row hands the panel.
+        cursor: str | None = None
+        at = None
+        for _ in range(10):
+            page = call(
+                "GET",
+                f"/api/v1/evaluation-results/{evaluation}/cases?version={version}&limit=1"
+                + (f"&cursor={urllib.parse.quote(cursor, safe='')}" if cursor else ""),
+            )[1]
+            if page["cases"][0]["measurement"]["case_id"] == "capital-peru":
+                at = cursor
+                break
+            cursor = page["next_cursor"]
+        target = {
+            "kind": "case",
+            "evaluation_id": evaluation,
+            "case_id": "capital-peru",
+            "repetition_id": "measurement-1",
+        }
+        from_case = call(
+            "POST",
+            "/api/v1/evaluation-reviews",
+            {"dataset": "regressions", "target": target, "at": at, "note": "judged wrong"},
+        )
+        found = call(
+            "GET", "/api/v1/evaluation-reviews/of-target?" + urllib.parse.urlencode(target)
+        )[1]
+        made = (from_case[1] or {}).get("review", {})
+        check(
+            7,
+            "a result's case is proposed in its own words, and the case finds its review",
+            from_case[0] == 201
+            and made.get("question") == "What is the capital of Peru?"
+            and made.get("answer") == "Cusco"
+            and made.get("content") == "measured"
+            and [review["dataset"] for review in (found or {}).get("items", [])] == ["regressions"],
+            {
+                "status": from_case[0],
+                "said": (from_case[1] or {}).get("message"),
+                "review": made,
+                "found": len((found or {}).get("items", [])),
+            },
+        )
+
+        wordless = call(
+            "POST",
+            "/api/v1/evaluation-reviews",
+            {k: v for k, v in proposal.items() if k != "question"}
+            | {"target": {"kind": "trace", "trace_id": "0af7651916cd43dd8448eb211c80319c"}},
+        )
+        check(
+            8,
+            "a trace holds no words, so its proposal writes the question",
+            wordless[0] == 400 and "write the question" in (wordless[1] or {}).get("message", ""),
+            (wordless[1] or {}).get("message"),
         )
     finally:
         server.terminate()

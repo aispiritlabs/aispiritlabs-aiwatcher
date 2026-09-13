@@ -490,6 +490,7 @@ function CaseAnswers({
           evaluationId={current.receipt.evaluation_id}
           caseId={measured.case_id}
           repetitionId={measured.repetition_id}
+          at={row.current?.at}
         />
       ) : null}
     </div>
