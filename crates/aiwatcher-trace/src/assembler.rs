@@ -747,6 +747,14 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             if let Some(taking) = event.data_str("taking_digest").filter(|d| is_digest(d)) {
                 out.push(attr(own::witness::TAKING, taking));
             }
+            if event
+                .data
+                .get("took_nothing")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                out.push(attr(own::witness::TOOK_NOTHING, true));
+            }
             out.extend(request_attributes(event));
         }
         Subject::Tool => {

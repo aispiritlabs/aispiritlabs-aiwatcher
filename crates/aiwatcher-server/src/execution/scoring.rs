@@ -1003,6 +1003,8 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
                 .collect(),
             taken: list(span, own::witness::TAKEN),
             taking: text(span, own::witness::TAKING),
+            took_nothing: flag(span, own::witness::TOOK_NOTHING) == Some(true),
+            started_ms: i64::try_from(span.start.unix_timestamp_nanos() / 1_000_000).ok(),
         })
         .collect()
 }
@@ -1118,19 +1120,18 @@ impl ActivityExecutor for TracesExecutor {
                 problems.join("; ")
             )));
         }
-        // How the variant takes an answer out of a reply, where its generation
-        // config says, and the shape an answer made of several replies has.
+        // What the variant's generation config pins about making an answer out
+        // of replies — taking one out, joining several, choosing among them —
+        // and the shape an answer made of several replies has.
         let witnesses = if variant.prompt.is_some() {
-            let taking = self
+            let config = self
                 .pinned_json(&approval, &variant.generation_config)
-                .await?
-                .and_then(|config| config.get("answer_from").cloned())
-                .filter(serde_json::Value::is_object);
+                .await?;
             let shaped = match &variant.response_schema {
                 Some(schema) => self.pinned_json(&approval, schema).await?,
                 None => None,
             };
-            witnesses.pinned(taking, shaped)
+            witnesses.pinned(config.as_ref(), shaped)
         } else {
             witnesses
         };

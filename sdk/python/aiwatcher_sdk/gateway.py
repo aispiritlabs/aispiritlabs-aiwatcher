@@ -31,7 +31,9 @@ It relays the deployment's tools the same way (``--tool search=https://…``):
 deployment named — never one a caller names — and the gateway publishes keyed
 digests of the arguments and of what the tool returned, so a value a later
 request renders that is a tool's result, relayed here, is the tool's word
-rather than the application's.
+rather than the application's. A tool the application calls directly is
+witnessed where it runs instead, by :class:`ToolWitness` under the gateway's
+own credential — the same key, so the same digests.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,6 +64,8 @@ __all__ = [
     "Gateway",
     "PromptFound",
     "PromptSource",
+    "ToolCall",
+    "ToolWitness",
     "canonical",
     "canonical_number",
     "extracted",
@@ -593,6 +597,116 @@ class Relayed:
         self.tool_arguments = held
 
 
+@dataclass
+class ToolCall:
+    """What a tool answered one call with, as its host sends it back."""
+
+    returned: bytes = b""
+    status: int = int(HTTPStatus.OK)
+
+    def answered(self, returned: bytes | str, status: int = int(HTTPStatus.OK)) -> None:
+        """The bytes the host sends the caller, exactly: what a later request renders."""
+        self.returned = returned.encode() if isinstance(returned, str) else returned
+        self.status = status
+
+
+class ToolWitness:
+    """A tool's calls, witnessed by keyed digests under a witness's credential.
+
+    The gateway relays a deployment's tools and witnesses them with this. A
+    tool the application calls directly — not through ``/tools/<name>`` — is
+    witnessed where it runs: its host wraps each call, and the witness publishes
+    a run naming the caller's run (:data:`~aiwatcher_sdk.CALLER_RUN_HEADER`)
+    holding digests of each part of the arguments and of the bytes the host
+    sends back, and nothing said in either::
+
+        witness = ToolWitness(telemetry, credential=GATEWAY_TOKEN)
+        with witness.call("atlas", arguments, caller=headers.get(CALLER_RUN_HEADER)) as call:
+            call.answered(json.dumps(look_up(arguments)))
+
+    ``credential`` is the token ``telemetry`` publishes with, and it must be the
+    gateway's own: a digest is made under the key derived from it, and only
+    digests under one key can say that a value a call the gateway relayed was
+    rendered with is what this tool returned. A host holding that token is
+    trusted as the gateway is; one holding the application's is no witness.
+    """
+
+    def __init__(self, telemetry: AiwatcherClient, *, credential: str | None) -> None:
+        self.telemetry = telemetry
+        self.key = witness_key(credential) if credential else None
+
+    @contextlib.contextmanager
+    def call(
+        self, name: str, arguments: Any, *, caller: str | None
+    ) -> Generator[ToolCall, None, None]:
+        """One call of the tool ``name`` with ``arguments``, reported once it is answered.
+
+        A body that raises is reported as a failed call, with nothing returned.
+        """
+        started = time.monotonic()
+        answer = ToolCall()
+        try:
+            yield answer
+        except BaseException:
+            self.report(
+                caller=caller,
+                name=name,
+                arguments=arguments,
+                returned=b"",
+                status=int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                started=started,
+            )
+            raise
+        self.report(
+            caller=caller,
+            name=name,
+            arguments=arguments,
+            returned=answer.returned,
+            status=answer.status,
+            started=started,
+        )
+
+    def report(
+        self,
+        *,
+        caller: str | None,
+        name: str,
+        arguments: Any,
+        returned: bytes,
+        status: int,
+        started: float,
+    ) -> None:
+        """One tool call: keyed digests of each part of its arguments and of
+        what it returned, and nothing said in either."""
+        with (
+            contextlib.suppress(Exception),
+            self.telemetry.run(f"gateway-{uuid.uuid4().hex}", caller_run_id=caller) as run,
+            run.agent("gateway") as agent,
+        ):
+            # Its start and its end together, once the tool has answered: what
+            # it returned is only known then, and the start would say nothing.
+            call = {"call_id": uuid.uuid4().hex, "tool_name": name}
+            self.telemetry.emit("tool.started", agent.correlation, call)
+            outcome: dict[str, Any] = {
+                **call,
+                "status_code": status,
+                "outcome": "succeeded" if status < 400 else "failed",
+            }
+            if self.key is not None:
+                outcome["arguments_digests"] = _digested(self.key, "replied", _leaves(arguments))
+                texts: list[str] = []
+                if len(returned) <= MAX_BODY_BYTES and status < 400:
+                    text = returned.decode("utf-8", errors="replace")
+                    texts.append(text)
+                    with contextlib.suppress(ValueError):
+                        texts.append(canonical(json.loads(text)))
+                outcome["returned_digests"] = _digested(self.key, "replied", texts)
+            outcome["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+            self.telemetry.emit("tool.completed", agent.correlation, outcome)
+        with contextlib.suppress(Exception):
+            self.telemetry.flush()
+
+
 class Gateway:
     """Relays calls to one provider and witnesses each under its own credential."""
 
@@ -623,6 +737,7 @@ class Gateway:
         self.upstream_token = upstream_token
         self.token = token
         self.key = witness_key(credential) if credential else None
+        self.tool_witness = ToolWitness(telemetry, credential=credential)
         self.timeout = timeout
         self._templates: dict[tuple[str, str], str | None] = {}
         self._lock = threading.Lock()
@@ -803,6 +918,21 @@ class Gateway:
                 texts.append(taken)
         return _digested(self.key, "replied", texts), taking
 
+    def took_nothing(self, relayed: Relayed, answer_from: Mapping[str, Any] | None) -> bool:
+        """Whether the way the caller takes its answer out took nothing out of any
+        reply it came back with: a reply the caller could not read, so none it
+        chose its answer against. Said only where there was a reply to read."""
+        if self.key is None or answer_from is None:
+            return False
+        texts = [
+            text
+            for text in (relayed.replies or {}).values()
+            if text.strip(_WHITE_SPACE) and len(text) <= MOST_REPLY_CHARS
+        ]
+        return bool(texts) and all(
+            not (extracted(text, answer_from) or "").strip(_WHITE_SPACE) for text in texts
+        )
+
     # ── Relaying ─────────────────────────────────────────────────────────
 
     def authorised(self, authorization: str | None) -> bool:
@@ -887,6 +1017,8 @@ class Gateway:
                 outcome["taken_digests"] = taken
             if taking:
                 outcome["taking_digest"] = taking
+            if self.took_nothing(relayed, answer_from):
+                outcome["took_nothing"] = True
             call.usage(
                 prompt_tokens=relayed.prompt_tokens,
                 completion_tokens=relayed.completion_tokens,
@@ -927,35 +1059,15 @@ class Gateway:
         status: int,
         started: float,
     ) -> None:
-        """One tool call, as the gateway relayed it: keyed digests of each part
-        of its arguments and of what it returned, and nothing said in either."""
-        with (
-            contextlib.suppress(Exception),
-            self.telemetry.run(f"gateway-{uuid.uuid4().hex}", caller_run_id=caller) as run,
-            run.agent("gateway") as agent,
-        ):
-            # Its start and its end together, once the tool has answered: what
-            # it returned is only known then, and the start would say nothing.
-            call = {"call_id": uuid.uuid4().hex, "tool_name": name}
-            self.telemetry.emit("tool.started", agent.correlation, call)
-            outcome: dict[str, Any] = {
-                **call,
-                "status_code": status,
-                "outcome": "succeeded" if status < 400 else "failed",
-            }
-            if self.key is not None:
-                outcome["arguments_digests"] = _digested(self.key, "replied", _leaves(arguments))
-                texts: list[str] = []
-                if len(returned) <= MAX_BODY_BYTES and status < 400:
-                    text = returned.decode("utf-8", errors="replace")
-                    texts.append(text)
-                    with contextlib.suppress(ValueError):
-                        texts.append(canonical(json.loads(text)))
-                outcome["returned_digests"] = _digested(self.key, "replied", texts)
-            outcome["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
-            self.telemetry.emit("tool.completed", agent.correlation, outcome)
-        with contextlib.suppress(Exception):
-            self.telemetry.flush()
+        """One tool call, as the gateway relayed it — see :meth:`ToolWitness.report`."""
+        self.tool_witness.report(
+            caller=caller,
+            name=name,
+            arguments=arguments,
+            returned=returned,
+            status=status,
+            started=started,
+        )
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
         gateway = self

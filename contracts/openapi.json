@@ -19434,6 +19434,11 @@
             "type": "integer",
             "minimum": 0
           },
+          "chosen": {
+            "type": "integer",
+            "description": "Answers that would be an exchange but were chosen among replies their\nrun's witnessed calls gave that went into nothing else, which no way of\nchoosing the variant pins picks ([`TracedAnswer::chosen`]).",
+            "minimum": 0
+          },
           "named": {
             "type": "integer",
             "description": "Answers naming the run they were made in.",

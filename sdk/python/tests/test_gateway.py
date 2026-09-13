@@ -17,6 +17,7 @@ from aiwatcher_sdk.api import ApiError
 from aiwatcher_sdk.gateway import (
     Gateway,
     Relayed,
+    ToolWitness,
     canonical,
     extracted,
     holds_template,
@@ -644,3 +645,64 @@ def test_the_arguments_of_a_tool_call_a_model_replied_are_digested_as_what_it_re
             witness_digest(KEY, "replied", '{"query":"Peru"}'),
             witness_digest(KEY, "replied", "Peru"),
         ]
+
+
+def test_a_tool_called_directly_is_witnessed_where_it_runs_as_the_gateway_would_relay_it() -> None:
+    recording = Recording()
+    witness = ToolWitness(
+        AiwatcherClient(service="atlas", transport=recording), credential="gateway-secret"
+    )
+    relayed = Recording()
+    relay = Gateway(
+        "http://127.0.0.1:9",
+        AiwatcherClient(service="gateway", transport=relayed),
+        credential="gateway-secret",
+    )
+    arguments = {"query": "Peru", "limit": 3}
+    returned = b'{"capital": "Lima", "population": 10}'
+
+    with witness.call("search", arguments, caller="app-run") as call:
+        call.answered(returned.decode())
+    with pytest.raises(RuntimeError), witness.call("search", arguments, caller="app-run"):
+        raise RuntimeError("the atlas is down")
+    relay.report_tool(
+        caller="app-run",
+        name="search",
+        arguments=arguments,
+        returned=returned,
+        status=200,
+        started=0.0,
+    )
+
+    done, failed = [
+        event["data"] for event in recording.events if event["event_type"] == "tool.completed"
+    ]
+    [through_the_gateway] = [
+        event["data"] for event in relayed.events if event["event_type"] == "tool.completed"
+    ]
+    for key in ("tool_name", "arguments_digests", "returned_digests"):
+        assert done[key] == through_the_gateway[key], key
+    assert (failed["outcome"], failed["returned_digests"]) == ("failed", [])
+    started = [event for event in recording.events if event["event_type"] == "run.started"]
+    assert {event["data"]["caller_run_id"] for event in started} == {"app-run"}
+    assert "Lima" not in json.dumps(recording.events)
+
+
+def test_a_reply_the_caller_s_way_of_taking_its_answer_reads_nothing_out_of_is_said_to_be_so() -> (
+    None
+):
+    relay = Gateway(
+        "http://127.0.0.1:9",
+        AiwatcherClient(service="gateway", transport=Recording()),
+        credential="gateway-secret",
+    )
+    rule = {"steps": [{"fenced": "json"}, {"json_pointer": "/capital"}]}
+    readable, unreadable, blank = Relayed(), Relayed(), Relayed()
+    readable.read({"choices": [{"message": {"content": '```json\n{"capital": "Lima"}\n```'}}]})
+    unreadable.read({"choices": [{"message": {"content": "I would rather not say."}}]})
+    blank.read({"choices": [{"message": {"content": "  "}}]})
+
+    assert relay.took_nothing(unreadable, rule)
+    assert not relay.took_nothing(readable, rule)
+    assert not relay.took_nothing(unreadable, None), "no way of taking, nothing to say"
+    assert not relay.took_nothing(blank, rule), "no reply to read"

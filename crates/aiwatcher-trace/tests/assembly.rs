@@ -379,6 +379,7 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
                 "derived_digests": [format!("{digest}:{digest}"), digest, "Peru:France"],
                 "taken_digests": [digest, "Lima"],
                 "taking_digest": digest,
+                "took_nothing": true,
             }),
         ),
         run.after(5).emit(
@@ -432,6 +433,10 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
     assert_eq!(
         list("aiwatcher.witness.taking"),
         Some(AttrValue::Str(digest.to_owned()))
+    );
+    assert_eq!(
+        list("aiwatcher.witness.took_nothing"),
+        Some(AttrValue::Bool(true))
     );
     let tool = assembled
         .spans

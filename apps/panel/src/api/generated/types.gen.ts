@@ -3807,6 +3807,12 @@ export type GenerationServed = {
 export type GenerationTrace = {
     answers: number;
     /**
+     * Answers that would be an exchange but were chosen among replies their
+     * run's witnessed calls gave that went into nothing else, which no way of
+     * choosing the variant pins picks ([`TracedAnswer::chosen`]).
+     */
+    chosen?: number;
+    /**
      * Answers naming the run they were made in.
      */
     named: number;

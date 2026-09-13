@@ -124,6 +124,9 @@ pub mod aiwatcher {
         pub const TAKEN: &str = "aiwatcher.witness.taken";
         /// The digest of the way the caller said it takes its answer out.
         pub const TAKING: &str = "aiwatcher.witness.taking";
+        /// That way took nothing out of any reply: one the caller could not
+        /// read, and so none it chose its answer against.
+        pub const TOOK_NOTHING: &str = "aiwatcher.witness.took_nothing";
         /// On a tool call a witness relayed: each part of its arguments, and
         /// what the tool returned, digested as a reply is.
         pub const ARGUMENTS: &str = "aiwatcher.witness.arguments";
