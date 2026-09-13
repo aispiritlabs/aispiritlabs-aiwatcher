@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it } from 'vitest';
 import { Approvals } from './approvals';
@@ -89,4 +89,57 @@ it("warns an admin whose declaration's judge reads the archive, and waits to be 
   expect(admit.disabled).toBe(true);
   await userEvent.click(screen.getByLabelText('Acknowledge what this pair sends'));
   expect(admit.disabled).toBe(false);
+});
+
+it('admits a line from a declaration and withdraws one only after asking', async () => {
+  const line = {
+    record: {
+      line_id: 'l'.repeat(64),
+      context_id: 'c'.repeat(64),
+      experiment_id: 'capitals-app',
+      admitted_by: 'operator',
+      admitted_at: 1789200000,
+    },
+  };
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/evaluation-approvals',
+      answer: { status: 200, body: { approvals: [] } },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-approval-lines',
+      answer: { status: 200, body: { lines: [line] } },
+    },
+    { method: 'POST', path: '/evaluation-approval-lines', answer: { status: 200, body: line } },
+    {
+      method: 'DELETE',
+      path: `/evaluation-approval-lines/${line.record.line_id}`,
+      answer: {
+        status: 200,
+        body: { ...line, withdrawn: { withdrawn_by: 'operator', withdrawn_at: 1789203600 } },
+      },
+    },
+  ]);
+  render(withQueries(<Approvals />));
+  expect(await screen.findByText('capitals-app')).toBeTruthy();
+
+  const declaration = Object.assign(
+    new File(['{"schema_version":1}'], 'manifest.json', { type: 'application/json' }),
+    { text: async () => '{"schema_version":1}' },
+  );
+  await userEvent.upload(screen.getByLabelText('Line declaration'), declaration);
+  await userEvent.click(screen.getByRole('button', { name: 'Admit the line' }));
+  await waitFor(() => expect(server.countOf('POST', '/evaluation-approval-lines')).toBe(1));
+  const sent = server.calls.find((call) => call.method === 'POST');
+  expect(sent?.body).toEqual({ schema_version: 1 });
+
+  await userEvent.click(screen.getByRole('button', { name: 'Withdraw…' }));
+  expect(screen.getByText('No further variant of it will be admitted.')).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: 'Withdraw the line' }));
+  await waitFor(() =>
+    expect(server.countOf('DELETE', `/evaluation-approval-lines/${line.record.line_id}`)).toBe(1),
+  );
 });

@@ -172,6 +172,20 @@ client.flush()  # a short-lived CLI needs the boundary
 The direct replacement for an MLflow `start_run` / `log_params` / `log_metrics`
 / `log_dict` block, on the client that is already there for tracing.
 
+## A regression gate in CI
+
+```bash
+aiwatcher-gate --run run.json --baseline answers-main --policy policy.json \
+    --code-commit --recording answers.json --evaluation-id "answers-$GITHUB_SHA"
+```
+
+Stages what the variant pins, declares and starts the measurement, follows the
+run and asks the server's gate, then exits `0` pass, `1` regression, `2`
+incomplete or `3` error, with the commit, the card and the evidence link in the
+output and in `GITHUB_STEP_SUMMARY`. The verdict is the server's
+(`POST /evaluation-results/{id}/gate`); a line an admin admitted once lets every
+commit's variant start without anybody. `examples/ci-gate` is a whole job.
+
 ## The prompt registry
 
 A prompt is the one thing aiwatcher keeps forever: the version a run used has

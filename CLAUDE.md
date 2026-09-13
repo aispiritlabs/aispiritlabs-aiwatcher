@@ -64,6 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just e2e-generate     # a baseline and a candidate generate answers on a worker, are scored and compared
+just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
@@ -2056,6 +2057,15 @@ the review.
   the scale, or a stand-in `read` refuses for the same reason, because a kept
   reply has no seal, no retention and no erasure and a reply can repeat what
   it was shown.
+- **Never decide a gate's verdict anywhere but the server.** `POST
+  /evaluation-results/{id}/gate` answers `pass`, `regression`, `incomplete` or
+  `error` from the comparison the panel draws, held to a policy — a tolerance
+  per metric, metrics ignored, and critical cases that must be measured and no
+  worse whatever the average did. A scorer that failed or a case nobody answered
+  is `incomplete` and never passes, and a pair that does not compare is
+  `error`. `aiwatcher-gate` stages, declares, starts, follows and asks, and exits
+  0 to 3 by the verdict; a second implementation of the rule in a pipeline
+  script would be the one that passed a regression.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an
@@ -2109,6 +2119,13 @@ the review.
   reason surfaces. A withdrawn pair, a bundle that changed underneath an
   approval and a caller who may not read the source stay the 403 they were:
   none of them is a step somebody still has to take. ADR_0030, amended.
+  A **line** is the one widening, and it is an admin's too: every variant of one
+  experiment measured in one context, admitted once, so a pipeline measuring a
+  new commit needs nobody. Each variant is still approved by name when its run
+  starts — the registry stages the declaration and the files the variant pins
+  from bytes kept by their digest, and approves naming the line — and a line is
+  refused for evidence a producer measured, over the conversation archive, and
+  for a variant naming a model or a workflow.
 - **Never let the adapter's bytes be the registry's business.** An operator
   stages a bundle through `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}`
   (admin) and it lands in `evaluation-bundles/`, the adapter's own prefix

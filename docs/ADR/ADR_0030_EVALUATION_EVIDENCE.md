@@ -1061,3 +1061,29 @@ fold's summary of each managed run behind them — the whole run's duration, kep
 apart from a case's latency, and absent once the log no longer holds the run.
 Production observations are not rows: a trace does not yet name the variant
 that produced it. Nothing is priced without a price source.
+
+**A line admits every variant of one experiment, and a gate decides whether one
+may ship.** C3 measures a new variant on every commit, and a pair is a variant:
+each commit was an admin staging a bundle and admitting a pair, which is a person
+in every pipeline. The operator's decision a gate relies on is not which variant
+— that is the point of measuring — but what it is measured on and how. So an
+admin may admit a **line**, `(context_id, experiment_id)`, from any declaration
+of it: checked as a pair's context is, and refused for evidence a producer
+measured (whose numbers nothing here computed), for a context over the
+conversation archive (whose pairs an admin who may read them admits one at a
+time) and at start for a variant naming a model or a workflow (whose packages a
+pipeline cannot send). A variant the line covers is still approved by name when
+its run starts: the registry stages the declaration and each file the variant
+pins from bytes an editor kept by digest (`PUT /evaluation-variant-artifacts`),
+the adapter resolves them as it would an operator's bundle, and the approval's
+`approved_by` names the line and who started it. Withdrawing a line admits
+nothing further; what it admitted stays admitted, each withdrawable.
+
+The verdict is the server's: `POST /evaluation-results/{id}/gate` holds the
+comparison to a policy — a tolerance per metric in its unit, metrics ignored,
+critical cases — and answers `pass`, `regression` (a metric worse than its
+tolerance, or a critical case not measured or worse, beside any average),
+`incomplete` (a case failed or went unscored; never a pass) or `error` (the pair
+does not compare, or the candidate is not readable). `aiwatcher-gate` in the SDK
+is the recipe around it and exits 0 to 3; `examples/ci-gate` is a deterministic
+job, and `just e2e-gate` proves each verdict against a server of its own.

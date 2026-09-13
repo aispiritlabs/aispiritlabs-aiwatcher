@@ -9,6 +9,7 @@ mod comparison;
 mod context;
 mod experiment;
 mod external;
+mod gate;
 mod judge;
 mod manifest;
 mod reference;
@@ -21,8 +22,8 @@ mod store;
 
 pub use aiwatcher_core::Comparability;
 pub use approval::{
-    Approval, ApprovalBundles, ApprovalPage, ApprovalRecord, StagedFile, Withdrawal, approval_id,
-    bundle_digest,
+    Approval, ApprovalBundles, ApprovalLine, ApprovalLinePage, ApprovalLineRecord, ApprovalPage,
+    ApprovalRecord, StagedFile, Withdrawal, approval_id, bundle_digest, line_id,
 };
 pub use assessment::{
     Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentSource,
@@ -37,6 +38,10 @@ pub use comparison::{
     EvidenceComparison, EvidenceMetricDelta,
 };
 pub use experiment::{Experiment, ExperimentEntry, ExperimentIndex, ExperimentRow, RowComparison};
+pub use gate::{
+    GateCase, GateDecision, GateMetric, GatePolicy, GateSubject, GateVerdict,
+    decide as gate_decision,
+};
 pub use registry::{
     CollectionReport, PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority,
     SourceEvidence,

@@ -98,6 +98,20 @@ pub(crate) fn indexed_since(committed_at: i64) -> String {
 /// Approvals live beside the evidence and never under an evaluation ID: one
 /// approval admits every repetition of its pair, and outlives all of them.
 pub(crate) const APPROVALS: &str = "evaluations/approvals/";
+/// A line admits every variant of one experiment in one context, and is the
+/// operator's act once rather than per variant — beside the approvals it makes.
+pub(crate) const LINES: &str = "evaluations/approval-lines/";
+pub(crate) fn line(id: &str) -> String {
+    format!("{LINES}{id}/record.json")
+}
+pub(crate) fn line_withdrawal(id: &str) -> String {
+    format!("{LINES}{id}/withdrawn.json")
+}
+/// A variant's pinned bytes, keyed by their digest: whoever sends them, they
+/// are the bytes a pin names or they are nothing.
+pub(crate) fn variant_artifact(digest: &str) -> String {
+    format!("evaluation-variant-artifacts/{digest}")
+}
 /// Outside every prefix a scan filters on, and deliberately overwritten rather
 /// than versioned: it is the last pass, not a history of passes.
 pub(crate) const RETENTION: &str = "evaluations/retention.json";

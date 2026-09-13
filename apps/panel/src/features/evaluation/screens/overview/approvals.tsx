@@ -15,13 +15,16 @@ import * as React from 'react';
 
 import {
   addressApproval,
+  admitLine,
   approveSource,
   listApprovals,
   listBundle,
+  listLines,
   stageBundle,
   withdrawApproval,
+  withdrawLine,
 } from '@/api/generated/sdk.gen';
-import type { Approval, EvaluationManifest } from '@/api/generated/types.gen';
+import type { Approval, ApprovalLine, EvaluationManifest } from '@/api/generated/types.gen';
 import { needsRole, useRoleDecision } from '@/shared/lib/auth';
 import { answerOf, ApiFailure } from '@/shared/lib/result';
 import {
@@ -82,7 +85,132 @@ export function Approvals() {
           ))}
         </ul>
       )}
+      <Lines admin={admin} />
     </Card>
+  );
+}
+
+/**
+ * Lines: every variant of one experiment in one context, admitted once.
+ *
+ * What a regression gate needs — a new variant each commit — without a person
+ * in each pipeline. The line is admitted from any declaration of the
+ * experiment, and each variant it covers is approved when its run starts, from
+ * the bytes its job staged, naming the line. The server refuses a line over the
+ * conversation archive or over evidence a producer measured; this form sends the
+ * declaration and renders what it said.
+ */
+function Lines({ admin }: { admin: boolean | undefined }) {
+  const queries = useQueryClient();
+  const input = React.useRef<HTMLInputElement>(null);
+  const lines = useQuery({
+    queryKey: ['evaluation-approval-lines'],
+    queryFn: async () => answerOf(await listLines(), 'could not read the lines'),
+    retry: false,
+  });
+  const admit = useMutation({
+    mutationFn: async (file: File) => {
+      const manifest = JSON.parse(await file.text()) as EvaluationManifest;
+      return answerOf(await admitLine({ body: manifest }), 'the line was refused');
+    },
+    onSuccess: () => {
+      if (input.current) input.current.value = '';
+      void queries.invalidateQueries({ queryKey: ['evaluation-approval-lines'] });
+    },
+  });
+  const rows = lines.data?.lines ?? [];
+  return (
+    <div className="flex flex-col gap-2 border-t border-border/40 pt-3 text-xs">
+      <div>
+        <h3 className="font-semibold">Lines</h3>
+        <p className="text-muted-foreground">
+          Every variant of one experiment measured in one context, admitted once — so a pipeline
+          measuring a new commit needs no step here. Each variant is still approved by name when its
+          run starts, and a withdrawn line admits nothing further.
+        </p>
+      </div>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const file = input.current?.files?.[0];
+          if (file) admit.mutate(file);
+        }}
+      >
+        <label className="flex items-center gap-2">
+          A declaration of the experiment
+          <input
+            ref={input}
+            type="file"
+            accept="application/json"
+            aria-label="Line declaration"
+            className="rounded border border-border bg-background p-1"
+          />
+        </label>
+        <Button size="sm" type="submit" disabled={admin === false || admit.isPending}>
+          {admit.isPending ? 'Admitting…' : 'Admit the line'}
+        </Button>
+        {admin === false ? (
+          <span className="text-muted-foreground">{needsRole('admin')}</span>
+        ) : null}
+        {admit.error ? <span className="text-danger">{(admit.error as Error).message}</span> : null}
+      </form>
+      {lines.error ? (
+        <p className="text-danger">{(lines.error as Error).message}</p>
+      ) : rows.length === 0 ? null : (
+        <ul className="flex flex-col divide-y divide-border/40">
+          {rows.map((line) => (
+            <LineRow key={line.record.line_id} line={line} admin={admin} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LineRow({ line, admin }: { line: ApprovalLine; admin: boolean | undefined }) {
+  const queries = useQueryClient();
+  const [confirming, setConfirming] = React.useState(false);
+  const withdraw = useMutation({
+    mutationFn: async () =>
+      answerOf(
+        await withdrawLine({ path: { line_id: line.record.line_id } }),
+        'the line was not withdrawn',
+      ),
+    onSuccess: () => void queries.invalidateQueries({ queryKey: ['evaluation-approval-lines'] }),
+  });
+  const { record, withdrawn } = line;
+  return (
+    <li className="flex flex-wrap items-center gap-2 py-2">
+      <span className="font-medium">{record.experiment_id}</span>
+      <IdChip label="context" value={pinchId(record.context_id, 8, 6)} full={record.context_id} />
+      <span className="text-muted-foreground">
+        {withdrawn
+          ? `Withdrawn by ${withdrawn.withdrawn_by} on ${on(withdrawn.withdrawn_at)}`
+          : `Admitted by ${record.admitted_by} on ${on(record.admitted_at)}`}
+      </span>
+      {withdrawn ? <Badge tone="danger">withdrawn</Badge> : null}
+      {!withdrawn && admin !== false ? (
+        confirming ? (
+          <>
+            <span>No further variant of it will be admitted.</span>
+            <Button size="sm" variant="outline" onClick={() => withdraw.mutate()}>
+              Withdraw the line
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+              Keep it
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
+            Withdraw…
+          </Button>
+        )
+      ) : null}
+      {withdraw.error ? (
+        <span className="text-danger">{(withdraw.error as Error).message}</span>
+      ) : null}
+    </li>
   );
 }
 

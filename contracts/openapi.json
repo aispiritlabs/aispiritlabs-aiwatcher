@@ -4020,6 +4020,158 @@
         }
       }
     },
+    "/api/v1/evaluation-approval-lines": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every line, withdrawn ones included.",
+        "operationId": "list_lines",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalLinePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Admit every variant of one experiment measured in one context.",
+        "description": "Sent any declaration of the line; its context and its variant's\n`experiment_id` are what is admitted. `Admin`, for a pair's reason. A\nscoring run of a variant the line covers is then admitted when it starts,\nfrom the bytes its pipeline staged, and the approval names the line.",
+        "operationId": "admit_line",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalLine"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-approval-lines/{line_id}": {
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Stop a line admitting further variants. What it admitted stays admitted,\neach withdrawable through its own approval.",
+        "operationId": "withdraw_line",
+        "parameters": [
+          {
+            "name": "line_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalLine"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-approvals": {
       "get": {
         "tags": [
@@ -5455,6 +5607,78 @@
         }
       }
     },
+    "/api/v1/evaluation-results/{evaluation_id}/gate": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Whether a result may ship against a baseline, under a policy.",
+        "description": "A read: nothing is written, so a pipeline asks as often as it likes and the\npanel asks the same thing. `pass`, `regression`, `incomplete` or `error`,\nwith every reason in words — a metric worse than its tolerance, a critical\ncase lost whatever the average did, a scorer that failed, a pair that does\nnot compare.",
+        "operationId": "gate_result",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-rubrics": {
       "get": {
         "tags": [
@@ -6157,6 +6381,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SuitePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-variant-artifacts/{name}": {
+      "put": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Keep one file a variant pins, by its content.",
+        "description": "`Editor`: the bytes are addressed by the digest computed here, so sending\nthem admits nothing — a line reads them when a run of that variant starts,\nand a pin names them or nothing.",
+        "operationId": "stage_variant_artifact",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The name the variant pins it under",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -11765,6 +12057,72 @@
             "format": "int64",
             "description": "How long the graph waits here. Absent waits as long as it takes.",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApprovalLine": {
+        "type": "object",
+        "required": [
+          "record"
+        ],
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/ApprovalLineRecord"
+          },
+          "withdrawn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApprovalWithdrawal",
+                "description": "A withdrawn line admits no further variant. What it admitted stays\nadmitted, each withdrawable by its own approval."
+              }
+            ]
+          }
+        }
+      },
+      "ApprovalLinePage": {
+        "type": "object",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalLine"
+            }
+          }
+        }
+      },
+      "ApprovalLineRecord": {
+        "type": "object",
+        "description": "An operator's admission of a whole line of variants: every variant of one\nexperiment, measured in one context.\n\nA regression gate measures a new variant on every commit — new code, new\nprompt — against a context that does not move. Admitting each of those\npairs by hand is a person in every pipeline; admitting none is a producer\nadmitting its own evidence. A line is the operator deciding once what may\nbe measured and how — the cohort, the card, the scorer, all in the context\n— and leaving which variant to the pipeline. It covers only evidence this\ndeployment measures, whose numbers the server computes rather than a\nproducer sends. Each variant it admits still gets its own approval, made\nwhen a run of it starts, from its bytes, and naming the line.",
+        "required": [
+          "line_id",
+          "context_id",
+          "experiment_id",
+          "admitted_by",
+          "admitted_at"
+        ],
+        "properties": {
+          "admitted_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "admitted_by": {
+            "type": "string"
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "experiment_id": {
+            "type": "string"
+          },
+          "line_id": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -18002,6 +18360,211 @@
             ]
           }
         }
+      },
+      "GateCase": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "held"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "change": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseChange",
+                "description": "Absent where neither result holds the case."
+              }
+            ]
+          },
+          "held": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GateDecision": {
+        "type": "object",
+        "required": [
+          "verdict",
+          "reasons",
+          "comparability",
+          "candidate",
+          "baseline",
+          "metrics",
+          "critical"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/GateSubject"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/GateSubject"
+          },
+          "comparability": {
+            "$ref": "#/components/schemas/Comparability"
+          },
+          "critical": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCase"
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateMetric"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every reason the verdict is not `pass`, in words."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/GateVerdict"
+          }
+        }
+      },
+      "GateMetric": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EvidenceMetricDelta"
+          },
+          {
+            "type": "object",
+            "required": [
+              "held",
+              "regressed"
+            ],
+            "properties": {
+              "held": {
+                "type": "boolean"
+              },
+              "regressed": {
+                "type": "boolean",
+                "description": "Worse than the baseline by more than its tolerance."
+              },
+              "tolerance": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              }
+            }
+          }
+        ]
+      },
+      "GatePolicy": {
+        "type": "object",
+        "description": "What a gate holds a result to.",
+        "properties": {
+          "critical_cases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Cases that must be measured and no worse than the baseline on any\nmetric, whatever the means did: a critical case lost is a regression\neven beside a better average."
+          },
+          "ignore": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Metrics shown and not held."
+          },
+          "tolerance": {
+            "type": "object",
+            "description": "How far worse than the baseline a metric may be, in its own unit. A\nmetric not named here may not get worse at all.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "GateRequest": {
+        "type": "object",
+        "required": [
+          "baseline"
+        ],
+        "properties": {
+          "baseline": {
+            "type": "string",
+            "description": "The result the candidate is held to."
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GatePolicy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GateSubject": {
+        "type": "object",
+        "description": "One side of the pair, as a pipeline records it beside its verdict.",
+        "required": [
+          "evaluation_id",
+          "version",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactRef",
+                "description": "The code the variant pins — a commit, where a pipeline pinned one."
+              }
+            ]
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/EvidenceState"
+          },
+          "suite": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference"
+              }
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "GateVerdict": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "regression",
+          "incomplete",
+          "error"
+        ]
       },
       "Geometry": {
         "oneOf": [

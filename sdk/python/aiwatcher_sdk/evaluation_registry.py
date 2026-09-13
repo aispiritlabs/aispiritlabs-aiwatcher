@@ -14,7 +14,7 @@ evidence in this registry, admitted at the same gate as everything else.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import Any, Literal, NotRequired, Self, TypedDict
 from urllib.parse import quote
@@ -584,6 +584,48 @@ class EvaluationRegistry:
             self._transport.send(
                 "GET", self._path(evaluation_id) + "/comparison", params={"baseline": baseline}
             )
+        )
+
+    def stage_variant_artifact(self, name: str, content: bytes) -> dict[str, Any]:
+        """Keep one file a variant pins, by its content; answers the reference to pin."""
+        return self._object(
+            self._transport.send(
+                "PUT",
+                "/api/v1/evaluation-variant-artifacts/" + quote(name, safe=""),
+                content=content,
+                content_type="application/octet-stream",
+                idempotent=True,
+            )
+        )
+
+    def admit_line(self, template: EvaluationManifest) -> dict[str, Any]:
+        """Admit every variant of ``template``'s experiment in its context. Admin."""
+        return self._object(
+            self._transport.send(
+                "POST", "/api/v1/evaluation-approval-lines", dict(template), idempotent=True
+            )
+        )
+
+    def get_lines(self) -> dict[str, Any]:
+        return self._object(self._transport.send("GET", "/api/v1/evaluation-approval-lines"))
+
+    def gate(
+        self, evaluation_id: str, *, baseline: str, policy: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Whether a result may ship against ``baseline``: the server's verdict and its reasons."""
+        return self._object(
+            self._transport.send(
+                "POST",
+                self._path(evaluation_id) + "/gate",
+                {"baseline": baseline, "policy": dict(policy or {})},
+                idempotent=True,
+            )
+        )
+
+    def get_execution(self, execution_id: str) -> dict[str, Any]:
+        """The managed run a start answered with, as its projection says now."""
+        return self._object(
+            self._transport.send("GET", "/api/v1/executions/" + quote(execution_id, safe=""))
         )
 
     def get_experiments(self) -> dict[str, Any]:

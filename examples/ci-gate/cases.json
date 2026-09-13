@@ -1,0 +1,6 @@
+[
+  {"case_id": "capital-france", "input": {"question": "What is the capital of France?"}},
+  {"case_id": "capital-japan", "input": {"question": "What is the capital of Japan?"}},
+  {"case_id": "capital-peru", "input": {"question": "What is the capital of Peru?"}},
+  {"case_id": "capital-kenya", "input": {"question": "What is the capital of Kenya?"}}
+]

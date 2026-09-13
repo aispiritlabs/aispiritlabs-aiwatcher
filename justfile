@@ -541,6 +541,11 @@ e2e-optimise:
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 
+# A regression gate in CI (FTI C3): an admin admits a line once, then jobs at four
+# commits run `aiwatcher-gate` and exit pass, regression, incomplete and error.
+e2e-gate:
+    ./scripts/e2e-gate.py
+
 # One turn of a composed graph, drawn against the shape it declared: the two
 # searchers the router passed over stay `Pending`, the hand-offs are messages
 # between agents, and an agent's span nests under its node though its tracer

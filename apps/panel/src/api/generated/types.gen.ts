@@ -254,6 +254,37 @@ export type ApprovalGate = {
     timeout_seconds?: number | null;
 };
 
+export type ApprovalLine = {
+    record: ApprovalLineRecord;
+    withdrawn?: null | ApprovalWithdrawal;
+};
+
+export type ApprovalLinePage = {
+    lines: Array<ApprovalLine>;
+};
+
+/**
+ * An operator's admission of a whole line of variants: every variant of one
+ * experiment, measured in one context.
+ *
+ * A regression gate measures a new variant on every commit — new code, new
+ * prompt — against a context that does not move. Admitting each of those
+ * pairs by hand is a person in every pipeline; admitting none is a producer
+ * admitting its own evidence. A line is the operator deciding once what may
+ * be measured and how — the cohort, the card, the scorer, all in the context
+ * — and leaving which variant to the pipeline. It covers only evidence this
+ * deployment measures, whose numbers the server computes rather than a
+ * producer sends. Each variant it admits still gets its own approval, made
+ * when a run of it starts, from its bytes, and naming the line.
+ */
+export type ApprovalLineRecord = {
+    admitted_at: number;
+    admitted_by: string;
+    context_id: string;
+    experiment_id: string;
+    line_id: string;
+};
+
 export type ApprovalPage = {
     approvals: Array<Approval>;
 };
@@ -3421,6 +3452,86 @@ export type FlowSourceRef = {
     resolved_revision?: string | null;
     window?: null | ResolvedWindow;
 };
+
+export type GateCase = {
+    case_id: string;
+    change?: null | CaseChange;
+    held: boolean;
+    reason?: string | null;
+};
+
+export type GateDecision = {
+    baseline: GateSubject;
+    candidate: GateSubject;
+    comparability: Comparability;
+    critical: Array<GateCase>;
+    metrics: Array<GateMetric>;
+    /**
+     * Every reason the verdict is not `pass`, in words.
+     */
+    reasons: Array<string>;
+    verdict: GateVerdict;
+};
+
+export type GateMetric = EvidenceMetricDelta & {
+    held: boolean;
+    /**
+     * Worse than the baseline by more than its tolerance.
+     */
+    regressed: boolean;
+    tolerance?: number | null;
+};
+
+/**
+ * What a gate holds a result to.
+ */
+export type GatePolicy = {
+    /**
+     * Cases that must be measured and no worse than the baseline on any
+     * metric, whatever the means did: a critical case lost is a regression
+     * even beside a better average.
+     */
+    critical_cases?: Array<string>;
+    /**
+     * Metrics shown and not held.
+     */
+    ignore?: Array<string>;
+    /**
+     * How far worse than the baseline a metric may be, in its own unit. A
+     * metric not named here may not get worse at all.
+     */
+    tolerance?: {
+        [key: string]: number;
+    };
+};
+
+export type GateRequest = {
+    /**
+     * The result the candidate is held to.
+     */
+    baseline: string;
+    policy?: GatePolicy;
+};
+
+/**
+ * One side of the pair, as a pipeline records it beside its verdict.
+ */
+export type GateSubject = {
+    code?: null | ArtifactRef;
+    evaluation_id: string;
+    state: EvidenceState;
+    suite?: null | VersionReference;
+    version: string;
+};
+
+export const GateVerdict = {
+    PASS: 'pass',
+    REGRESSION: 'regression',
+    INCOMPLETE: 'incomplete',
+    ERROR: 'error'
+} as const;
+
+export type GateVerdict = typeof GateVerdict[keyof typeof GateVerdict];
 
 /**
  * What was drawn.
@@ -10730,6 +10841,69 @@ export type ListDimensionResponses = {
 
 export type ListDimensionResponse = ListDimensionResponses[keyof ListDimensionResponses];
 
+export type ListLinesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-approval-lines';
+};
+
+export type ListLinesErrors = {
+    501: ErrorBody;
+};
+
+export type ListLinesError = ListLinesErrors[keyof ListLinesErrors];
+
+export type ListLinesResponses = {
+    200: ApprovalLinePage;
+};
+
+export type ListLinesResponse = ListLinesResponses[keyof ListLinesResponses];
+
+export type AdmitLineData = {
+    body: EvaluationManifest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-approval-lines';
+};
+
+export type AdmitLineErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type AdmitLineError = AdmitLineErrors[keyof AdmitLineErrors];
+
+export type AdmitLineResponses = {
+    200: ApprovalLine;
+};
+
+export type AdmitLineResponse = AdmitLineResponses[keyof AdmitLineResponses];
+
+export type WithdrawLineData = {
+    body?: never;
+    path: {
+        line_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-approval-lines/{line_id}';
+};
+
+export type WithdrawLineErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type WithdrawLineError = WithdrawLineErrors[keyof WithdrawLineErrors];
+
+export type WithdrawLineResponses = {
+    200: ApprovalLine;
+};
+
+export type WithdrawLineResponse = WithdrawLineResponses[keyof WithdrawLineResponses];
+
 export type ListApprovalsData = {
     body?: never;
     path?: never;
@@ -11277,6 +11451,29 @@ export type CompareCasesResponses = {
 
 export type CompareCasesResponse = CompareCasesResponses[keyof CompareCasesResponses];
 
+export type GateResultData = {
+    body: GateRequest;
+    path: {
+        evaluation_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-results/{evaluation_id}/gate';
+};
+
+export type GateResultErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GateResultError = GateResultErrors[keyof GateResultErrors];
+
+export type GateResultResponses = {
+    200: GateDecision;
+};
+
+export type GateResultResponse = GateResultResponses[keyof GateResultResponses];
+
 export type ListRubricsData = {
     body?: never;
     path?: never;
@@ -11580,6 +11777,31 @@ export type ListEvaluationSuitesResponses = {
 };
 
 export type ListEvaluationSuitesResponse = ListEvaluationSuitesResponses[keyof ListEvaluationSuitesResponses];
+
+export type StageVariantArtifactData = {
+    body: Array<number>;
+    path: {
+        /**
+         * The name the variant pins it under
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-variant-artifacts/{name}';
+};
+
+export type StageVariantArtifactErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type StageVariantArtifactError = StageVariantArtifactErrors[keyof StageVariantArtifactErrors];
+
+export type StageVariantArtifactResponses = {
+    200: ArtifactRef;
+};
+
+export type StageVariantArtifactResponse = StageVariantArtifactResponses[keyof StageVariantArtifactResponses];
 
 export type ListEvaluationsData = {
     body?: never;

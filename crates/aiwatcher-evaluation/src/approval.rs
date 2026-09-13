@@ -110,6 +110,60 @@ impl Approval {
     }
 }
 
+/// An operator's admission of a whole line of variants: every variant of one
+/// experiment, measured in one context.
+///
+/// A regression gate measures a new variant on every commit — new code, new
+/// prompt — against a context that does not move. Admitting each of those
+/// pairs by hand is a person in every pipeline; admitting none is a producer
+/// admitting its own evidence. A line is the operator deciding once what may
+/// be measured and how — the cohort, the card, the scorer, all in the context
+/// — and leaving which variant to the pipeline. It covers only evidence this
+/// deployment measures, whose numbers the server computes rather than a
+/// producer sends. Each variant it admits still gets its own approval, made
+/// when a run of it starts, from its bytes, and naming the line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLineRecord {
+    pub line_id: String,
+    pub context_id: String,
+    pub experiment_id: String,
+    pub admitted_by: String,
+    pub admitted_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApprovalLine {
+    pub record: ApprovalLineRecord,
+    /// A withdrawn line admits no further variant. What it admitted stays
+    /// admitted, each withdrawable by its own approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawn: Option<Withdrawal>,
+}
+
+impl ApprovalLine {
+    #[must_use]
+    pub fn admits(&self) -> bool {
+        self.withdrawn.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApprovalLinePage {
+    pub lines: Vec<ApprovalLine>,
+}
+
+/// The address of a line: derived from what it admits, so admitting it twice
+/// lands on one.
+pub fn line_id(context_id: &str, experiment_id: &str) -> Result<String> {
+    digest(&(
+        SCHEMA_VERSION,
+        "evaluation.approval_line",
+        context_id,
+        experiment_id,
+    ))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApprovalPage {
     pub approvals: Vec<Approval>,

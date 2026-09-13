@@ -7,9 +7,10 @@
 use crate::auth::Caller;
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
-    Approval, ApprovalBundles, ApprovalPage, CaseDiffPage, CaseFilter, CasePage, DiffQuery,
-    DurableEvaluation, DurablePage, EvaluationManifest, EvaluationReceipt, EvidenceComparison,
-    EvidenceState, PublishEvaluation, ResultStatus, StagedFile,
+    Approval, ApprovalBundles, ApprovalLine, ApprovalLinePage, ApprovalPage, CaseDiffPage,
+    CaseFilter, CasePage, DiffQuery, DurableEvaluation, DurablePage, EvaluationManifest,
+    EvaluationReceipt, EvidenceComparison, EvidenceState, GateDecision, GatePolicy,
+    PublishEvaluation, ResultStatus, StagedFile,
 };
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, post, put};
@@ -41,6 +42,11 @@ use crate::state::AppState;
     stage_bundle,
     list_bundle,
     discard_bundle,
+    gate_result,
+    admit_line,
+    list_lines,
+    withdraw_line,
+    stage_variant_artifact,
 ))]
 struct Api;
 
@@ -60,6 +66,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/evaluation-results/{evaluation_id}",
             get(get_result).delete(forget_result),
+        )
+        .route(
+            "/api/v1/evaluation-results/{evaluation_id}/gate",
+            post(gate_result),
+        )
+        .route(
+            "/api/v1/evaluation-approval-lines",
+            get(list_lines).post(admit_line),
+        )
+        .route(
+            "/api/v1/evaluation-approval-lines/{line_id}",
+            delete(withdraw_line),
+        )
+        .route(
+            "/api/v1/evaluation-variant-artifacts/{name}",
+            put(stage_variant_artifact)
+                .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route("/api/v1/evaluation-approvals", get(list_approvals))
         .route("/api/v1/evaluation-approvals", post(approve_source))
@@ -450,6 +473,136 @@ async fn get_cases(
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound(id))
+}
+
+// ── The gate ─────────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct GateRequest {
+    /// The result the candidate is held to.
+    baseline: String,
+    #[serde(default)]
+    policy: GatePolicy,
+}
+
+/// Whether a result may ship against a baseline, under a policy.
+///
+/// A read: nothing is written, so a pipeline asks as often as it likes and the
+/// panel asks the same thing. `pass`, `regression`, `incomplete` or `error`,
+/// with every reason in words — a metric worse than its tolerance, a critical
+/// case lost whatever the average did, a scorer that failed, a pair that does
+/// not compare.
+#[utoipa::path(post, path = "/api/v1/evaluation-results/{evaluation_id}/gate",
+    params(("evaluation_id" = String, Path)), request_body = GateRequest,
+    responses((status = 200, body = GateDecision), (status = 400, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn gate_result(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(request): Json<GateRequest>,
+) -> ApiResult<Json<GateDecision>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .clone()
+        .with_content_access(caller.require(Role::Admin).is_ok())
+        .gate(
+            &id,
+            &request.baseline,
+            &request.policy,
+            &caller.identity().subject,
+            now(),
+        )
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("{id} or baseline {}", request.baseline)))
+}
+
+// ── Lines ────────────────────────────────────────────────────────────────────
+
+/// Admit every variant of one experiment measured in one context.
+///
+/// Sent any declaration of the line; its context and its variant's
+/// `experiment_id` are what is admitted. `Admin`, for a pair's reason. A
+/// scoring run of a variant the line covers is then admitted when it starts,
+/// from the bytes its pipeline staged, and the approval names the line.
+#[utoipa::path(post, path = "/api/v1/evaluation-approval-lines", request_body = EvaluationManifest,
+    responses((status = 200, body = ApprovalLine), (status = 400, body = crate::error::ErrorBody),
+    (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn admit_line(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(manifest): Json<EvaluationManifest>,
+) -> ApiResult<Json<ApprovalLine>> {
+    caller.require(Role::Admin)?;
+    Ok(Json(
+        registry(&state)?
+            .clone()
+            .with_content_access(true)
+            .admit_line(&manifest, &caller.identity().subject, now())
+            .await?,
+    ))
+}
+
+/// Every line, withdrawn ones included.
+#[utoipa::path(get, path = "/api/v1/evaluation-approval-lines",
+    responses((status = 200, body = ApprovalLinePage), (status = 501, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn list_lines(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> ApiResult<Json<ApprovalLinePage>> {
+    caller.require(Role::Viewer)?;
+    Ok(Json(ApprovalLinePage {
+        lines: registry(&state)?.lines().await?,
+    }))
+}
+
+/// Stop a line admitting further variants. What it admitted stays admitted,
+/// each withdrawable through its own approval.
+#[utoipa::path(delete, path = "/api/v1/evaluation-approval-lines/{line_id}",
+    params(("line_id" = String, Path)),
+    responses((status = 200, body = ApprovalLine), (status = 403, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn withdraw_line(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(line_id): Path<String>,
+) -> ApiResult<Json<ApprovalLine>> {
+    caller.require(Role::Admin)?;
+    registry(&state)?
+        .withdraw_line(&line_id, &caller.identity().subject, now())
+        .await?
+        .map(Json)
+        .ok_or(ApiError::NotFound(line_id))
+}
+
+/// Keep one file a variant pins, by its content.
+///
+/// `Editor`: the bytes are addressed by the digest computed here, so sending
+/// them admits nothing — a line reads them when a run of that variant starts,
+/// and a pin names them or nothing.
+#[utoipa::path(put, path = "/api/v1/evaluation-variant-artifacts/{name}",
+    params(("name" = String, Path, description = "The name the variant pins it under")),
+    request_body = Vec<u8>,
+    responses((status = 200, body = aiwatcher_core::ArtifactRef), (status = 400, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn stage_variant_artifact(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<aiwatcher_core::ArtifactRef>> {
+    caller.require(Role::Editor)?;
+    Ok(Json(
+        registry(&state)?
+            .stage_variant_artifact(&name, body.to_vec())
+            .await?,
+    ))
 }
 
 // ── Approvals ────────────────────────────────────────────────────────────────

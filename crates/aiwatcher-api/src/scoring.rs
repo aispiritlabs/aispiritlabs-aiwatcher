@@ -233,8 +233,34 @@ async fn start_scoring_run(
     let evaluations = registry(&state)?;
     let viewed = view(evaluations, &id).await?;
     // The gate's own refusal: not yet names the approval, and withdrawn is the
-    // same 403 a producer's publication of that pair gets.
-    evaluations.admission(&viewed.manifest).await?;
+    // same 403 a producer's publication of that pair gets — unless a line an
+    // operator admitted covers this variant, which admits it now, from the
+    // bytes its pipeline staged.
+    match evaluations.admission(&viewed.manifest).await {
+        Err(aiwatcher_evaluation::EvaluationError::NotAdmitted(approval)) => {
+            let admitted = match state.evaluation_bundles.as_deref() {
+                Some(bundles) => {
+                    evaluations
+                        .clone()
+                        .with_content_access(true)
+                        .admit_through_line(
+                            &viewed.manifest,
+                            &requester,
+                            bundles,
+                            time::OffsetDateTime::now_utc().unix_timestamp(),
+                        )
+                        .await?
+                }
+                None => None,
+            };
+            if admitted.is_none() {
+                return Err(aiwatcher_evaluation::EvaluationError::NotAdmitted(approval).into());
+            }
+        }
+        refused => {
+            refused?;
+        }
+    }
     // Before a run exists rather than after: a judged run on a deployment with
     // no judge, or with another profile, is one nothing would ever claim — and
     // a run whose card asks a scorer service, on a deployment with none.

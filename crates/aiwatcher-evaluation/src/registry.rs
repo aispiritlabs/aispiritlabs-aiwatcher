@@ -388,6 +388,264 @@ impl Registry {
         self.approval(approval_id).await
     }
 
+    /// Admit every variant of one experiment measured in one context.
+    ///
+    /// `template` is any declaration of the line: its context is what is
+    /// admitted, its variant's `experiment_id` which variants, and nothing
+    /// else of the variant is read. Checked as a pair's context is — the card
+    /// and scorer this deployment measures with — and refused for evidence a
+    /// producer measured, whose numbers nothing here computed.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] naming what cannot be a line.
+    pub async fn admit_line(
+        &self,
+        template: &EvaluationManifest,
+        subject: &str,
+        now: i64,
+    ) -> Result<crate::ApprovalLine> {
+        text(subject, "admitted_by")?;
+        let prepared = Evaluation::prepare(template.clone())?;
+        require(
+            template.context.scored_here(),
+            "context.scorer",
+            "a line admits evidence this deployment measures; a producer's evidence is admitted \
+             pair by pair",
+        )?;
+        // A pair over the archive is admitted by an admin who may read what its
+        // run reads; a line would let every later variant's start stand in for
+        // that person.
+        require(
+            template.context.dataset.kind != crate::DatasetKind::Conversations
+                && template
+                    .context
+                    .external_calibration
+                    .as_ref()
+                    .is_none_or(|pin| !pin.reads_archive)
+                && template
+                    .context
+                    .judge
+                    .as_ref()
+                    .is_none_or(|judge| !judge.reads_archive),
+            "context.dataset",
+            "reads the conversation archive, whose pairs an admin admits one at a time",
+        )?;
+        self.admit_scoring(&template.context).await?;
+        let id = crate::line_id(prepared.context_id(), &template.variant.experiment_id)?;
+        if let Some(line) = self.line(&id).await? {
+            require(
+                line.admits(),
+                "line",
+                "was withdrawn; a withdrawn line admits nothing again",
+            )?;
+        }
+        let record = crate::ApprovalLineRecord {
+            line_id: id.clone(),
+            context_id: prepared.context_id().into(),
+            experiment_id: template.variant.experiment_id.clone(),
+            admitted_by: subject.into(),
+            admitted_at: now,
+        };
+        self.store.create(&store::line(&id), &record).await?;
+        self.line(&id)
+            .await?
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))
+    }
+
+    /// Stop a line admitting further variants.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn withdraw_line(
+        &self,
+        line_id: &str,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<crate::ApprovalLine>> {
+        text(subject, "withdrawn_by")?;
+        if self.line(line_id).await?.is_none() {
+            return Ok(None);
+        }
+        self.store
+            .create(
+                &store::line_withdrawal(line_id),
+                &Withdrawal {
+                    withdrawn_by: subject.into(),
+                    withdrawn_at: now,
+                },
+            )
+            .await?;
+        self.line(line_id).await
+    }
+
+    /// Every line, withdrawn ones included.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn lines(&self) -> Result<Vec<crate::ApprovalLine>> {
+        let mut entries = self.store.0.list(store::LINES).await?;
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut lines = Vec::new();
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.key.ends_with("/record.json"))
+        {
+            if let Some(record) = self
+                .store
+                .read::<crate::ApprovalLineRecord>(&entry.key)
+                .await?
+                && entry.key == store::line(&record.line_id)
+                && let Some(line) = self.line(&record.line_id).await?
+            {
+                lines.push(line);
+            }
+        }
+        Ok(lines)
+    }
+
+    async fn line(&self, id: &str) -> Result<Option<crate::ApprovalLine>> {
+        let Some(record) = self
+            .store
+            .read::<crate::ApprovalLineRecord>(&store::line(id))
+            .await?
+        else {
+            return Ok(None);
+        };
+        require(record.line_id == id, "line", "identity mismatch")?;
+        Ok(Some(crate::ApprovalLine {
+            record,
+            withdrawn: self.store.read(&store::line_withdrawal(id)).await?,
+        }))
+    }
+
+    /// Keep one of a variant's pinned files by its content, for a line to
+    /// admit the variant from.
+    ///
+    /// Any bytes: a variant's code may be an archive or a note naming a
+    /// commit, and a pin is a pin. What they are is the digest, computed here.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a name that is not one path segment or
+    /// bytes over the instance's limit.
+    pub async fn stage_variant_artifact(
+        &self,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<aiwatcher_core::ArtifactRef> {
+        text(name, "artifact.name")?;
+        require(
+            !name.contains('/') && !name.contains('\\') && name != "manifest.json",
+            "artifact.name",
+            "must be one path segment, and not the bundle's manifest",
+        )?;
+        require(
+            bytes.len() <= self.config.max_bytes,
+            "artifact",
+            "exceeds instance byte limit",
+        )?;
+        let digest = store::hash(&bytes);
+        let size = bytes.len() as u64;
+        self.store
+            .0
+            .create(&store::variant_artifact(&digest), bytes)
+            .await?;
+        Ok(aiwatcher_core::ArtifactRef {
+            name: name.to_owned(),
+            uri: format!("evaluation://variant-artifacts/{digest}"),
+            digest,
+            size_bytes: Some(size),
+            content_type: String::new(),
+            kind: aiwatcher_core::ArtifactKind::Blob,
+            schema_ref: None,
+        })
+    }
+
+    /// Admit a pair through the line its context and experiment belong to,
+    /// when nothing admitted it yet and a live line does.
+    ///
+    /// The bundle an operator would have staged is built from what a line
+    /// already decided and what the pipeline sent: the declaration's own
+    /// manifest, and each file its variant pins from the bytes kept under
+    /// that digest. Then the pair is approved the way an operator approves
+    /// one — resolved by the adapter from those bytes — naming the line and
+    /// who started it. A variant pinning a model or a workflow brings files a
+    /// pipeline cannot send, and is left to be admitted pair by pair.
+    ///
+    /// `None` when no live line covers the pair.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] naming a pinned file nothing staged, and
+    /// whatever approving refuses.
+    pub async fn admit_through_line(
+        &self,
+        manifest: &EvaluationManifest,
+        started_by: &str,
+        bundles: &dyn crate::ApprovalBundles,
+        now: i64,
+    ) -> Result<Option<Approval>> {
+        let prepared = Evaluation::prepare(manifest.clone())?;
+        let Some(line) = self
+            .line(&crate::line_id(
+                prepared.context_id(),
+                &manifest.variant.experiment_id,
+            )?)
+            .await?
+            .filter(crate::ApprovalLine::admits)
+        else {
+            return Ok(None);
+        };
+        require(
+            manifest.variant.model.is_none() && manifest.variant.workflow.is_none(),
+            "variant",
+            "names a model or a workflow, whose packages a line cannot stage; admit this pair \
+             by hand",
+        )?;
+        let id = approval_id(prepared.variant_id(), prepared.context_id())?;
+        bundles
+            .stage(&id, "manifest.json", canonical(manifest)?)
+            .await?;
+        let pinned = [
+            ("variant.code", Some(&manifest.variant.code)),
+            (
+                "variant.generation_config",
+                Some(&manifest.variant.generation_config),
+            ),
+            (
+                "variant.response_schema",
+                manifest.variant.response_schema.as_ref(),
+            ),
+            ("variant.tools", manifest.variant.tools.as_ref()),
+        ];
+        for (field, artifact) in pinned {
+            let Some(artifact) = artifact else { continue };
+            let bytes = self
+                .store
+                .0
+                .get(&store::variant_artifact(&artifact.digest))
+                .await?
+                .filter(|bytes| store::hash(bytes) == artifact.digest)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: field.into(),
+                    reason: format!(
+                        "no bytes were staged under {}; send them to \
+                         PUT /api/v1/evaluation-variant-artifacts/{} first",
+                        artifact.digest, artifact.name
+                    ),
+                })?;
+            bundles.stage(&id, &artifact.name, bytes).await?;
+        }
+        let approved_by = format!(
+            "line {} ({}), started by {started_by}",
+            line.record.line_id, line.record.admitted_by
+        );
+        self.approve(manifest, &approved_by, now).await.map(Some)
+    }
+
     /// Every pair this instance has admitted, withdrawn ones included: an
     /// approval that vanished from the list would read as one nobody made.
     pub async fn approvals(&self) -> Result<Vec<Approval>> {
@@ -812,6 +1070,62 @@ impl Registry {
             return Ok(None);
         };
         Ok(Some(crate::comparison::compare(current, baseline)))
+    }
+
+    /// Whether one result may ship against a baseline, under a policy.
+    ///
+    /// The header comparison decides whether the two compare and by how much
+    /// each metric moved; the critical cases are read from the case diff,
+    /// walked page by page until every one named is found or both results
+    /// are exhausted. `None` when either result is not there.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a policy that says nothing a gate can
+    /// hold, and whatever reading the two results refuses.
+    pub async fn gate(
+        &self,
+        id: &str,
+        baseline_id: &str,
+        policy: &crate::GatePolicy,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<crate::GateDecision>> {
+        policy.validate()?;
+        let Some(comparison) = self.compare(id, baseline_id, subject, now).await? else {
+            return Ok(None);
+        };
+        let mut wanted: BTreeSet<&str> = policy.critical_cases.iter().map(String::as_str).collect();
+        let mut rows = Vec::new();
+        let mut cursor: Option<String> = None;
+        while !wanted.is_empty() && comparison.comparability != Comparability::Incompatible {
+            let Some(page) = self
+                .compare_cases(
+                    id,
+                    baseline_id,
+                    DiffQuery {
+                        cursor: cursor.as_deref(),
+                        limit: Some(200),
+                        only: None,
+                    },
+                    subject,
+                    now,
+                )
+                .await?
+            else {
+                break;
+            };
+            for row in page.cases {
+                if wanted.remove(row.case_id.as_str()) {
+                    rows.push(row);
+                }
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(Some(crate::gate_decision(&comparison, policy, &rows)))
     }
 
     /// Which cases moved, between one result and another named one.

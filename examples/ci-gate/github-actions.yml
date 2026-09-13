@@ -1,0 +1,30 @@
+# An example job, not one this repository runs: measure the application at
+# this commit against the result `main` published, and fail on a regression.
+#
+# Once, by an admin: publish the dataset and the card, measure `main` as the
+# baseline, and admit the line — every variant of this experiment in this
+# context — with POST /api/v1/evaluation-approval-lines. After that a job needs
+# an editor's token and nothing on the server's host.
+name: quality gate
+on: [pull_request]
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      AIWATCHER_URL: ${{ vars.AIWATCHER_URL }}
+      AIWATCHER_TOKEN: ${{ secrets.AIWATCHER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Answer every case
+        run: uv run examples/ci-gate/app.py examples/ci-gate/cases.json answers.json
+      - name: Gate
+        run: >
+          uvx --from aiwatcher-sdk aiwatcher-gate
+          --run examples/ci-gate/run.json
+          --evaluation-id "capitals-${GITHUB_SHA}"
+          --baseline capitals-main
+          --policy examples/ci-gate/policy.json
+          --code-commit
+          --recording answers.json
+          --output gate.json
