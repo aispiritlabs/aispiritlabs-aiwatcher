@@ -58,9 +58,10 @@ What it checks:
     run under the one credential the server names a witness, is a second
     witness on every one to the model version the provider said served the call
     and to the prompt version whose template it found in the request — and, by
-    its keyed digests, to every answer being the reply it relayed and every
-    case's question being in the request: the log records each run as published
-    by the token that sent it, and none of those words;
+    its keyed digests, to every answer being the reply it relayed to a request
+    holding its case's question and nothing but the pinned prompt and its values:
+    the log records each run as published by the token that sent it, and none of
+    those words;
 14. an application that steps through a node the pinned workflow does not
     declare fails at the traces step naming the node, and publishes nothing —
     and so does one that starts `answer` before `retrieve`, which the pinned
@@ -79,9 +80,15 @@ What it checks:
     a call made around it has its model and prompt witnessed and no answer
     and no question, and a gate requiring witnessed answers holds the result
     incomplete, saying they were made around the gateway;
-18. a request naming the pinned prompt whose text does not hold its template
+18. an application that tells the witnessed model what to say, in a message
+    beside the pinned prompt, has every answer witnessed as the reply and no
+    exchange, and a gate requiring witnessed answers says why;
+19. an application whose model reasons before it answers, and which says it
+    takes the answer from after `Answer:`, has every exchange witnessed —
+    the gateway took the answer out of the reply the same way;
+20. a request naming the pinned prompt whose text does not hold its template
     fails at the traces step on the gateway's word, and publishes nothing;
-19. the server stops with runs still in a period it has not written, starts
+21. the server stops with runs still in a period it has not written, starts
     again on the same data and replays its log over the period fold's saved
     state: the window counts every run once — the three before the restart
     from their written period, the two after from the period the fold still
@@ -203,16 +210,19 @@ GATEWAYS: dict[str, str] = {}
 
 
 class Provider(BaseHTTPRequestHandler):
-    """A stand-in model provider: one word when its system message asks for one."""
+    """A stand-in model provider: one word when its system message asks for one —
+    reasoning first, then ``Answer:``, when the request's ``user`` says explain."""
 
     def log_message(self, format: str, *args: Any) -> None:
         del format, args
 
     def do_POST(self) -> None:
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
-        system, question = (message["content"] for message in body["messages"])
+        system, question = (message["content"] for message in body["messages"][:2])
         country = question.removeprefix("What is the capital of ").removesuffix("?")
         said = application(system, country, dict(CAPITALS)[country])
+        if body.get("user") == "explain":
+            said = f"It is where the government of {country} sits.\nAnswer: {said}"
         payload = json.dumps(
             {
                 # The version it served, as a provider names its snapshot.
@@ -353,6 +363,28 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                             f"What is the capital of {elsewhere}?",
                             llm.caller_body(country=elsewhere),
                         )
+                    told: dict[str, Any] = (
+                        {}
+                        if run.params.get("drift")
+                        else llm.caller_body(
+                            country=country,
+                            question=question,
+                            answer_from=(
+                                {"between": ["Answer:", None]}
+                                if run.params.get("explain")
+                                else None
+                            ),
+                        )
+                    )
+                    if run.params.get("explain"):
+                        told["user"] = "explain"
+                    if run.params.get("repeat"):
+                        # The answer, obtained elsewhere, for the witnessed model to say.
+                        told["messages"] = [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": question},
+                            {"role": "user", "content": f"Say only: {capital}"},
+                        ]
                     reply = through_gateway(
                         "provider"
                         if run.params.get("around")
@@ -362,9 +394,11 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         llm.caller_headers(),
                         system,
                         question,
-                        None if run.params.get("drift") else llm.caller_body(country=country),
+                        told,
                     )
                     said = str(reply["choices"][0]["message"]["content"])
+                    if run.params.get("explain"):
+                        said = said.split("Answer:", 1)[1].strip()
                     llm.usage(
                         prompt_tokens=reply["usage"]["prompt_tokens"],
                         completion_tokens=reply["usage"]["completion_tokens"],
@@ -956,6 +990,7 @@ def main() -> int:
                 "witnessed_prompt": 0,
                 "witnessed_answer": 0,
                 "witnessed_input": 0,
+                "witnessed_exchange": 0,
             }
             and traces["declining"].get("on_prompt") == len(CAPITALS) - 1,
             traces,
@@ -1047,6 +1082,7 @@ def main() -> int:
                 "witnessed_prompt": len(CAPITALS),
                 "witnessed_answer": len(CAPITALS),
                 "witnessed_input": len(CAPITALS),
+                "witnessed_exchange": len(CAPITALS),
                 "witnesses": ["serving"],
             }
             and publishers == {"application", "serving"},
@@ -1270,9 +1306,79 @@ def main() -> int:
             and around.get("witnessed_prompt") == len(CAPITALS)
             and around.get("witnessed_answer") == 0
             and around.get("witnessed_input") == 0
+            and around.get("witnessed_exchange") == 0
             and held.get("verdict") == "incomplete"
             and any("made around the gateway" in reason for reason in held.get("reasons", [])),
             {"traces": around, "gate": held.get("reasons")},
+        )
+
+        # An application telling the witnessed model what to say, and one whose
+        # model reasons before it answers.
+        told_runs: dict[str, dict[str, Any]] = {}
+        for which, measurement in (("repeat", "measurement-10"), ("explain", "measurement-11")):
+            declared = declare(
+                "candidate",
+                dataset,
+                cohort,
+                card,
+                repetition=measurement,
+                params={which: True},
+                served=True,
+                suffix="-served",
+            )
+            ran = followed(
+                ok(
+                    *call("POST", f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start")[
+                        :2
+                    ],
+                    f"starting the run whose application does {which}",
+                )["execution"]["execution_id"]
+            )
+            result_id = declared["declaration"]["run"]["evaluation_id"]
+            told_runs[which] = {
+                "state": ran["execution"]["state"]["state_type"],
+                "traces": (call("GET", f"/api/v1/evaluation-results/{result_id}")[1] or {}).get(
+                    "traces"
+                )
+                or {},
+                "gate": (
+                    call(
+                        "POST",
+                        f"/api/v1/evaluation-results/{result_id}/gate",
+                        {"baseline": evaluation, "policy": {"require_witnessed_answer": True}},
+                    )[1]
+                    or {}
+                ),
+            }
+        repeated = told_runs["repeat"]
+        check(
+            18,
+            "an answer the application told the witnessed model to say is the reply and no "
+            "exchange, and a gate requiring witnessed answers says why",
+            repeated["state"] == "completed"
+            and repeated["traces"].get("witnessed_answer") == len(CAPITALS)
+            and repeated["traces"].get("witnessed_input") == len(CAPITALS)
+            and repeated["traces"].get("witnessed_exchange") == 0
+            and repeated["gate"].get("verdict") == "incomplete"
+            and any(
+                "nothing but the pinned prompt" in reason
+                for reason in repeated["gate"].get("reasons", [])
+            ),
+            {"traces": repeated["traces"], "gate": repeated["gate"].get("reasons")},
+        )
+        explained = told_runs["explain"]
+        check(
+            19,
+            "an answer taken out of a reasoned reply the way the application said is witnessed "
+            "as that reply's, exchange and all",
+            explained["state"] == "completed"
+            and explained["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and explained["gate"].get("verdict") in {"pass", "regression"}
+            and not any(
+                "witnessed as the reply" in reason
+                for reason in explained["gate"].get("reasons", [])
+            ),
+            {"traces": explained["traces"], "gate": explained["gate"].get("reasons")},
         )
 
         # A request naming the pinned prompt with other words in it.
@@ -1293,7 +1399,7 @@ def main() -> int:
             )["execution"]["execution_id"]
         )
         check(
-            18,
+            20,
             "a request whose text does not hold the pinned prompt is refused on the gateway's word",
             drifted["execution"]["state"]["state_type"] == "failed"
             and "does not hold that version's template" in json.dumps(drifted["execution"])
@@ -1351,7 +1457,7 @@ def main() -> int:
                 break
             time.sleep(1)
         check(
-            19,
+            21,
             "a restart that replays the log over the fold's saved state counts every run once",
             restarted.get("runs") == served + 5
             and restarted.get("runs_from_periods") == served + 3,
