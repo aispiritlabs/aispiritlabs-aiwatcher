@@ -88,6 +88,10 @@ pub fn executors(config: &Config, artifacts: Option<&Artifacts>) -> ExecutorRegi
     }
 }
 
+/// How long asking an engine to stop may take. A marker written, or a child
+/// killed: an engine that cannot do either in five seconds is not stopping it.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// One engine's client: its address, where its routes live, and the object
 /// store a step's rows are written to.
 #[derive(Debug)]
@@ -131,7 +135,8 @@ impl QueryClient {
 
         let answer: QueryAnswer = self
             .post("/query", &request_of(spec, &key), context.timeout)
-            .await?
+            .await
+            .map_err(|error| context.stop.or_stopped(error))?
             .decode()?;
 
         // What the plan asked for against what the engine could do. A step
@@ -195,6 +200,27 @@ impl QueryClient {
             awaiting: None,
             cacheable: honoured,
         })
+    }
+
+    /// Ask the engine to stop the query it is running under this attempt's key.
+    ///
+    /// Bounded and best effort: the reactor stops waiting either way, and an
+    /// engine whose build has no such route answers 404, which is an engine
+    /// with nothing to be asked rather than a failure.
+    pub(super) async fn cancel(&self, command: &ActivityCommand) -> Result<(), ActivityError> {
+        let key = command.idempotency_key();
+        let answered = self
+            .send(
+                self.client
+                    .post(self.url(&format!("/executions/{key}/cancel")))
+                    .timeout(CANCEL_TIMEOUT),
+                Absence::IsAnAnswer,
+            )
+            .await?;
+        if answered.status == StatusCode::NOT_FOUND {
+            tracing::debug!(key, "the query engine serves no cancel route; it runs to its own ceiling");
+        }
+        Ok(())
     }
 
     /// Whether an earlier attempt of this step already ran, and what it left.

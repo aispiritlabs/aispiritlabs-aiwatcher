@@ -433,3 +433,69 @@ def test_staging_for_a_notebook_nobody_wrote_is_a_404(scratch: Config) -> None:
         )
 
         assert absent.status_code == 404
+
+
+def test_a_managed_run_is_stopped_by_its_key_rather_than_left_to_its_timeout(
+    scratch: Config,
+) -> None:
+    """The reactor stops waiting when a run is cancelled or its deadline passes.
+
+    Until this route the notebook it had sent went on to the service's own timeout,
+    holding whatever it loaded for an execution nobody wanted any more.
+    """
+    stuck = NOTEBOOK.replace(
+        "    from ml_pipeline import Block",
+        "    import time\n    from ml_pipeline import Block",
+    ).replace(
+        '{**row, "seen": True} for row in rows',
+        '{**row, "seen": not time.sleep(60)} for row in rows',
+    )
+    (scratch.notebooks / "stuck.py").write_text(stuck)
+    key = "01a0/stuck/1"
+    answers: dict[str, object] = {}
+
+    async def exercise() -> None:
+        async with (
+            anyio.create_task_group() as group,
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client,
+        ):
+            await client.put("/ml-pipeline/notebooks/stuck", json={"source": stuck})
+
+            async def run() -> None:
+                ran = await client.post(
+                    "/ml-pipeline/run",
+                    json={"notebook": "stuck", "rows": [{"a": 1}], "params": {}, "context": key},
+                    timeout=120,
+                )
+                answers["run"] = ran
+
+            group.start_soon(run)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as other:
+                for _ in range(200):
+                    state = (await other.get(f"/ml-pipeline/executions/{key}")).json()["state"]
+                    if state == RUNNING:
+                        break
+                    await anyio.sleep(0.02)
+                await anyio.sleep(0.5)
+                answers["asked_at"] = anyio.current_time()
+                answers["cancel"] = (
+                    await other.post(f"/ml-pipeline/executions/{key}/cancel")
+                ).json()
+                answers["idle"] = (
+                    await other.post("/ml-pipeline/executions/01a0/nothing/1/cancel")
+                ).json()
+        answers["ended_at"] = anyio.current_time()
+
+    app = create_app(scratch)
+    anyio.run(exercise)
+
+    assert answers["cancel"] == {"state": "cancelling"}
+    assert answers["idle"] == {"state": ABSENT}
+    ran = answers["run"]
+    assert getattr(ran, "status_code", None) == 409, getattr(ran, "text", ran)
+    assert "stopped" in ran.json()["error"]["message"]  # type: ignore[attr-defined]
+    ended = float(answers["ended_at"])  # type: ignore[arg-type]
+    asked = float(answers["asked_at"])  # type: ignore[arg-type]
+    assert ended - asked < 30, "stopped, not left to its sixty-second sleep"
+    with TestClient(app) as client:
+        assert client.get(f"/ml-pipeline/executions/{key}").json() == {"state": ABSENT}

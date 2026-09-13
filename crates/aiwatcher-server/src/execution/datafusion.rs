@@ -63,4 +63,8 @@ impl ActivityExecutor for DataFusionExecutor {
     async fn lookup(&self, command: &ActivityCommand) -> Result<PriorAttempt, ActivityError> {
         self.client.lookup(command).await
     }
+
+    async fn cancel(&self, command: &ActivityCommand) -> Result<(), ActivityError> {
+        self.client.cancel(command).await
+    }
 }

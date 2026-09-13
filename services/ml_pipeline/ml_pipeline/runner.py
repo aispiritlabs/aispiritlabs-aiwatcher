@@ -31,6 +31,7 @@ from ml_pipeline.config import SERVICE_ROOT, Config
 from ml_pipeline.log import logger
 from ml_pipeline.notebooks import Notebook
 from ml_pipeline.staging import Row, Staging, columns_of, read_json
+from ml_pipeline.stopping import NotebookCancelledError, Stopping, kill
 
 log = logger(__name__)
 
@@ -76,13 +77,17 @@ def run_notebook(
     staging: Staging,
     config: Config,
     context: str | None = None,
+    stopping: Stopping | None = None,
 ) -> RunResult:
     """Stage the rows, run the notebook over them, and read what it handed on.
 
     `context` is the managed run's `<execution>/<step>/<attempt>`; the panel's
     own runs have none and share the ad-hoc directory, which is the same thing
-    they shared before contexts existed.
+    they shared before contexts existed. `stopping` is where a managed run can be
+    stopped by that context; a run stopped there raises `NotebookCancelledError`.
     """
+    stopping = stopping or Stopping()
+    stopping.raise_if_requested(context)
     staging.stage(notebook.name, rows, params=params, context=context)
     output_path = staging.output_path(notebook.name, context)
     output_path.unlink(missing_ok=True)
@@ -100,35 +105,44 @@ def run_notebook(
     )
 
     started = time.monotonic()
+    # S603: the command is this interpreter and a path this service resolved inside its
+    # own notebook directory — never a string from a request. No shell is involved. A
+    # session of its own, so stopping it stops what it started too.
+    process = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "ml_pipeline.step",
+            str(notebook.path),
+            str(staging.input_path(notebook.name, context)),
+            str(output_path),
+        ],
+        cwd=str(SERVICE_ROOT),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    stopping.attach(context, process)
     try:
-        # S603: the command is this interpreter and a path this service resolved
-        # inside its own notebook directory — never a string from a request. No
-        # shell is involved.
-        completed = subprocess.run(  # noqa: S603
-            [
-                sys.executable,
-                "-m",
-                "ml_pipeline.step",
-                str(notebook.path),
-                str(staging.input_path(notebook.name, context)),
-                str(output_path),
-            ],
-            cwd=str(SERVICE_ROOT),
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=config.timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as expired:
+        stdout, stderr = process.communicate(timeout=config.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        kill(process)
+        stdout, stderr = process.communicate()
+        stopping.detach(context)
         log.warning(
             "notebook.timeout", notebook=notebook.name, timeout_seconds=config.timeout_seconds
         )
         raise NotebookFailedError(
             f"{notebook.name} did not finish within {config.timeout_seconds:.0f}s",
-            stdout=_tail(expired.stdout),
-            stderr=_tail(expired.stderr),
-        ) from expired
+            stdout=_tail(stdout),
+            stderr=_tail(stderr),
+        ) from None
+    if stopping.detach(context) and process.returncode != 0:
+        log.info("notebook.cancelled", notebook=notebook.name, context=context)
+        raise NotebookCancelledError(f"{notebook.name} was stopped: the run it belonged to stopped")
+    completed = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
     took_ms = int((time.monotonic() - started) * 1000)
 
     if completed.returncode != 0:

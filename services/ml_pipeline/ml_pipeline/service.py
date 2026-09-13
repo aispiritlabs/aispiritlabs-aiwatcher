@@ -14,6 +14,7 @@ from one screen and nothing else (ADR_0008, ADR_0024).
     POST /ml-pipeline/staging             put rows under a context, run nothing
     GET  /ml-pipeline/staging             how much scratch is here, and how old
     GET  /ml-pipeline/executions/{key}    did this key run here, and is it still going
+    POST /ml-pipeline/executions/{key}/cancel   stop the run under that key
     ANY  /ml-pipeline/app/{name}/         the notebook itself, live, for an iframe
 
 SECURITY: this runs notebook code, with no sandbox, in this process (the app
@@ -36,7 +37,7 @@ from starlette.routing import Mount, Route
 
 from ml_pipeline.config import Config
 from ml_pipeline.log import logger
-from ml_pipeline.memory import ExecutionMemory
+from ml_pipeline.memory import RUNNING, ExecutionMemory
 from ml_pipeline.notebooks import (
     NotebookDirectory,
     NotebookNotFoundError,
@@ -44,6 +45,7 @@ from ml_pipeline.notebooks import (
 )
 from ml_pipeline.runner import NotebookFailedError, run_notebook
 from ml_pipeline.staging import Row, Staging, StagingError
+from ml_pipeline.stopping import NotebookCancelledError, Stopping
 
 log = logger(__name__)
 
@@ -77,6 +79,7 @@ def create_app(config: Config | None = None) -> Starlette:
         log.info("notebook.history.backfilled", notebooks=kept)
     staging = Staging(root=settings.data)
     memory = ExecutionMemory()
+    stopping = Stopping()
 
     async def healthz(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -177,7 +180,7 @@ def create_app(config: Config | None = None) -> Starlette:
             # is the only case it exists for, and marimo's live app is served
             # by this same process for the panel's iframe.
             result = await anyio.to_thread.run_sync(
-                run_notebook, notebook, rows, params, staging, settings, context
+                run_notebook, notebook, rows, params, staging, settings, context, stopping
             )
         except BaseException:
             if context is not None:
@@ -295,6 +298,20 @@ def create_app(config: Config | None = None) -> Starlette:
         """
         return JSONResponse(memory.seen(request.path_params["key"]))
 
+    async def cancel(request: Request) -> JSONResponse:
+        """Stop the notebook running under one key.
+
+        Only a key this service is running: any other is answered as the lookup
+        would, and leaves nothing behind to stop a later attempt under it.
+        """
+        key = request.path_params["key"]
+        known = memory.seen(key)
+        if known["state"] != RUNNING:
+            return JSONResponse(known)
+        stopping.request(key)
+        log.info("notebook.cancel_requested", context=key)
+        return JSONResponse({"state": "cancelling"})
+
     # marimo's public embedding API. The dynamic directory turns every notebook
     # in the directory into a live app; `include_code=False` is not decoration
     # — the panel is where a notebook is edited, and a second editor in the
@@ -323,6 +340,9 @@ def create_app(config: Config | None = None) -> Starlette:
             # carries its own separators. Sent as it is rather than encoded, so
             # a person reading a log sees the key they would grep for.
             Route("/ml-pipeline/executions/{key:path}", seen, methods=["GET"]),
+            # After the lookup, which matches a POST here only partially: a key ends in
+            # its attempt number, so `/cancel` is never part of one.
+            Route("/ml-pipeline/executions/{key:path}/cancel", cancel, methods=["POST"]),
             # Last, and mounted at the root rather than at `APP_PATH`: marimo's
             # app serves its own assets from paths it chooses, and its dynamic
             # directory matches the full path itself.
@@ -332,6 +352,7 @@ def create_app(config: Config | None = None) -> Starlette:
             NotebookNotFoundError: _handler(404),
             NotebookRejectedError: _handler(422),
             NotebookFailedError: _handler(422),
+            NotebookCancelledError: _handler(409),
             StagingError: _handler(422),
             ValueError: _handler(400),
         },

@@ -6,6 +6,7 @@ namespace Aiwatcher\Flow\Tests;
 
 use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\ExecutionMemory;
+use Aiwatcher\Flow\QueryCancelled;
 use Aiwatcher\Flow\QueryRunner;
 use Aiwatcher\Flow\Tests\Fake\FakeApi;
 use PHPUnit\Framework\TestCase;
@@ -73,6 +74,42 @@ final class ExecutionMemoryTest extends TestCase
         $memory->failed('exec-1/read/1');
 
         self::assertSame(ExecutionMemory::ABSENT, $memory->seen('exec-1/read/1')['state']);
+    }
+
+    public function test_a_running_query_asked_to_stop_is_marked_and_nothing_else_is(): void
+    {
+        // A request cannot kill another request's query, only tell it. Only a key that is
+        // running is marked: a mark left for a key nothing runs would stop whatever ran
+        // under it next.
+        $memory = $this->memory();
+        self::assertSame(['state' => ExecutionMemory::ABSENT], $memory->cancel('exec-1/read/1'));
+        self::assertFalse($memory->cancelled('exec-1/read/1'));
+
+        $memory->started('exec-1/read/1');
+        self::assertSame(['state' => ExecutionMemory::CANCELLING], $memory->cancel('exec-1/read/1'));
+        self::assertTrue($memory->cancelled('exec-1/read/1'));
+        self::assertSame(ExecutionMemory::RUNNING, $memory->seen('exec-1/read/1')['state']);
+
+        $memory->failed('exec-1/read/1');
+        self::assertFalse($memory->cancelled('exec-1/read/1'), 'an ended query leaves no mark');
+    }
+
+    public function test_a_managed_query_asked_to_stop_stops_between_batches_and_leaves_absent(): void
+    {
+        $memory = $this->memory();
+        $runner = new QueryRunner(new Catalog(FakeApi::withDemoRuns(), 'http://api.test'), 'http://api.test', $memory);
+        $memory->started('exec-1/read/1');
+        $memory->cancel('exec-1/read/1');
+
+        try {
+            $runner->run('data_frame()->read(default)', null, QueryRunner::MAX_ROWS, 'exec-1/read/1');
+            self::fail('a cancelled query does not answer');
+        } catch (QueryCancelled $cancelled) {
+            self::assertStringContainsString('exec-1/read/1', $cancelled->getMessage());
+        }
+
+        self::assertSame(ExecutionMemory::ABSENT, $runner->seen('exec-1/read/1')['state']);
+        self::assertFalse($memory->cancelled('exec-1/read/1'));
     }
 
     public function test_a_note_older_than_the_lookup_window_is_absent(): void

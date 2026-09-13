@@ -21,6 +21,9 @@ Three choices, each measured or forced (AW-3's decisions):
 The parent waits on the clock as well as the child's CPU limit, because a query blocked
 on the network spends no CPU. A ceiling is a 422 naming it: the same query reaches the
 same ceiling on every retry.
+
+A managed query runs under its key, so it can be stopped by it: `cancel` kills the child,
+and the query answers 409 rather than a ceiling it never reached.
 """
 
 from __future__ import annotations
@@ -33,6 +36,9 @@ import shutil
 import signal
 import sys
 import tempfile
+import threading
+import time
+from multiprocessing.process import BaseProcess
 
 from aiwatcher_query import child
 from aiwatcher_query.child import Limits
@@ -47,6 +53,8 @@ log = logger(__name__)
 GRACE_SECONDS = 2.0
 #: How long a killed child gets to be reaped.
 REAP_SECONDS = 5.0
+#: How long a request to stop a key is kept for a query that has not started yet.
+CANCEL_TTL_SECONDS = 900.0
 _PR_SET_DUMPABLE = 4
 
 
@@ -57,6 +65,10 @@ class Sandbox:
         self._engine = engine
         self._limits = limits
         self._context = multiprocessing.get_context("forkserver")
+        # Written from the event loop's cancel and read from each query's thread.
+        self._lock = threading.Lock()
+        self._running: dict[str, BaseProcess] = {}
+        self._cancelled: dict[str, float] = {}
 
     @property
     def limits(self) -> Limits:
@@ -69,16 +81,39 @@ class Sandbox:
         self._context.set_forkserver_preload([engine_module(self._engine), child.__name__])
         multiprocessing.forkserver.ensure_running()
 
-    def run(self, job: Job) -> Outcome | Failure:
+    def cancel(self, key: str) -> None:
+        """Stop the query running under `key`, or the one about to.
+
+        Kept for a query still waiting for a slot, so it never starts; killed for one that
+        is running, so its thread wakes to a child that ended.
+        """
+        now = time.monotonic()
+        with self._lock:
+            for stale in [k for k, at in self._cancelled.items() if now - at > CANCEL_TTL_SECONDS]:
+                del self._cancelled[stale]
+            self._cancelled[key] = now
+            process = self._running.get(key)
+        if process is not None and process.pid is not None and process.is_alive():
+            process.kill()
+
+    def run(self, job: Job, key: str | None = None) -> Outcome | Failure:
+        if key is not None and self._stopping(key):
+            return _cancelled()
         receiver, sender = self._context.Pipe(duplex=False)
         scratch = tempfile.mkdtemp(prefix="aiwatcher-query-")
         process = self._context.Process(
             target=child.main, args=(sender, job, self._limits, scratch), daemon=True
         )
         stopped = False
+        if key is not None:
+            with self._lock:
+                self._running[key] = process
         try:
             process.start()
             sender.close()
+            # A cancel that arrived between registering and starting found nothing alive.
+            if key is not None and self._stopping(key, forget=False):
+                process.kill()
             answer: Outcome | Failure | None = None
             ended = receiver.poll(self._limits.cpu_seconds + GRACE_SECONDS)
             if ended:
@@ -93,10 +128,23 @@ class Sandbox:
                 process.kill()
                 stopped = True
             process.join(REAP_SECONDS)
-            return answer if answer is not None else self._death(process.exitcode, stopped)
+            cancelled = key is not None and self._stopping(key)
+            # A child that answered as the cancel arrived has answered: its rows stand.
+            if answer is not None:
+                return answer
+            return _cancelled() if cancelled else self._death(process.exitcode, stopped)
         finally:
+            if key is not None:
+                with self._lock:
+                    self._running.pop(key, None)
             receiver.close()
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def _stopping(self, key: str, *, forget: bool = True) -> bool:
+        with self._lock:
+            if forget:
+                return self._cancelled.pop(key, None) is not None
+            return key in self._cancelled
 
     def _death(self, exitcode: int | None, stopped: bool) -> Failure:
         """What to say about a child that ended without answering."""
@@ -125,6 +173,10 @@ class Sandbox:
                 502, f"The query's process ended with signal {-exitcode} without answering."
             )
         return Failure(502, f"The query's process ended with status {exitcode} without answering.")
+
+
+def _cancelled() -> Failure:
+    return Failure(409, "The query was cancelled: the run it belonged to stopped.")
 
 
 def undumpable() -> None:

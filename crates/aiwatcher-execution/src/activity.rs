@@ -216,6 +216,17 @@ impl StopSignal {
             .map_or(Ok(()), |reason| Err(reason.as_error()))
     }
 
+    /// The error an attempt reports for a failure that may be the stop itself.
+    ///
+    /// A runtime asked to stop answers the request it was serving with a
+    /// refusal of its own — a 409, a closed connection — and reported as it
+    /// came, that reads as user code or an outage and is retried. Once a stop
+    /// was requested, the stop is the reason.
+    #[must_use]
+    pub fn or_stopped(&self, error: ActivityError) -> ActivityError {
+        self.requested().map_or(error, StopReason::as_error)
+    }
+
     /// The last look, and then a commit the reactor will wait for.
     ///
     /// # Errors
@@ -512,6 +523,16 @@ mod tests {
             !signal.is_committing(),
             "a refused commit leaves nothing outstanding"
         );
+    }
+
+    #[test]
+    fn a_runtime_refusing_the_request_it_was_asked_to_stop_reports_the_stop() {
+        let signal = StopSignal::new();
+        let refused = || ActivityError::user_code("409: the query was cancelled");
+        assert_eq!(signal.or_stopped(refused()).class, FailureClass::UserCode);
+        signal.stop(StopReason::RunStopping);
+        let stopped = signal.or_stopped(refused());
+        assert_eq!(stopped.class, FailureClass::Policy, "never retried as user code");
     }
 
     #[test]

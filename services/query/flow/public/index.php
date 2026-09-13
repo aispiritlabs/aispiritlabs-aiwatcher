@@ -16,6 +16,7 @@ declare(strict_types=1);
  *   POST /query/query     {"pipeline": …, "window_seconds": …, "window_from"/"window_to": …,
  *                          "execution_id": …} -> a table, saying which window it used
  *   GET  /query/executions/{id}  did this service already run that key
+ *   POST /query/executions/{id}/cancel  stop the query running under that key
  *
  * `/query` is the contract every engine serves, and healthz and datasets say which engine
  * this is. The same six routes also answer under `/flow`, the prefix they had while Flow
@@ -33,6 +34,7 @@ use Aiwatcher\Flow\Dataset\CheckedClient;
 use Aiwatcher\Flow\Dataset\UpstreamFailed;
 use Aiwatcher\Flow\Dsl\ParseError;
 use Aiwatcher\Flow\ExecutionMemory;
+use Aiwatcher\Flow\QueryCancelled;
 use Aiwatcher\Flow\Lint\MagoLinter;
 use Aiwatcher\Flow\QueryChecker;
 use Aiwatcher\Flow\QueryRunner;
@@ -201,6 +203,12 @@ try {
         // The lookup half. A reactor asks this after a timeout, before it runs the same
         // key again — a timeout says the caller stopped waiting and nothing about whether
         // this service stopped working. `absent` is the ordinary answer and the safe one.
+        // A key ends in its attempt number, so `/cancel` is never part of one.
+        \str_starts_with($route, '/executions/') && \str_ends_with($route, '/cancel') && $method === 'POST' => $send(
+            200,
+            $runner->cancel(\rawurldecode(\substr($route, \strlen('/executions/'), -\strlen('/cancel')))),
+        ),
+
         \str_starts_with($route, '/executions/') && $method === 'GET' => $send(
             200,
             $runner->seen(\rawurldecode(\substr($route, \strlen('/executions/')))),
@@ -220,6 +228,9 @@ try {
 
         default => $send(404, ['error' => ['message' => \sprintf('No route %s.', $path), 'column' => 0]]),
     };
+} catch (QueryCancelled $error) {
+    // Its own status: a query somebody stopped is neither the query's fault nor an outage.
+    $send(409, ['error' => ['message' => $error->getMessage(), 'column' => 0]]);
 } catch (ParseError $error) {
     // 422, not 400: the request was well-formed, the query was not. The column
     // is what lets the panel point at the character instead of the query.

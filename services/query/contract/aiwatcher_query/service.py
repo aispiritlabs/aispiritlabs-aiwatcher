@@ -8,6 +8,7 @@
                                     "window_to": …, "execution_id": …}
                                    -> a table, saying which window it used
     GET  /query/executions/{id}    did this service already run that key
+    POST /query/executions/{id}/cancel  stop the query running under that key
 
 The same request and answer fields as `services/query/flow`, which is what lets the
 panel and the reactor talk to "the query engine" rather than to one of them — and the
@@ -51,7 +52,9 @@ _NO_PIPELINE = 'Send {"pipeline": "<the query>"}.'
 class Runner(Protocol):
     """What runs a job: the sandbox in a deployment."""
 
-    def run(self, job: Job) -> Outcome | Failure: ...
+    def run(self, job: Job, key: str | None = None) -> Outcome | Failure: ...
+
+    def cancel(self, key: str) -> None: ...
 
 
 def create_app(
@@ -118,7 +121,7 @@ def create_app(
         if key:
             memory.started(key)
         try:
-            outcome = await anyio.to_thread.run_sync(runner.run, job, limiter=limiter)
+            outcome = await anyio.to_thread.run_sync(runner.run, job, key, limiter=limiter)
         except Exception as error:
             log.exception("query.crashed")
             outcome = Failure(502, f"The query could not be run: {error}")
@@ -162,6 +165,17 @@ def create_app(
     async def executions(request: Request) -> JSONResponse:
         return JSONResponse(memory.seen(request.path_params["key"]))
 
+    async def cancel(request: Request) -> JSONResponse:
+        # Only a key this service is running: any other gets what the lookup would, and
+        # leaves nothing behind to stop a later attempt that happens to share it.
+        key = request.path_params["key"]
+        seen = memory.seen(key)
+        if seen["state"] != "running":
+            return JSONResponse(seen)
+        runner.cancel(key)
+        log.info("query.cancelled", key=key)
+        return JSONResponse({"state": "cancelling"})
+
     async def missing(request: Request, _: Exception) -> Response:
         # Flow's shape for a route that is not there, so a client reading `error.message`
         # reads this too. A 404 from a query route is also what tells the reactor that
@@ -176,6 +190,9 @@ def create_app(
             Route(f"{PREFIX}/query", query, methods=["POST"]),
             Route(f"{PREFIX}/simulate", simulate, methods=["POST"]),
             Route(f"{PREFIX}/executions/{{key:path}}", executions, methods=["GET"]),
+            # After the lookup, which answers a POST here only partially: a key ends in
+            # its attempt number, so `/cancel` is never part of one.
+            Route(f"{PREFIX}/executions/{{key:path}}/cancel", cancel, methods=["POST"]),
         ],
         exception_handlers={404: missing, 405: missing},
     )

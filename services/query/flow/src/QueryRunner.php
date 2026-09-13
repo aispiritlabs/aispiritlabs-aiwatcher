@@ -8,6 +8,7 @@ use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dataset\Dataset;
 use Aiwatcher\Flow\Dsl\Parser;
 use Aiwatcher\Flow\Dsl\PipelineBuilder;
+use Flow\ETL\Rows;
 
 /**
  * Parse, build, run, and stop.
@@ -96,8 +97,18 @@ final readonly class QueryRunner
 
         try {
             // One more than the cap, so "there was more" is a fact rather than an
-            // inference from a full page.
-            $rows = $plan->frame->fetch($maxRows + 1)->toArray();
+            // inference from a full page. Batch by batch rather than `fetch()`, so a managed
+            // query looks between them for a request to stop: it cannot be killed from
+            // another request, only told.
+            $fetched = new Rows();
+
+            foreach ($plan->frame->limit($maxRows + 1)->get() as $batch) {
+                if ($note?->cancelled((string) $executionId) === true) {
+                    throw new QueryCancelled((string) $executionId);
+                }
+                $fetched = $fetched->merge($batch);
+            }
+            $rows = $fetched->toArray();
         } catch (\Throwable $error) {
             $note?->failed((string) $executionId);
 
@@ -189,6 +200,16 @@ final readonly class QueryRunner
     public function seen(string $executionId): array
     {
         return $this->memory?->seen($executionId) ?? ['state' => ExecutionMemory::ABSENT];
+    }
+
+    /**
+     * Ask the query running under this key to stop.
+     *
+     * @return array{state: string, digest?: string, rows?: int}
+     */
+    public function cancel(string $executionId): array
+    {
+        return $this->memory?->cancel($executionId) ?? ['state' => ExecutionMemory::ABSENT];
     }
 
     /**

@@ -45,6 +45,9 @@ final readonly class ExecutionMemory
 
     public const string ABSENT = 'absent';
 
+    /** What a cancel answers for a key that was running: the query has been asked to stop. */
+    public const string CANCELLING = 'cancelling';
+
     public function __construct(
         private string $directory,
     ) {}
@@ -81,6 +84,43 @@ final readonly class ExecutionMemory
     public function finished(string $executionId, string $digest, int $rows): void
     {
         $this->write($executionId, ['state' => self::DONE, 'digest' => $digest, 'rows' => $rows]);
+        $this->uncancel($executionId);
+    }
+
+    /**
+     * Ask a running query to stop.
+     *
+     * A marker beside the note rather than a signal: a request is a thread of FrankenPHP or
+     * a worker of `php -S`, which share no memory and, under FrankenPHP, one pid — so the
+     * query cannot be killed, only told. It looks for the marker between the batches it
+     * reads (`QueryRunner::run`). Only a key noted as running is marked: any other gets
+     * what the lookup would, and leaves nothing to stop a later attempt under it.
+     *
+     * @return array{state: string, digest?: string, rows?: int}
+     */
+    public function cancel(string $executionId): array
+    {
+        $seen = $this->seen($executionId);
+
+        if ($seen['state'] !== self::RUNNING) {
+            return $seen;
+        }
+
+        $path = $this->marker($executionId);
+        self::quietly(static fn(): int|false => \file_put_contents($path, (string) \time(), \LOCK_EX));
+
+        return ['state' => self::CANCELLING];
+    }
+
+    /** Whether somebody asked the query running under this key to stop. */
+    public function cancelled(string $executionId): bool
+    {
+        $path = $this->marker($executionId);
+        // A marker written by another request after this one first looked.
+        \clearstatcache(true, $path);
+        $raw = self::quietly(static fn(): string|false => \file_get_contents($path));
+
+        return \is_string($raw) && \ctype_digit($raw) && (\time() - (int) $raw) <= self::TTL_SECONDS;
     }
 
     /**
@@ -94,6 +134,7 @@ final readonly class ExecutionMemory
     {
         $path = $this->path($executionId);
         self::quietly(static fn(): bool => \unlink($path));
+        $this->uncancel($executionId);
     }
 
     /**
@@ -201,5 +242,17 @@ final readonly class ExecutionMemory
     private function path(string $executionId): string
     {
         return $this->directory . '/' . \hash('sha256', $executionId) . '.json';
+    }
+
+    /** Its own file, because a note is replaced whole by a rename and would take it along. */
+    private function marker(string $executionId): string
+    {
+        return $this->directory . '/' . \hash('sha256', $executionId) . '.cancel';
+    }
+
+    private function uncancel(string $executionId): void
+    {
+        $path = $this->marker($executionId);
+        self::quietly(static fn(): bool => \unlink($path));
     }
 }

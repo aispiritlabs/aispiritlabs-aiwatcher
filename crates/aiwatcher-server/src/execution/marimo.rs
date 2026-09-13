@@ -144,7 +144,8 @@ impl ActivityExecutor for MarimoExecutor {
                 &request_of(spec, context, &rows),
                 context.timeout,
             )
-            .await?
+            .await
+            .map_err(|error| context.stop.or_stopped(error))?
             .decode()
             .await?;
 
@@ -255,7 +256,39 @@ impl ActivityExecutor for MarimoExecutor {
             cacheable: false,
         })))
     }
+
+    /// Ask the runtime to kill the notebook it is running under this key.
+    ///
+    /// Bounded and best effort: the reactor stops waiting either way. An older
+    /// build has no such route and answers from marimo's own app below it,
+    /// which is a runtime with nothing to be asked rather than a failure.
+    async fn cancel(&self, command: &ActivityCommand) -> Result<(), ActivityError> {
+        let key = command.idempotency_key();
+        let response = self
+            .client
+            .post(format!("{}/ml-pipeline/executions/{key}/cancel", self.endpoint))
+            .timeout(CANCEL_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| {
+                ActivityError::transient(format!(
+                    "the notebook runtime could not be asked to stop: {error}"
+                ))
+            })?;
+        if !response.status().is_success() {
+            tracing::debug!(
+                key,
+                status = %response.status(),
+                "the notebook runtime serves no cancel route; the notebook runs to its own timeout"
+            );
+        }
+        Ok(())
+    }
 }
+
+/// How long asking the runtime to stop a notebook may take: a process group
+/// killed, or nothing running under that key.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the runtime remembers about one key.
 #[derive(Debug, serde::Deserialize)]

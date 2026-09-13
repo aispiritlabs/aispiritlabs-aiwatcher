@@ -242,3 +242,42 @@ def test_a_strict_check_names_the_refusal_and_says_it_was_strict(strict_client: 
     assert answer["checked_by"] == ["python", "aiwatcher", "strict"]
     (found,) = answer["diagnostics"]
     assert found["message"].startswith("to_pandas is not admitted: it leaves the engine")
+
+
+@pytest.mark.anyio
+async def test_a_managed_query_is_stopped_by_its_key_and_says_it_was_cancelled(app: Any) -> None:
+    # The reactor stops waiting when a run is cancelled or a step's deadline passes; until
+    # this route, the query it had sent went on spinning in its child to the ceiling.
+    transport = httpx.ASGITransport(app=app)
+    key = "exec-9/read/1"
+    async with httpx.AsyncClient(transport=transport, base_url="http://query.test") as client:
+        spinning: dict[str, httpx.Response] = {}
+
+        async def spin() -> None:
+            spinning["response"] = await client.post(
+                "/query/query",
+                json={
+                    "pipeline": "while True:\n    pass\nread('corpus_spans')",
+                    "execution_id": key,
+                },
+            )
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(spin)
+            for _ in range(50):
+                if (await client.get(f"/query/executions/{key}")).json()["state"] == "running":
+                    break
+                await anyio.sleep(0.02)
+            await anyio.sleep(0.2)
+            started = time.monotonic()
+            asked = await client.post(f"/query/executions/{key}/cancel")
+            assert asked.json() == {"state": "cancelling"}
+
+        stopped = spinning["response"]
+        assert time.monotonic() - started < TIMEOUT_SECONDS, "stopped, not at its ceiling"
+        assert stopped.status_code == 409
+        assert "cancelled" in stopped.json()["error"]["message"]
+        assert (await client.get(f"/query/executions/{key}")).json() == {"state": "absent"}
+        # A key nothing is running is answered as the lookup would, and marks nothing.
+        idle = await client.post("/query/executions/exec-9/other/1/cancel")
+        assert idle.json() == {"state": "absent"}
