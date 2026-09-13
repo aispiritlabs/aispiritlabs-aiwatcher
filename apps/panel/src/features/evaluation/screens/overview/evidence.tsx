@@ -614,7 +614,8 @@ function AgreementTable({
  *
  * Both are the server's readings, drawn as given and coloured by nothing. The
  * fitted bar was found on the very items it agrees with, so it is labelled as
- * that; adopting it is publishing the card again, which is a new context.
+ * that, with where it lands when the cases are drawn again; adopting it is
+ * publishing the card again, which is a new context.
  */
 function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
   if (rows.every((row) => row.rank_agreement == null && row.fitted_pass_at == null)) return null;
@@ -633,7 +634,7 @@ function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
           <th className="font-normal">Bar these people support</th>
           <th
             className="font-normal"
-            title="The same fit made on half the set and scored on the other half, both ways round"
+            title="The same fit made without each case — ten folds of cases in a large set — and scored on what it left out"
           >
             On items it was not fitted on
           </th>
@@ -657,6 +658,11 @@ function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
               {row.fitted_pass_at == null || row.fitted_agreement == null
                 ? '—'
                 : `${row.fitted_pass_at} would agree ${percent(row.fitted_agreement)} — fitted on these same items`}
+              {row.fitted_pass_interval ? (
+                <div className="text-muted-foreground">
+                  {`${row.fitted_pass_interval.low} to ${row.fitted_pass_interval.high} when the cases are drawn again`}
+                </div>
+              ) : null}
             </td>
             <td>
               {row.held_out ? (
@@ -669,16 +675,20 @@ function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
                       row.held_out.agreement_interval
                         ? `${percent(row.held_out.agreement_interval.low)}–${percent(row.held_out.agreement_interval.high)}`
                         : null,
-                      `each half's bar: ${row.held_out.fold_pass_at.join(' and ')}`,
+                      row.held_out.folds != null
+                        ? `${row.held_out.folds} bars fitted${
+                            row.held_out.fold_pass_range
+                              ? `, from ${row.held_out.fold_pass_range.low} to ${row.held_out.fold_pass_range.high}`
+                              : ''
+                          }`
+                        : `each half's bar: ${(row.held_out.fold_pass_at ?? []).join(' and ')}`,
                     ]
                       .filter(Boolean)
                       .join(' · ')}
                   </div>
                 </>
               ) : (
-                <span className="text-muted-foreground">
-                  every item is on one side of the split
-                </span>
+                <span className="text-muted-foreground">every item is one case&apos;s</span>
               )}
             </td>
           </tr>

@@ -498,8 +498,9 @@ impl ExternalCalibration {
 /// that ranks answers the other way round from the people. So two more
 /// readings ride beside it. Neither is applied to anything. The fitted bar is
 /// found on the very items it is scored on, so it flatters itself; `held_out`
-/// is the check it lacks — the same fit made on half the set and scored on the
-/// other half, both ways round — and adopting a bar is still publishing the
+/// is the check it lacks — the same fit made without each case and scored on
+/// that case — and `fitted_pass_interval` says how far the bar itself moves
+/// when the set's cases are drawn again. Adopting a bar is still publishing the
 /// card again, and a new context.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExternalAgreement {
@@ -529,20 +530,29 @@ pub struct ExternalAgreement {
     /// How often, counted as `agreement` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fitted_agreement: Option<f64>,
+    /// Where the fitted bar lands when the set's cases are drawn again with
+    /// replacement, as often as [`REDRAWS`] says: the middle 95% of the bars
+    /// those redraws fit. Wide says this set cannot tell one bar from another.
+    /// The redraws are dealt from a digest of the cases, so the same set
+    /// answers the same. Absent under two cases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitted_pass_interval: Option<PassAtRange>,
     /// How a bar fitted this way does on items it was not fitted on. Absent
-    /// when the set cannot be split into two halves with an item in each.
+    /// when the set's items are all one case's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_out: Option<HeldOutBar>,
 }
 
-/// A bar fitted on one half of a calibration set and scored on the other, both
-/// ways round, so every item is scored once by a bar that never saw it.
+/// A bar fitted without each fold of a calibration set and scored on that
+/// fold, so every item is scored once by a bar that never saw it.
 ///
-/// The halves are dealt by the case, from a digest of its ID: a case two people
-/// judged lands on one side with both judgements, and the same set is dealt the
-/// same way on every run. Compare it with `agreement`, the card's own bar, which
-/// was never fitted on these items either; `fitted_agreement` above both is the
-/// flattery a fit on everything carries.
+/// A fold is a case while the set holds at most [`EVERY_CASE_ITS_OWN_FOLD`]
+/// cases — every bar fitted on all the others, which is the most a small set
+/// can lend a fit — and one of ten dealt from a digest of the case beyond. A
+/// case two people judged is one fold with both judgements either way, and the
+/// same set is dealt the same way on every run. Compare it with `agreement`,
+/// the card's own bar, which was never fitted on these items either;
+/// `fitted_agreement` above both is the flattery a fit on everything carries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HeldOutBar {
     pub items: usize,
@@ -551,19 +561,175 @@ pub struct HeldOutBar {
     pub agreement: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agreement_interval: Option<AgreementInterval>,
-    /// The bar fitted without each half, in the order the halves are dealt —
-    /// the one that scored it. Two far apart say the fitted bar is mostly this
-    /// set's noise.
+    /// How many bars were fitted — one per fold holding an item. Absent from a
+    /// result measured before folds were cases, which was dealt into two halves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folds: Option<usize>,
+    /// The lowest and the highest of those bars. Far apart says the fitted bar
+    /// is mostly this set's noise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold_pass_range: Option<PassAtRange>,
+    /// The two halves' bars, on a result measured before folds were cases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fold_pass_at: Vec<f64>,
 }
 
-/// Which half of a calibration set a case is dealt to.
-pub(crate) fn calibration_fold(case_id: &str) -> usize {
+/// Two bars on a metric, the lower first.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PassAtRange {
+    pub low: f64,
+    pub high: f64,
+}
+
+impl PassAtRange {
+    fn of(bars: &[f64]) -> Option<Self> {
+        let low = bars.iter().copied().min_by(f64::total_cmp)?;
+        let high = bars.iter().copied().max_by(f64::total_cmp)?;
+        Some(Self { low, high })
+    }
+}
+
+/// While a calibration set holds at most this many cases, each is a fold.
+pub const EVERY_CASE_ITS_OWN_FOLD: usize = 200;
+/// How many folds a larger set is dealt into.
+const DEALT_FOLDS: u64 = 10;
+/// How many times a set's cases are drawn again for the fitted bar's interval.
+pub const REDRAWS: usize = 1000;
+
+/// The first eight bytes of a labelled digest, as a number.
+fn digest_number(label: &str, parts: &[&str]) -> u64 {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"aiwatcher.calibration.fold\0");
-    hasher.update(case_id.as_bytes());
-    usize::from(hasher.finalize()[0] & 1)
+    hasher.update(label.as_bytes());
+    for part in parts {
+        hasher.update(b"\0");
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut first = [0_u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(first)
+}
+
+/// Which fold each item's case is dealt to, and the folds that hold one.
+pub(crate) fn calibration_folds(case_ids: &[&str]) -> Vec<u64> {
+    let distinct: std::collections::BTreeSet<&str> = case_ids.iter().copied().collect();
+    if distinct.len() <= EVERY_CASE_ITS_OWN_FOLD {
+        let position: BTreeMap<&str, u64> = distinct
+            .iter()
+            .zip(0..)
+            .map(|(case_id, at)| (*case_id, at))
+            .collect();
+        case_ids
+            .iter()
+            .map(|case_id| position.get(case_id).copied().unwrap_or_default())
+            .collect()
+    } else {
+        case_ids
+            .iter()
+            .map(|case_id| digest_number("aiwatcher.calibration.fold", &[case_id]) % DEALT_FOLDS)
+            .collect()
+    }
+}
+
+/// A small deterministic generator for the redraws: SplitMix64, seeded from a
+/// digest of the set, so a retry folds the same bytes.
+struct Redraw(u64);
+
+impl Redraw {
+    fn below(&mut self, bound: usize) -> usize {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut mixed = self.0;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        // A bound is a set's case count; the bias of a remainder is nothing
+        // beside the spread being measured.
+        usize::try_from(mixed % bound.max(1) as u64).unwrap_or_default()
+    }
+}
+
+/// One item as a fit reads it: the metric's number and the person's verdict,
+/// where a person gave one that passes or fails at all.
+#[derive(Clone, Copy, Debug)]
+struct Point {
+    number: f64,
+    person: Option<f64>,
+    item: usize,
+}
+
+/// The bar, among the numbers of the items weighted in and the card's own,
+/// whose verdicts matched the people's over the most weight — the card's
+/// nearest among equals, the lower of two as near — and the weight matched.
+///
+/// `points` hold every item the metric gave a number, in ascending order of
+/// it — one without a person's verdict is a bar and matches nothing — `weights` are per item, and nought leaves an
+/// item out. One pass over the points, so a thousand redraws of a set cost a
+/// thousand passes rather than a thousand times the square of it.
+fn fitted_bar(
+    points: &[Point],
+    weights: &[f64],
+    direction: MetricDirection,
+    card: f64,
+) -> (f64, f64) {
+    let weight = |point: &Point| weights.get(point.item).copied().unwrap_or_default();
+    let (mut ones, mut zeros) = (0.0, 0.0);
+    for point in points {
+        match point.person {
+            Some(person) if person > 0.5 => ones += weight(point),
+            Some(_) => zeros += weight(point),
+            None => {}
+        }
+    }
+    // What a bar at `bar` matches, given the weight strictly below it and the
+    // weight at it or below.
+    let matched = |ones_below: f64, zeros_below: f64, ones_at: f64, zeros_at: f64| match direction {
+        // Passing is at the bar or above.
+        MetricDirection::Higher => zeros_below + (ones - ones_below),
+        // Passing is at the bar or below.
+        MetricDirection::Lower => (ones_below + ones_at) + (zeros - zeros_below - zeros_at),
+        MetricDirection::None => 0.0,
+    };
+    let mut candidates: Vec<(f64, f64)> = Vec::new();
+    let (mut ones_below, mut zeros_below) = (0.0, 0.0);
+    let mut card_seen = false;
+    let mut at = 0;
+    while at < points.len() {
+        let number = points[at].number;
+        let (mut ones_at, mut zeros_at, mut present) = (0.0, 0.0, false);
+        while at < points.len() && points[at].number == number {
+            let held = weight(&points[at]);
+            present |= held > 0.0;
+            match points[at].person {
+                Some(person) if person > 0.5 => ones_at += held,
+                Some(_) => zeros_at += held,
+                None => {}
+            }
+            at += 1;
+        }
+        if !card_seen && card <= number {
+            if card < number {
+                candidates.push((card, matched(ones_below, zeros_below, 0.0, 0.0)));
+            }
+            card_seen = true;
+        }
+        if present || number == card {
+            candidates.push((number, matched(ones_below, zeros_below, ones_at, zeros_at)));
+        }
+        ones_below += ones_at;
+        zeros_below += zeros_at;
+    }
+    if !card_seen {
+        candidates.push((card, matched(ones_below, zeros_below, 0.0, 0.0)));
+    }
+    let mut best = (card, f64::NEG_INFINITY);
+    for (bar, agreeing) in candidates {
+        let nearer = (bar - card).abs() < (best.0 - card).abs();
+        if agreeing > best.1 + 1e-9 || ((agreeing - best.1).abs() <= 1e-9 && nearer) {
+            best = (bar, agreeing);
+        }
+    }
+    (best.0, best.1.max(0.0))
 }
 
 /// A 95% interval for Goodman and Kruskal's gamma over pairs, or `None` where
@@ -694,11 +860,11 @@ pub fn external_agreement(
                 )
             })
             .collect();
-        let folds: Vec<usize> = set
+        let case_ids: Vec<&str> = set
             .items
             .iter()
             .filter(|item| item.rubric == calibrated.rubric)
-            .map(|item| calibration_fold(&item.case_id))
+            .map(|item| item.case_id.as_str())
             .collect();
         let at = |bar: &ExternalCalibration| {
             crate::judge::counted(
@@ -740,49 +906,90 @@ pub fn external_agreement(
                 })
                 .count()
         };
-        // The bar, among the numbers the chosen items were given and the card's
-        // own, whose verdicts matched on most of them — the card's nearest
-        // among equals.
-        let fit = |chosen: &dyn Fn(usize) -> bool| {
-            let mut bars: Vec<f64> = items
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| chosen(*at))
-                .filter_map(|(_, (number, _))| *number)
-                .collect();
-            bars.push(calibrated.pass_at);
-            bars.sort_by(f64::total_cmp);
-            bars.dedup();
-            bars.into_iter()
-                .map(|pass_at| (pass_at, hits(pass_at, chosen)))
-                .min_by(|(one, agreeing), (other, agreeing_other)| {
-                    agreeing_other.cmp(agreeing).then(
-                        (one - calibrated.pass_at)
-                            .abs()
-                            .total_cmp(&(other - calibrated.pass_at).abs()),
-                    )
+        let mut points: Vec<Point> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(item, (number, value))| {
+                Some(Point {
+                    number: (*number)?,
+                    person: calibrated.judged(rubric, value),
+                    item,
                 })
-        };
-        let fitted = (!items.is_empty())
-            .then(|| fit(&|_| true))
-            .flatten()
-            .map(|(bar, matched)| (bar, matched as f64 / items.len() as f64));
-        let held_out = {
-            let halves = [0, 1].map(|half| folds.iter().filter(|fold| **fold == half).count());
-            (halves.iter().all(|count| *count > 0)).then(|| {
-                let mut matched = 0;
-                let mut fold_pass_at = Vec::new();
-                for half in [0, 1] {
-                    if let Some((bar, _)) = fit(&|at| folds[at] != half) {
-                        matched += hits(bar, &|at| folds[at] == half);
-                        fold_pass_at.push(bar);
-                    }
-                }
-                HeldOutBar {
-                    items: items.len(),
-                    agreement: matched as f64 / items.len() as f64,
-                    agreement_interval: AgreementInterval::wilson(matched, items.len()),
-                    fold_pass_at,
+            })
+            .collect();
+        points.sort_by(|one, other| one.number.total_cmp(&other.number));
+        let fit =
+            |weights: &[f64]| fitted_bar(&points, weights, declared.direction, calibrated.pass_at);
+        let fitted = (!items.is_empty()).then(|| {
+            let (bar, matched) = fit(&vec![1.0; items.len()]);
+            (bar, matched / items.len() as f64)
+        });
+        let folds = calibration_folds(&case_ids);
+        let occupied: std::collections::BTreeSet<u64> = folds.iter().copied().collect();
+        let held_out = (occupied.len() >= 2).then(|| {
+            let mut matched = 0;
+            let mut bars = Vec::with_capacity(occupied.len());
+            for fold in &occupied {
+                let without: Vec<f64> = folds
+                    .iter()
+                    .map(|dealt| if dealt == fold { 0.0 } else { 1.0 })
+                    .collect();
+                let (bar, _) = fit(&without);
+                matched += hits(bar, &|at| folds.get(at) == Some(fold));
+                bars.push(bar);
+            }
+            HeldOutBar {
+                items: items.len(),
+                agreement: matched as f64 / items.len() as f64,
+                agreement_interval: AgreementInterval::wilson(matched, items.len()),
+                folds: Some(bars.len()),
+                fold_pass_range: PassAtRange::of(&bars),
+                fold_pass_at: Vec::new(),
+            }
+        });
+        // The cases drawn again with replacement, each draw weighting a case's
+        // items by how often it was drawn.
+        let fitted_pass_interval = {
+            let distinct: Vec<&str> = {
+                let mut distinct = case_ids.clone();
+                distinct.sort_unstable();
+                distinct.dedup();
+                distinct
+            };
+            (distinct.len() >= 2).then(|| {
+                let of_case: Vec<Vec<usize>> = distinct
+                    .iter()
+                    .map(|case_id| {
+                        case_ids
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, own)| *own == case_id)
+                            .map(|(item, _)| item)
+                            .collect()
+                    })
+                    .collect();
+                let mut seed_parts = vec![spec.metric.as_str()];
+                seed_parts.extend(distinct.iter().copied());
+                let mut redraw = Redraw(digest_number("aiwatcher.calibration.redraw", &seed_parts));
+                let mut bars: Vec<f64> = (0..REDRAWS)
+                    .map(|_| {
+                        let mut weights = vec![0.0; items.len()];
+                        for _ in 0..distinct.len() {
+                            for item in &of_case[redraw.below(distinct.len())] {
+                                weights[*item] += 1.0;
+                            }
+                        }
+                        fit(&weights).0
+                    })
+                    .collect();
+                bars.sort_by(f64::total_cmp);
+                let rank = |share: f64| {
+                    let at = ((share * REDRAWS as f64).ceil() as usize).max(1) - 1;
+                    bars[at.min(bars.len() - 1)]
+                };
+                PassAtRange {
+                    low: rank(0.025),
+                    high: rank(0.975),
                 }
             })
         };
@@ -793,6 +1000,7 @@ pub fn external_agreement(
             rank_interval: gamma_interval(&ranked),
             fitted_pass_at: fitted.map(|(bar, _)| bar),
             fitted_agreement: fitted.map(|(_, share)| share),
+            fitted_pass_interval,
             held_out,
             verdicts,
         });
@@ -1337,22 +1545,6 @@ mod tests {
         assert_eq!(gamma_interval(&[(0.1, 1.0), (0.9, 1.0)]), None);
     }
 
-    /// Case IDs dealt to each half, in the order they are found.
-    fn dealt(count: usize) -> [Vec<String>; 2] {
-        let mut halves: [Vec<String>; 2] = [Vec::new(), Vec::new()];
-        for at in 0.. {
-            let case_id = format!("case-{at}");
-            let half = calibration_fold(&case_id);
-            if halves[half].len() < count {
-                halves[half].push(case_id);
-            }
-            if halves.iter().all(|half| half.len() == count) {
-                break;
-            }
-        }
-        halves
-    }
-
     /// A card, its rubric, a set of yes-or-no judgements one per case, and
     /// what the metric said about each.
     type Flagged = (
@@ -1408,16 +1600,21 @@ mod tests {
     }
 
     #[test]
-    fn a_bar_both_halves_support_holds_on_the_half_it_never_saw() {
-        let [first, second] = dealt(4);
-        let judged: Vec<(String, bool, f64)> = [first, second]
-            .into_iter()
-            .flat_map(|half| {
-                half.into_iter()
-                    .zip([(true, 0.8), (true, 0.7), (false, 0.3), (false, 0.2)])
-                    .map(|(case_id, (value, number))| (case_id, value, number))
-            })
-            .collect();
+    fn a_bar_every_other_case_supports_holds_on_the_case_left_out() {
+        let judged: Vec<(String, bool, f64)> = [
+            (true, 0.8),
+            (true, 0.7),
+            (false, 0.3),
+            (false, 0.2),
+            (true, 0.8),
+            (true, 0.7),
+            (false, 0.3),
+            (false, 0.2),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (value, number))| (format!("case-{at}"), value, number))
+        .collect();
         let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
 
         let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
@@ -1431,22 +1628,27 @@ mod tests {
             (row.fitted_pass_at, row.fitted_agreement),
             (Some(0.7), Some(1.0))
         );
-        let held_out = row.held_out.as_ref().expect("both halves hold items");
+        let held_out = row.held_out.as_ref().expect("eight cases, eight folds");
         assert_eq!((held_out.items, held_out.agreement), (8, 1.0));
-        assert_eq!(held_out.fold_pass_at, vec![0.7, 0.7]);
+        assert_eq!(held_out.folds, Some(8), "a case is a fold");
+        assert_eq!(
+            held_out.fold_pass_range,
+            Some(PassAtRange {
+                low: 0.7,
+                high: 0.7
+            })
+        );
         assert!(held_out.agreement_interval.is_some());
     }
 
     #[test]
-    fn a_bar_fitted_on_everything_flatters_itself_and_the_held_out_half_says_by_how_much() {
-        // Each half alone supports a bar the other half does not: 0.8 fits
-        // the first and fails the second's yes at 0.5; 0.5 fits the second.
-        let [first, second] = dealt(2);
+    fn a_bar_fitted_on_everything_flatters_itself_and_the_case_left_out_says_by_how_much() {
+        // Leaving out the yes at 0.5 fits 0.8 on the rest, which fails it.
         let judged = vec![
-            (first[0].clone(), true, 0.8),
-            (first[1].clone(), false, 0.2),
-            (second[0].clone(), true, 0.5),
-            (second[1].clone(), false, 0.4),
+            ("a".to_owned(), true, 0.8),
+            ("b".to_owned(), false, 0.2),
+            ("c".to_owned(), true, 0.5),
+            ("d".to_owned(), false, 0.4),
         ];
         let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
 
@@ -1457,24 +1659,136 @@ mod tests {
             (row.fitted_pass_at, row.fitted_agreement),
             (Some(0.5), Some(1.0))
         );
-        let held_out = row.held_out.as_ref().expect("both halves hold items");
+        let held_out = row.held_out.as_ref().expect("four folds");
         assert_eq!(held_out.agreement, 0.75, "{held_out:?}");
-        assert_eq!(held_out.fold_pass_at, vec![0.5, 0.8]);
+        assert_eq!(
+            held_out.fold_pass_range,
+            Some(PassAtRange {
+                low: 0.5,
+                high: 0.8
+            })
+        );
     }
 
     #[test]
-    fn a_set_all_on_one_side_has_no_held_out_half() {
-        let [first, _] = dealt(3);
-        let judged: Vec<(String, bool, f64)> = first
-            .into_iter()
-            .zip([(true, 0.8), (false, 0.3), (true, 0.9)])
-            .map(|(case_id, (value, number))| (case_id, value, number))
-            .collect();
+    fn a_set_of_one_case_has_nothing_to_hold_out_and_nothing_to_draw_again() {
+        let judged = vec![
+            ("only".to_owned(), true, 0.8),
+            ("only".to_owned(), false, 0.3),
+        ];
         let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
 
         let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
 
         assert!(report.agreement[0].fitted_pass_at.is_some());
         assert!(report.agreement[0].held_out.is_none());
+        assert!(report.agreement[0].fitted_pass_interval.is_none());
+    }
+
+    #[test]
+    fn the_fitted_bar_s_interval_is_the_same_on_every_run_and_wider_where_people_disagree() {
+        let clear: Vec<(String, bool, f64)> = (0..20)
+            .map(|at| {
+                let yes = at % 2 == 0;
+                (format!("case-{at}"), yes, if yes { 0.8 } else { 0.2 })
+            })
+            .collect();
+        let muddled: Vec<(String, bool, f64)> = (0..20)
+            .map(|at| (format!("case-{at}"), at % 3 == 0, f64::from(at) / 20.0))
+            .collect();
+        let interval = |judged: &[(String, bool, f64)]| {
+            let (card, rubrics, rubric_ref, set, said) = flagged(judged);
+            external_agreement(&card, &rubrics, &rubric_ref, &set, &said).agreement[0]
+                .fitted_pass_interval
+                .expect("twenty cases")
+        };
+
+        let first = interval(&clear);
+        assert_eq!(first, interval(&clear), "dealt from the set, not a clock");
+        assert!(first.low <= 0.8 && first.high >= 0.2, "{first:?}");
+        let wide = interval(&muddled);
+        assert!(
+            wide.high - wide.low > first.high - first.low || (first.high - first.low).abs() < 1e-9,
+            "{wide:?} against {first:?}"
+        );
+    }
+
+    #[test]
+    fn a_large_set_is_dealt_into_ten_folds_by_its_cases() {
+        let judged: Vec<(String, bool, f64)> = (0..(EVERY_CASE_ITS_OWN_FOLD + 50))
+            .map(|at| {
+                let yes = at % 2 == 0;
+                (format!("case-{at}"), yes, if yes { 0.8 } else { 0.2 })
+            })
+            .collect();
+        let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
+
+        let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
+
+        let held_out = report.agreement[0].held_out.as_ref().expect("folds");
+        assert_eq!((held_out.folds, held_out.agreement), (Some(10), 1.0));
+    }
+
+    #[test]
+    fn one_pass_over_the_numbers_fits_the_bar_a_look_at_every_bar_would() {
+        // Against the obvious fit: every candidate bar, every item.
+        let naive = |points: &[Point], weights: &[f64], direction: MetricDirection, card: f64| {
+            let mut bars: Vec<f64> = points
+                .iter()
+                .filter(|point| weights[point.item] > 0.0)
+                .map(|point| point.number)
+                .collect();
+            bars.push(card);
+            bars.sort_by(f64::total_cmp);
+            bars.dedup();
+            bars.into_iter()
+                .map(|bar| {
+                    let agreeing: f64 = points
+                        .iter()
+                        .filter_map(|point| {
+                            let passes = match direction {
+                                MetricDirection::Higher => point.number >= bar,
+                                MetricDirection::Lower => point.number <= bar,
+                                MetricDirection::None => return None,
+                            };
+                            ((point.person? > 0.5) == passes).then_some(weights[point.item])
+                        })
+                        // A fold from nought: a float sum of nothing is minus
+                        // nought, which orders below nought.
+                        .fold(0.0, |sum, weight| sum + weight);
+                    (bar, agreeing)
+                })
+                .min_by(|(one, agreeing), (other, agreeing_other)| {
+                    agreeing_other
+                        .total_cmp(agreeing)
+                        .then((one - card).abs().total_cmp(&(other - card).abs()))
+                })
+                .expect("the card is a bar")
+        };
+        let mut redraw = Redraw(7);
+        for round in 0..300 {
+            let count = 1 + redraw.below(12);
+            let mut points: Vec<Point> = (0..count)
+                .map(|item| Point {
+                    number: redraw.below(6) as f64 / 5.0,
+                    person: match redraw.below(3) {
+                        0 => None,
+                        1 => Some(0.0),
+                        _ => Some(1.0),
+                    },
+                    item,
+                })
+                .collect();
+            points.sort_by(|one, other| one.number.total_cmp(&other.number));
+            let weights: Vec<f64> = (0..count).map(|_| redraw.below(3) as f64).collect();
+            let card = redraw.below(6) as f64 / 5.0 + if round % 4 == 0 { 0.1 } else { 0.0 };
+            for direction in [MetricDirection::Higher, MetricDirection::Lower] {
+                assert_eq!(
+                    fitted_bar(&points, &weights, direction, card),
+                    naive(&points, &weights, direction, card),
+                    "round {round}, {direction:?}, card {card}, {points:?}, {weights:?}"
+                );
+            }
+        }
     }
 }

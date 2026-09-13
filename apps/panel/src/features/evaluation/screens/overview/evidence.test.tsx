@@ -418,11 +418,13 @@ it('shows how often a calibrated framework metric agreed with people, as two ver
                 rank_interval: { low: -0.31, high: 0.96 },
                 fitted_pass_at: 0.4,
                 fitted_agreement: 1,
+                fitted_pass_interval: { low: 0.3, high: 0.8 },
                 held_out: {
                   items: 4,
                   agreement: 0.5,
                   agreement_interval: { low: 0.15, high: 0.85 },
-                  fold_pass_at: [0.4, 0.8],
+                  folds: 4,
+                  fold_pass_range: { low: 0.4, high: 0.8 },
                 },
               },
             ],
@@ -477,7 +479,9 @@ it('shows how often a calibrated framework metric agreed with people, as two ver
   // What the fit is worth on items it never saw, beside the card's own bar.
   expect(screen.getByText('-0.31 to 0.96')).toBeTruthy();
   expect(screen.getByText("50% over 4 items, against 75% at the card's bar")).toBeTruthy();
-  expect(screen.getByText("15%–85% · each half's bar: 0.4 and 0.8")).toBeTruthy();
+  expect(screen.getByText('15%–85% · 4 bars fitted, from 0.4 to 0.8')).toBeTruthy();
+  // And how far the fitted bar itself moves when the cases are drawn again.
+  expect(screen.getByText('0.3 to 0.8 when the cases are drawn again')).toBeTruthy();
 });
 
 it('says how many generated answers their traces showed on the pins, as counts', async () => {

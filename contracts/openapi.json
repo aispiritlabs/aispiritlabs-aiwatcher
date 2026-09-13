@@ -18814,6 +18814,17 @@
                 "format": "double",
                 "description": "The bar on the metric — one of the numbers it gave on this set — whose\nverdicts would have matched the people's most often, over every item;\nthe nearest to the card's own `pass_at` among equals."
               },
+              "fitted_pass_interval": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PassAtRange",
+                    "description": "Where the fitted bar lands when the set's cases are drawn again with\nreplacement, as often as [`REDRAWS`] says: the middle 95% of the bars\nthose redraws fit. Wide says this set cannot tell one bar from another.\nThe redraws are dealt from a digest of the cases, so the same set\nanswers the same. Absent under two cases."
+                  }
+                ]
+              },
               "held_out": {
                 "oneOf": [
                   {
@@ -18821,7 +18832,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/HeldOutBar",
-                    "description": "How a bar fitted this way does on items it was not fitted on. Absent\nwhen the set cannot be split into two halves with an item in each."
+                    "description": "How a bar fitted this way does on items it was not fitted on. Absent\nwhen the set's items are all one case's."
                   }
                 ]
               },
@@ -18855,7 +18866,7 @@
             }
           }
         ],
-        "description": "How far a calibrated framework metric agreed with its people, beyond the\nverdicts at the card's bar.\n\nThe verdict agreement is the one a result is held to, and it says nothing\nabout a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric\nthat ranks answers the other way round from the people. So two more\nreadings ride beside it. Neither is applied to anything. The fitted bar is\nfound on the very items it is scored on, so it flatters itself; `held_out`\nis the check it lacks — the same fit made on half the set and scored on the\nother half, both ways round — and adopting a bar is still publishing the\ncard again, and a new context."
+        "description": "How far a calibrated framework metric agreed with its people, beyond the\nverdicts at the card's bar.\n\nThe verdict agreement is the one a result is held to, and it says nothing\nabout a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric\nthat ranks answers the other way round from the people. So two more\nreadings ride beside it. Neither is applied to anything. The fitted bar is\nfound on the very items it is scored on, so it flatters itself; `held_out`\nis the check it lacks — the same fit made without each case and scored on\nthat case — and `fitted_pass_interval` says how far the bar itself moves\nwhen the set's cases are drawn again. Adopting a bar is still publishing the\ncard again, and a new context."
       },
       "ExternalCalibration": {
         "type": "object",
@@ -19542,11 +19553,10 @@
       },
       "HeldOutBar": {
         "type": "object",
-        "description": "A bar fitted on one half of a calibration set and scored on the other, both\nways round, so every item is scored once by a bar that never saw it.\n\nThe halves are dealt by the case, from a digest of its ID: a case two people\njudged lands on one side with both judgements, and the same set is dealt the\nsame way on every run. Compare it with `agreement`, the card's own bar, which\nwas never fitted on these items either; `fitted_agreement` above both is the\nflattery a fit on everything carries.",
+        "description": "A bar fitted without each fold of a calibration set and scored on that\nfold, so every item is scored once by a bar that never saw it.\n\nA fold is a case while the set holds at most [`EVERY_CASE_ITS_OWN_FOLD`]\ncases — every bar fitted on all the others, which is the most a small set\ncan lend a fit — and one of ten dealt from a digest of the case beyond. A\ncase two people judged is one fold with both judgements either way, and the\nsame set is dealt the same way on every run. Compare it with `agreement`,\nthe card's own bar, which was never fitted on these items either;\n`fitted_agreement` above both is the flattery a fit on everything carries.",
         "required": [
           "items",
-          "agreement",
-          "fold_pass_at"
+          "agreement"
         ],
         "properties": {
           "agreement": {
@@ -19570,7 +19580,26 @@
               "type": "number",
               "format": "double"
             },
-            "description": "The bar fitted without each half, in the order the halves are dealt —\nthe one that scored it. Two far apart say the fitted bar is mostly this\nset's noise."
+            "description": "The two halves' bars, on a result measured before folds were cases."
+          },
+          "fold_pass_range": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PassAtRange",
+                "description": "The lowest and the highest of those bars. Far apart says the fitted bar\nis mostly this set's noise."
+              }
+            ]
+          },
+          "folds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many bars were fitted — one per fold holding an item. Absent from a\nresult measured before folds were cases, which was dealt into two halves.",
+            "minimum": 0
           },
           "items": {
             "type": "integer",
@@ -22679,6 +22708,24 @@
           },
           "kind": {
             "type": "string"
+          }
+        }
+      },
+      "PassAtRange": {
+        "type": "object",
+        "description": "Two bars on a metric, the lower first.",
+        "required": [
+          "low",
+          "high"
+        ],
+        "properties": {
+          "high": {
+            "type": "number",
+            "format": "double"
+          },
+          "low": {
+            "type": "number",
+            "format": "double"
           }
         }
       },

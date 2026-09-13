@@ -3437,8 +3437,9 @@ export type ExportVersionSummary = {
  * that ranks answers the other way round from the people. So two more
  * readings ride beside it. Neither is applied to anything. The fitted bar is
  * found on the very items it is scored on, so it flatters itself; `held_out`
- * is the check it lacks — the same fit made on half the set and scored on the
- * other half, both ways round — and adopting a bar is still publishing the
+ * is the check it lacks — the same fit made without each case and scored on
+ * that case — and `fitted_pass_interval` says how far the bar itself moves
+ * when the set's cases are drawn again. Adopting a bar is still publishing the
  * card again, and a new context.
  */
 export type ExternalAgreement = JudgeAgreement & {
@@ -3452,6 +3453,7 @@ export type ExternalAgreement = JudgeAgreement & {
      * the nearest to the card's own `pass_at` among equals.
      */
     fitted_pass_at?: number | null;
+    fitted_pass_interval?: null | PassAtRange;
     held_out?: null | HeldOutBar;
     /**
      * Whether the metric orders answers as the people do, needing no bar:
@@ -3809,14 +3811,16 @@ export const GeometryKind = {
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 
 /**
- * A bar fitted on one half of a calibration set and scored on the other, both
- * ways round, so every item is scored once by a bar that never saw it.
+ * A bar fitted without each fold of a calibration set and scored on that
+ * fold, so every item is scored once by a bar that never saw it.
  *
- * The halves are dealt by the case, from a digest of its ID: a case two people
- * judged lands on one side with both judgements, and the same set is dealt the
- * same way on every run. Compare it with `agreement`, the card's own bar, which
- * was never fitted on these items either; `fitted_agreement` above both is the
- * flattery a fit on everything carries.
+ * A fold is a case while the set holds at most [`EVERY_CASE_ITS_OWN_FOLD`]
+ * cases — every bar fitted on all the others, which is the most a small set
+ * can lend a fit — and one of ten dealt from a digest of the case beyond. A
+ * case two people judged is one fold with both judgements either way, and the
+ * same set is dealt the same way on every run. Compare it with `agreement`,
+ * the card's own bar, which was never fitted on these items either;
+ * `fitted_agreement` above both is the flattery a fit on everything carries.
  */
 export type HeldOutBar = {
     /**
@@ -3826,11 +3830,15 @@ export type HeldOutBar = {
     agreement: number;
     agreement_interval?: null | AgreementInterval;
     /**
-     * The bar fitted without each half, in the order the halves are dealt —
-     * the one that scored it. Two far apart say the fitted bar is mostly this
-     * set's noise.
+     * The two halves' bars, on a result measured before folds were cases.
      */
-    fold_pass_at: Array<number>;
+    fold_pass_at?: Array<number>;
+    fold_pass_range?: null | PassAtRange;
+    /**
+     * How many bars were fitted — one per fold holding an item. Absent from a
+     * result measured before folds were cases, which was dealt into two halves.
+     */
+    folds?: number | null;
     items: number;
 };
 
@@ -5588,6 +5596,14 @@ export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
 export type PartSummary = {
     bytes: number;
     kind: string;
+};
+
+/**
+ * Two bars on a metric, the lower first.
+ */
+export type PassAtRange = {
+    high: number;
+    low: number;
 };
 
 /**
