@@ -71,6 +71,9 @@ struct InFlight {
     input_tokens: i64,
     output_tokens: i64,
     models: Vec<ModelUsage>,
+    /// The same calls by the day each ended on, which is what prices them.
+    #[serde(default)]
+    models_by_day: BTreeMap<String, Vec<ModelUsage>>,
     call_ms: Vec<i64>,
     ttft_ms: Vec<i64>,
     calls: BTreeMap<String, OpenCall>,
@@ -278,16 +281,20 @@ impl PeriodFold {
                 };
                 run.input_tokens += input;
                 run.output_tokens += output;
+                let usage = ModelUsage {
+                    model,
+                    calls: 1,
+                    input_tokens: input,
+                    output_tokens: output,
+                    cached_tokens: cached,
+                };
                 ModelUsage::add_to(
-                    &mut run.models,
-                    &ModelUsage {
-                        model,
-                        calls: 1,
-                        input_tokens: input,
-                        output_tokens: output,
-                        cached_tokens: cached,
-                    },
+                    run.models_by_day
+                        .entry(aiwatcher_core::prices::day_of(at.div_euclid(1_000)))
+                        .or_default(),
+                    &usage,
                 );
+                ModelUsage::add_to(&mut run.models, &usage);
             }
             _ => {}
         }
@@ -345,6 +352,12 @@ impl PeriodFold {
         record.output_tokens += run.output_tokens;
         for model in &run.models {
             ModelUsage::add_to(&mut record.models, model);
+        }
+        for (day, models) in &run.models_by_day {
+            let into = record.models_by_day.entry(day.clone()).or_default();
+            for model in models {
+                ModelUsage::add_to(into, model);
+            }
         }
         let started = run.started_ms.div_euclid(1_000);
         record.first_seen_at = Some(
@@ -837,6 +850,46 @@ mod tests {
             ),
             (2, 2)
         );
+    }
+
+    #[test]
+    fn a_run_across_midnight_keeps_each_call_on_the_day_it_ended() {
+        let midnight = 15 * 3_600;
+        let mut log = Log::new();
+        let call = |id: &str| serde_json::json!({"call_id": id, "model": "gpt-4o"});
+        let done =
+            |id: &str| serde_json::json!({"call_id": id, "model": "gpt-4o", "prompt_tokens": 10});
+        log.at(
+            "r1",
+            EventType::RunStarted,
+            midnight - 20,
+            serde_json::json!({}),
+        )
+        .at("r1", EventType::LlmStarted, midnight - 20, call("a"))
+        .at("r1", EventType::LlmCompleted, midnight - 10, done("a"))
+        .at("r1", EventType::LlmStarted, midnight - 5, call("b"))
+        .at("r1", EventType::LlmCompleted, midnight + 5, done("b"))
+        .at(
+            "r1",
+            EventType::RunCompleted,
+            midnight + 10,
+            serde_json::json!({}),
+        );
+
+        let (fold, _) = folded(300, &log.events);
+
+        let record = fold
+            .open
+            .values()
+            .flat_map(BTreeMap::values)
+            .next()
+            .expect("the run's period is open");
+        let days: Vec<(&str, u64)> = record
+            .models_by_day
+            .iter()
+            .map(|(day, models)| (day.as_str(), models[0].calls))
+            .collect();
+        assert_eq!(days, [("2026-09-13", 1), ("2026-09-14", 1)]);
     }
 
     #[test]

@@ -224,6 +224,10 @@ pub struct ObservedPeriod {
     pub output_tokens: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelUsage>,
+    /// The same calls by the UTC day each ended on — what prices them, so a
+    /// run across midnight pays each day's price for that day's calls.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models_by_day: BTreeMap<String, Vec<ModelUsage>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +259,12 @@ impl ObservedPeriod {
         for model in &other.models {
             ModelUsage::add_to(&mut self.models, model);
         }
+        for (day, models) in &other.models_by_day {
+            let into = self.models_by_day.entry(day.clone()).or_default();
+            for model in models {
+                ModelUsage::add_to(into, model);
+            }
+        }
         let earliest = |one: Option<i64>, other: Option<i64>| match (one, other) {
             (Some(one), Some(other)) => Some(one.min(other)),
             (one, other) => one.or(other),
@@ -285,8 +295,7 @@ struct Accumulated {
     input_tokens: i64,
     output_tokens: i64,
     models: BTreeMap<String, ModelUsage>,
-    /// The same calls by the day their run started, which is what they are
-    /// priced on.
+    /// The same calls by the day each started on, which is what prices them.
     by_day: BTreeMap<String, Vec<ModelUsage>>,
     first_seen_at: Option<OffsetDateTime>,
     last_seen_at: Option<OffsetDateTime>,
@@ -354,7 +363,7 @@ impl Accumulated {
             entry.cached_tokens += usage.cached_tokens;
             ModelUsage::add_to(
                 self.by_day
-                    .entry(day_of(run.started_at.unix_timestamp()))
+                    .entry(day_of(span.start.unix_timestamp()))
                     .or_default(),
                 &usage,
             );
@@ -416,14 +425,10 @@ pub fn from_periods(
         complete: true,
         ..ObservedPeriod::default()
     };
-    let mut by_day: BTreeMap<String, Vec<ModelUsage>> = BTreeMap::new();
     for period in written.iter().chain(unwritten) {
         total.merge(period);
-        let day = by_day.entry(day_of(period.from)).or_default();
-        for model in &period.models {
-            ModelUsage::add_to(day, model);
-        }
     }
+    let by_day = total.models_by_day.clone();
     let seconds = |at: Option<i64>| at.and_then(|at| OffsetDateTime::from_unix_timestamp(at).ok());
     VariantObservations {
         variant_id: variant_id.to_owned(),
@@ -728,23 +733,27 @@ mod tests {
     }
 
     #[test]
-    fn a_window_s_periods_add_up_written_or_not_and_each_is_priced_on_its_day() {
+    fn a_window_s_periods_add_up_written_or_not_and_each_call_is_priced_on_its_own_day() {
         let day = datetime!(2026-09-13 00:00:00 UTC).unix_timestamp();
-        let period = |from: i64, runs: u64, took: &[i64], complete: bool| {
+        let million = |calls: u64| ModelUsage {
+            model: "gpt-4o".to_owned(),
+            calls,
+            input_tokens: 1_000_000 * i64::try_from(calls).unwrap(),
+            output_tokens: 0,
+            cached_tokens: 0,
+        };
+        let period = |from: i64, runs: u64, took: &[i64], complete: bool, days: &[(&str, u64)]| {
             let mut record = ObservedPeriod {
                 variant_id: "v1".to_owned(),
                 from,
                 to: from + 3_600,
                 runs,
                 succeeded: runs,
-                llm_calls: runs,
-                models: vec![ModelUsage {
-                    model: "gpt-4o".to_owned(),
-                    calls: runs,
-                    input_tokens: 1_000_000 * i64::try_from(runs).unwrap(),
-                    output_tokens: 0,
-                    cached_tokens: 0,
-                }],
+                llm_calls: days.iter().map(|(_, calls)| calls).sum(),
+                models_by_day: days
+                    .iter()
+                    .map(|(on, calls)| ((*on).to_owned(), vec![million(*calls)]))
+                    .collect(),
                 late_runs: u64::from(!complete),
                 complete,
                 ..ObservedPeriod::default()
@@ -754,8 +763,21 @@ mod tests {
             }
             record
         };
-        let written = [period(day - 3_600, 2, &[100, 200], true)];
-        let unwritten = [period(day, 1, &[250], false)];
+        let written = [period(
+            day - 3_600,
+            2,
+            &[100, 200],
+            true,
+            &[("2026-09-12", 2)],
+        )];
+        // A run that ended just past midnight, one of whose calls ended before.
+        let unwritten = [period(
+            day,
+            1,
+            &[250],
+            false,
+            &[("2026-09-12", 1), ("2026-09-13", 1)],
+        )];
         let prices = ModelPrices {
             currency: "USD".into(),
             prices: [("2026-09-01", 1.0), ("2026-09-13", 2.0)]
@@ -790,8 +812,8 @@ mod tests {
         assert!(duration.bucketed && duration.count == 3 && duration.max == 250);
         let cost = row.cost.expect("a table");
         assert!(
-            (cost.amount - (2.0 * 1.0 + 1.0 * 2.0)).abs() < 1e-9,
-            "the day before at the first price, the day itself at the second"
+            (cost.amount - (3.0 * 1.0 + 1.0 * 2.0)).abs() < 1e-9,
+            "the calls of the day before at its price, the one after midnight at the day's"
         );
         assert_eq!(
             row.counted_from.map(OffsetDateTime::unix_timestamp),
