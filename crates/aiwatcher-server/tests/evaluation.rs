@@ -325,6 +325,27 @@ async fn contract(store: Arc<dyn ObjectStore>) {
     }
     assert_eq!(rows.len(), 1201);
     assert_eq!(rows[0].expected, serde_json::json!({"answer": ""}));
+    // Every case carries where it sits, the first and one past a page's end
+    // included, and handing that back reads exactly that case.
+    for at in [0, 137, 1200] {
+        let position = rows[at].at.clone().expect("every case says where it sits");
+        let page = restarted
+            .cases(
+                "concurrent",
+                &receipt.version,
+                Some(&position),
+                Some(1),
+                "viewer",
+                1000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.cases[0].measurement.case_id,
+            rows[at].measurement.case_id
+        );
+    }
     assert!(
         restarted
             .cases(

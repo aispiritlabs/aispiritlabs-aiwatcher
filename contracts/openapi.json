@@ -17326,6 +17326,13 @@
           "expected"
         ],
         "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where this case sits in its result, in the case route's own words: hand\nit back as that route's `cursor` with `limit=1` and this case is the\npage. On every case the route answers, the first one included — a page's\n`next_cursor` names only the case after it — and opaque, like the cursor\na comparison row carries."
+          },
           "expected": {},
           "measurement": {
             "$ref": "#/components/schemas/CaseMeasurement"

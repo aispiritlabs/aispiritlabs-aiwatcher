@@ -768,8 +768,8 @@ impl Registry {
             .as_deref()
             .ok_or_else(|| EvaluationError::Invalid {
                 field: "at".into(),
-                reason: "names where the case sits in its result — the `at` a comparison row \
-                         carries — or the proposal writes its question"
+                reason: "names where the case sits in its result — the `at` its row carries on \
+                         the case route or a comparison — or the proposal writes its question"
                     .into(),
             })?;
         let invalid = |field: &str, reason: String| EvaluationError::Invalid {
@@ -1749,6 +1749,7 @@ impl Registry {
             .map(|(measurement, expected)| EvidenceCase {
                 measurement,
                 expected,
+                at: None,
             })
             .collect())
     }
@@ -1818,10 +1819,16 @@ impl Registry {
                     }
                     Err(error) => return Err(error),
                 };
+                let first = start.max(offset);
                 page.cases.extend(
                     rows.into_iter()
                         .skip(offset.saturating_sub(start))
-                        .take(end - start.max(offset)),
+                        .take(end - first)
+                        .zip(first..)
+                        .map(|(case, position)| EvidenceCase {
+                            at: Some(format!("{version}:{position}")),
+                            ..case
+                        }),
                 );
             }
             start += shard.count;

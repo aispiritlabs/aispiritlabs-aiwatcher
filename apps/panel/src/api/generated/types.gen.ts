@@ -2738,6 +2738,14 @@ export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStar
 };
 
 export type EvidenceCase = {
+    /**
+     * Where this case sits in its result, in the case route's own words: hand
+     * it back as that route's `cursor` with `limit=1` and this case is the
+     * page. On every case the route answers, the first one included — a page's
+     * `next_cursor` names only the case after it — and opaque, like the cursor
+     * a comparison row carries.
+     */
+    at?: string | null;
     expected: unknown;
     measurement: CaseMeasurement;
 };

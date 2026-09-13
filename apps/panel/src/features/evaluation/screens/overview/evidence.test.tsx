@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DurableEvaluation, EvidenceState } from '@/api/generated/types.gen';
 import { Evidence, EvidenceRow, EvidenceUnavailable, Retention } from './evidence';
@@ -503,4 +503,76 @@ it('says how many generated answers their traces showed on the pins, as counts',
     ),
   ).toBeTruthy();
   expect(screen.getByText(/1 named no run/)).toBeTruthy();
+});
+
+it("opens a result's first case where it is judged, and proposes it by where its row says it sits", async () => {
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: {
+        status: 200,
+        body: {
+          version: 'ff00',
+          state: 'complete',
+          next_cursor: null,
+          cases: [
+            {
+              at: 'ff00:0',
+              expected: { answer: 'Santiago' },
+              measurement: {
+                case_id: 'capital-chile',
+                repetition_id: 'measurement-1',
+                actual: 'Valparaíso',
+                metrics: { exact: 0 },
+                error: null,
+                trace_id: null,
+                span_id: null,
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-assessments',
+      answer: { status: 200, body: { target_id: 'target-1', assessments: [] } },
+    },
+    { method: 'GET', path: '/evaluation-rubrics', answer: { status: 200, body: { rubrics: [] } } },
+    {
+      method: 'GET',
+      path: '/evaluation-reviews/of-target',
+      answer: { status: 200, body: { target: {}, items: [] } },
+    },
+    {
+      method: 'POST',
+      path: '/evaluation-reviews',
+      answer: { status: 201, body: { created: true, review: {} } },
+    },
+  ]);
+  render(withQueries(<Evidence evidence={evidence('complete')} />));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'capital-chile' }));
+  fireEvent.change(await screen.findByLabelText('Dataset to propose it to'), {
+    target: { value: 'regressions' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Propose as a case' }));
+  await waitFor(() =>
+    expect(
+      server.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith('/evaluation-reviews'),
+      )?.body,
+    ).toEqual({
+      dataset: 'regressions',
+      target: {
+        kind: 'case',
+        evaluation_id: 'kept-1',
+        case_id: 'capital-chile',
+        repetition_id: 'measurement-1',
+      },
+      at: 'ff00:0',
+    }),
+  );
 });

@@ -205,6 +205,13 @@ pub struct DurableEvaluation {
 pub struct EvidenceCase {
     pub measurement: CaseMeasurement,
     pub expected: serde_json::Value,
+    /// Where this case sits in its result, in the case route's own words: hand
+    /// it back as that route's `cursor` with `limit=1` and this case is the
+    /// page. On every case the route answers, the first one included — a page's
+    /// `next_cursor` names only the case after it — and opaque, like the cursor
+    /// a comparison row carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]

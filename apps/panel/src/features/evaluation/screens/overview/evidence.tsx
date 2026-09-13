@@ -14,6 +14,7 @@
  * causes, so each gets its own sentence rather than one shared "failed" shape.
  */
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { Fragment, useState } from 'react';
 
 import { getCases, getResult, listResults } from '@/api/generated/sdk.gen';
 import type {
@@ -34,6 +35,7 @@ import { ApiFailure, answerOf } from '@/shared/lib/result';
 import { cn, formatTime, pinchId } from '@/shared/lib/utils';
 
 import { type CaseFilterChoice, Comparison } from './comparison';
+import { CaseJudgement } from './judgement';
 
 const EVIDENCE_PAGE = 50;
 
@@ -869,6 +871,8 @@ function Cases({ evaluationId, version }: { evaluationId: string; version: strin
   const pages = cases.data?.pages ?? [];
   const rows: EvidenceCase[] = pages.flatMap((page) => page.cases);
   const damaged = pages.find((page) => !readable(page.state));
+  // Which case is open is a disclosure rather than a filter, so it stays here.
+  const [open, setOpen] = useState<string | undefined>(undefined);
 
   return (
     <Card className="overflow-auto">
@@ -907,26 +911,54 @@ function Cases({ evaluationId, version }: { evaluationId: string; version: strin
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.measurement.case_id} className="border-t border-border/40 align-top">
-                <td className="px-4 py-1.5 text-muted-foreground">{row.measurement.case_id}</td>
-                <td className="max-w-[16rem] truncate px-4 py-1.5">
-                  {JSON.stringify(row.expected)}
-                </td>
-                <td className="max-w-[16rem] truncate px-4 py-1.5">
-                  {row.measurement.error ? (
-                    <span className="text-danger">{row.measurement.error}</span>
-                  ) : (
-                    JSON.stringify(row.measurement.actual)
-                  )}
-                </td>
-                <td className="px-4 py-1.5 text-right text-xs tabular-nums">
-                  {Object.entries(row.measurement.metrics)
-                    .map(([name, value]) => `${name} ${value}`)
-                    .join(' · ') || '—'}
-                </td>
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const key = `${row.measurement.case_id}/${row.measurement.repetition_id}`;
+              return (
+                <Fragment key={key}>
+                  <tr className="border-t border-border/40 align-top">
+                    <td className="px-4 py-1.5 text-muted-foreground">
+                      <button
+                        type="button"
+                        className="underline decoration-dotted underline-offset-2"
+                        aria-expanded={open === key}
+                        onClick={() => setOpen(open === key ? undefined : key)}
+                      >
+                        {row.measurement.case_id}
+                      </button>
+                    </td>
+                    <td className="max-w-[16rem] truncate px-4 py-1.5">
+                      {JSON.stringify(row.expected)}
+                    </td>
+                    <td className="max-w-[16rem] truncate px-4 py-1.5">
+                      {row.measurement.error ? (
+                        <span className="text-danger">{row.measurement.error}</span>
+                      ) : (
+                        JSON.stringify(row.measurement.actual)
+                      )}
+                    </td>
+                    <td className="px-4 py-1.5 text-right text-xs tabular-nums">
+                      {Object.entries(row.measurement.metrics)
+                        .map(([name, value]) => `${name} ${value}`)
+                        .join(' · ') || '—'}
+                    </td>
+                  </tr>
+                  {/* Judged and proposed from here as from a comparison row: the
+                      case route says where every case sits, the first included. */}
+                  {open === key ? (
+                    <tr className="border-t border-border/20">
+                      <td colSpan={4} className="px-4 pb-2 text-xs">
+                        <CaseJudgement
+                          evaluationId={evaluationId}
+                          caseId={row.measurement.case_id}
+                          repetitionId={row.measurement.repetition_id}
+                          at={row.at ?? undefined}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -19,9 +19,10 @@ notices the application named Mombasa for Kenya's capital in a trace, and:
    with its question and the answer people wrote;
 6. the review says which version it was published in, and refuses to change;
 7. a case of a published result — measured on the first version, where the
-   application named Cusco for Peru — is proposed by where it sits and
-   nothing else: the question its cohort asked and what was answered are read
-   from the result, the proposal says it was, and the case finds its review;
+   application named Valparaíso for Chile, the result's first case — is
+   proposed by where its row on the case route says it sits and nothing else:
+   the question its cohort asked and what was answered are read from the
+   result, the proposal says it was, and the case finds its review;
 8. a trace holds no words, so a proposal of one without a question is refused
    saying to write it.
 
@@ -130,7 +131,7 @@ def measured(dataset: dict[str, Any]) -> tuple[str, str]:
             ],
         },
     )[1]
-    said = {"France": "Paris", "Japan": "Tokyo", "Peru": "Cusco", "Chile": "Santiago"}
+    said = {"France": "Paris", "Japan": "Tokyo", "Peru": "Lima", "Chile": "Valparaíso"}
     recording = call(
         "PUT",
         "/api/v1/evaluation-recordings/answers.json",
@@ -337,24 +338,17 @@ def main() -> int:
                 "version": first["dataset"]["latest"]["version"],
             }
         )
-        # Where Peru sits in the result, as the case route issues positions —
-        # what a comparison row hands the panel.
-        cursor: str | None = None
-        at = None
-        for _ in range(10):
-            page = call(
-                "GET",
-                f"/api/v1/evaluation-results/{evaluation}/cases?version={version}&limit=1"
-                + (f"&cursor={urllib.parse.quote(cursor, safe='')}" if cursor else ""),
-            )[1]
-            if page["cases"][0]["measurement"]["case_id"] == "capital-peru":
-                at = cursor
-                break
-            cursor = page["next_cursor"]
+        # The result's first case, where its own row on the case route says it
+        # sits — a page's `next_cursor` only ever names the case after it.
+        page = call(
+            "GET", f"/api/v1/evaluation-results/{evaluation}/cases?version={version}&limit=200"
+        )[1]
+        first_case = page["cases"][0]
+        at = first_case.get("at")
         target = {
             "kind": "case",
             "evaluation_id": evaluation,
-            "case_id": "capital-peru",
+            "case_id": first_case["measurement"]["case_id"],
             "repetition_id": "measurement-1",
         }
         from_case = call(
@@ -370,8 +364,9 @@ def main() -> int:
             7,
             "a result's case is proposed in its own words, and the case finds its review",
             from_case[0] == 201
-            and made.get("question") == "What is the capital of Peru?"
-            and made.get("answer") == "Cusco"
+            and target["case_id"] == "capital-chile"
+            and made.get("question") == "What is the capital of Chile?"
+            and made.get("answer") == "Valparaíso"
             and made.get("content") == "measured"
             and [review["dataset"] for review in (found or {}).get("items", [])] == ["regressions"],
             {
