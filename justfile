@@ -546,9 +546,9 @@ e2e-optimise:
 # traces of their runs and scored on one derived cohort, then compared and set
 # beside what the candidate was observed serving (FTI C1, C2): cases → generate →
 # traces → score, twice, against a server of its own behind a stand-in proxy with
-# three tokens — so a model server's own run is a second witness, a pinned
-# workflow is held to its shape, and observations are read back from written
-# periods and priced.
+# three tokens — so a gateway in front of a stand-in provider is a second witness
+# to the model and the prompt, a pinned workflow is held to its shape and order,
+# results and observations are priced, and written periods survive a restart.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 

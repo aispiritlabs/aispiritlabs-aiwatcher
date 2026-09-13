@@ -296,3 +296,13 @@ credential behind it: two producers sharing one ingest token are one publisher
 here. And a deployment that publishes only through a broker has no publisher on
 any record until the broker authenticates producers and the adapter carries
 what it learnt.
+
+## Amendment 2026-09-13, last: a prompt a gateway checked
+
+`llm.*` data may carry `prompt_verified`, recorded on the span as
+`aiwatcher.prompt.verified` beside the prompt reference it qualifies: whether a
+host that saw the request's text found that prompt version's template in it. It
+is what `aiwatcher_sdk.gateway` reports about a call it relayed, and it means
+nothing on an application's own call — the application saying it rendered what
+it says it rendered. Like every other field, it is taken as the producer sent it;
+what makes it a witness is the credential it was published under.

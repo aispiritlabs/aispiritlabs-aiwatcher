@@ -9,7 +9,9 @@
   cohort derived from a dataset version, and a run's settings and stop; a
   variant on the trace and answers held to it; and a second witness, the
   workflow's shape, folds by case, a model addressed by its package, and
-  observations kept past the read model
+  observations kept past the read model; and witnesses a deployment names, a
+  gateway for a provider and the prompt, the order a workflow leads, a result
+  priced, and periods folded with a state of their own
 - **Date**: 2026-09-11
 
 ## Context
@@ -1256,3 +1258,49 @@ call is timed with its first token, tokens are kept per model, and a deployment'
 price table prices them — one currency, every price with the page it was read
 from and the day, refused at start-up without either — with unpriced calls
 counted, never free. A result's usage names no model, so it is not priced.
+
+## Amendment (2026-09-13, final): witnesses a deployment names, a gateway, the order a workflow leads, a result priced, and periods with a state of their own
+
+Four limits of the amendment above.
+
+**A witness is a credential the deployment names, and a shared one is said to
+be.** `AIWATCHER_WITNESSES` lists the credentials whose runs may witness a
+generated answer; with none listed, any credential other than the answer's own
+still does. A serving run published under the answer's own credential — one
+token on two hosts — is counted `self_witnessed` and named in the gate's reasons,
+rather than passed over in silence.
+
+**A provider outside the deployment, and the prompt, get a witness.**
+`aiwatcher_sdk.gateway` is an OpenAI-compatible relay that can hold the
+provider's key, so the application need not. For each call it publishes, under
+its own credential, a run naming the caller's run with the model the provider's
+reply said served it — `model_version`, which the traces step holds to the
+variant's pin — and whether the request's text holds the template of the prompt
+version the caller names (`prompt_verified`): every literal part of the template
+in order, with anything where a placeholder stands. A gateway that found the
+pinned template witnesses the prompt (`witnessed_prompt`), and one that found
+other words refuses the answers. It publishes neither the request nor the reply,
+and it posts the witness before the reply ends. `require_witness` now requires
+both witnesses wherever the variant pins what they show.
+
+**A workflow is held to the order its declaration leads.** A run's node steps
+are kept in log order, and a run that started a node before any node the pinned
+declaration leads into it from had completed is refused. One completed
+predecessor admits a node, so a branch and the join after it pass.
+
+**A result's cases are priced.** A case's usage may name its calls by model
+(`ModelUsage`); for generated answers the traces step reads them from the run's
+spans and the score step fills them in. The Experiments route prices each row
+from its result's usage at the deployment's table, at read time, with the day
+each price was read; the evidence carries tokens, never a price.
+
+**Observed periods are a projector output with a state of their own.** The
+snapshot of the read model this replaces could not write a period after a
+restart that does not replay (Laser), and lost a run whose end arrived after its
+period was written. The fold reads each event once, closes a period when the
+log's clock — `min(occurred_at, ingested_at)` — has passed it, and saves its
+state with the position it was folded through; the projector resumes from that
+position when it is behind its checkpoint, and a period that could not be
+written holds the checkpoint back. A late end is counted in the oldest open
+period and said to be (`late_runs`); a run whose start the fold never saw is
+counted without a duration, in a period marked incomplete.
