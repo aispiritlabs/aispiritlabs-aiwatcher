@@ -7,11 +7,13 @@ would pass while sending a shape nothing can draw.
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pytest
 
-from aiwatcher_sdk import AiwatcherClient
+from aiwatcher_sdk import AiwatcherClient, Correlation
 
 
 class RecordingTransport:
@@ -341,6 +343,56 @@ def test_each_client_numbers_the_events_it_sends_into_a_run_from_nought(
     }, "one client, one name"
     other = [event for event in transport.events if event["run_id"] == "another"]
     assert [event["sequence"] for event in other] == [0, 1]
+
+
+def test_each_client_numbers_the_runs_it_opens_for_a_variant_and_no_measurement_among_them(
+    transport: RecordingTransport,
+) -> None:
+    client = AiwatcherClient(service="capitals", transport=transport, variant_id="v1")
+    with client.run("run-1"):
+        pass
+    with client.run("measured", evaluation_id="e1"):
+        pass
+    with client.workflow("house-import", nodes=NODES, edges=EDGES, run_id="run-2"):
+        pass
+    with client.run("elsewhere", variant_id="v2"):
+        pass
+
+    starts = {
+        event["run_id"]: event.get("run_sequence") for event in transport.of_type("run.started")
+    }
+    assert starts == {"run-1": 0, "measured": None, "run-2": 1, "elsewhere": 0}
+    assert all(
+        "run_sequence" not in event
+        for event in transport.events
+        if event["event_type"] != "run.started"
+    )
+
+
+def test_events_from_many_threads_reach_the_transport_in_the_order_they_were_numbered() -> None:
+    received: list[dict[str, Any]] = []
+
+    class Slow:
+        def send(self, batch: list[dict[str, Any]]) -> None:
+            time.sleep(0.0005)
+            received.extend(batch)
+
+        def flush(self) -> None: ...
+
+        def close(self) -> None: ...
+
+    client = AiwatcherClient(service="capitals", transport=Slow())
+    context = Correlation(run_id="parallel")
+    threads = [
+        threading.Thread(target=lambda: [client.emit("llm.chunk", context, {}) for _ in range(20)])
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert [event["sequence"] for event in received] == list(range(160))
 
 
 def test_a_shared_bound_on_anything_but_one_cycle_s_ways_back_is_refused_naming_it(

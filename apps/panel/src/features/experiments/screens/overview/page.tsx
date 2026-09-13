@@ -478,6 +478,9 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
           (observed.lost_events ?? 0) > 0
             ? `${observed.lost_events} events the runs' clients numbered never reached the fold, so those runs are counted with what did`
             : null,
+          (observed.lost_runs ?? 0) > 0
+            ? `${observed.lost_runs} runs the clients numbered never reached the fold with their start — each lost whole, or counted with what did arrive`
+            : null,
         ]
           .filter(Boolean)
           .join(' · ')}

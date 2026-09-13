@@ -17058,6 +17058,15 @@
             "type": "string",
             "description": "One execution of an agent. This is what a trace is scoped to."
           },
+          "run_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On a run's start: the client's count of the runs it opened naming this\nrun's variant and answering no measurement, from nought. A number passed\nover is a run whose start never reached the log's reader — a run lost\nwhole among them, which no count inside a run can show.",
+            "minimum": 0
+          },
           "schema_version": {
             "type": "integer",
             "format": "int32",
@@ -24333,6 +24342,15 @@
           "run_id": {
             "type": "string"
           },
+          "run_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "See [`EventEnvelope::run_sequence`]. Absent from every record written\nbefore it.",
+            "minimum": 0
+          },
           "schema_version": {
             "type": "integer",
             "format": "int32",
@@ -29456,6 +29474,12 @@
             "type": "integer",
             "format": "int64",
             "description": "Events the clients that published the runs counted here numbered, and\nthe fold never read — a batch a transport dropped, or one a log did not\nkeep — found by the gaps in each client's count, on any log. The runs\nthey belonged to are counted with what did arrive, in periods that say\nthey are incomplete. Counted by the period fold; nought without a window.",
+            "minimum": 0
+          },
+          "lost_runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs the clients that published runs of this variant numbered, whose\nstart the fold never read — a run lost whole among them — found by the\ngaps in each client's count of the runs it opened, on any log. Counted\nin the period the next start reached, which says it is incomplete;\nnought without a window.",
             "minimum": 0
           },
           "measured_runs": {

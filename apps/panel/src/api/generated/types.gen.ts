@@ -2695,6 +2695,13 @@ export type EventEnvelope = {
      */
     run_id: string;
     /**
+     * On a run's start: the client's count of the runs it opened naming this
+     * run's variant and answering no measurement, from nought. A number passed
+     * over is a run whose start never reached the log's reader — a run lost
+     * whole among them, which no count inside a run can show.
+     */
+    run_sequence?: number | null;
+    /**
      * Contract version. An envelope from the future is rejected rather than
      * silently half-read.
      */
@@ -6502,6 +6509,11 @@ export type RecordedMetadata = {
      */
     published_by?: string | null;
     run_id: string;
+    /**
+     * See [`EventEnvelope::run_sequence`]. Absent from every record written
+     * before it.
+     */
+    run_sequence?: number | null;
     schema_version: number;
     sequence?: number | null;
     source: Source;
@@ -9306,6 +9318,14 @@ export type VariantObservations = {
      * they are incomplete. Counted by the period fold; nought without a window.
      */
     lost_events?: number;
+    /**
+     * Runs the clients that published runs of this variant numbered, whose
+     * start the fold never read — a run lost whole among them — found by the
+     * gaps in each client's count of the runs it opened, on any log. Counted
+     * in the period the next start reached, which says it is incomplete;
+     * nought without a window.
+     */
+    lost_runs?: number;
     /**
      * Runs naming it that answered a measurement's cases, left out of every
      * other figure.

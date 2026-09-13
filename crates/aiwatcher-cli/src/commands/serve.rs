@@ -57,10 +57,12 @@ pub async fn run(config: Config) -> Result<()> {
 
     let shutdown = CancellationToken::new();
 
-    // The journal of what the period fold reads runs where work is drained:
-    // beside the projector in one process, and on its own in the `work` role,
-    // where it keeps reading while the projector is down.
-    let journal_task = journal.filter(|_| config.role.works()).map(|journal| {
+    // The journal of what the period fold reads runs in every role: beside the
+    // projector in one process, and in both halves of a split one, which read
+    // under one group name so the log gives its partition to one of them and
+    // hands it to the other when that one stops. While anything that accepts
+    // events is up, a journal is reading them.
+    let journal_task = journal.map(|journal| {
         let shutdown = shutdown.clone();
         tokio::spawn(async move { journal.run(shutdown).await })
     });

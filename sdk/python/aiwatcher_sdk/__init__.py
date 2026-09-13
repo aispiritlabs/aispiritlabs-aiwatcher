@@ -309,6 +309,9 @@ class Correlation:
 #: How many runs a client keeps a count of events for at once; the one heard
 #: from longest ago is forgotten past it, and counts again from nought.
 MOST_RUNS_NUMBERED = 100_000
+#: How many variants a client keeps a count of runs for; the one numbered first
+#: is forgotten past it, and counts again from nought.
+MOST_VARIANTS_NUMBERED = 1_024
 _RUN_ENDS = frozenset({"run.completed", "run.failed"})
 
 
@@ -359,6 +362,7 @@ class AiwatcherClient:
             "client": _new_id(),
         }
         self._sequences: dict[str, int] = {}
+        self._run_sequences: dict[str, int] = {}
         self._sequence_lock = threading.Lock()
         if instance or os.environ.get("HOSTNAME"):
             self._source["instance"] = instance or os.environ["HOSTNAME"]
@@ -392,7 +396,6 @@ class AiwatcherClient:
             "event_type": event_type,
             "occurred_at": occurred_at or _now(),
             "run_id": context.run_id,
-            "sequence": self._next_sequence(context.run_id, event_type),
             "correlation_id": context.correlation_id,
             "source": self._source,
             "data": data or {},
@@ -413,7 +416,18 @@ class AiwatcherClient:
             envelope["span_id"] = span_id
         if parent := (parent_span_id or context.parent_span_id):
             envelope["parent_span_id"] = parent
-        self._transport.send([envelope])
+        # Numbered and handed to the transport in one step, so two threads'
+        # events reach it in the order they were counted: out of order, the
+        # later number would read as the earlier one lost.
+        with self._sequence_lock:
+            envelope["sequence"] = self._next_sequence(context.run_id, event_type)
+            if (
+                event_type == "run.started"
+                and context.variant_id
+                and not (data or {}).get("evaluation_id")
+            ):
+                envelope["run_sequence"] = self._next_run_sequence(context.variant_id)
+            self._transport.send([envelope])
         return event_id
 
     def _next_sequence(self, run_id: str, event_type: str) -> int:
@@ -421,14 +435,30 @@ class AiwatcherClient:
 
         What lets the other end see an event that never reached it — a batch
         the transport dropped, or one a log did not keep — whether or not the
-        log numbers its own records. A run's end forgets its count.
+        log numbers its own records. A run's end forgets its count. Called
+        holding the lock the event is sent under.
         """
-        with self._sequence_lock:
-            sequence = self._sequences.pop(run_id, 0)
-            if event_type not in _RUN_ENDS:
-                if len(self._sequences) >= MOST_RUNS_NUMBERED:
-                    self._sequences.pop(next(iter(self._sequences)))
-                self._sequences[run_id] = sequence + 1
+        sequence = self._sequences.pop(run_id, 0)
+        if event_type not in _RUN_ENDS:
+            if len(self._sequences) >= MOST_RUNS_NUMBERED:
+                self._sequences.pop(next(iter(self._sequences)))
+            self._sequences[run_id] = sequence + 1
+        return sequence
+
+    def _next_run_sequence(self, variant_id: str) -> int:
+        """This client's count of the runs it has opened naming one variant, from nought.
+
+        A number the other end never read is a run whose start never reached it
+        — lost whole, perhaps, which no count inside a run can show. A
+        measurement's run is in no count. Called holding the lock the start is
+        sent under.
+        """
+        sequence = self._run_sequences.get(variant_id, 0)
+        if variant_id not in self._run_sequences and len(self._run_sequences) >= (
+            MOST_VARIANTS_NUMBERED
+        ):
+            self._run_sequences.pop(next(iter(self._run_sequences)))
+        self._run_sequences[variant_id] = sequence + 1
         return sequence
 
     @contextlib.contextmanager

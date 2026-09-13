@@ -17,9 +17,10 @@
 //!
 //! Where it runs decides what it survives. Beside the projector it refills a
 //! fold that fell behind the log, or started again from further back than the
-//! log reaches; in a process of its own it also outlives the projector being
-//! down — for as long as it is up itself, since a log nobody read before it
-//! evicted the events is a gap for both.
+//! log reaches; it runs in every role, under one group name, so in a split
+//! deployment it also outlives either half being down. What no journal read
+//! before the log evicted it is a gap for both, and the journal says so when it
+//! comes to a position past the one after its last.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -125,8 +126,15 @@ where
             );
             return Ok(());
         }
+        let mut held = Held::default();
         let from = match self.checkpointer.load(&self.processor_id).await? {
-            Some(checkpoint) => StartFrom::After(checkpoint),
+            Some(checkpoint) => {
+                // Paged through there already: a redelivery before it is
+                // nothing, and a first position past the one after it is
+                // what the log evicted while no journal read it.
+                held.through = checkpoint.global_position();
+                StartFrom::After(checkpoint)
+            }
             None => self.cold_start.clone(),
         };
         tracing::info!(
@@ -142,7 +150,6 @@ where
                     .with_batch_size(512),
             )
             .await?;
-        let mut held = Held::default();
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut pruned: Option<Instant> = None;
@@ -196,6 +203,19 @@ where
             .unix_timestamp();
         if held.through.is_some_and(|through| position <= through) {
             return false;
+        }
+        let last_read = held
+            .reading
+            .as_ref()
+            .map(|open| open.page.last)
+            .or(held.through);
+        if let Some(last) = last_read.filter(|last| position > last + 1) {
+            tracing::warn!(
+                processor_id = self.processor_id,
+                first = last + 1,
+                last = position - 1,
+                "the log no longer held these positions when the observation journal came to them, so no page holds them"
+            );
         }
         let mut closed = false;
         if let Some(open) = held.reading.as_ref() {

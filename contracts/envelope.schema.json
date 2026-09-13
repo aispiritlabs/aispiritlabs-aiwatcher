@@ -76,6 +76,11 @@
       "minimum": 0,
       "description": "Producer-side counter within the run, one per client (source.client), from 0. A gap here is an event that never reached the log's reader — a batch the producer dropped, or one retention removed — and it is visible on a log that numbers nothing itself."
     },
+    "run_sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "On run.started only: the client's (source.client) count of the runs it opened naming this variant_id and answering no measurement, from 0. A gap here is a run whose start never reached the log's reader — a run lost whole among them, which no count inside a run can show."
+    },
     "trace_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{32}$",

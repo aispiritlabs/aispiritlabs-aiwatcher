@@ -34,3 +34,23 @@ test('each client numbers the events it sends into a run from nought', async () 
   assert.equal(tracerSent.events[0].sequence, 0);
   assert.notEqual(tracerSent.events[0].source.client, first[0].source.client);
 });
+
+test('each client numbers the runs it opens for a variant, and no measurement among them', async () => {
+  const sent = new Recording();
+  const client = new AiwatcherClient({ service: 'agent', transport: sent, variantId: 'v1' });
+
+  await client.run('run-1', undefined, async () => {});
+  await client.run('measured', { evaluationId: 'e1' }, async () => {});
+  await client.run('run-2', undefined, async () => {});
+  await client.run('elsewhere', { variantId: 'v2' }, async () => {});
+
+  const starts = Object.fromEntries(
+    sent.events
+      .filter((event) => event.event_type === 'run.started')
+      .map((event) => [event.run_id, event.run_sequence]),
+  );
+  assert.deepEqual(starts, { 'run-1': 0, measured: undefined, 'run-2': 1, elsewhere: 0 });
+  assert.ok(
+    sent.events.every((event) => event.event_type === 'run.started' || event.run_sequence === undefined),
+  );
+});

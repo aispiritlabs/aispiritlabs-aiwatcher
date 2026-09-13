@@ -196,6 +196,13 @@ pub struct EventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
 
+    /// On a run's start: the client's count of the runs it opened naming this
+    /// run's variant and answering no measurement, from nought. A number passed
+    /// over is a run whose start never reached the log's reader — a run lost
+    /// whole among them, which no count inside a run can show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_sequence: Option<u64>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<TraceId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +249,7 @@ impl EventEnvelope {
             variant_id: None,
             published_by: None,
             sequence: None,
+            run_sequence: None,
             trace_id: None,
             span_id: None,
             parent_span_id: None,
@@ -412,6 +420,7 @@ impl EventEnvelope {
                 variant_id: self.variant_id,
                 published_by: self.published_by,
                 sequence: self.sequence,
+                run_sequence: self.run_sequence,
                 span_key,
                 schema_version: self.schema_version,
                 source: self.source,
@@ -467,6 +476,10 @@ pub struct RecordedMetadata {
     pub published_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
+    /// See [`EventEnvelope::run_sequence`]. Absent from every record written
+    /// before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_sequence: Option<u64>,
 
     /// The key `span_id` derived from. Carried so a projector can group a
     /// start and its end without re-deriving it.

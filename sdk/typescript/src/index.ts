@@ -48,6 +48,11 @@ export interface EventEnvelope {
   variant_id?: string;
   /** This client's count of the events it sent into the run, from 0. */
   sequence?: number;
+  /**
+   * On a run's start: this client's count of the runs it opened naming the
+   * variant and answering no measurement, from 0 — what shows a run lost whole.
+   */
+  run_sequence?: number;
   trace_id?: string;
   span_id?: string;
   parent_span_id?: string;
@@ -198,6 +203,11 @@ const now = () => new Date().toISOString();
  * from longest ago is forgotten past it, and counts again from nought.
  */
 export const MOST_RUNS_NUMBERED = 100_000;
+/**
+ * How many variants a client keeps a count of runs for; the one numbered
+ * first is forgotten past it, and counts again from nought.
+ */
+export const MOST_VARIANTS_NUMBERED = 1_024;
 const RUN_ENDS = new Set(['run.completed', 'run.failed']);
 
 export interface ClientOptions {
@@ -221,6 +231,7 @@ export class AiwatcherClient {
   readonly #source: Source;
   readonly #variantId: string | undefined;
   readonly #sequences = new Map<string, number>();
+  readonly #runSequences = new Map<string, number>();
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -261,6 +272,21 @@ export class AiwatcherClient {
   }
 
   /**
+   * This client's count of the runs it has opened naming one variant, from
+   * nought: a number the other end never read is a run whose start never
+   * reached it — lost whole, perhaps, which no count inside a run can show.
+   */
+  #nextRunSequence(variantId: string): number {
+    const sequence = this.#runSequences.get(variantId) ?? 0;
+    if (!this.#runSequences.has(variantId) && this.#runSequences.size >= MOST_VARIANTS_NUMBERED) {
+      const oldest = this.#runSequences.keys().next();
+      if (!oldest.done) this.#runSequences.delete(oldest.value);
+    }
+    this.#runSequences.set(variantId, sequence + 1);
+    return sequence;
+  }
+
+  /**
    * Publish one event. Returns its id.
    *
    * `occurredAt` overrides the clock. Only worth passing for something
@@ -284,6 +310,10 @@ export class AiwatcherClient {
         occurred_at: occurredAt ?? now(),
         run_id: context.runId,
         sequence: this.#nextSequence(context.runId, eventType),
+        // A measurement's run is in no count: what it answers is a result's.
+        ...(eventType === 'run.started' && context.variantId && data.evaluation_id === undefined
+          ? { run_sequence: this.#nextRunSequence(context.variantId) }
+          : {}),
         correlation_id: context.correlationId,
         source: this.#source,
         data,

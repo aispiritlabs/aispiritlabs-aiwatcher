@@ -120,6 +120,13 @@ pub struct VariantObservations {
     /// they are incomplete. Counted by the period fold; nought without a window.
     #[serde(default, skip_serializing_if = "is_nought")]
     pub lost_events: u64,
+    /// Runs the clients that published runs of this variant numbered, whose
+    /// start the fold never read — a run lost whole among them — found by the
+    /// gaps in each client's count of the runs it opened, on any log. Counted
+    /// in the period the next start reached, which says it is incomplete;
+    /// nought without a window.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub lost_runs: u64,
 }
 
 /// Events a window's span may be short of, because the fold was never given them.
@@ -276,6 +283,11 @@ pub struct ObservedPeriod {
     /// says it is incomplete.
     #[serde(default, skip_serializing_if = "is_nought")]
     pub lost_events: u64,
+    /// Runs the clients publishing this variant's runs numbered whose start
+    /// the fold never read, counted where the next start from the same count
+    /// arrived.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub lost_runs: u64,
     /// Whether the fold saw every run counted here from its start: one it
     /// did not is counted with no duration.
     pub complete: bool,
@@ -331,6 +343,7 @@ impl ObservedPeriod {
         self.last_seen_at = latest(self.last_seen_at, other.last_seen_at);
         self.late_runs += other.late_runs;
         self.lost_events += other.lost_events;
+        self.lost_runs += other.lost_runs;
         self.complete &= other.complete;
     }
 
@@ -552,6 +565,7 @@ impl Accumulated {
             window_before_observations: false,
             missed: Vec::new(),
             lost_events: 0,
+            lost_runs: 0,
         }
     }
 }
@@ -640,6 +654,7 @@ pub fn from_periods(
             .count(),
         late_runs: runs_where(|part| part.late),
         lost_events: total.lost_events,
+        lost_runs: total.lost_runs,
         counted_from: seconds(counted.counted_from),
         window_before_observations: counted.before_observations,
         missed: counted

@@ -57,6 +57,9 @@ const MOST_IN_FLIGHT: usize = 50_000;
 const MOST_CALLS_TIMED: usize = 1_000;
 /// Clients a run keeps a count for; one past it is not counted.
 const MOST_CLIENTS_NUMBERED: usize = 64;
+/// Clients' counts of the runs they opened the fold keeps, for each variant;
+/// past it, the one heard from longest ago is forgotten and counts afresh.
+const MOST_RUN_COUNTS: usize = 10_000;
 /// How often the state is saved when nothing forces it.
 const SAVE_EVERY: Duration = Duration::from_secs(15);
 /// Periods read from the store at once when a window is answered.
@@ -102,6 +105,16 @@ struct InFlight {
     lost: u64,
 }
 
+/// How far one client's count of the runs it opened naming one variant has
+/// reached, as the fold read it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct RunCount {
+    highest: u64,
+    /// When its last start was read, on the log's clock: what decides which
+    /// count is forgotten first.
+    heard: i64,
+}
+
 /// One closed period's records, waiting to be written.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClosedPeriod {
@@ -141,6 +154,11 @@ pub struct PeriodFold {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gap_from: Option<i64>,
     runs: BTreeMap<String, InFlight>,
+    /// Each client's count of the runs it opened naming a variant, keyed by
+    /// the client and the variant: a number passed over is a run whose start
+    /// never reached the fold.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    run_counts: BTreeMap<String, RunCount>,
     /// Periods at their own width still open, by their start.
     open: BTreeMap<i64, BTreeMap<String, ObservedPeriod>>,
     /// Hours and days still open, by level and then start: what the closed
@@ -451,6 +469,9 @@ impl PeriodFold {
                 },
             );
         }
+        if subject == Subject::Run && phase == Some(Phase::Start) {
+            self.runs_numbered(event);
+        }
         if let Some(run) = self.runs.get_mut(run_id) {
             Self::numbered(
                 run,
@@ -508,6 +529,72 @@ impl PeriodFold {
                 run.numbered.insert(client.to_owned(), sequence);
             }
             None => {}
+        }
+    }
+
+    /// Read a run's start in its client's count of the runs it opened naming
+    /// its variant: numbers passed over since that count's last are runs whose
+    /// start never reached the fold — a run lost whole among them — counted in
+    /// the period this start reached, which says it is incomplete. A client's
+    /// first start counts nothing before it, since the fold cannot tell a count
+    /// it began reading midway from one it lost the beginning of; a number at
+    /// or below one already read passes nothing over. A measurement's run is in
+    /// no such count.
+    fn runs_numbered(&mut self, event: &RecordedEvent) {
+        let (Some(number), Some(client), Some(variant_id)) = (
+            event.metadata.run_sequence,
+            event.metadata.source.client.as_deref(),
+            event.metadata.variant_id.as_deref(),
+        ) else {
+            return;
+        };
+        if event.data_str("evaluation_id").is_some() {
+            return;
+        }
+        let heard = event
+            .metadata
+            .occurred_at
+            .min(event.metadata.ingested_at)
+            .unix_timestamp();
+        let key = format!("{client} {variant_id}");
+        let passed = match self.run_counts.get_mut(&key) {
+            Some(count) => {
+                let passed = number.saturating_sub(count.highest + 1);
+                count.highest = count.highest.max(number);
+                count.heard = count.heard.max(heard);
+                passed
+            }
+            None => {
+                if self.run_counts.len() >= MOST_RUN_COUNTS
+                    && let Some(oldest) = self
+                        .run_counts
+                        .iter()
+                        .min_by_key(|(_, count)| count.heard)
+                        .map(|(key, _)| key.clone())
+                {
+                    self.run_counts.remove(&oldest);
+                }
+                self.run_counts.insert(
+                    key,
+                    RunCount {
+                        highest: number,
+                        heard,
+                    },
+                );
+                0
+            }
+        };
+        if passed > 0 {
+            let counted = ObservedPeriod {
+                lost_runs: passed,
+                complete: false,
+                ..ObservedPeriod::default()
+            };
+            self.place(
+                variant_id,
+                event.metadata.occurred_at.unix_timestamp(),
+                &counted,
+            );
         }
     }
 
@@ -1501,6 +1588,65 @@ mod tests {
             .map(|(offset, slice)| (*offset, slice.lost_events))
             .collect();
         assert_eq!(offsets, [(62, 0), (125, 1), (135, 0)]);
+    }
+
+    #[test]
+    fn a_number_a_client_passed_over_in_its_count_of_runs_is_a_run_whose_start_never_arrived() {
+        let mut log = Log::new();
+        log.served("r0", 60, 62)
+            .served("r1", 120, 125)
+            .served("r2", 130, 135)
+            .served("r3", 200, 205)
+            .served("measured", 210, 215)
+            .served("other", 220, 225)
+            .served("r5", 3_600 + 400, 3_600 + 401);
+        for event in &mut log.events {
+            event.metadata.source.client = Some("app".to_owned());
+            if event.event_type == EventType::RunStarted {
+                event.metadata.run_sequence = match event.metadata.run_id.as_str() {
+                    "r0" => Some(0),
+                    "r1" => Some(1),
+                    // A redelivered number passes nothing over.
+                    "r2" => Some(1),
+                    // Number 2 never arrived: the run was lost whole.
+                    "r3" => Some(3),
+                    // Another client's count, first read at 7: nothing before
+                    // it is counted, since the fold may have begun midway.
+                    "other" => Some(7),
+                    // Past number 3 again, in the next hour: 4 never arrived.
+                    "r5" => Some(5),
+                    _ => None,
+                };
+            }
+            if event.metadata.run_id == "other" {
+                event.metadata.source.client = Some("tracer".to_owned());
+            }
+            if event.metadata.run_id == "measured" && event.event_type == EventType::RunStarted {
+                // A measurement's run is in no count, whatever it says.
+                event.metadata.run_sequence = Some(40);
+                event.data = serde_json::json!({"evaluation_id": "e1"});
+            }
+        }
+
+        let (fold, closed) = folded(3_600, &log.events);
+
+        let record = &closed[0].records[0];
+        assert_eq!((record.runs, record.measured_runs), (5, 1));
+        assert_eq!(record.lost_runs, 1, "run number 2");
+        assert!(!record.complete, "a period missing a run is not all there");
+        let lost: Vec<(u32, u64)> = record
+            .slices
+            .iter()
+            .filter(|(_, slice)| slice.lost_runs > 0)
+            .map(|(offset, slice)| (*offset, slice.lost_runs))
+            .collect();
+        assert_eq!(lost, [(200, 1)], "where the start after it arrived");
+        let open = fold.open.values().flat_map(BTreeMap::values);
+        assert_eq!(
+            open.map(|record| record.lost_runs).sum::<u64>(),
+            1,
+            "run number 4, in the hour number 5 started"
+        );
     }
 
     #[test]
