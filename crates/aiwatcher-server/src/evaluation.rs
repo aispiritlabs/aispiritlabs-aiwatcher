@@ -335,6 +335,62 @@ impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
         }
         Ok(removed)
     }
+
+    /// A model's package as the training registry holds it — the declaration
+    /// admission compares with the owner's — and each of its artifacts by
+    /// digest; a workflow's declaration by the digest the variant pins. The
+    /// weights and the declaration are bytes this deployment does not hold, so
+    /// they are named here and sent by whoever measures.
+    async fn pinned_members(
+        &self,
+        variant: &aiwatcher_evaluation::VariantManifest,
+    ) -> Result<Vec<aiwatcher_evaluation::PinnedMember>> {
+        use aiwatcher_evaluation::PinnedMember;
+        let mut members = Vec::new();
+        if let Some(model) = &variant.model {
+            let owner = self
+                .training
+                .as_ref()
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            let package = owner
+                .verified_version(&model.name, &model.version)
+                .await
+                .map_err(training_error)?
+                .package
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "variant.model".into(),
+                    reason: format!(
+                        "{} @ {} was registered without a package, so nothing says which \
+                         artifacts it is",
+                        model.name, model.version
+                    ),
+                })?;
+            let declared = serde_json::to_vec(&package)?;
+            members.push(PinnedMember {
+                name: "model-package.json".into(),
+                digest: hex::encode(Sha256::digest(&declared)),
+                size_bytes: Some(declared.len() as u64),
+                bytes: Some(declared),
+            });
+            for artifact in &package.artifacts {
+                members.push(PinnedMember {
+                    name: format!("{ARTIFACTS}{}", artifact.name),
+                    digest: artifact.digest.clone(),
+                    size_bytes: artifact.size_bytes,
+                    bytes: None,
+                });
+            }
+        }
+        if let Some(workflow) = &variant.workflow {
+            members.push(PinnedMember {
+                name: "workflow.json".into(),
+                digest: workflow.version.clone(),
+                size_bytes: None,
+                bytes: None,
+            });
+        }
+        Ok(members)
+    }
 }
 
 #[async_trait]

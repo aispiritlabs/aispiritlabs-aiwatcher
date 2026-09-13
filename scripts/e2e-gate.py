@@ -21,7 +21,12 @@ over what it answered, each with nothing but the policy and the run declaration:
 4. answers missing a case never pass: exit 2;
 5. a variant of another experiment, which the line does not cover, is an error
    naming the line route: exit 3;
-6. the job summary names the commit, the card and the evidence.
+6. the job summary names the commit, the card, the variant and the evidence;
+7. a variant of the same experiment naming a registered model and a workflow is
+   admitted through the line too: the server stages the model's package from
+   its own registry, the job sends the weights and the workflow's declaration
+   by digest, and the job passes — while a job that forgot the weights is an
+   error naming the member and the route to send it to.
 
     cargo build --bin aiwatcher   # once
     just e2e-gate
@@ -204,6 +209,7 @@ def job(
     style: str,
     evaluation_id: str,
     drop: str | None = None,
+    staged: tuple[Path, ...] = (),
 ) -> tuple[int, dict[str, Any], str]:
     """One CI job: answer every case, then `aiwatcher-gate`."""
     work = home / commit
@@ -251,6 +257,7 @@ def job(
             f"generation_config={work / 'generation.json'}",
             "--recording",
             str(work / "answers.json"),
+            *[argument for path in staged for argument in ("--stage", str(path))],
             "--output",
             str(work / "gate.json"),
             "--timeout",
@@ -396,11 +403,100 @@ def main() -> int:
         _, _, text = job(home, run, commit="c5", style="one-word", evaluation_id="capitals-c5")
         check(
             6,
-            "the job summary names the commit, the card and the evidence",
+            "the job summary names the commit, the card, the variant and the evidence",
             "`c5`" in text
             and "capitals-exact" in text
+            and "- variant: `" in text
             and "evaluation?evidence=capitals-c5" in text,
             text.splitlines()[0] if text else "",
+        )
+
+        # A model this deployment's registry holds, and a workflow declaration.
+        weights = home / "weights"
+        weights.write_bytes(b"the capitals model's weights\n")
+        declaration = home / "workflow.json"
+        declaration.write_bytes(b'{"name":"capitals-app","steps":["answer"]}')
+        ok(
+            *call(
+                "POST",
+                "/api/v1/training-runs",
+                {"run_id": "capitals-train", "model": "capitals", "dataset": "capitals@abc"},
+            ),
+            "opening the training run",
+        )
+        registered = ok(
+            *call(
+                "POST",
+                "/api/v1/models",
+                {
+                    "name": "capitals",
+                    "run_id": "capitals-train",
+                    "checkpoint_uri": "s3://models/capitals",
+                    "package": {
+                        "runtime": "weights",
+                        "artifacts": [
+                            {
+                                "name": "weights",
+                                "uri": "s3://models/capitals.bin",
+                                "digest": hashlib.sha256(weights.read_bytes()).hexdigest(),
+                                "size_bytes": len(weights.read_bytes()),
+                                "content_type": "",
+                                "kind": "model",
+                            }
+                        ],
+                    },
+                },
+            ),
+            "registering the model",
+        )
+        modelled = json.loads(json.dumps(run))
+        modelled["variant"]["model"] = {
+            "name": "capitals",
+            "version": registered["version"]["version"],
+        }
+        modelled["variant"]["workflow"] = {
+            "name": "capitals-app",
+            "version": hashlib.sha256(declaration.read_bytes()).hexdigest(),
+        }
+        forgot, told, _ = job(
+            home,
+            modelled,
+            commit="c6",
+            style="terse-south",
+            evaluation_id="capitals-c6",
+            staged=(declaration,),
+        )
+        passed, decided, _ = job(
+            home,
+            modelled,
+            commit="c7",
+            style="terse-south",
+            evaluation_id="capitals-c7",
+            staged=(weights, declaration),
+        )
+        approvals = ok(*call("GET", "/api/v1/evaluation-approvals"), "listing the approvals")
+        # The model variant's own approval: named by the line, and carrying the
+        # digest of the package the server staged from its registry.
+        through = [
+            approval["record"]
+            for approval in approvals["approvals"]
+            if approval["record"]["variant_id"] == decided.get("variant_id")
+            and line["record"]["line_id"] in approval["record"]["approved_by"]
+        ]
+        check(
+            7,
+            "a variant naming a model and a workflow is admitted through the line too",
+            forgot == 3
+            and any(
+                "model-artifacts/weights" in reason
+                and "evaluation-variant-artifacts/weights" in reason
+                for reason in told.get("reasons", [])
+            )
+            and passed == 0
+            and decided.get("verdict") == "pass"
+            and len(through) == 1
+            and through[0].get("bundle_digest") is not None,
+            {"forgot": told.get("reasons"), "passed": decided.get("reasons"), "through": through},
         )
     finally:
         server.terminate()

@@ -313,3 +313,77 @@ async fn an_approval_recorded_over_a_whole_declaration_still_admits_until_its_by
     );
     assert!(refused.to_string().contains("stage the bytes it admitted"));
 }
+
+/// What a line stages for a variant naming a model and a workflow: the package
+/// as the training registry holds it, and the bytes nobody here holds by the
+/// digests their owners pinned.
+#[tokio::test]
+async fn a_model_and_a_workflow_imply_the_members_a_line_stages_and_where_their_bytes_come_from() {
+    use aiwatcher_evaluation::{ApprovalBundles, PinnedMember};
+    let training = Arc::new(aiwatcher_training::Registry::new(
+        Arc::new(MemoryObjectStore::new()),
+        "training",
+    ));
+    training
+        .start(
+            serde_json::from_value(serde_json::json!({
+                "run_id": "run", "model": "capitals", "dataset": "capitals@abc"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let weights = "ab".repeat(32);
+    let registered = training
+        .register_model(
+            serde_json::from_value(serde_json::json!({
+                "name": "capitals", "run_id": "run", "checkpoint_uri": "s3://models/capitals",
+                "package": {
+                    "runtime": "weights",
+                    "artifacts": [{
+                        "name": "weights", "uri": "s3://models/capitals.bin", "digest": weights,
+                        "size_bytes": 12, "content_type": "", "kind": "model"
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let source = LocalSource::new(None).with_training(training);
+    let mut variant = request("line", 1).manifest.variant;
+    variant.model = Some(VersionReference {
+        name: "capitals".into(),
+        version: registered.version.version.clone(),
+    });
+
+    let members = source.pinned_members(&variant).await.unwrap();
+
+    let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "model-package.json",
+            "model-artifacts/weights",
+            "workflow.json"
+        ]
+    );
+    let package: aiwatcher_training::ModelPackage =
+        serde_json::from_slice(members[0].bytes.as_ref().expect("derived from its owner")).unwrap();
+    assert_eq!(package.artifacts[0].digest, weights);
+    assert_eq!(
+        members[1],
+        PinnedMember {
+            name: "model-artifacts/weights".into(),
+            digest: weights,
+            size_bytes: Some(12),
+            bytes: None,
+        },
+        "weights are nobody's here to derive: a pipeline sends them by digest"
+    );
+    assert_eq!(
+        members[2].digest,
+        variant.workflow.as_ref().unwrap().version,
+        "a workflow's declaration, by the digest the variant pins"
+    );
+}

@@ -575,8 +575,10 @@ impl Registry {
     /// manifest, and each file its variant pins from the bytes kept under
     /// that digest. Then the pair is approved the way an operator approves
     /// one — resolved by the adapter from those bytes — naming the line and
-    /// who started it. A variant pinning a model or a workflow brings files a
-    /// pipeline cannot send, and is left to be admitted pair by pair.
+    /// who started it. A variant naming a model or a workflow implies members
+    /// beyond its pins, which the adapter names ([`crate::ApprovalBundles::pinned_members`]):
+    /// a model's package, derived from its owner, and the weights and workflow
+    /// declaration the pipeline sent by digest.
     ///
     /// `None` when no live line covers the pair.
     ///
@@ -602,11 +604,16 @@ impl Registry {
         else {
             return Ok(None);
         };
+        // What the model and workflow references imply, as their owners here
+        // declare it, before anything is staged: a variant naming either that
+        // this adapter derives nothing for is one a line cannot admit.
+        let implied = bundles.pinned_members(&manifest.variant).await?;
         require(
-            manifest.variant.model.is_none() && manifest.variant.workflow.is_none(),
+            (manifest.variant.model.is_none() && manifest.variant.workflow.is_none())
+                || !implied.is_empty(),
             "variant",
-            "names a model or a workflow, whose packages a line cannot stage; admit this pair \
-             by hand",
+            "names a model or a workflow, and this deployment derives no bundle members for \
+             either; admit this pair by hand",
         )?;
         let id = approval_id(prepared.variant_id(), prepared.context_id())?;
         bundles
@@ -641,6 +648,50 @@ impl Registry {
                     ),
                 })?;
             bundles.stage(&id, &artifact.name, bytes).await?;
+        }
+        for member in implied {
+            require(
+                member.digest.len() == 64
+                    && member
+                        .digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "variant",
+                &format!(
+                    "{} is pinned by {}, which is not a lowercase sha256 digest a line can \
+                     find bytes under",
+                    member.name, member.digest
+                ),
+            )?;
+            let bytes = match member.bytes {
+                Some(derived) => derived,
+                None => self
+                    .store
+                    .0
+                    .get(&store::variant_artifact(&member.digest))
+                    .await?
+                    .filter(|bytes| {
+                        store::hash(bytes) == member.digest
+                            && member
+                                .size_bytes
+                                .is_none_or(|size| size == bytes.len() as u64)
+                    })
+                    .ok_or_else(|| EvaluationError::Invalid {
+                        field: "variant".into(),
+                        reason: format!(
+                            "{} needs {} ({}), and no bytes were staged under that digest; \
+                             send them to PUT /api/v1/evaluation-variant-artifacts/{} first",
+                            member.name,
+                            member.digest,
+                            member.size_bytes.map_or_else(
+                                || "any size".to_owned(),
+                                |size| format!("{size} bytes")
+                            ),
+                            member.name.rsplit('/').next().unwrap_or(&member.name),
+                        ),
+                    })?,
+            };
+            bundles.stage(&id, &member.name, bytes).await?;
         }
         let approved_by = format!(
             "line {} ({}), started by {started_by}",

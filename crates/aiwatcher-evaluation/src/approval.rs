@@ -29,6 +29,30 @@ pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
     async fn staged(&self, approval_id: &str) -> Result<Vec<StagedFile>>;
     /// Remove every member. Answers how many there were.
     async fn discard(&self, approval_id: &str) -> Result<usize>;
+    /// The members a variant's references imply beyond the files it pins
+    /// itself — a model's package and artifacts, a workflow's declaration —
+    /// as this adapter's owners declare them. A line stages these to approve a
+    /// variant nobody staged a bundle for. Empty from an adapter that derives
+    /// none, which a line then refuses for a variant naming either.
+    async fn pinned_members(&self, variant: &crate::VariantManifest) -> Result<Vec<PinnedMember>> {
+        let _ = variant;
+        Ok(Vec::new())
+    }
+}
+
+/// One member a variant's references imply, by its bundle name.
+///
+/// `bytes` is what an owner derived — a model's package, read from the training
+/// registry — and absent for bytes nobody here holds: a model's weights or a
+/// workflow's declaration, which a pipeline sends by digest to
+/// `PUT /api/v1/evaluation-variant-artifacts/{name}` and the line copies from
+/// there, held to `digest`. No URI is fetched either way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedMember {
+    pub name: String,
+    pub digest: String,
+    pub size_bytes: Option<u64>,
+    pub bytes: Option<Vec<u8>>,
 }
 
 /// One member of a staged bundle. Never its content, and never a digest: the

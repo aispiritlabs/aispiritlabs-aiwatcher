@@ -16,8 +16,15 @@ could not say:
 - ``2`` incomplete — a scorer failed or a case went unanswered, which never passes;
 - ``3`` error — nothing admits the pair, the run failed, or the two do not compare.
 
+A variant naming a registered model or a workflow is admitted through a line
+too: the server stages the model's package from its own registry, and the job
+sends the bytes nobody there holds — the model's weights, the workflow's
+declaration — with ``--stage``, addressed by their digest.
+
 It records what a reader needs later beside the verdict: the commit, the card
-version the context pins, and the link to the evidence. With
+version the context pins, the variant's ID — what the deployed application
+names on its runs, so what it is observed doing stands beside what it scored —
+and the link to the evidence. With
 ``GITHUB_STEP_SUMMARY`` set it writes the same as Markdown there. It comments on
 no pull request. A regression suite a team can see is not a held-out measure of
 improvement, and passing it is not one.
@@ -54,6 +61,7 @@ class Outcome:
     evidence: str
     commit: str | None
     decision: dict[str, Any] | None
+    variant_id: str | None = None
 
     @property
     def exit_code(self) -> int:
@@ -75,6 +83,7 @@ def run_gate(
     policy: Mapping[str, Any],
     artifacts: Mapping[str, Path],
     recording: Path | None,
+    staged: Sequence[Path] = (),
     commit: str | None,
     repository: str | None,
     code_commit: bool,
@@ -99,6 +108,8 @@ def run_gate(
         )
     for field, path in artifacts.items():
         variant[field] = registry.stage_variant_artifact(path.name, path.read_bytes())
+    for path in staged:
+        registry.stage_variant_artifact(path.name, path.read_bytes())
     if recording is not None:
         answers = json.loads(recording.read_bytes())
         run["answers"] = registry.stage_recording(recording.name, answers["answers"])
@@ -114,6 +125,7 @@ def run_gate(
                 "POST /api/v1/evaluation-approval-lines"
             )
         raise
+    variant_id = str(view.get("variant_id")) if view.get("variant_id") else None
     execution_id = started["execution"]["execution_id"]
     deadline = clock() + timeout
     while True:
@@ -124,9 +136,17 @@ def run_gate(
             return failed(f"run {execution_id} did not finish within {timeout:.0f}s")
         sleep(1.0)
     if state["state_type"] != "completed":
-        return failed(
-            f"run {execution_id} ended {state['state_type']}"
-            + (f": {state['message']}" if state.get("message") else "")
+        return Outcome(
+            "error",
+            [
+                f"run {execution_id} ended {state['state_type']}"
+                + (f": {state['message']}" if state.get("message") else "")
+            ],
+            evaluation_id,
+            evidence,
+            commit,
+            None,
+            variant_id,
         )
     decision = registry.gate(evaluation_id, baseline=baseline, policy=policy)
     return Outcome(
@@ -136,6 +156,7 @@ def run_gate(
         evidence,
         commit,
         decision,
+        variant_id,
     )
 
 
@@ -149,6 +170,8 @@ def summary(outcome: Outcome) -> str:
         f"- evidence: [{outcome.evaluation_id}]({outcome.evidence})",
         f"- commit: `{outcome.commit}`" if outcome.commit else "- commit: not given",
     ]
+    if outcome.variant_id:
+        lines.append(f"- variant: `{outcome.variant_id}`")
     if suite:
         lines.append(f"- card: `{suite.get('name')}` @ `{str(suite.get('version'))[:12]}`")
     if decision.get("baseline"):
@@ -183,6 +206,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"stage a file the variant pins as one of {', '.join(PINNED)}; repeatable",
     )
     parser.add_argument("--recording", type=Path, help="recorded answers to stage and score")
+    parser.add_argument(
+        "--stage",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="PATH",
+        help="send bytes a line needs by digest — a model's weights, a workflow's declaration; "
+        "repeatable",
+    )
     parser.add_argument("--evaluation-id", help="the result's ID, e.g. answers-$GITHUB_SHA")
     parser.add_argument("--commit", default=os.environ.get("GITHUB_SHA"))
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
@@ -215,6 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 policy=policy,
                 artifacts=artifacts,
                 recording=args.recording,
+                staged=args.stage,
                 commit=args.commit,
                 repository=args.repository,
                 code_commit=args.code_commit,
@@ -240,6 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "evaluation_id": outcome.evaluation_id,
                     "evidence": outcome.evidence,
                     "commit": outcome.commit,
+                    "variant_id": outcome.variant_id,
                     "decision": outcome.decision,
                 },
                 indent=2,

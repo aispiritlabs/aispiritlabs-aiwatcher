@@ -26,17 +26,26 @@ comments on nothing.
    of the experiment. Every variant of that `experiment_id` measured in that
    context — same cases, split, card, scorer — is then admitted when its run
    starts, from the bytes its job staged, and the approval names the line. A
-   variant naming a model or a workflow is still admitted by hand, and a line
-   over the conversation archive is refused.
+   variant naming a model this deployment registered, or a workflow, is admitted
+   the same way: the server stages the model's package from its own registry and
+   the job sends what nobody there holds. A line over the conversation archive is
+   refused.
 
 ## Every job, with an editor's token
 
 `run.json` is a scoring run declaration with the pins the job fills in:
 `--code-commit` pins `variant.code` to the commit, `--artifact
 generation_config=path` stages a file the variant pins, and `--recording`
-stages the answers `app.py` wrote. `policy.json` names what may not get worse:
-`tolerance` per metric in its unit (a metric not named may not get worse at
-all), `ignore`, and `critical_cases`.
+stages the answers `app.py` wrote. `--stage path` sends bytes a line needs by
+their digest without pinning anything: a model's weights, a workflow's
+declaration. `policy.json` names what may not get worse: `tolerance` per metric
+in its unit (a metric not named may not get worse at all), `ignore`,
+`critical_cases`, and `require_traces` — every generated answer seen on the
+variant's prompt and model, or `incomplete`.
+
+The summary names the variant's ID. A deployment of that variant passes it to
+its telemetry client (`AiwatcherClient(variant_id=…)`), and Experiments sets what
+it is observed doing beside what it scored.
 
 `github-actions.yml` is the job. `just e2e-gate` runs the whole of this against a
 server of its own and checks every exit code.

@@ -25,7 +25,7 @@ mod traced;
 pub use aiwatcher_core::Comparability;
 pub use approval::{
     Approval, ApprovalBundles, ApprovalLine, ApprovalLinePage, ApprovalLineRecord, ApprovalPage,
-    ApprovalRecord, StagedFile, Withdrawal, approval_id, bundle_digest, line_id,
+    ApprovalRecord, PinnedMember, StagedFile, Withdrawal, approval_id, bundle_digest, line_id,
 };
 pub use assessment::{
     Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentSource,

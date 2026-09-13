@@ -55,7 +55,9 @@ def server(*, admitted: bool = True) -> tuple[list[tuple[str, str, Any]], httpx.
                 200, json={"name": "answers.json", "uri": "y", "digest": "a" * 64}
             )
         if path == "/api/v1/evaluation-runs":
-            return httpx.Response(200, json={"declaration": {"id": "d" * 64}})
+            return httpx.Response(
+                200, json={"declaration": {"id": "d" * 64}, "variant_id": "e" * 64}
+            )
         if path.endswith("/start"):
             if not admitted:
                 return httpx.Response(
@@ -91,6 +93,8 @@ def gate(tmp_path: Path, *, admitted: bool = True) -> tuple[Outcome, list[tuple[
     )
     config = tmp_path / "generation.json"
     config.write_text('{"temperature": 0}')
+    weights = tmp_path / "weights"
+    weights.write_bytes(b"\x00\x01")
     with EvaluationRegistry(
         "http://aiwatcher.invalid", client=httpx.Client(transport=transport)
     ) as registry:
@@ -101,6 +105,7 @@ def gate(tmp_path: Path, *, admitted: bool = True) -> tuple[Outcome, list[tuple[
             policy={"critical_cases": ["capital-kenya"]},
             artifacts={"generation_config": config},
             recording=recording,
+            staged=[weights],
             commit="abc123",
             repository="example/app",
             code_commit=True,
@@ -123,8 +128,9 @@ def test_a_critical_case_lost_exits_as_a_regression_with_the_commit_card_and_evi
     assert staged == [
         ("PUT", "/api/v1/evaluation-variant-artifacts/commit.json"),
         ("PUT", "/api/v1/evaluation-variant-artifacts/generation.json"),
+        ("PUT", "/api/v1/evaluation-variant-artifacts/weights"),
         ("PUT", "/api/v1/evaluation-recordings/answers.json"),
-    ]
+    ], "a model's weights are sent by digest, pinning nothing in the declaration"
     commit = next(body for _, path, body in seen if path.endswith("/commit.json"))
     assert commit == commit_note("example/app", "abc123")
     declared = next(body for _, path, body in seen if path == "/api/v1/evaluation-runs")
@@ -135,6 +141,7 @@ def test_a_critical_case_lost_exits_as_a_regression_with_the_commit_card_and_evi
     text = summary(outcome)
     assert text.startswith("## aiwatcher gate: regression")
     assert "- commit: `abc123`" in text
+    assert f"- variant: `{'e' * 64}`" in text, "what the deployed application names on its runs"
     assert "- card: `capitals-exact` @ `ssssssssssss`" in text
     assert "| exact | 0.75 | 0.5 | 0.25 | yes |" in text
     assert "critical case capital-kenya" in text
