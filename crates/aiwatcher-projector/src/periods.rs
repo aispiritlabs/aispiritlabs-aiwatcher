@@ -22,6 +22,10 @@
 //! the log no longer held when the fold came to them, and the span of time the
 //! events there may have lain in — so a window over that span says what it
 //! may be short of rather than reading as complete.
+//!
+//! Under `journal/` are the pages a journal of the log wrote
+//! ([`crate::journal`]): the events the fold reads, kept past the log's own
+//! retention, which a gap is refilled from before it is written down.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -97,6 +101,49 @@ impl LogGap {
             from,
             until,
         })
+    }
+}
+
+/// Positions a journal page is filed under together: pages are listed a
+/// bucket at a time, so a gap is looked up without listing the whole journal.
+const JOURNAL_BUCKET: u64 = 1_000_000;
+
+/// Positions of the log a journal read, one after the last, and the events
+/// among them the fold reads — each holding only what the fold reads of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JournalPage {
+    /// The first and the last position read; every one between was read too.
+    pub first: u64,
+    pub last: u64,
+    /// The log's clock at the first position, and the latest it reached by
+    /// the last, in Unix seconds.
+    pub from: i64,
+    pub clock: i64,
+    pub events: Vec<aiwatcher_core::RecordedEvent>,
+}
+
+impl JournalPage {
+    fn key(&self) -> String {
+        format!(
+            "{PREFIX}journal/{:014}/{:020}-{:020}-{:012}.json",
+            self.first / JOURNAL_BUCKET,
+            self.first,
+            self.last,
+            self.clock
+        )
+    }
+
+    /// `(first, last, clock)`, named by the key alone.
+    fn named(key: &str) -> Option<(u64, u64, i64)> {
+        let (_, name) = key
+            .strip_prefix(&format!("{PREFIX}journal/"))?
+            .split_once('/')?;
+        let mut parts = name.strip_suffix(".json")?.splitn(3, '-');
+        Some((
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        ))
     }
 }
 
@@ -349,6 +396,63 @@ impl PeriodStore {
         Ok(gaps)
     }
 
+    /// Keep a journal page. A page already kept under its key is the same
+    /// positions read the same way, and stays.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure.
+    pub async fn write_page(&self, page: &JournalPage) -> Result<(), PortError> {
+        self.0.create(&page.key(), encoded(page)?).await.map(|_| ())
+    }
+
+    /// The journal pages reaching any position from `first` to `last`, in
+    /// order of their first — two journals may have paged one stretch twice,
+    /// and a reader skips what it already holds.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure, or a page that no longer reads.
+    pub async fn pages(&self, first: u64, last: u64) -> Result<Vec<JournalPage>, PortError> {
+        let mut named = Vec::new();
+        // A page filed a bucket earlier may run on into this one.
+        for bucket in (first / JOURNAL_BUCKET).saturating_sub(1)..=last / JOURNAL_BUCKET {
+            for key in self.keys(&format!("{PREFIX}journal/{bucket:014}/")).await? {
+                if let Some((from, to, _)) = JournalPage::named(&key)
+                    && from <= last
+                    && to >= first
+                {
+                    named.push((from, key));
+                }
+            }
+        }
+        named.sort();
+        let mut pages = Vec::with_capacity(named.len());
+        for (_, key) in named {
+            if let Some(bytes) = self.0.get(&key).await? {
+                pages.push(decoded(&key, &bytes)?);
+            }
+        }
+        Ok(pages)
+    }
+
+    /// Remove the pages whose clock reached no later than `before`, and say
+    /// how many went.
+    ///
+    /// # Errors
+    ///
+    /// The store's own failure.
+    pub async fn prune_journal(&self, before: i64) -> Result<usize, PortError> {
+        let mut removed = 0;
+        for key in self.keys(&format!("{PREFIX}journal/")).await? {
+            if JournalPage::named(&key).is_some_and(|(_, _, clock)| clock < before) {
+                self.0.delete(&key).await?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     async fn keys(&self, prefix: &str) -> Result<Vec<String>, PortError> {
         Ok(self
             .0
@@ -579,6 +683,46 @@ pub(crate) mod tests {
         );
         assert!(store.gaps(gap.until + 1).await.unwrap().is_empty());
         assert_eq!(gap.events(), 100);
+    }
+
+    #[tokio::test]
+    async fn journal_pages_are_found_by_the_positions_they_reach_and_pruned_by_their_clock() {
+        let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
+        let page = |first: u64, last: u64, clock: i64| JournalPage {
+            first,
+            last,
+            from: clock - 10,
+            clock,
+            events: Vec::new(),
+        };
+        for kept in [
+            page(999_990, 1_000_020, 100),
+            page(1_000_021, 1_000_500, 200),
+            page(1_000_501, 1_000_900, 300),
+            page(5, 9, 50),
+        ] {
+            store.write_page(&kept).await.unwrap();
+        }
+        store.write_page(&page(5, 9, 50)).await.unwrap();
+
+        let found: Vec<(u64, u64)> = store
+            .pages(1_000_010, 1_000_600)
+            .await
+            .unwrap()
+            .iter()
+            .map(|page| (page.first, page.last))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (999_990, 1_000_020),
+                (1_000_021, 1_000_500),
+                (1_000_501, 1_000_900)
+            ],
+            "a page filed in the bucket before runs on into the gap"
+        );
+        assert_eq!(store.prune_journal(200).await.unwrap(), 2);
+        assert_eq!(store.pages(0, 2_000_000).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

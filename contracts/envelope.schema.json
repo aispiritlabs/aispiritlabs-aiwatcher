@@ -74,7 +74,7 @@
     "sequence": {
       "type": "integer",
       "minimum": 0,
-      "description": "Producer-side counter within the run. Gaps here are the only way to notice a producer that dropped a batch."
+      "description": "Producer-side counter within the run, one per client (source.client), from 0. A gap here is an event that never reached the log's reader — a batch the producer dropped, or one retention removed — and it is visible on a log that numbers nothing itself."
     },
     "trace_id": {
       "type": "string",
@@ -121,6 +121,10 @@
             "typescript",
             "rust"
           ]
+        },
+        "client": {
+          "type": "string",
+          "description": "The one client that sent the event, which its sequence counts under: a process may hold two clients publishing into one run, a tracer beside the application, and each numbers its own events."
         }
       }
     },

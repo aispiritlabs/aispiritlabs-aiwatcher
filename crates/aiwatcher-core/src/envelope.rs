@@ -91,6 +91,12 @@ pub struct Source {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
     pub sdk: Sdk,
+    /// The one client that sent it, which its `sequence` counts under. A
+    /// process may hold two clients publishing into one run — a tracer beside
+    /// the application — and each numbers its own events, so a count is read
+    /// per client and never across them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
 }
 
 impl Source {
@@ -99,6 +105,7 @@ impl Source {
             service: service.into(),
             instance: None,
             sdk,
+            client: None,
         }
     }
 }
@@ -182,8 +189,10 @@ pub struct EventEnvelope {
     #[schema(ignore)]
     pub published_by: Option<String>,
 
-    /// Producer-side counter within the run. Gaps here mean lost events; it is
-    /// the only way to notice a producer that dropped a batch.
+    /// Producer-side counter within the run, one per client (`source.client`),
+    /// from nought. Gaps here mean lost events — a batch the producer dropped,
+    /// or one a log never kept — and they are visible whether or not the log
+    /// numbers its own records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
 

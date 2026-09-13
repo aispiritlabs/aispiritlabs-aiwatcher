@@ -36,13 +36,27 @@ use aiwatcher_core::prices::{ModelPrices, ModelUsage};
 use aiwatcher_core::{Phase, RecordedEvent, Subject};
 
 use crate::observations::{Counted, CountedPart, ObservedPeriod, VariantObservations};
-use crate::periods::{FoldAt, LogGap, PeriodStore};
+use crate::periods::{FoldAt, JournalPage, LogGap, PeriodStore};
+
+/// What the fold reads of an event's payload, and nothing else of it.
+const READS: &[&str] = &[
+    "evaluation_id",
+    "model",
+    "duration_ms",
+    "prompt_tokens",
+    "input_tokens",
+    "completion_tokens",
+    "output_tokens",
+    "cached_tokens",
+];
 
 /// Runs in flight past this are not tracked; each is counted at its end with
 /// no duration, in a period that says it is incomplete.
 const MOST_IN_FLIGHT: usize = 50_000;
 /// Call durations a run keeps; its call count goes on past it.
 const MOST_CALLS_TIMED: usize = 1_000;
+/// Clients a run keeps a count for; one past it is not counted.
+const MOST_CLIENTS_NUMBERED: usize = 64;
 /// How often the state is saved when nothing forces it.
 const SAVE_EVERY: Duration = Duration::from_secs(15);
 /// Periods read from the store at once when a window is answered.
@@ -80,6 +94,12 @@ struct InFlight {
     call_ms: Vec<i64>,
     ttft_ms: Vec<i64>,
     calls: BTreeMap<String, OpenCall>,
+    /// The highest `sequence` read from each client publishing into the run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    numbered: BTreeMap<String, u64>,
+    /// Numbers those clients passed over: events the fold never read.
+    #[serde(default)]
+    lost: u64,
 }
 
 /// One closed period's records, waiting to be written.
@@ -253,6 +273,82 @@ impl PeriodFold {
         self.contiguous = contiguous;
     }
 
+    /// Whether the fold reads anything of this event: the runs, executions and
+    /// model calls of a run naming a variant. A stream's chunks, an
+    /// evaluation's report and every event of a run naming none change nothing
+    /// it counts.
+    #[must_use]
+    pub fn reads(event: &RecordedEvent) -> bool {
+        if event.metadata.variant_id.is_none() {
+            return false;
+        }
+        let phase = event.event_type.phase();
+        match event.event_type.subject() {
+            Subject::Run => true,
+            Subject::Execution => matches!(phase, Some(Phase::End { .. })),
+            Subject::Llm => {
+                matches!(phase, Some(Phase::Start | Phase::End { .. }))
+                    || event.event_type.as_str() == "llm.first_token"
+            }
+            _ => false,
+        }
+    }
+
+    /// The event with only what the fold reads of its payload: what a journal
+    /// keeps of it, so nothing said in a run is copied past the log.
+    #[must_use]
+    pub fn kept(event: &RecordedEvent) -> RecordedEvent {
+        let mut kept = event.clone();
+        if let serde_json::Value::Object(fields) = &mut kept.data {
+            fields.retain(|key, _| READS.contains(&key.as_str()));
+        }
+        kept
+    }
+
+    /// The positions a log numbering every event passed over before this one:
+    /// what the fold was never given, unless a journal kept it.
+    #[must_use]
+    pub fn gap_before(&self, event: &RecordedEvent) -> Option<(u64, u64)> {
+        let position = event.metadata.global_position;
+        self.through
+            .filter(|through| self.contiguous && position > through + 1)
+            .map(|through| (through + 1, position - 1))
+    }
+
+    /// Fold in what a journal page kept of positions the fold was never given,
+    /// up to `until`, as it would have folded them from the log: the page's
+    /// events in order, and its clock once it is all read. Positions between
+    /// where the fold stands and the page's first are still missing, and are
+    /// written down as a gap first. `false` when the page reaches nothing past
+    /// where the fold stands.
+    pub fn refill(&mut self, page: &JournalPage, until: u64) -> bool {
+        let Some(through) = self.through else {
+            return false;
+        };
+        let last = page.last.min(until);
+        if page.last <= through || page.first > last {
+            return false;
+        }
+        if page.first > through + 1 {
+            self.missed_before(through, page.first, page.from);
+            self.through = Some(page.first - 1);
+        }
+        for event in &page.events {
+            let position = event.metadata.global_position;
+            if position <= self.through.unwrap_or(0) || position > last {
+                continue;
+            }
+            self.through = Some(position - 1);
+            self.apply(event);
+        }
+        self.through = Some(last.max(self.through.unwrap_or(0)));
+        if last == page.last {
+            self.clock = Some(self.clock.map_or(page.clock, |clock| clock.max(page.clock)));
+            self.close();
+        }
+        true
+    }
+
     /// Fold one event in, once: an event at or before `through` is skipped.
     pub fn apply(&mut self, event: &RecordedEvent) {
         let position = event.metadata.global_position;
@@ -356,6 +452,11 @@ impl PeriodFold {
             );
         }
         if let Some(run) = self.runs.get_mut(run_id) {
+            Self::numbered(
+                run,
+                event,
+                subject == Subject::Run && phase == Some(Phase::Start),
+            );
             run.started_ms = run.started_ms.min(at);
             run.last_ms = run.last_ms.max(at);
             if subject == Subject::Run && phase == Some(Phase::Start) {
@@ -378,6 +479,35 @@ impl PeriodFold {
                     }
                 }
             }
+        }
+    }
+
+    /// Read an event's place in its client's count: numbers passed over since
+    /// that client's last are events the fold never read. A client's first
+    /// event counts the numbers before it only where the fold saw the run
+    /// begin — or it is the run's start — since a fold that began mid-run never
+    /// could have read them. A number at or below one already read — a
+    /// redelivery, or a client that forgot its count — passes nothing over.
+    fn numbered(run: &mut InFlight, event: &RecordedEvent, starts: bool) {
+        let (Some(sequence), Some(client)) = (
+            event.metadata.sequence,
+            event.metadata.source.client.as_deref(),
+        ) else {
+            return;
+        };
+        let clients = run.numbered.len();
+        match run.numbered.get_mut(client) {
+            Some(highest) => {
+                run.lost += sequence.saturating_sub(*highest + 1);
+                *highest = (*highest).max(sequence);
+            }
+            None if clients < MOST_CLIENTS_NUMBERED => {
+                if run.saw_start || starts {
+                    run.lost += sequence;
+                }
+                run.numbered.insert(client.to_owned(), sequence);
+            }
+            None => {}
         }
     }
 
@@ -523,6 +653,10 @@ impl PeriodFold {
             counted.models_by_day.clone_from(&run.models_by_day);
             counted.first_seen_at = Some(run.started_ms.div_euclid(1_000));
             counted.last_seen_at = Some(end_seconds);
+            counted.lost_events = run.lost;
+            if run.lost > 0 {
+                counted.complete = false;
+            }
         }
         self.place(&run.variant_id, end_seconds, &counted);
     }
@@ -790,6 +924,8 @@ pub struct PeriodOutput {
     processor_id: String,
     fold: Mutex<PeriodFold>,
     saved_at: Mutex<Option<Instant>>,
+    /// Whether a journal of the log is kept, so a gap is looked for there first.
+    journaled: bool,
 }
 
 impl PeriodOutput {
@@ -800,7 +936,16 @@ impl PeriodOutput {
             processor_id: processor_id.into(),
             fold: Mutex::new(PeriodFold::new(width)),
             saved_at: Mutex::new(None),
+            journaled: false,
         }
+    }
+
+    /// The same output, refilling a gap from the journal's pages
+    /// ([`crate::journal`]) before writing down what they do not cover.
+    #[must_use]
+    pub const fn reading_journal(mut self, journaled: bool) -> Self {
+        self.journaled = journaled;
+        self
     }
 
     /// Load the saved state furthest along that reads, and answer the position
@@ -894,6 +1039,30 @@ impl PeriodOutput {
     }
 
     pub async fn apply(&self, event: &RecordedEvent) {
+        let gap = if self.journaled {
+            self.fold.lock().await.gap_before(event)
+        } else {
+            None
+        };
+        if let Some((first, last)) = gap {
+            match self.store.pages(first, last).await {
+                Ok(pages) => {
+                    let mut fold = self.fold.lock().await;
+                    let refilled = pages.iter().filter(|page| fold.refill(page, last)).count();
+                    if refilled > 0 {
+                        tracing::info!(
+                            first,
+                            last,
+                            pages = refilled,
+                            "the log no longer held events the observation fold came to; folded them from the journal"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, first, last, "the journal could not be read for events the log no longer held; writing them down as a gap");
+                }
+            }
+        }
         self.fold.lock().await.apply(event);
     }
 
@@ -1285,6 +1454,56 @@ mod tests {
     }
 
     #[test]
+    fn numbers_a_client_passed_over_are_events_the_fold_never_read_on_any_log() {
+        let mut log = Log::new();
+        log.served("whole", 60, 62)
+            .served("short", 120, 125)
+            .served("traced", 130, 135)
+            .served("r3", 3_600 + 400, 3_600 + 401);
+        let number = |event: &mut RecordedEvent, client: &str, sequence: u64| {
+            event.metadata.source.client = Some(client.to_owned());
+            event.metadata.sequence = Some(sequence);
+        };
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for event in &mut log.events {
+            let run = event.metadata.run_id.clone();
+            let next = counts.entry(run.clone()).or_default();
+            number(event, &format!("app-{run}"), *next);
+            *next += 1;
+        }
+        // Of "short", the call's start never arrived: its client numbered it 1
+        // and the next event the fold read is 2.
+        log.events.remove(5);
+        // A tracer beside the application in "traced": its own count, with its
+        // first event read, so nothing of it is missing.
+        let mut tracer = log.events[8].clone();
+        number(&mut tracer, "tracer", 0);
+        tracer.metadata.global_position = 0;
+        log.events.insert(9, tracer);
+        // A redelivery of a number already read passes nothing over.
+        log.events.insert(10, log.events[9].clone());
+        for (at, event) in log.events.iter_mut().enumerate() {
+            event.metadata.global_position = at as u64 + 1;
+        }
+
+        let (_, closed) = folded(3_600, &log.events);
+
+        let record = &closed[0].records[0];
+        assert_eq!(record.runs, 3);
+        assert_eq!(
+            record.lost_events, 1,
+            "the one call start that never arrived"
+        );
+        assert!(!record.complete, "a run missing an event is not all there");
+        let offsets: Vec<(u32, u64)> = record
+            .slices
+            .iter()
+            .map(|(offset, slice)| (*offset, slice.lost_events))
+            .collect();
+        assert_eq!(offsets, [(62, 0), (125, 1), (135, 0)]);
+    }
+
+    #[test]
     fn a_producer_clock_in_the_future_closes_nothing_the_server_has_not_reached() {
         let mut log = Log::new();
         log.served("r1", 60, 62);
@@ -1491,6 +1710,64 @@ mod tests {
         assert!(
             row.missed.is_empty() && row.incomplete_periods == 0,
             "a log that does not number every event says nothing by a jump"
+        );
+    }
+
+    #[tokio::test]
+    async fn events_the_log_no_longer_holds_are_folded_from_the_journal_and_only_the_rest_is_a_gap()
+    {
+        let start = HOUR_START.unix_timestamp();
+        let mut log = Log::new();
+        log.served("r1", 60, 62)
+            .served("evicted", 400, 410)
+            .served("beyond", 500, 510)
+            .served("r4", 700, 710);
+        let page = |first: u64, last: u64| {
+            let within: Vec<&RecordedEvent> = log
+                .events
+                .iter()
+                .filter(|event| (first..=last).contains(&event.metadata.global_position))
+                .collect();
+            let bound = |event: &RecordedEvent| event.metadata.occurred_at.unix_timestamp();
+            JournalPage {
+                first,
+                last,
+                from: within.first().map_or(0, |event| bound(event)),
+                clock: within.iter().map(|event| bound(event)).max().unwrap_or(0),
+                events: within.into_iter().map(PeriodFold::kept).collect(),
+            }
+        };
+        let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
+        // The journal read the second run's events, and not the third's.
+        store.write_page(&page(5, 8)).await.expect("kept");
+        let kept: Vec<RecordedEvent> = log
+            .events
+            .iter()
+            .filter(|event| !(5..=12).contains(&event.metadata.global_position))
+            .cloned()
+            .collect();
+        let output = PeriodOutput::new(store.clone(), "projector", 300).reading_journal(true);
+        output.reads_contiguous_positions(true).await;
+        for event in &kept {
+            output.apply(event).await;
+            assert!(output.flush(false).await, "the memory store writes");
+        }
+
+        let [row] = output
+            .observe(&["v1"], start, None)
+            .await
+            .expect("reads")
+            .try_into()
+            .expect("one row");
+        assert_eq!(row.runs, 3, "the evicted run, from its journal page");
+        assert_eq!(row.duration_ms.map(|took| took.count), Some(3));
+        assert_eq!(
+            row.missed
+                .iter()
+                .map(|gap| (gap.events, gap.until.unix_timestamp() - start))
+                .collect::<Vec<_>>(),
+            [(4, 700)],
+            "only the positions no page covers"
         );
     }
 

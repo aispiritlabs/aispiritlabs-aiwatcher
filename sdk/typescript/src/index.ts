@@ -24,6 +24,12 @@ export interface Source {
   service: string;
   instance?: string;
   sdk: Sdk;
+  /**
+   * The one client that sent the event, which its `sequence` counts under: a
+   * process may hold two clients publishing into one run, and each numbers its
+   * own events.
+   */
+  client?: string;
 }
 
 /** The wire form. Everything optional is filled in by the backend. */
@@ -40,6 +46,7 @@ export interface EventEnvelope {
   agent_id?: string;
   /** The declared variant answering in this run: Evaluation's `variant_id`. */
   variant_id?: string;
+  /** This client's count of the events it sent into the run, from 0. */
   sequence?: number;
   trace_id?: string;
   span_id?: string;
@@ -186,6 +193,13 @@ interface Context {
 const newId = () => globalThis.crypto.randomUUID();
 const now = () => new Date().toISOString();
 
+/**
+ * How many runs a client keeps a count of events for at once; the one heard
+ * from longest ago is forgotten past it, and counts again from nought.
+ */
+export const MOST_RUNS_NUMBERED = 100_000;
+const RUN_ENDS = new Set(['run.completed', 'run.failed']);
+
 export interface ClientOptions {
   service: string;
   instance?: string;
@@ -206,6 +220,7 @@ export class AiwatcherClient {
   readonly #transport: Transport;
   readonly #source: Source;
   readonly #variantId: string | undefined;
+  readonly #sequences = new Map<string, number>();
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -221,7 +236,28 @@ export class AiwatcherClient {
       service: options.service,
       sdk: 'typescript',
       ...(options.instance ? { instance: options.instance } : {}),
+      // Each client numbers the events it sends into a run under a name of
+      // its own, so two clients in one run are two counts, not one that jumps.
+      client: newId(),
     };
+  }
+
+  /**
+   * This client's count of the events it has sent into one run, from nought:
+   * what lets the other end see an event that never reached it, whether or not
+   * the log numbers its own records. A run's end forgets its count.
+   */
+  #nextSequence(runId: string, eventType: string): number {
+    const sequence = this.#sequences.get(runId) ?? 0;
+    this.#sequences.delete(runId);
+    if (!RUN_ENDS.has(eventType)) {
+      if (this.#sequences.size >= MOST_RUNS_NUMBERED) {
+        const oldest = this.#sequences.keys().next();
+        if (!oldest.done) this.#sequences.delete(oldest.value);
+      }
+      this.#sequences.set(runId, sequence + 1);
+    }
+    return sequence;
   }
 
   /**
@@ -247,6 +283,7 @@ export class AiwatcherClient {
         event_type: eventType,
         occurred_at: occurredAt ?? now(),
         run_id: context.runId,
+        sequence: this.#nextSequence(context.runId, eventType),
         correlation_id: context.correlationId,
         source: this.#source,
         data,
@@ -485,11 +522,15 @@ export class EvaluationScope {
   #params: Record<string, string> = {};
   #report: Record<string, unknown> | undefined;
 
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-    private readonly base: Record<string, unknown>,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+  private readonly base: Record<string, unknown>;
+
+  constructor(client: AiwatcherClient, context: Context, base: Record<string, unknown>) {
+    this.client = client;
+    this.context = context;
+    this.base = base;
+  }
 
   /**
    * One scored case. `reason` is what makes a score reviewable — a number with
@@ -630,10 +671,13 @@ async function topologyVersion(nodes: WorkflowNode[], edges: WorkflowEdge[]): Pr
 
 /** One traversal of a declared graph. */
 export class WorkflowScope {
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+
+  constructor(client: AiwatcherClient, context: Context) {
+    this.client = client;
+    this.context = context;
+  }
 
   /**
    * One stage. Becomes a span, and a node's status on the graph.
@@ -698,11 +742,15 @@ export class WorkflowScope {
 
 /** One stage of a traversal, while it runs. */
 export class NodeScope {
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-    private readonly nodeId: string,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+  private readonly nodeId: string;
+
+  constructor(client: AiwatcherClient, context: Context, nodeId: string) {
+    this.client = client;
+    this.context = context;
+    this.nodeId = nodeId;
+  }
 
   /** An agent doing this stage's work. Nests under the stage's span. */
   async agent<T>(agentId: string, body: (agent: AgentScope) => Promise<T>): Promise<T> {
@@ -738,10 +786,13 @@ function emitArtifact(
 }
 
 export class RunScope {
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+
+  constructor(client: AiwatcherClient, context: Context) {
+    this.client = client;
+    this.context = context;
+  }
 
   async agent<T>(agentId: string, body: (agent: AgentScope) => Promise<T>): Promise<T> {
     const context: Context = {
@@ -783,10 +834,13 @@ export interface Usage {
 }
 
 export class AgentScope {
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+
+  constructor(client: AiwatcherClient, context: Context) {
+    this.client = client;
+    this.context = context;
+  }
 
   /**
    * Record this agent addressing another one.
@@ -867,11 +921,15 @@ export class AgentScope {
 export class LlmCall {
   usageData: Usage = {};
 
-  constructor(
-    private readonly client: AiwatcherClient,
-    private readonly context: Context,
-    private readonly base: Record<string, unknown>,
-  ) {}
+  private readonly client: AiwatcherClient;
+  private readonly context: Context;
+  private readonly base: Record<string, unknown>;
+
+  constructor(client: AiwatcherClient, context: Context, base: Record<string, unknown>) {
+    this.client = client;
+    this.context = context;
+    this.base = base;
+  }
 
   /** Call once, when the first token arrives. Drives time-to-first-token. */
   firstToken(): void {

@@ -52,9 +52,18 @@ pub async fn run(config: Config) -> Result<()> {
         sink,
         metrics,
         projector,
+        journal,
     } = runtime;
 
     let shutdown = CancellationToken::new();
+
+    // The journal of what the period fold reads runs where work is drained:
+    // beside the projector in one process, and on its own in the `work` role,
+    // where it keeps reading while the projector is down.
+    let journal_task = journal.filter(|_| config.role.works()).map(|journal| {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move { journal.run(shutdown).await })
+    });
 
     // Both roles' background work, started before anything is served: a
     // command accepted by an instance whose reactors are not running yet is a
@@ -79,6 +88,7 @@ pub async fn run(config: Config) -> Result<()> {
         tracing::info!("shutdown signal received");
         shutdown.cancel();
         execution.drain(GRACE).await;
+        stop_journal(journal_task).await;
         return Ok(());
     }
 
@@ -148,6 +158,7 @@ pub async fn run(config: Config) -> Result<()> {
             Err(_) => tracing::warn!("the annotation import worker did not stop within 10s"),
         }
     }
+    stop_journal(journal_task).await;
     match tokio::time::timeout(Duration::from_secs(30), projector_task).await {
         Ok(Ok(Ok(()))) => tracing::info!("projector drained cleanly"),
         Ok(Ok(Err(error))) => tracing::error!(%error, "projector stopped with an error"),
@@ -223,5 +234,21 @@ async fn wait_for_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Let the journal keep the page it was reading, within the grace.
+async fn stop_journal(task: Option<tokio::task::JoinHandle<Result<()>>>) {
+    let Some(task) = task else {
+        return;
+    };
+    match tokio::time::timeout(GRACE, task).await {
+        Ok(Ok(Ok(()))) => tracing::info!("the observation journal stopped"),
+        Ok(Ok(Err(error))) => {
+            tracing::error!(%error, "the observation journal stopped with an error")
+        }
+        Ok(Err(error)) => tracing::error!(%error, "the observation journal panicked"),
+        // What it had not kept is read again from its committed position.
+        Err(_) => tracing::warn!("the observation journal did not stop within 10s"),
     }
 }

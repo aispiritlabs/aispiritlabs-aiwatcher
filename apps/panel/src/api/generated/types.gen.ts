@@ -2700,8 +2700,10 @@ export type EventEnvelope = {
      */
     schema_version?: number;
     /**
-     * Producer-side counter within the run. Gaps here mean lost events; it is
-     * the only way to notice a producer that dropped a batch.
+     * Producer-side counter within the run, one per client (`source.client`),
+     * from nought. Gaps here mean lost events — a batch the producer dropped,
+     * or one a log never kept — and they are visible whether or not the log
+     * numbers its own records.
      */
     sequence?: number | null;
     source: Source;
@@ -8353,6 +8355,13 @@ export type SlotRecord = SlotKey & {
  * Who sent the event. Enough to find the process that produced a bad batch.
  */
 export type Source = {
+    /**
+     * The one client that sent it, which its `sequence` counts under. A
+     * process may hold two clients publishing into one run — a tracer beside
+     * the application — and each numbers its own events, so a count is read
+     * per client and never across them.
+     */
+    client?: string | null;
     instance?: string | null;
     sdk: Sdk;
     service: string;
@@ -9287,6 +9296,14 @@ export type VariantObservations = {
      */
     late_runs?: number;
     llm_calls: number;
+    /**
+     * Events the clients that published the runs counted here numbered, and
+     * the fold never read — a batch a transport dropped, or one a log did not
+     * keep — found by the gaps in each client's count, on any log. The runs
+     * they belonged to are counted with what did arrive, in periods that say
+     * they are incomplete. Counted by the period fold; nought without a window.
+     */
+    lost_events?: number;
     /**
      * Runs naming it that answered a measurement's cases, left out of every
      * other figure.

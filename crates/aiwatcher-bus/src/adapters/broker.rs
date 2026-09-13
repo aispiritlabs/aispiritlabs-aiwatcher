@@ -18,7 +18,15 @@
 //! * **At-least-once delivery.** Redelivery after a crash is expected, which is
 //!   why span ids are derived rather than generated.
 //! * **Resumable cursors.** `poll` takes the last committed cursor and returns
-//!   what follows it.
+//!   what follows it. A cursor is a record's number in the topic, written as a
+//!   [`Checkpoint`] writes one, and it is the position every record is read
+//!   at: what the producer's append stamped is provisional and is replaced.
+//! * **Contiguity, where it holds.** A broker whose numbers go one after the
+//!   last — removing old records by retention without renumbering the rest —
+//!   says so ([`BrokerClient::cursors_are_contiguous`]), and a jump in them is
+//!   then events the reader was never given. One that cannot promise it still
+//!   lets a reader see what never arrived, by each producer's own count of the
+//!   events it sent into a run (`sequence`).
 
 use std::fmt;
 use std::sync::Arc;
@@ -74,6 +82,14 @@ pub trait BrokerClient: Send + Sync + fmt::Debug {
 
     /// The newest cursor on the topic, for reporting lag.
     async fn head(&self, topic: &str) -> Result<Option<String>, String>;
+
+    /// Whether each record's cursor is one after the record before it, so a
+    /// reader handed a cursor further on knows it was never given what lay
+    /// between. A stream's sequence in JetStream is; a Kafka partition's
+    /// offsets are not once compaction or transactions leave holes in them.
+    fn cursors_are_contiguous(&self) -> bool {
+        false
+    }
 }
 
 /// Bridges [`BrokerClient`] to the bus ports.
@@ -104,11 +120,20 @@ impl<C: BrokerClient + 'static> BrokerBus<C> {
         self
     }
 
+    /// A record as the event it holds, at the position its cursor names —
+    /// never the provisional one its append stamped, which numbers each batch
+    /// from one.
     fn decode(record: &BrokerRecord) -> BusResult<RecordedEvent> {
-        serde_json::from_slice(&record.payload).map_err(|source| BusError::Decode {
-            checkpoint: record.cursor.clone(),
-            source,
-        })
+        let mut event: RecordedEvent =
+            serde_json::from_slice(&record.payload).map_err(|source| BusError::Decode {
+                checkpoint: record.cursor.clone(),
+                source,
+            })?;
+        if let Ok(checkpoint) = Checkpoint::parse(&record.cursor) {
+            event.metadata.global_position = checkpoint.global_position().unwrap_or(0);
+            event.metadata.checkpoint = checkpoint;
+        }
+        Ok(event)
     }
 }
 
@@ -162,6 +187,10 @@ impl<C: BrokerClient + 'static> MessageSink for BrokerBus<C> {
 
 #[async_trait]
 impl<C: BrokerClient + 'static> MessageSource for BrokerBus<C> {
+    fn positions_are_contiguous(&self) -> bool {
+        self.client.cursors_are_contiguous()
+    }
+
     async fn subscribe(
         &self,
         options: SubscribeOptions,

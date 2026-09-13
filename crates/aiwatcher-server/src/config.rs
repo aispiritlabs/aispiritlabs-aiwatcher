@@ -493,6 +493,13 @@ pub struct Config {
     /// says otherwise, rolled up into hours and days; a fold saved for another
     /// width starts afresh.
     pub observation_period: Duration,
+    /// How many days the journal of what the period fold reads keeps a page —
+    /// what a gap in the log is refilled from before it is written down as
+    /// missing. Unset keeps no journal. Kept in the object store, by a consumer
+    /// of its own in whichever process drains work: beside the projector in
+    /// one process, and on its own in the `work` role, where it outlives the
+    /// projector being down.
+    pub observation_journal_days: Option<u64>,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
     /// pod is refused at registration naming this variable.
@@ -713,6 +720,7 @@ impl Default for Config {
             model_prices: None,
             witnesses: Vec::new(),
             observation_period: Duration::from_secs(300),
+            observation_journal_days: None,
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
@@ -998,6 +1006,18 @@ impl Config {
                                periods add up to hours and days",
                 })?;
             config.observation_period = Duration::from_secs(seconds);
+        }
+        if let Some(raw) = var("AIWATCHER_OBSERVATION_JOURNAL_DAYS") {
+            let days =
+                raw.parse::<u64>()
+                    .ok()
+                    .filter(|days| *days > 0)
+                    .ok_or(ConfigError::Invalid {
+                        name: "AIWATCHER_OBSERVATION_JOURNAL_DAYS",
+                        value: raw,
+                        expected: "a whole number of days, at least one; unset keeps no journal",
+                    })?;
+            config.observation_journal_days = Some(days);
         }
         config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
         config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");

@@ -113,6 +113,13 @@ pub struct VariantObservations {
     /// there may be missing from every figure here, whatever variant it named.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missed: Vec<MissedEvents>,
+    /// Events the clients that published the runs counted here numbered, and
+    /// the fold never read — a batch a transport dropped, or one a log did not
+    /// keep — found by the gaps in each client's count, on any log. The runs
+    /// they belonged to are counted with what did arrive, in periods that say
+    /// they are incomplete. Counted by the period fold; nought without a window.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub lost_events: u64,
 }
 
 /// Events a window's span may be short of, because the fold was never given them.
@@ -264,6 +271,11 @@ pub struct ObservedPeriod {
     /// Runs held in `late`.
     #[serde(default, skip_serializing_if = "is_nought")]
     pub late_runs: u64,
+    /// Events the clients publishing these runs numbered and the fold never
+    /// read. A run missing some is counted with what arrived, and its period
+    /// says it is incomplete.
+    #[serde(default, skip_serializing_if = "is_nought")]
+    pub lost_events: u64,
     /// Whether the fold saw every run counted here from its start: one it
     /// did not is counted with no duration.
     pub complete: bool,
@@ -318,6 +330,7 @@ impl ObservedPeriod {
         self.first_seen_at = earliest(self.first_seen_at, other.first_seen_at);
         self.last_seen_at = latest(self.last_seen_at, other.last_seen_at);
         self.late_runs += other.late_runs;
+        self.lost_events += other.lost_events;
         self.complete &= other.complete;
     }
 
@@ -538,6 +551,7 @@ impl Accumulated {
             counted_from: None,
             window_before_observations: false,
             missed: Vec::new(),
+            lost_events: 0,
         }
     }
 }
@@ -625,6 +639,7 @@ pub fn from_periods(
             .filter(|part| !part.late && !part.record.complete)
             .count(),
         late_runs: runs_where(|part| part.late),
+        lost_events: total.lost_events,
         counted_from: seconds(counted.counted_from),
         window_before_observations: counted.before_observations,
         missed: counted

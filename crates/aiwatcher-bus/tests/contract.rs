@@ -397,6 +397,81 @@ async fn broker_adapter_satisfies_the_read_contract() {
 }
 
 #[tokio::test]
+async fn a_broker_record_is_read_at_the_number_its_cursor_names_and_says_whether_they_are_dense() {
+    #[derive(Debug, Default)]
+    struct Numbering(FakeBroker);
+    #[async_trait]
+    impl BrokerClient for Numbering {
+        async fn publish(
+            &self,
+            topic: &str,
+            key: &str,
+            payloads: Vec<Vec<u8>>,
+        ) -> Result<(), String> {
+            self.0.publish(topic, key, payloads).await
+        }
+        async fn poll(
+            &self,
+            topic: &str,
+            group: &str,
+            cursor: Option<&str>,
+            max: usize,
+        ) -> Result<Vec<BrokerRecord>, String> {
+            self.0.poll(topic, group, cursor, max).await
+        }
+        async fn commit(&self, topic: &str, group: &str, cursor: &str) -> Result<(), String> {
+            self.0.commit(topic, group, cursor).await
+        }
+        async fn head(&self, topic: &str) -> Result<Option<String>, String> {
+            self.0.head(topic).await
+        }
+        fn cursors_are_contiguous(&self) -> bool {
+            true
+        }
+    }
+
+    let plain = BrokerBus::new(Arc::new(FakeBroker::default()), "aiwatcher.events");
+    assert!(
+        !plain.positions_are_contiguous(),
+        "a broker says nothing it did not promise"
+    );
+    let bus = BrokerBus::new(Arc::new(Numbering::default()), "aiwatcher.events")
+        .with_poll_interval(std::time::Duration::from_millis(5));
+    assert!(bus.positions_are_contiguous());
+    // Two appends, each numbering its own batch from one as it is written.
+    bus.append(vec![
+        envelope(EventType::RunStarted, "run-1"),
+        envelope(EventType::LlmStarted, "run-1"),
+    ])
+    .await
+    .expect("written");
+    bus.append(vec![envelope(EventType::RunCompleted, "run-1")])
+        .await
+        .expect("written");
+
+    let mut stream = bus
+        .subscribe(SubscribeOptions::from(StartFrom::Beginning))
+        .await
+        .expect("subscribes");
+    let positions: Vec<(u64, Checkpoint)> = drain_until_caught_up(&mut stream)
+        .await
+        .iter()
+        .filter_map(SourceMessage::as_event)
+        .map(|event| {
+            (
+                event.metadata.global_position,
+                event.metadata.checkpoint.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        positions,
+        [1, 2, 3].map(|at| (at, Checkpoint::from_global_position(at))),
+        "the broker's numbers, not the batches'"
+    );
+}
+
+#[tokio::test]
 async fn a_wal_survives_a_restart() {
     let dir = tempdir("restart");
     {

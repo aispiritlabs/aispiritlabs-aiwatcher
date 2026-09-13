@@ -20,6 +20,7 @@ pub mod deadletter;
 pub mod dedup;
 pub mod dimensions;
 pub mod evaluations;
+pub mod journal;
 pub mod live;
 pub mod metrics;
 pub mod observations;
@@ -41,13 +42,14 @@ pub use evaluations::{
     EvaluationCase, EvaluationComparison, EvaluationDetail, EvaluationFilter, EvaluationPage,
     EvaluationStatus, EvaluationSummary, SuitePage, SuiteSummary,
 };
+pub use journal::Journal;
 pub use live::{LiveHub, ReplayGap};
 pub use metrics::{MetricsFilter, MetricsSummary};
 pub use observations::{
     DurationHistogram, DurationSummary, MissedEvents, ObservedPeriod, VariantObservations,
 };
 pub use period_fold::PeriodOutput;
-pub use periods::PeriodStore;
+pub use periods::{JournalPage, PeriodStore};
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{NodeStep, ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
 pub use spans::{SpanFilter, SpanOutcome, SpanPage, SpanRow};

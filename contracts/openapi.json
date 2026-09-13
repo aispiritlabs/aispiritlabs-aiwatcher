@@ -17070,7 +17070,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Producer-side counter within the run. Gaps here mean lost events; it is\nthe only way to notice a producer that dropped a batch.",
+            "description": "Producer-side counter within the run, one per client (`source.client`),\nfrom nought. Gaps here mean lost events — a batch the producer dropped,\nor one a log never kept — and they are visible whether or not the log\nnumbers its own records.",
             "minimum": 0
           },
           "source": {
@@ -26773,7 +26773,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "The answer is the expected one. Two strings are compared as text under\nthe options below; anything else is compared as JSON, so an object with\nits keys in another order still matches.",
+            "description": "The answer is the expected one. Two strings are compared as text under\nthe options below; anything else is compared as JSON, so an object with\nits keys in another order still matches — and every number by its value\nas written, so `5` is `5.0` and two integers a double cannot tell apart\nare two.",
             "required": [
               "kind"
             ],
@@ -26831,7 +26831,7 @@
           },
           {
             "type": "object",
-            "description": "The answer is a number near the expected number.",
+            "description": "The answer is a number near the expected number. Each side is a JSON\nnumber or a text that is nothing but one, read digit for digit: the\ndistance is exact, and so is the tolerance as the card writes it.",
             "required": [
               "tolerance",
               "kind"
@@ -26851,7 +26851,7 @@
           },
           {
             "type": "object",
-            "description": "How far the answer is from the expected number. A quantity rather than a\nverdict, so it is averaged rather than counted and lower is better — and\nit has a unit, which is the one part of a metric definition only the\nauthor can know: the scorer sees two numbers and never what they count.",
+            "description": "How far the answer is from the expected number. A quantity rather than a\nverdict, so it is averaged rather than counted and lower is better — and\nit has a unit, which is the one part of a metric definition only the\nauthor can know: the scorer sees two numbers and never what they count.\nBoth sides are read as `numeric_within` reads them, and the distance\nbetween them is exact until it is published as a double.",
             "required": [
               "unit",
               "kind"
@@ -27610,6 +27610,13 @@
           "sdk"
         ],
         "properties": {
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The one client that sent it, which its `sequence` counts under. A\nprocess may hold two clients publishing into one run — a tracer beside\nthe application — and each numbers its own events, so a count is read\nper client and never across them."
+          },
           "instance": {
             "type": [
               "string",
@@ -29443,6 +29450,12 @@
           "llm_calls": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          },
+          "lost_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Events the clients that published the runs counted here numbered, and\nthe fold never read — a batch a transport dropped, or one a log did not\nkeep — found by the gaps in each client's count, on any log. The runs\nthey belonged to are counted with what did arrive, in periods that say\nthey are incomplete. Counted by the period fold; nought without a window.",
             "minimum": 0
           },
           "measured_runs": {

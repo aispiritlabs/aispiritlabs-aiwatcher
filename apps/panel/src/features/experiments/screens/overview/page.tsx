@@ -475,6 +475,9 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
                   ' ',
                 )} UTC never reached the fold, so runs that ended then may be missing`,
           ),
+          (observed.lost_events ?? 0) > 0
+            ? `${observed.lost_events} events the runs' clients numbered never reached the fold, so those runs are counted with what did`
+            : null,
         ]
           .filter(Boolean)
           .join(' · ')}

@@ -318,3 +318,26 @@ def test_a_workflow_run_can_name_the_variant_and_the_measurement_it_answers(
     assert started["variant_id"] == "v-candidate"
     assert started["data"] == {"evaluation_id": "answers-1"}
     assert transport.of_type("workflow.declared")[0]["variant_id"] == "v-candidate"
+
+
+def test_each_client_numbers_the_events_it_sends_into_a_run_from_nought(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    tracer_transport = RecordingTransport()
+    tracer = AiwatcherClient(service="planner-import-service", transport=tracer_transport)
+    with client.workflow("house-import", nodes=NODES, edges=EDGES) as flow:
+        with flow.node("acquire"):
+            tracer.emit("llm.started", flow.correlation, {"model": "m"})
+            tracer.emit("llm.completed", flow.correlation, {"model": "m"})
+        with client.run("another"):
+            pass
+
+    own = [event for event in transport.events if event["run_id"] == flow.correlation.run_id]
+    assert [event["sequence"] for event in own] == list(range(len(own)))
+    assert [event["sequence"] for event in tracer_transport.events] == [0, 1]
+    assert own[0]["source"]["client"] != tracer_transport.events[0]["source"]["client"]
+    assert {event["source"]["client"] for event in transport.events} == {
+        own[0]["source"]["client"]
+    }, "one client, one name"
+    other = [event for event in transport.events if event["run_id"] == "another"]
+    assert [event["sequence"] for event in other] == [0, 1]

@@ -574,6 +574,9 @@ pub struct Runtime {
     /// export metrics".
     pub metrics: Arc<dyn aiwatcher_core::ports::MetricSink>,
     pub projector: Box<dyn ProjectorTask>,
+    /// The journal of what the period fold reads, when the deployment keeps
+    /// one: a consumer of the log of its own, run by whichever role drains work.
+    pub journal: Option<Box<dyn JournalTask>>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -596,6 +599,30 @@ impl Runtime {
 #[async_trait::async_trait]
 pub trait ProjectorTask: Send + Sync {
     async fn run(self: Box<Self>, shutdown: CancellationToken) -> Result<()>;
+}
+
+/// The observation journal, erased over its log the way the projector is.
+#[async_trait::async_trait]
+pub trait JournalTask: Send + Sync {
+    async fn run(self: Box<Self>, shutdown: CancellationToken) -> Result<()>;
+}
+
+struct TypedJournal<S, C> {
+    inner: Arc<aiwatcher_projector::Journal<S, C>>,
+}
+
+#[async_trait::async_trait]
+impl<S, C> JournalTask for TypedJournal<S, C>
+where
+    S: MessageSource + 'static,
+    C: Checkpointer + 'static,
+{
+    async fn run(self: Box<Self>, shutdown: CancellationToken) -> Result<()> {
+        Arc::clone(&self.inner)
+            .run(shutdown)
+            .await
+            .context("the observation journal stopped with an error")
+    }
 }
 
 struct TypedProjector<S, C> {
@@ -687,12 +714,26 @@ pub async fn build(config: Config) -> Result<Runtime> {
     )
     .await?;
     let observations = registries.objects.clone().map(|store| {
-        Arc::new(aiwatcher_projector::PeriodOutput::new(
-            aiwatcher_projector::PeriodStore::new(store),
-            config.processor_id.clone(),
-            i64::try_from(config.observation_period.as_secs()).unwrap_or(300),
-        ))
+        Arc::new(
+            aiwatcher_projector::PeriodOutput::new(
+                aiwatcher_projector::PeriodStore::new(store),
+                config.processor_id.clone(),
+                i64::try_from(config.observation_period.as_secs()).unwrap_or(300),
+            )
+            .reading_journal(config.observation_journal_days.is_some()),
+        )
     });
+    // The journal reads the log under its own name and commits its own
+    // position, and keeps its pages beside the periods it refills.
+    let journal_of = |days: u64| {
+        registries.objects.clone().map(|store| {
+            (
+                aiwatcher_projector::PeriodStore::new(store),
+                format!("{}-journal", config.processor_id),
+                days,
+            )
+        })
+    };
     let outputs = Outputs {
         live: Arc::clone(&live) as _,
         traces,
@@ -705,99 +746,154 @@ pub async fn build(config: Config) -> Result<Runtime> {
         periods: observations.clone(),
     };
 
-    // Each arm produces the same three things; only the concrete types differ.
+    // Each arm produces the same three things, and the journal where one is
+    // kept; only the concrete types differ.
+    let journal: Option<Box<dyn JournalTask>>;
     let (source, sink, projector): (
         Arc<dyn MessageSource>,
         Arc<dyn MessageSink>,
         Box<dyn ProjectorTask>,
-    ) = match config.bus {
-        BackendKind::Memory => {
-            let bus = Arc::new(InMemoryBus::new());
-            let projector = Arc::new(Projector::new(
-                Arc::clone(&bus),
-                Arc::clone(&bus),
-                outputs,
-                projector_config,
-            ));
-            (
-                Arc::clone(&bus) as _,
-                Arc::clone(&bus) as _,
-                Box::new(TypedProjector { inner: projector }),
-            )
-        }
-        BackendKind::Wal => {
-            let wal = Arc::new(
-                FileWal::open(config.wal_dir())
-                    .await
-                    .context("opening the write-ahead log")?,
-            );
-            let projector = Arc::new(Projector::new(
-                Arc::clone(&wal),
-                Arc::clone(&wal),
-                outputs,
-                projector_config,
-            ));
-            (
-                Arc::clone(&wal) as _,
-                Arc::clone(&wal) as _,
-                Box::new(TypedProjector { inner: projector }),
-            )
-        }
-        #[cfg(feature = "laser")]
-        BackendKind::Laser => {
-            use aiwatcher_bus::adapters::laser::{LaserBus, LaserConfig};
+    ) =
+        match config.bus {
+            BackendKind::Memory => {
+                let bus = Arc::new(InMemoryBus::new());
+                let projector = Arc::new(Projector::new(
+                    Arc::clone(&bus),
+                    Arc::clone(&bus),
+                    outputs,
+                    projector_config,
+                ));
+                journal = config.observation_journal_days.and_then(journal_of).map(
+                    |(store, name, days)| {
+                        Box::new(TypedJournal {
+                            inner: Arc::new(aiwatcher_projector::Journal::new(
+                                Arc::clone(&bus),
+                                Arc::clone(&bus),
+                                store,
+                                name,
+                                days,
+                                aiwatcher_bus::StartFrom::Beginning,
+                            )),
+                        }) as Box<dyn JournalTask>
+                    },
+                );
+                (
+                    Arc::clone(&bus) as _,
+                    Arc::clone(&bus) as _,
+                    Box::new(TypedProjector { inner: projector }),
+                )
+            }
+            BackendKind::Wal => {
+                let wal = Arc::new(
+                    FileWal::open(config.wal_dir())
+                        .await
+                        .context("opening the write-ahead log")?,
+                );
+                let projector = Arc::new(Projector::new(
+                    Arc::clone(&wal),
+                    Arc::clone(&wal),
+                    outputs,
+                    projector_config,
+                ));
+                journal = config.observation_journal_days.and_then(journal_of).map(
+                    |(store, name, days)| {
+                        Box::new(TypedJournal {
+                            inner: Arc::new(aiwatcher_projector::Journal::new(
+                                Arc::clone(&wal),
+                                Arc::clone(&wal),
+                                store,
+                                name,
+                                days,
+                                aiwatcher_bus::StartFrom::Beginning,
+                            )),
+                        }) as Box<dyn JournalTask>
+                    },
+                );
+                (
+                    Arc::clone(&wal) as _,
+                    Arc::clone(&wal) as _,
+                    Box::new(TypedProjector { inner: projector }),
+                )
+            }
+            #[cfg(feature = "laser")]
+            BackendKind::Laser => {
+                use aiwatcher_bus::adapters::laser::{LaserBus, LaserConfig};
 
-            let connection_string = config
-                .laser_connection_string
-                .clone()
-                .context("AIWATCHER_LASER_CONNECTION_STRING is required for AIWATCHER_BUS=laser")?;
-            let bus = Arc::new(
-                LaserBus::connect(LaserConfig {
+                let connection_string = config.laser_connection_string.clone().context(
+                    "AIWATCHER_LASER_CONNECTION_STRING is required for AIWATCHER_BUS=laser",
+                )?;
+                let laser = LaserConfig {
                     connection_string,
                     stream: config.laser_stream.clone(),
                     topic: config.laser_topic.clone(),
                     partitions: config.laser_partitions,
                     batch_length: 256,
                     ..LaserConfig::default()
-                })
-                .await
-                .context("connecting to Laser")?,
-            );
-            // The broker owns the group's resume position, so a cold start
-            // means "after whatever this group last committed" rather than a
-            // full replay. `Beginning` here would re-read the whole topic on
-            // every restart.
-            let projector_config = ProjectorConfig {
-                cold_start: aiwatcher_bus::StartFrom::Now,
-                // The broker owns the group's resume position and the topic
-                // outlives any one process, so replaying it on every restart
-                // would re-read history that could be arbitrarily long.
-                rebuild_on_start: false,
-                ..projector_config
-            };
-            let projector = Arc::new(Projector::new(
-                Arc::clone(&bus),
-                Arc::clone(&bus),
-                outputs,
-                projector_config,
-            ));
-            (
-                Arc::clone(&bus) as _,
-                Arc::clone(&bus) as _,
-                Box::new(TypedProjector { inner: projector }),
-            )
-        }
+                };
+                // A connection of its own: one holds one subscription's commits,
+                // and the journal's must never move the projector's offset.
+                journal = match config.observation_journal_days.and_then(journal_of) {
+                    Some((store, name, days)) => {
+                        let own = Arc::new(
+                            LaserBus::connect(laser.clone())
+                                .await
+                                .context("connecting the observation journal to Laser")?,
+                        );
+                        Some(Box::new(TypedJournal {
+                            inner: Arc::new(aiwatcher_projector::Journal::new(
+                                Arc::clone(&own),
+                                own,
+                                store,
+                                name,
+                                days,
+                                // The broker resumes the journal's group from its
+                                // own committed offset.
+                                aiwatcher_bus::StartFrom::Now,
+                            )),
+                        }) as Box<dyn JournalTask>)
+                    }
+                    None => None,
+                };
+                let bus = Arc::new(
+                    LaserBus::connect(laser)
+                        .await
+                        .context("connecting to Laser")?,
+                );
+                // The broker owns the group's resume position, so a cold start
+                // means "after whatever this group last committed" rather than a
+                // full replay. `Beginning` here would re-read the whole topic on
+                // every restart.
+                let projector_config = ProjectorConfig {
+                    cold_start: aiwatcher_bus::StartFrom::Now,
+                    // The broker owns the group's resume position and the topic
+                    // outlives any one process, so replaying it on every restart
+                    // would re-read history that could be arbitrarily long.
+                    rebuild_on_start: false,
+                    ..projector_config
+                };
+                let projector = Arc::new(Projector::new(
+                    Arc::clone(&bus),
+                    Arc::clone(&bus),
+                    outputs,
+                    projector_config,
+                ));
+                (
+                    Arc::clone(&bus) as _,
+                    Arc::clone(&bus) as _,
+                    Box::new(TypedProjector { inner: projector }),
+                )
+            }
 
-        #[cfg(not(feature = "laser"))]
-        BackendKind::Laser => {
-            // A silent fallback to a different log would be worse than not
-            // starting: the events would go somewhere nobody is looking.
-            anyhow::bail!(
-                "AIWATCHER_BUS=laser needs this binary built with the `laser` cargo feature \
+            #[cfg(not(feature = "laser"))]
+            BackendKind::Laser => {
+                // A silent fallback to a different log would be worse than not
+                // starting: the events would go somewhere nobody is looking.
+                anyhow::bail!(
+                    "AIWATCHER_BUS=laser needs this binary built with the `laser` cargo feature \
                  (`cargo build --features laser`, or `just build-laser`)"
-            );
-        }
-    };
+                );
+            }
+        };
 
     let workflow_store = build_workflow_store(&config).await?;
     let state = AppState {
@@ -897,5 +993,6 @@ pub async fn build(config: Config) -> Result<Runtime> {
         sink,
         metrics,
         projector,
+        journal,
     })
 }

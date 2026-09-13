@@ -306,6 +306,12 @@ class Correlation:
     parent_span_id: str | None = None
 
 
+#: How many runs a client keeps a count of events for at once; the one heard
+#: from longest ago is forgotten past it, and counts again from nought.
+MOST_RUNS_NUMBERED = 100_000
+_RUN_ENDS = frozenset({"run.completed", "run.failed"})
+
+
 class AiwatcherClient:
     """Publishes envelopes.
 
@@ -347,7 +353,13 @@ class AiwatcherClient:
         self._source = {
             "service": service,
             "sdk": "python",
+            # Each client numbers the events it sends into a run under a name
+            # of its own, so two clients in one run — a tracer beside the
+            # application — are two counts rather than one that jumps.
+            "client": _new_id(),
         }
+        self._sequences: dict[str, int] = {}
+        self._sequence_lock = threading.Lock()
         if instance or os.environ.get("HOSTNAME"):
             self._source["instance"] = instance or os.environ["HOSTNAME"]
 
@@ -380,6 +392,7 @@ class AiwatcherClient:
             "event_type": event_type,
             "occurred_at": occurred_at or _now(),
             "run_id": context.run_id,
+            "sequence": self._next_sequence(context.run_id, event_type),
             "correlation_id": context.correlation_id,
             "source": self._source,
             "data": data or {},
@@ -402,6 +415,21 @@ class AiwatcherClient:
             envelope["parent_span_id"] = parent
         self._transport.send([envelope])
         return event_id
+
+    def _next_sequence(self, run_id: str, event_type: str) -> int:
+        """This client's count of the events it has sent into one run, from nought.
+
+        What lets the other end see an event that never reached it — a batch
+        the transport dropped, or one a log did not keep — whether or not the
+        log numbers its own records. A run's end forgets its count.
+        """
+        with self._sequence_lock:
+            sequence = self._sequences.pop(run_id, 0)
+            if event_type not in _RUN_ENDS:
+                if len(self._sequences) >= MOST_RUNS_NUMBERED:
+                    self._sequences.pop(next(iter(self._sequences)))
+                self._sequences[run_id] = sequence + 1
+        return sequence
 
     @contextlib.contextmanager
     def run(
