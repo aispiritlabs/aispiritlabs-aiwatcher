@@ -17,7 +17,9 @@
   request holding only the prompt, a window to the second, and a fold that does
   not start over; and values accounted for, steps to take an answer out,
   integers digit for digit, a log that no longer holds what a fold reads, and
-  every width sliced by the second
+  every width sliced by the second; and a value taken out of another, a tool's
+  result, a label the variant pins, an answer made of parts, numbers scored as
+  written, a gap refilled, and a count every client keeps
 - **Date**: 2026-09-11
 
 ## Context
@@ -1465,3 +1467,60 @@ from where that slice began.
 **A cycle is bounded by its way back.** An edge may declare `at_most`, bounding
 how often a run follows it — the rounds of a cycle through several nodes
 (ADR_0012, amended).
+
+## Amendment (2026-09-13, closing): a value taken out of another, a tool's result, a label the variant pins, an answer made of parts, numbers scored as written, a gap refilled, and a count every client keeps
+
+Six limits of the amendment above.
+
+**A value taken out of the input is the input's.** The caller may say, beside a
+value, which of its other values it took it out of and how
+(`derived={"country": {"from": "question", "take": {"between": ["capital of ",
+"?"]}}}`), in the closed steps an answer is taken out with. The gateway takes it
+out the same way and, where it gets the same text, publishes the pair of digests
+(ADR_0001, amended); the traces step then accounts for the value as the one it
+came from, down a chain of them. A way of taking that knows more than the text
+it reads — a `map` — derives nothing. Rendering a value any other way is still
+the application's word.
+
+**A tool's result is the tool's word when a witness relayed it.** The gateway
+relays the tools the deployment names (`--tool atlas=https://…`, a bearer token
+per tool from its own variable), never a URL a caller names, and publishes keyed
+digests of each part of the arguments and of what came back. It digests a
+model's tool-call arguments as that model's reply. One fixpoint accounts for
+calls and tools together: a tool call is accounted for once every part of its
+arguments is — a part of the case's input, a reply of an accounted call, a
+result of another accounted tool — and its result then accounts for a value
+rendered with it. Arguments the application made account for nothing.
+
+**A label's word counts where the variant pins how it is taken.** `answer_from`
+may map a label to the word it stands for (`{"map": {"A": "Paris"}}`). That
+knowledge is not in the reply, so the gateway publishes what a rule holding one
+took apart from the replies, beside the rule's keyed digest; the traces step
+reads `answer_from` from the variant's pinned generation config, read out of the
+pair's bundle under its digest, and counts those as replies only when the digests
+agree. A map chosen per call — which could name any answer — counts for nothing.
+
+**An answer made of several replies counts in the shape the variant pins.** An
+object or a list answer is an exchange when the variant pins a response schema,
+every key the answer uses is one the schema names at that place, and each part
+— text as itself, a number or a flag as its canonical JSON — is the reply of an
+accounted call whose request did not hold it. Words joined into one text are not
+split back into replies.
+
+**A scorer reads numbers as they were written.** Numeric scorers and exact match
+compare exact decimals (`aiwatcher_core::exact`): an answer from the JSON its
+generation or its recording wrote, and a text that is nothing but a number as
+that number, so a curation cohort's expectations — texts — compare with a
+number digit for digit. A distance becomes a double only as the published
+metric. A table holding a decimal longer than a double keeps is stored as sent,
+as a wide integer already was. The scorer vocabulary is version 2, because some
+answers now score differently, and a context declared under version 1 is refused
+at admission naming the version this binary implements.
+
+**A gap is refilled where a journal kept it, and lost events show on any log.**
+The period fold looks for a gap in the journal's pages first (ADR_0002, amended)
+and folds what they hold as it would have from the log; only positions no page
+covers are written down. Every SDK client numbers its events per run (ADR_0001,
+amended), and the fold counts the numbers it never read for each run it tracked:
+the run is counted with what arrived, its period says it is incomplete, and a
+window returns `lost_events` beside the log's gaps.

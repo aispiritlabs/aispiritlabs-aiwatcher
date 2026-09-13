@@ -548,11 +548,14 @@ e2e-optimise:
 # traces → score, twice, against a server of its own behind a stand-in proxy with
 # three tokens — so a gateway in front of a stand-in provider is a second witness
 # to the model, the prompt, the question and the answer — taken out of a reasoned
-# reply the way the application said — and an answer made around it, one the
-# model was told to say, or one to a request rendered with a value the application
-# made, is not; a pinned workflow is held to its shape, order and traversals;
-# results and observations are priced from a table with a history; and a window
-# is the period fold's, across a restart.
+# reply the way the application said, rendered with a country cut out of the
+# question or out of a tool the gateway relayed, a label's word the variant pins,
+# or two replies in the pinned schema's shape — and an answer made around it, one
+# the model was told to say, one to a request rendered with a value the
+# application made, or a label nobody pinned, is not; a pinned workflow is held to
+# its shape, order and traversals; results and observations are priced from a
+# table with a history; and a window is the period fold's, journaled, across a
+# restart.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 

@@ -157,3 +157,29 @@ positions are provisional, keeps the default no. A consumer that knows its
 positions are contiguous reads a jump as events it was never given: retention
 passed them, or Laser skipped a record it could not decode. The projector's
 period fold writes such a jump down (ADR_0030, amended); nothing else reads it.
+
+## Amendment 2026-09-13, later: a gap refilled from a journal, and a broker's own numbers
+
+**What a log evicted can be read again where somebody kept it.** A journal is a
+consumer of its own (`aiwatcher_projector::journal`), under its processor ID
+with `-journal` beside it and, on Laser, a connection of its own — one connection
+holds one subscription's commits, and the journal's must never move the
+projector's offset. It keeps every stretch of positions it read as a page in the
+object store, created once, holding the events the period fold reads and only
+what the fold reads of each, and commits past a page only once the page is
+kept. A page covers every position from its first to its last and never one it
+did not read. The fold refills a gap from those pages before it writes down what
+no page covers (ADR_0030, amended). Pages are kept for
+`AIWATCHER_OBSERVATION_JOURNAL_DAYS`; unset keeps no journal. It runs where work
+is drained — beside the projector in one process, on its own in the `work` role —
+so in a split deployment it keeps reading while the projector is down. A log
+nobody read before it evicted the events is still a gap for both.
+
+**The generic broker reads every record at its cursor's number.** The positions
+an append stamps are provisional and numbered per batch, and the adapter used to
+hand them on; a record is now read at the position its cursor names, which is
+what a checkpoint is. `BrokerClient::cursors_are_contiguous` lets a client say
+its numbers go one after the last (a JetStream stream sequence does; a Kafka
+partition's offsets do not once compaction leaves holes), and the adapter says
+no otherwise. A log that cannot say it still shows what never arrived through
+each producer's own count (ADR_0001, amended).

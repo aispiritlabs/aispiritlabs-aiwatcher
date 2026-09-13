@@ -336,3 +336,27 @@ under. So a value that is what a model already replied reads, to a deployment
 holding the key, as that reply, and one that is a case's input as that input;
 one the application made reads as neither. The assembler keeps only
 digest-shaped values, as it does for the other two lists.
+
+## Amendment 2026-09-13, final: a client's count, and what a witness saw of tools, derivations and a label
+
+`source` may carry `client`, the one client that sent the event, and each SDK
+client now numbers the events it sends into a run from nought under it
+(`sequence`, which the envelope has always had and no client set). A process can
+hold two clients publishing into one run — a tracer beside the application — so
+a count is read per client and never across two. The period fold reads a number
+it skipped as an event it was never given, on any log, whether or not the log
+numbers its own records (ADR_0002, amended). A client forgets a run's count at
+the run's end and past 100 000 runs at once; a count that starts again passes
+nothing over, since a number at or below one already read is never a gap.
+
+What a gateway publishes about a call grows by four, recorded as they arrive and
+kept only where digest-shaped: `derived_digests` (`aiwatcher.witness.derived`) —
+a value the caller took out of another of its values in steps the gateway
+repeated, as `value:source`; `taken_digests` (`aiwatcher.witness.taken`) — what
+a way of taking the answer that knows more than the reply, a label's word, took
+out of each reply; and `taking_digest` (`aiwatcher.witness.taking`), the keyed
+digest of that way itself, under a side of its own. A gateway that relays a tool
+publishes `tool.*` on its own run naming the caller's, with
+`arguments_digests` and `returned_digests` (`aiwatcher.witness.arguments`,
+`aiwatcher.witness.returned`): each part of the arguments, and what came back,
+as a reply's digest is made. None of it is a word said in the call.

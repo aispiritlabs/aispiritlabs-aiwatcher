@@ -18,15 +18,10 @@
 //! * **At-least-once delivery.** Redelivery after a crash is expected, which is
 //!   why span ids are derived rather than generated.
 //! * **Resumable cursors.** `poll` takes the last committed cursor and returns
-//!   what follows it. A cursor is a record's number in the topic, written as a
-//!   [`Checkpoint`] writes one, and it is the position every record is read
-//!   at: what the producer's append stamped is provisional and is replaced.
-//! * **Contiguity, where it holds.** A broker whose numbers go one after the
-//!   last — removing old records by retention without renumbering the rest —
-//!   says so ([`BrokerClient::cursors_are_contiguous`]), and a jump in them is
-//!   then events the reader was never given. One that cannot promise it still
-//!   lets a reader see what never arrived, by each producer's own count of the
-//!   events it sent into a run (`sequence`).
+//!   what follows it. A cursor is a record's number, as a [`Checkpoint`] writes
+//!   one, and every record is read at it — never at the provisional position
+//!   an append stamped. Whether the numbers go one after the last is the
+//!   client's to say ([`BrokerClient::cursors_are_contiguous`]; ADR_0002).
 
 use std::fmt;
 use std::sync::Arc;

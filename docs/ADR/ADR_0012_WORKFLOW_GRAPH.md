@@ -5,7 +5,8 @@
   [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md).
   The decision stands — a declaration is still the source that is right on
   every path. Amended 2026-09-11 (below): how the panel lays the graph out;
-  amended 2026-09-13: a node that repeats, and where a run enters a shape.
+  amended 2026-09-13: a node that repeats, and where a run enters a shape;
+  and edges that share one bound.
 - **Date**: 2026-08-29
 
 ## Context
@@ -305,9 +306,19 @@ turn from an unbounded edge before one from a bounded edge, and of bounded ones
 the edge with the most left, so an edge is counted only for a start nothing else
 led to. Also part of the digest only where declared.
 
+Several edges may share one bound, declared beside the nodes and the edges:
+`"bounds": [{"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}]`.
+A run may follow any of them that many times between them — the rounds of a
+cycle with more than one way back, whichever way each round took. A shared bound
+naming an edge the declaration lacks bounds nothing on that edge; one naming a
+single edge is that edge's own `at_most`, however it is spelled; and a start
+that followed an edge uses the bounded edge with the most left under every bound
+it is in. Part of the digest only where declared.
+
 ### What would make this wrong
 
-A bound on an edge counts rounds of the cycles through that edge; a cycle with
-two ways back is bounded only by bounding both. The fold keeps 256 steps a run;
-a run that took more is counted as unseen on the workflow rather than checked in
-part.
+A bound counts starts that a completion led to, so it bounds rounds only of the
+cycles its edges are on: an author who shares a bound between the wrong edges
+bounds the wrong thing, and nothing checks that the edges are a cycle's ways
+back. The fold keeps 256 steps a run; a run that took more is counted as unseen
+on the workflow rather than checked in part.

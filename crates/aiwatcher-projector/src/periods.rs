@@ -18,14 +18,10 @@
 //! every saved state is gone starts again from the last period it wrote rather
 //! than from nothing.
 //!
-//! And what the fold could not read is written down under `gaps/`: positions
-//! the log no longer held when the fold came to them, and the span of time the
-//! events there may have lain in — so a window over that span says what it
-//! may be short of rather than reading as complete.
-//!
-//! Under `journal/` are the pages a journal of the log wrote
-//! ([`crate::journal`]): the events the fold reads, kept past the log's own
-//! retention, which a gap is refilled from before it is written down.
+//! What the fold could not read is written down under `gaps/` — positions the
+//! log no longer held and the span of time they may have lain in, so a window
+//! over it says what it may be short of — once `journal/`, the pages a journal
+//! of the log kept ([`crate::journal`]), has refilled what it could.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

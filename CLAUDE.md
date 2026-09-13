@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned or made around it — scored, compared, observed, priced, and restarted
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed or made around it — scored, compared, observed, priced, journaled and restarted
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -162,7 +162,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`, and `periods`, the one module here that writes an object store), dedup, retry, dead letters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention; and `periods`, the one module here that writes an object store), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
@@ -743,10 +743,14 @@ caller sends in the body field it removes before the provider sees the request
 (`LlmCall.caller_body`), or by the template's literal parts — and whether the
 request held nothing else. The same field may say how the caller takes its
 answer out of the reply — steps from a closed vocabulary (a JSON pointer, text
-between markers, a line, a fenced block, stripped, lower-cased, a number), in
-turn or as alternatives, and never a pattern a caller wrote — which the gateway
-takes the same way, with the function the caller takes it with
-(`gateway.extracted`). It is the telemetry
+between markers, a line, a fenced block, stripped, lower-cased, a number, a
+label's word), in turn or as alternatives, and never a pattern a caller wrote —
+which the gateway takes the same way, with the function the caller takes it with
+(`gateway.extracted`), and which of its values it took out of another in those
+steps (`derived`), which the gateway takes out again. It relays the deployment's
+tools the same way, at `/tools/<name>` to the URL the deployment named and never
+one a caller names, digesting each part of the arguments and what came back. It
+is the telemetry
 client's half — the standard library and nothing else — and it publishes neither
 the request nor the reply: only keyed digests of each message, of the values it
 found rendered — again as a reply's are made, so a value that is what a model
@@ -915,8 +919,9 @@ there.
   projector's period fold's — the runs that ended from the window's start on,
   where they ended, written or still held — which the column says with where
   counting began, how many runs came from written periods and reached the log
-  late, what the log no longer held when the fold came to it, and that the
-  percentiles are bucketed. What calls cost is the server's, at the deployment's price
+  late, what the log no longer held when the fold came to it, the events the
+  runs' clients numbered that never arrived, and that the percentiles are
+  bucketed. What calls cost is the server's, at the deployment's price
   table, each call at the price in force on its day — a variant's observed calls
   and each row's cases, by the models their usage names — drawn with the day and
   the model each price was read for, the calls priced before any price was read,
@@ -1038,8 +1043,9 @@ the review.
   Rows go through the attempt's own `outputs/{name}` route, which digests what
   it stored — the prompt registry's rule — and the result route checks every
   reported output exists before it settles. A table holding an integer wider
-  than 64 bits is stored as it was sent, since a parsed row holds one only as
-  the double it rounds to. A completed step pointing at an
+  than 64 bits, or a decimal longer than a double keeps, is stored as it was
+  sent, since a parsed row holds one only as the double nearest it. A completed
+  step pointing at an
   object that 404s is the one failure nothing downstream catches.
 - **Never presign a bucket to a process outside the cluster.** A worker runs on
   somebody's laptop, and a presigned URL is a bearer credential for a store that
@@ -1949,7 +1955,10 @@ the review.
   would invert every comparison drawn from it. The unit is derived for a verdict
   (`ratio`) and is the author's one word for a quantity — `absolute_error`
   requires it, because the scorer sees two numbers and never what they count,
-  and a guessed unit reads as a stated one. When an existing
+  and a guessed unit reads as a stated one. A scorer compares numbers as they
+  were written — exact decimals from the JSON each side was kept in, a text that
+  is nothing but a number read as that number — and turns a distance into a
+  double only to publish it. When an existing
   scorer's answer changes for some input, `SCORING_VERSION` moves, because
   `context.scorer` names the code that read the card and `context.suite` names
   the card — two owners, two references.
@@ -2097,18 +2106,24 @@ the review.
   whether an answer is, word for word, a reply it relayed — or what the caller
   said it would take out of one — and whether the request held the case's
   input; one call doing both for a request that was nothing but the pinned
-  prompt, the answer not in it, rendered with values each of which is the
-  case's input or a part of it or the reply of another call so made, is an
-  exchange, which an application answering around the gateway, telling the
-  model what to say or handing it a value it made cannot show, and
-  `require_witnessed_answer` requires one per answer; an answer is compared
-  from the JSON the generation wrote, so an integer digit for digit. A run's
+  prompt, the answer not in it, rendered with values each accounted for — the
+  case's input or a part of it, the reply of another call so made, what a tool
+  the gateway relayed returned to arguments so accounted for, or a value taken
+  out of one of those in steps the gateway repeated — is an exchange, which an
+  application answering around the gateway, telling the model what to say or
+  handing it a value it made cannot show, and `require_witnessed_answer`
+  requires one per answer. A label's word counts only where the variant's
+  generation config pins that `answer_from`, and an answer made of several
+  replies only where each part the pinned response schema names is one; an
+  answer is compared from the JSON the generation wrote, so an integer digit
+  for digit. A run's
   steps are held to the order the pinned declaration leads and to how often: a
   node starts once per completion leading into it, a failed start gives its turn
   back, a declared loop goes round as often as it completes, a node declared
   `repeats` runs once per item, one declared `at_most` starts no more than
   that, and an edge declared `at_most` is followed no more than that — the
-  rounds of a cycle through it, a retry not counted. Not over the conversation
+  rounds of a cycle through it, a retry not counted — as are edges sharing one
+  of the declaration's `bounds`, between them. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2212,9 +2227,15 @@ the review.
   its runs by the second they ended in, whatever its width. A width configured
   anew takes over at the next hour, so two widths never cover one span. On a
   log that numbers every event, a position the log no longer holds when the
-  fold comes to it is written down with the span of time it may have lain in,
-  the periods it reaches say they are incomplete, and a window over it says how
-  many events it may be short of — a gap nothing can refill, never a silence.
+  fold comes to it is first looked for in the journal — a consumer of its own,
+  on a connection of its own, keeping each stretch it read, with only what the
+  fold reads of each event, for as many days as the deployment says — and what
+  no page covers is written down with the span of time it may have lain in, the
+  periods it reaches say they are incomplete, and a window over it says how many
+  events it may be short of. On any log, a number a client skipped in its own
+  count of a run's events is an event the fold never read: the run is counted
+  with what arrived, its period says it is incomplete, and a window counts the
+  lost events — never a silence.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start

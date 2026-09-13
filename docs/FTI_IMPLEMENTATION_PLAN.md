@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review. Sekcja 33 zamyka ograniczenia sekcji 32 — serwer modelu publikujący własny run pod własnym tokenem jest drugim świadkiem wersji modelu, workflow jest trzymany do kształtu przypiętej deklaracji, obserwacje przeżywają read model w zapisanych okresach, mierzą każde wywołanie i mają ceny ze źródłem, kalibracja odkłada po jednym przypadku, linia dopuszcza model spoza rejestru po skrócie paczki, a każdy przypadek wyniku ma pozycję i każdy przypadek review — split. Sekcja 34 zamyka ograniczenia sekcji 33 — świadkiem jest tylko poświadczenie nazwane przez wdrożenie, wspólny token jest nazwany, bramka przed dostawcą świadczy o modelu i prompcie, workflow jest trzymany do kolejności, wyniki mają ceny, a okresy składa projektor z własnym stanem, bez luki po restarcie i bez gubienia późnych końców. Sekcja 35 zamyka ograniczenia sekcji 34 — świadek mówi, że odpowiedź jest odpowiedzią przekazaną przez bramkę na żądanie z wejściem przypadku, workflow jest trzymany do liczby przejść i pętli, tabela cen ma historię, a okno liczy jeden fold okresów zwijanych w godziny i dni. Sekcja 36 zamyka ograniczenia sekcji 35 — odpowiedź wyciągnięta z repliki i żądanie z samym promptem są świadczone jako wymiana, liczby mają jeden zapis w obu językach, okno liczy od sekundy startu, spóźniony run tam, gdzie się skończył, zmiana szerokości i utrata stanu nie zaczynają obserwacji od nowa, węzeł ma limit startów, a wywołanie cenę ze swojego dnia. Sekcja 37 zamyka ograniczenia sekcji 36 — wymiana liczy się tylko z wartościami, które są wejściem przypadku albo repliką innego takiego wywołania, odpowiedź wyciąga się krokami z zamkniętego słownika, liczby całkowite są porównywane co do cyfry, luka w logu jest zapisana i widoczna w oknie, każdy okres ma wycinki co sekundę, a krawędź ma limit przejść.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata. Sekcja 31 zamyka ograniczenia sekcji 30 — Flow zatrzymuje się w dowolnym miejscu, serwis scorerów ma token zawsze i egress tylko do modelu, generowanie mówi, z czym generowało, kalibracja wychodzi poza jeden próg, karty mają wersje i różnice — i domyka etap C: Experiments (C2), bramkę CI z liniami zatwierdzeń (C3), review przypadków z feedbacku (C4) i test śmierci workera kroku podowego. Sekcja 32 zamyka ograniczenia sekcji 31 — trace nazywa wariant, a Experiments pokazuje obok wyniku, co wariant robił poza pomiarem; odpowiedzi generowane są trzymane do promptu i modelu wariantu przez trace ich runów; dopasowany próg kalibracji jest sprawdzany na połowie zbioru, na której go nie dopasowano; linia dopuszcza warianty z modelem i workflow; propozycja przypadku bierze słowa z wyniku, a ocena przypadku pokazuje jego review. Sekcja 33 zamyka ograniczenia sekcji 32 — serwer modelu publikujący własny run pod własnym tokenem jest drugim świadkiem wersji modelu, workflow jest trzymany do kształtu przypiętej deklaracji, obserwacje przeżywają read model w zapisanych okresach, mierzą każde wywołanie i mają ceny ze źródłem, kalibracja odkłada po jednym przypadku, linia dopuszcza model spoza rejestru po skrócie paczki, a każdy przypadek wyniku ma pozycję i każdy przypadek review — split. Sekcja 34 zamyka ograniczenia sekcji 33 — świadkiem jest tylko poświadczenie nazwane przez wdrożenie, wspólny token jest nazwany, bramka przed dostawcą świadczy o modelu i prompcie, workflow jest trzymany do kolejności, wyniki mają ceny, a okresy składa projektor z własnym stanem, bez luki po restarcie i bez gubienia późnych końców. Sekcja 35 zamyka ograniczenia sekcji 34 — świadek mówi, że odpowiedź jest odpowiedzią przekazaną przez bramkę na żądanie z wejściem przypadku, workflow jest trzymany do liczby przejść i pętli, tabela cen ma historię, a okno liczy jeden fold okresów zwijanych w godziny i dni. Sekcja 36 zamyka ograniczenia sekcji 35 — odpowiedź wyciągnięta z repliki i żądanie z samym promptem są świadczone jako wymiana, liczby mają jeden zapis w obu językach, okno liczy od sekundy startu, spóźniony run tam, gdzie się skończył, zmiana szerokości i utrata stanu nie zaczynają obserwacji od nowa, węzeł ma limit startów, a wywołanie cenę ze swojego dnia. Sekcja 37 zamyka ograniczenia sekcji 36 — wymiana liczy się tylko z wartościami, które są wejściem przypadku albo repliką innego takiego wywołania, odpowiedź wyciąga się krokami z zamkniętego słownika, liczby całkowite są porównywane co do cyfry, luka w logu jest zapisana i widoczna w oknie, każdy okres ma wycinki co sekundę, a krawędź ma limit przejść. Sekcja 38 zamyka ograniczenia sekcji 37 — wartość wyciągnięta z innej wartości, wynik narzędzia przekazany przez bramkę, etykieta pod przypiętą regułą i odpowiedź złożona w kształcie schematu są rozliczone, scorer porównuje liczby tak, jak je zapisano, luka w logu jest uzupełniana z dziennika, zgubione zdarzenia widać na każdym logu po licznikach klientów, a kilka krawędzi może mieć jeden limit.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -3263,4 +3263,147 @@ nasłuchiwało przed i po; własne serwery testowe są zatrzymane.
   mówi nawet tego.
 - **Limit**: krawędź ogranicza obroty cykli przez siebie; cykl z dwiema drogami
   powrotu wymaga limitu na obu.
+- Dalej: etap D.
+
+## 38. Ograniczenia sekcji 37
+
+Użytkownik wskazał ograniczenia z 37.7: wynik narzędzia i wartość wyprowadzona z
+wejścia nie są rozliczone; przetworzenie z wiedzą spoza repliki (etykieta zamieniona
+na słowo, odpowiedź złożona z kilku replik) nie daje wymiany; scorer porównujący
+odpowiedź z oczekiwaniem czyta obie liczby jako double; brakujących zdarzeń nie da
+się odzyskać, a ogólny broker nie numeruje zdarzeń kolejno, więc luka nie jest na
+nim nawet widoczna; cykl z dwiema drogami powrotu wymaga limitu na obu krawędziach.
+Commity: `9cc8165` (wspólny limit krawędzi), `acf230a` (liczby w scorerach),
+`e8e2fa1` (dziennik okresów, liczniki klientów, pozycje brokera), `5eb8e66`
+(świadek: wartości wyprowadzone, narzędzia, przypięta mapa, odpowiedź złożona),
+`4c527d5` (e2e) oraz commit tej sekcji. Reguły są w poprawkach
+[ADR 0001](ADR/ADR_0001_EVENT_ENVELOPE.md),
+[ADR 0002](ADR/ADR_0002_EVENT_BUS_PORT.md),
+[ADR 0012](ADR/ADR_0012_WORKFLOW_GRAPH.md) i
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) i w `CLAUDE.md`.
+
+### 38.1 Wartość wyciągnięta z innej wartości
+
+Obok wartości aplikacja może powiedzieć, z której swojej wartości ją wyciągnęła i
+jak: `derived={"country": {"from": "question", "take": {"between": ["capital of ",
+"?"]}}}` — tymi samymi zamkniętymi krokami, którymi wyciąga się odpowiedź. Bramka
+wyciąga ją tak samo i jeśli dostaje ten sam tekst, publikuje parę skrótów
+(`derived_digests`, atrybut `aiwatcher.witness.derived`). Krok `traces` rozlicza
+taką wartość jak tę, z której pochodzi, także w łańcuchu. Krok, który wie więcej
+niż czytany tekst (`map`), niczego nie wyprowadza, a wartość przeformatowana inaczej
+nadal jest słowem aplikacji.
+
+### 38.2 Wynik narzędzia
+
+Bramka przekazuje narzędzia wdrożenia (`--tool atlas=https://…`, token każdego
+narzędzia z własnej zmiennej) pod `POST /tools/<nazwa>` — zawsze na adres z
+konfiguracji, nigdy na adres podany przez wywołującego — i publikuje na własnym
+runie, nazywającym run aplikacji, skróty każdej części argumentów i tego, co
+narzędzie zwróciło. Argumenty wywołania narzędzia z odpowiedzi modelu są
+skracane jak replika. Jeden punkt stały rozlicza wywołania modelu i narzędzia
+razem: wywołanie narzędzia liczy się, gdy każda część argumentów jest rozliczona
+(część wejścia, replika rozliczonego wywołania, wynik innego rozliczonego
+narzędzia), a jego wynik rozlicza wartość, z którą potem wyrenderowano prompt.
+Argumenty zrobione przez aplikację niczego nie rozliczają.
+
+### 38.3 Etykieta i odpowiedź złożona
+
+Krok `{"map": {"A": "Paris"}}` zamienia etykietę na słowo. Tej wiedzy nie ma w
+replice, więc bramka publikuje to, co wyciągnęła reguła z mapą, osobno
+(`taken_digests`) razem ze skrótem samej reguły (`taking_digest`). Krok `traces`
+czyta `answer_from` z przypiętego pliku konfiguracji generowania (z bundle'a pary,
+pod jego skrótem) i liczy te skróty jako replikę tylko wtedy, gdy skróty reguł się
+zgadzają; mapa wybierana per wywołanie, która mogłaby wskazać dowolną odpowiedź, nie
+liczy się. Odpowiedź będąca obiektem albo listą jest wymianą, gdy wariant przypina
+schemat odpowiedzi, każdy klucz jest nazwany w schemacie w tym miejscu, a każda
+część (tekst jako on sam, liczba i flaga kanonicznie) jest repliką rozliczonego
+wywołania, którego żądanie jej nie zawierało. Słowa sklejone w jeden tekst nie są
+rozdzielane z powrotem na repliki.
+
+### 38.4 Liczby w scorerach
+
+`numeric_within`, `absolute_error` i `exact_match` porównują dokładne liczby
+dziesiętne (`aiwatcher_core::exact`): odpowiedź z JSON-u zapisanego przez
+generowanie albo nagranie, tekst będący samą liczbą jako tę liczbę — więc
+oczekiwania kohorty kuracji, które są tekstem, porównują się z liczbą co do cyfry.
+Odległość staje się double dopiero jako publikowana metryka. Tabela z liczbą
+dziesiętną dłuższą niż mieści double jest zapisywana tak, jak przyszła. Słownik
+scorerów ma wersję 2, bo część odpowiedzi ocenia się teraz inaczej; kontekst
+zadeklarowany w wersji 1 jest odrzucany przy dopuszczeniu z nazwą wersji tej
+binarki.
+
+### 38.5 Luki w logu: dziennik i liczniki klientów
+
+Dziennik (`aiwatcher_projector::journal`) to osobny konsument logu, na Laserze na
+własnym połączeniu, bo jedno połączenie trzyma commity jednej subskrypcji. Każdy
+odczytany odcinek pozycji zapisuje jako stronę w magazynie obiektów, tylko z tym,
+co z każdego zdarzenia czyta fold okresów, i commituje dopiero po zapisaniu
+strony. Strona obejmuje każdą pozycję od pierwszej do ostatniej i żadnej, której
+nie przeczytał. Fold najpierw uzupełnia lukę ze stron, a zapisuje tylko to,
+czego żadna strona nie obejmuje. Strony żyją `AIWATCHER_OBSERVATION_JOURNAL_DAYS`
+dni; bez tej zmiennej dziennika nie ma. Dziennik chodzi tam, gdzie wykonuje się
+pracę: obok projektora w jednym procesie, sam w roli `work` — tam czyta dalej,
+gdy projektor nie działa.
+
+Każdy klient SDK (Python i TypeScript) numeruje zdarzenia wysyłane do runu od zera
+pod własną nazwą (`source.client`, `sequence`), a fold liczy numery, których nigdy
+nie dostał, dla każdego śledzonego runu — na każdym logu. Run jest liczony z tym,
+co doszło, jego okres mówi, że jest niepełny, a okno zwraca `lost_events`, które
+panel Experiments pisze obok luk logu. Ogólny broker czyta każdy rekord na
+pozycji z kursora, a nie na tymczasowej pozycji z dopisania, i mówi, że jego
+numery są ciągłe, tylko gdy klient tak mówi (`cursors_are_contiguous`).
+
+### 38.6 Wspólny limit krawędzi
+
+Deklaracja może mieć `"bounds": [{"edges": [["review", "write"], ["fix",
+"review"]], "at_most": 3}]`: run może przejść tymi krawędziami najwyżej tyle razy
+łącznie — to obroty cyklu z kilkoma drogami powrotu, którąkolwiek szedł każdy
+obrót. Limit na jednej krawędzi to jej własne `at_most`, krawędź spoza deklaracji
+nic nie ogranicza, a ponowienie po błędzie nie jest obrotem. Część skrótu tylko
+tam, gdzie jest zadeklarowany; SDK Pythona przekazuje `bounds` w `workflow()` i
+`traced_workflow()`.
+
+### 38.7 Odbiór
+
+`just check`: wszystkie kroki zielone (Rust: 1511 testów, panel: 297, SDK
+Pythona: 516, silnik agentic: 461, `tsc` i testy SDK TypeScript: 4) poza `typos`,
+który zgłasza słowo w nieśledzonym `docs/design-skills-selection.md` równoległej
+sesji. Testy end-to-end, każdy na własnym serwerze:
+
+- `just e2e-generate` 26/26 — nowe przypadki: kraj wycięty z pytania krokami, które
+  aplikacja nazwała (4 wymiany); kraj wzięty z odpowiedzi atlasu przekazanego przez
+  bramkę dla pytania przypadku (4 wymiany); stolica z etykiety modelu, gdy
+  konfiguracja generowania wariantu przypina regułę (4 wymiany) i gdy nie przypina
+  (0 odpowiedzi świadczonych, 0 wymian, bramka CI podaje przyczynę); odpowiedź
+  złożona z dwóch replik w kształcie przypiętego schematu (4 wymiany). Serwer ma
+  dziennik okresów, a przypadek restartu sprawdza, że jego strony nie mają żadnego
+  słowa z runu;
+- `just e2e-gate` 8/8, `just e2e-review` 8/8.
+
+Testy jednostkowe: wartość wyprowadzona z wejścia i ze źródła, którego nikt nie
+podał; narzędzie z argumentami z repliki modelu i z argumentami zrobionymi przez
+aplikację; etykieta pod przypiętą i nieprzypiętą regułą; odpowiedź złożona w
+kształcie schematu i z kluczem spoza niego; wektor skrótu reguły wspólny dla obu
+języków; liczby szersze niż double w `exact_match`, `numeric_within` i
+`absolute_error`; tekst będący liczbą; numery pominięte przez klienta, tracer
+obok aplikacji i ponowna dostawa; luka uzupełniona stroną dziennika z resztą
+zapisaną jako luka; strony dziennika znajdowane po pozycjach i usuwane po dniach;
+rekordy brokera na pozycjach z kursorów; cykl z dwiema drogami powrotu pod
+wspólnym limitem. Na `:8080` i `:18080` nic nie nasłuchiwało przed i po; własne
+serwery testowe są zatrzymane.
+
+### 38.8 Co zostaje
+
+- **Świadek**: tekst złożony z kilku replik (sklejony w jedno zdanie) nie jest
+  rozdzielany, więc nie ma wymiany; wybór jednej z wielu replik rozliczonych wywołań
+  nadal jest wyborem aplikacji, której świadek nie widzi. Narzędzie wywołane poza
+  bramką i wartość przeformatowana inaczej niż krokami ze słownika dalej psują
+  wymianę. Przypadek wyniku (`actual`) pokazuje odpowiedź sparsowaną, więc liczba
+  szersza niż double jest tam zaokrąglona, choć ocena jest dokładna.
+- **Okresy**: dziennik uzupełnia lukę tylko wtedy, gdy przeczytał pozycje, zanim log
+  je usunął — gdy nie działał razem z projektorem dłużej niż retencja, luka zostaje
+  luką. Run, którego wszystkie zdarzenia zginęły, nie ma licznika, który by to
+  pokazał.
+- **Limit**: wspólny limit ogranicza obroty cykli przez swoje krawędzie, ale nic nie
+  sprawdza, że deklaracja wskazała właśnie drogi powrotu cyklu.
 - Dalej: etap D.
