@@ -26,8 +26,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Aggregation, AssessmentValue, CalibrationSet, EvaluationError, JudgeAgreement, MetricDirection,
-    Result, Rubric, Rubrics, Scale, Scorecard, VersionReference, digest, require, text,
+    Aggregation, AgreementInterval, AssessmentValue, CalibrationSet, EvaluationError,
+    JudgeAgreement, MetricDirection, Result, Rubric, Rubrics, Scale, Scorecard, VersionReference,
+    digest, require, text,
 };
 
 /// The contract version a catalog speaks. A service speaking another is
@@ -495,9 +496,11 @@ impl ExternalCalibration {
 /// The verdict agreement is the one a result is held to, and it says nothing
 /// about a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric
 /// that ranks answers the other way round from the people. So two more
-/// readings ride beside it. Neither is applied to anything, and the fitted bar
-/// is found on the very items it is scored on, so it flatters itself —
-/// adopting it is publishing the card again, and a new context.
+/// readings ride beside it. Neither is applied to anything. The fitted bar is
+/// found on the very items it is scored on, so it flatters itself; `held_out`
+/// is the check it lacks — the same fit made on half the set and scored on the
+/// other half, both ways round — and adopting a bar is still publishing the
+/// card again, and a new context.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExternalAgreement {
     #[serde(flatten)]
@@ -512,6 +515,12 @@ pub struct ExternalAgreement {
     /// The pairs of items `rank_agreement` was counted over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ranked_pairs: Option<usize>,
+    /// Where `rank_agreement` plausibly lies: 95%, from its asymptotic standard
+    /// error taken through Fisher's transform so it stays inside minus one and
+    /// one. Absent when every pair told apart was ordered one way, where that
+    /// method has nothing to say — the pair count beside it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank_interval: Option<AgreementInterval>,
     /// The bar on the metric — one of the numbers it gave on this set — whose
     /// verdicts would have matched the people's most often, over every item;
     /// the nearest to the card's own `pass_at` among equals.
@@ -520,6 +529,90 @@ pub struct ExternalAgreement {
     /// How often, counted as `agreement` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fitted_agreement: Option<f64>,
+    /// How a bar fitted this way does on items it was not fitted on. Absent
+    /// when the set cannot be split into two halves with an item in each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_out: Option<HeldOutBar>,
+}
+
+/// A bar fitted on one half of a calibration set and scored on the other, both
+/// ways round, so every item is scored once by a bar that never saw it.
+///
+/// The halves are dealt by the case, from a digest of its ID: a case two people
+/// judged lands on one side with both judgements, and the same set is dealt the
+/// same way on every run. Compare it with `agreement`, the card's own bar, which
+/// was never fitted on these items either; `fitted_agreement` above both is the
+/// flattery a fit on everything carries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct HeldOutBar {
+    pub items: usize,
+    /// The share of items where the verdict at the bar fitted without them was
+    /// the people's, over every item.
+    pub agreement: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agreement_interval: Option<AgreementInterval>,
+    /// The bar fitted without each half, in the order the halves are dealt —
+    /// the one that scored it. Two far apart say the fitted bar is mostly this
+    /// set's noise.
+    pub fold_pass_at: Vec<f64>,
+}
+
+/// Which half of a calibration set a case is dealt to.
+pub(crate) fn calibration_fold(case_id: &str) -> usize {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"aiwatcher.calibration.fold\0");
+    hasher.update(case_id.as_bytes());
+    usize::from(hasher.finalize()[0] & 1)
+}
+
+/// A 95% interval for Goodman and Kruskal's gamma over pairs, or `None` where
+/// it is undefined: no pair told apart, or every one ordered the same way.
+///
+/// The asymptotic standard error is `2 / (P + Q)² · √Σᵢ (Q·Cᵢ − P·Dᵢ)²`, with
+/// `P` and `Q` the concordant and discordant pairs and `Cᵢ`, `Dᵢ` the items
+/// concordant and discordant with item `i` — checked against the spread of
+/// gamma over fresh samples before it was written here. The interval is taken
+/// on `atanh(gamma)` and turned back, which keeps it inside minus one and one.
+fn gamma_interval(pairs: &[(f64, f64)]) -> Option<AgreementInterval> {
+    const Z: f64 = 1.959_963_984_540_054;
+    let mut concordant = vec![0.0_f64; pairs.len()];
+    let mut discordant = vec![0.0_f64; pairs.len()];
+    for (at, (x, y)) in pairs.iter().enumerate() {
+        for (other, (other_x, other_y)) in pairs.iter().enumerate() {
+            let (dx, dy) = (x - other_x, y - other_y);
+            if at == other || dx.abs() <= 1e-12 || dy.abs() <= 1e-12 {
+                continue;
+            }
+            if (dx > 0.0) == (dy > 0.0) {
+                concordant[at] += 1.0;
+            } else {
+                discordant[at] += 1.0;
+            }
+        }
+    }
+    let same = concordant.iter().sum::<f64>() / 2.0;
+    let reversed = discordant.iter().sum::<f64>() / 2.0;
+    let told_apart = same + reversed;
+    if told_apart <= 0.0 {
+        return None;
+    }
+    let gamma = (same - reversed) / told_apart;
+    if gamma.abs() >= 1.0 - 1e-12 {
+        return None;
+    }
+    let spread = concordant
+        .iter()
+        .zip(&discordant)
+        .map(|(c, d)| (reversed * c - same * d).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let error = 2.0 / (told_apart * told_apart) * spread;
+    let (centre, width) = (gamma.atanh(), Z * error / (1.0 - gamma * gamma));
+    Some(AgreementInterval {
+        low: (centre - width).tanh(),
+        high: (centre + width).tanh(),
+    })
 }
 
 /// Goodman and Kruskal's gamma over pairs: of the pairs of items both sides
@@ -601,6 +694,12 @@ pub fn external_agreement(
                 )
             })
             .collect();
+        let folds: Vec<usize> = set
+            .items
+            .iter()
+            .filter(|item| item.rubric == calibrated.rubric)
+            .map(|item| calibration_fold(&item.case_id))
+            .collect();
         let at = |bar: &ExternalCalibration| {
             crate::judge::counted(
                 &spec.metric,
@@ -620,32 +719,81 @@ pub fn external_agreement(
                 ExternalCalibration::ranked(declared, rubric, *number, value)
             })
             .collect();
-        let mut bars: Vec<f64> = items.iter().filter_map(|(number, _)| *number).collect();
-        bars.push(calibrated.pass_at);
-        bars.sort_by(f64::total_cmp);
-        bars.dedup();
-        let fitted = bars
-            .into_iter()
-            .map(|pass_at| {
-                let bar = ExternalCalibration {
-                    pass_at,
-                    ..calibrated.clone()
-                };
-                (pass_at, at(&bar).agreement)
+        // Whether the verdicts at a bar match the people's on the items chosen.
+        let hits = |pass_at: f64, chosen: &dyn Fn(usize) -> bool| {
+            let bar = ExternalCalibration {
+                pass_at,
+                ..calibrated.clone()
+            };
+            items
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| chosen(*at))
+                .filter(|(_, (number, value))| {
+                    matches!(
+                        (
+                            number.and_then(|number| bar.verdict(declared, number)),
+                            bar.judged(rubric, value),
+                        ),
+                        (Some(metric), Some(person)) if (metric - person).abs() < 1e-9
+                    )
+                })
+                .count()
+        };
+        // The bar, among the numbers the chosen items were given and the card's
+        // own, whose verdicts matched on most of them — the card's nearest
+        // among equals.
+        let fit = |chosen: &dyn Fn(usize) -> bool| {
+            let mut bars: Vec<f64> = items
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| chosen(*at))
+                .filter_map(|(_, (number, _))| *number)
+                .collect();
+            bars.push(calibrated.pass_at);
+            bars.sort_by(f64::total_cmp);
+            bars.dedup();
+            bars.into_iter()
+                .map(|pass_at| (pass_at, hits(pass_at, chosen)))
+                .min_by(|(one, agreeing), (other, agreeing_other)| {
+                    agreeing_other.cmp(agreeing).then(
+                        (one - calibrated.pass_at)
+                            .abs()
+                            .total_cmp(&(other - calibrated.pass_at).abs()),
+                    )
+                })
+        };
+        let fitted = (!items.is_empty())
+            .then(|| fit(&|_| true))
+            .flatten()
+            .map(|(bar, matched)| (bar, matched as f64 / items.len() as f64));
+        let held_out = {
+            let halves = [0, 1].map(|half| folds.iter().filter(|fold| **fold == half).count());
+            (halves.iter().all(|count| *count > 0)).then(|| {
+                let mut matched = 0;
+                let mut fold_pass_at = Vec::new();
+                for half in [0, 1] {
+                    if let Some((bar, _)) = fit(&|at| folds[at] != half) {
+                        matched += hits(bar, &|at| folds[at] == half);
+                        fold_pass_at.push(bar);
+                    }
+                }
+                HeldOutBar {
+                    items: items.len(),
+                    agreement: matched as f64 / items.len() as f64,
+                    agreement_interval: AgreementInterval::wilson(matched, items.len()),
+                    fold_pass_at,
+                }
             })
-            .min_by(|(one, agreeing), (other, agreeing_other)| {
-                agreeing_other.total_cmp(agreeing).then(
-                    (one - calibrated.pass_at)
-                        .abs()
-                        .total_cmp(&(other - calibrated.pass_at).abs()),
-                )
-            });
+        };
         let ranking = gamma(&ranked);
         agreement.push(ExternalAgreement {
             rank_agreement: ranking.map(|(gamma, _)| gamma),
             ranked_pairs: ranking.map(|(_, pairs)| pairs),
-            fitted_pass_at: fitted.filter(|_| !items.is_empty()).map(|(bar, _)| bar),
-            fitted_agreement: fitted.filter(|_| !items.is_empty()).map(|(_, share)| share),
+            rank_interval: gamma_interval(&ranked),
+            fitted_pass_at: fitted.map(|(bar, _)| bar),
+            fitted_agreement: fitted.map(|(_, share)| share),
+            held_out,
             verdicts,
         });
     }
@@ -1158,5 +1306,175 @@ mod tests {
         assert_eq!(gamma(&flagged), Some((1.0, 4)));
         let muddled = [(0.2, 0.0), (0.7, 0.0), (0.6, 1.0), (0.8, 1.0)];
         assert_eq!(gamma(&muddled), Some((0.5, 4)));
+    }
+
+    #[test]
+    fn a_ranking_s_interval_is_its_standard_error_through_fisher_s_transform_and_absent_at_one() {
+        // Ten pairs the people's way round and two the other, on a coarse side.
+        let pairs = [
+            (0.2, 0.0),
+            (0.7, 0.0),
+            (0.6, 1.0),
+            (0.8, 1.0),
+            (0.3, 0.0),
+            (0.9, 1.0),
+            (0.5, 1.0),
+        ];
+        let interval = gamma_interval(&pairs).expect("a gamma short of one has an interval");
+        assert!(
+            (interval.low - -0.310_586_715_315_065_6).abs() < 1e-9,
+            "{interval:?}"
+        );
+        assert!(
+            (interval.high - 0.958_784_503_377_518_1).abs() < 1e-9,
+            "{interval:?}"
+        );
+        assert_eq!(
+            gamma_interval(&[(0.1, 1.0), (0.5, 2.0), (0.9, 3.0)]),
+            None,
+            "every pair one way round"
+        );
+        assert_eq!(gamma_interval(&[(0.1, 1.0), (0.9, 1.0)]), None);
+    }
+
+    /// Case IDs dealt to each half, in the order they are found.
+    fn dealt(count: usize) -> [Vec<String>; 2] {
+        let mut halves: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+        for at in 0.. {
+            let case_id = format!("case-{at}");
+            let half = calibration_fold(&case_id);
+            if halves[half].len() < count {
+                halves[half].push(case_id);
+            }
+            if halves.iter().all(|half| half.len() == count) {
+                break;
+            }
+        }
+        halves
+    }
+
+    /// A card, its rubric, a set of yes-or-no judgements one per case, and
+    /// what the metric said about each.
+    type Flagged = (
+        Scorecard,
+        Rubrics,
+        VersionReference,
+        CalibrationSet,
+        BTreeMap<(usize, String), Option<f64>>,
+    );
+
+    fn flagged(judged: &[(String, bool, f64)]) -> Flagged {
+        let rubric_ref = VersionReference {
+            name: "correct".into(),
+            version: "r1".into(),
+        };
+        let card: Scorecard = serde_json::from_value(json!({
+            "name": "calibrated",
+            "scorers": [{
+                "metric": "relevancy", "answer_path": "/text",
+                "scorer": {
+                    "kind": "external", "adapter": "deepeval", "metric": "answer_relevancy",
+                    "declared": serde_json::to_value(graded(MetricDirection::Higher)).unwrap(),
+                    "calibration": {"rubric": rubric_ref, "pass_at": 0.9}
+                }
+            }]
+        }))
+        .unwrap();
+        let rubrics =
+            Rubrics::default().with(&rubric_ref, rubric(Scale::Flag, MetricDirection::Higher));
+        let set = CalibrationSet {
+            name: "people".into(),
+            result: rubric_ref.clone(),
+            items: judged
+                .iter()
+                .map(|(case_id, value, _)| crate::CalibrationItem {
+                    case_id: case_id.clone(),
+                    repetition_id: "measurement-1".into(),
+                    rubric: rubric_ref.clone(),
+                    value: AssessmentValue::Flag { value: *value },
+                    author: "ada".into(),
+                    standing_id: format!("s-{case_id}"),
+                    revision: 1,
+                })
+                .collect(),
+            from_archive: false,
+        };
+        let said = judged
+            .iter()
+            .enumerate()
+            .map(|(at, (_, _, number))| ((at, "relevancy".to_owned()), Some(*number)))
+            .collect();
+        (card, rubrics, rubric_ref, set, said)
+    }
+
+    #[test]
+    fn a_bar_both_halves_support_holds_on_the_half_it_never_saw() {
+        let [first, second] = dealt(4);
+        let judged: Vec<(String, bool, f64)> = [first, second]
+            .into_iter()
+            .flat_map(|half| {
+                half.into_iter()
+                    .zip([(true, 0.8), (true, 0.7), (false, 0.3), (false, 0.2)])
+                    .map(|(case_id, (value, number))| (case_id, value, number))
+            })
+            .collect();
+        let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
+
+        let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
+        let row = &report.agreement[0];
+
+        assert_eq!(
+            row.verdicts.agreement, 0.5,
+            "the card's 0.9 fails every yes"
+        );
+        assert_eq!(
+            (row.fitted_pass_at, row.fitted_agreement),
+            (Some(0.7), Some(1.0))
+        );
+        let held_out = row.held_out.as_ref().expect("both halves hold items");
+        assert_eq!((held_out.items, held_out.agreement), (8, 1.0));
+        assert_eq!(held_out.fold_pass_at, vec![0.7, 0.7]);
+        assert!(held_out.agreement_interval.is_some());
+    }
+
+    #[test]
+    fn a_bar_fitted_on_everything_flatters_itself_and_the_held_out_half_says_by_how_much() {
+        // Each half alone supports a bar the other half does not: 0.8 fits
+        // the first and fails the second's yes at 0.5; 0.5 fits the second.
+        let [first, second] = dealt(2);
+        let judged = vec![
+            (first[0].clone(), true, 0.8),
+            (first[1].clone(), false, 0.2),
+            (second[0].clone(), true, 0.5),
+            (second[1].clone(), false, 0.4),
+        ];
+        let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
+
+        let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
+        let row = &report.agreement[0];
+
+        assert_eq!(
+            (row.fitted_pass_at, row.fitted_agreement),
+            (Some(0.5), Some(1.0))
+        );
+        let held_out = row.held_out.as_ref().expect("both halves hold items");
+        assert_eq!(held_out.agreement, 0.75, "{held_out:?}");
+        assert_eq!(held_out.fold_pass_at, vec![0.5, 0.8]);
+    }
+
+    #[test]
+    fn a_set_all_on_one_side_has_no_held_out_half() {
+        let [first, _] = dealt(3);
+        let judged: Vec<(String, bool, f64)> = first
+            .into_iter()
+            .zip([(true, 0.8), (false, 0.3), (true, 0.9)])
+            .map(|(case_id, (value, number))| (case_id, value, number))
+            .collect();
+        let (card, rubrics, rubric_ref, set, said) = flagged(&judged);
+
+        let report = external_agreement(&card, &rubrics, &rubric_ref, &set, &said);
+
+        assert!(report.agreement[0].fitted_pass_at.is_some());
+        assert!(report.agreement[0].held_out.is_none());
     }
 }

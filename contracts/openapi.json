@@ -18630,6 +18630,17 @@
                 "format": "double",
                 "description": "The bar on the metric — one of the numbers it gave on this set — whose\nverdicts would have matched the people's most often, over every item;\nthe nearest to the card's own `pass_at` among equals."
               },
+              "held_out": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/HeldOutBar",
+                    "description": "How a bar fitted this way does on items it was not fitted on. Absent\nwhen the set cannot be split into two halves with an item in each."
+                  }
+                ]
+              },
               "rank_agreement": {
                 "type": [
                   "number",
@@ -18637,6 +18648,17 @@
                 ],
                 "format": "double",
                 "description": "Whether the metric orders answers as the people do, needing no bar:\nGoodman and Kruskal's gamma over the answered items, each side turned so\nmore is better — one when every pair both sides told apart is ordered\nthe same way, nought when the order says nothing, minus one when it is\nreversed. Absent when no pair was told apart on both sides."
+              },
+              "rank_interval": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgreementInterval",
+                    "description": "Where `rank_agreement` plausibly lies: 95%, from its asymptotic standard\nerror taken through Fisher's transform so it stays inside minus one and\none. Absent when every pair told apart was ordered one way, where that\nmethod has nothing to say — the pair count beside it does."
+                  }
+                ]
               },
               "ranked_pairs": {
                 "type": [
@@ -18649,7 +18671,7 @@
             }
           }
         ],
-        "description": "How far a calibrated framework metric agreed with its people, beyond the\nverdicts at the card's bar.\n\nThe verdict agreement is the one a result is held to, and it says nothing\nabout a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric\nthat ranks answers the other way round from the people. So two more\nreadings ride beside it. Neither is applied to anything, and the fitted bar\nis found on the very items it is scored on, so it flatters itself —\nadopting it is publishing the card again, and a new context."
+        "description": "How far a calibrated framework metric agreed with its people, beyond the\nverdicts at the card's bar.\n\nThe verdict agreement is the one a result is held to, and it says nothing\nabout a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric\nthat ranks answers the other way round from the people. So two more\nreadings ride beside it. Neither is applied to anything. The fitted bar is\nfound on the very items it is scored on, so it flatters itself; `held_out`\nis the check it lacks — the same fit made on half the set and scored on the\nother half, both ways round — and adopting a bar is still publishing the\ncard again, and a new context."
       },
       "ExternalCalibration": {
         "type": "object",
@@ -19333,6 +19355,44 @@
           "polygon",
           "keypoints"
         ]
+      },
+      "HeldOutBar": {
+        "type": "object",
+        "description": "A bar fitted on one half of a calibration set and scored on the other, both\nways round, so every item is scored once by a bar that never saw it.\n\nThe halves are dealt by the case, from a digest of its ID: a case two people\njudged lands on one side with both judgements, and the same set is dealt the\nsame way on every run. Compare it with `agreement`, the card's own bar, which\nwas never fitted on these items either; `fitted_agreement` above both is the\nflattery a fit on everything carries.",
+        "required": [
+          "items",
+          "agreement",
+          "fold_pass_at"
+        ],
+        "properties": {
+          "agreement": {
+            "type": "number",
+            "format": "double",
+            "description": "The share of items where the verdict at the bar fitted without them was\nthe people's, over every item."
+          },
+          "agreement_interval": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgreementInterval"
+              }
+            ]
+          },
+          "fold_pass_at": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "The bar fitted without each half, in the order the halves are dealt —\nthe one that scored it. Two far apart say the fitted bar is mostly this\nset's noise."
+          },
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "HostedMessage": {
         "type": "object",

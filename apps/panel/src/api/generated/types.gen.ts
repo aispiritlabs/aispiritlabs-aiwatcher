@@ -3378,9 +3378,11 @@ export type ExportVersionSummary = {
  * The verdict agreement is the one a result is held to, and it says nothing
  * about a bar a little either side: 60% at 0.7 may be 90% at 0.5 or a metric
  * that ranks answers the other way round from the people. So two more
- * readings ride beside it. Neither is applied to anything, and the fitted bar
- * is found on the very items it is scored on, so it flatters itself —
- * adopting it is publishing the card again, and a new context.
+ * readings ride beside it. Neither is applied to anything. The fitted bar is
+ * found on the very items it is scored on, so it flatters itself; `held_out`
+ * is the check it lacks — the same fit made on half the set and scored on the
+ * other half, both ways round — and adopting a bar is still publishing the
+ * card again, and a new context.
  */
 export type ExternalAgreement = JudgeAgreement & {
     /**
@@ -3393,6 +3395,7 @@ export type ExternalAgreement = JudgeAgreement & {
      * the nearest to the card's own `pass_at` among equals.
      */
     fitted_pass_at?: number | null;
+    held_out?: null | HeldOutBar;
     /**
      * Whether the metric orders answers as the people do, needing no bar:
      * Goodman and Kruskal's gamma over the answered items, each side turned so
@@ -3401,6 +3404,7 @@ export type ExternalAgreement = JudgeAgreement & {
      * reversed. Absent when no pair was told apart on both sides.
      */
     rank_agreement?: number | null;
+    rank_interval?: null | AgreementInterval;
     /**
      * The pairs of items `rank_agreement` was counted over.
      */
@@ -3746,6 +3750,32 @@ export const GeometryKind = {
  * image and a box in another produces a training target nothing can decode.
  */
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
+
+/**
+ * A bar fitted on one half of a calibration set and scored on the other, both
+ * ways round, so every item is scored once by a bar that never saw it.
+ *
+ * The halves are dealt by the case, from a digest of its ID: a case two people
+ * judged lands on one side with both judgements, and the same set is dealt the
+ * same way on every run. Compare it with `agreement`, the card's own bar, which
+ * was never fitted on these items either; `fitted_agreement` above both is the
+ * flattery a fit on everything carries.
+ */
+export type HeldOutBar = {
+    /**
+     * The share of items where the verdict at the bar fitted without them was
+     * the people's, over every item.
+     */
+    agreement: number;
+    agreement_interval?: null | AgreementInterval;
+    /**
+     * The bar fitted without each half, in the order the halves are dealt —
+     * the one that scored it. Two far apart say the fitted bar is mostly this
+     * set's noise.
+     */
+    fold_pass_at: Array<number>;
+    items: number;
+};
 
 /**
  * A hosted decider's own message, as this engine holds it.

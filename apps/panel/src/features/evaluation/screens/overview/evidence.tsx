@@ -616,6 +616,7 @@ function AgreementTable({
  */
 function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
   if (rows.every((row) => row.rank_agreement == null && row.fitted_pass_at == null)) return null;
+  const percent = (share: number) => `${Math.round(share * 100)}%`;
   return (
     <table className="mt-2 w-full text-left">
       <thead className="text-muted-foreground">
@@ -628,6 +629,12 @@ function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
             Orders answers as people do
           </th>
           <th className="font-normal">Bar these people support</th>
+          <th
+            className="font-normal"
+            title="The same fit made on half the set and scored on the other half, both ways round"
+          >
+            On items it was not fitted on
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -638,11 +645,39 @@ function BeyondTheBar({ rows }: { rows: ExternalAgreement[] }) {
               {row.rank_agreement == null
                 ? 'no pair told apart on both sides'
                 : `${row.rank_agreement.toFixed(2)} over ${row.ranked_pairs ?? 0} pairs`}
+              {row.rank_interval ? (
+                <div className="text-muted-foreground">
+                  {`${row.rank_interval.low.toFixed(2)} to ${row.rank_interval.high.toFixed(2)}`}
+                </div>
+              ) : null}
             </td>
             <td>
               {row.fitted_pass_at == null || row.fitted_agreement == null
                 ? '—'
-                : `${row.fitted_pass_at} would agree ${Math.round(row.fitted_agreement * 100)}% — fitted on these same items`}
+                : `${row.fitted_pass_at} would agree ${percent(row.fitted_agreement)} — fitted on these same items`}
+            </td>
+            <td>
+              {row.held_out ? (
+                <>
+                  <div>
+                    {`${percent(row.held_out.agreement)} over ${row.held_out.items} items, against ${percent(row.agreement)} at the card's bar`}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {[
+                      row.held_out.agreement_interval
+                        ? `${percent(row.held_out.agreement_interval.low)}–${percent(row.held_out.agreement_interval.high)}`
+                        : null,
+                      `each half's bar: ${row.held_out.fold_pass_at.join(' and ')}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </>
+              ) : (
+                <span className="text-muted-foreground">
+                  every item is on one side of the split
+                </span>
+              )}
             </td>
           </tr>
         ))}
