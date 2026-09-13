@@ -59,7 +59,7 @@ What it checks:
     witness on every one to the model version the provider said served the call
     and to the prompt version whose template it found in the request — and, by
     its keyed digests, to every answer being the reply it relayed to a request
-    holding its case's question and nothing but the pinned prompt and its values:
+    that was nothing but the pinned prompt rendered with its case's question:
     the log records each run as published by the token that sent it, and none of
     those words;
 14. an application that steps through a node the pinned workflow does not
@@ -84,11 +84,15 @@ What it checks:
     beside the pinned prompt, has every answer witnessed as the reply and no
     exchange, and a gate requiring witnessed answers says why;
 19. an application whose model reasons before it answers, and which says it
-    takes the answer from after `Answer:`, has every exchange witnessed —
-    the gateway took the answer out of the reply the same way;
-20. a request naming the pinned prompt whose text does not hold its template
+    takes the answer from the fenced JSON block of the reply — the steps it
+    takes it out with — has every exchange witnessed: the gateway took the
+    answer out of the reply the same way;
+20. an application that renders the pinned prompt with a value it made beside
+    the case's question has every answer witnessed as the reply and no
+    exchange, and a gate requiring witnessed answers says why;
+21. a request naming the pinned prompt whose text does not hold its template
     fails at the traces step on the gateway's word, and publishes nothing;
-21. the server stops with runs still in a period it has not written, starts
+22. the server stops with runs still in a period it has not written, starts
     again on the same data and replays its log over the period fold's saved
     state: the window counts every run once — the three before the restart
     from their written period, the two after from the period the fold still
@@ -130,7 +134,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
 from aiwatcher_sdk import AiwatcherClient  # noqa: E402
-from aiwatcher_sdk.gateway import Gateway  # noqa: E402
+from aiwatcher_sdk.gateway import Gateway, extracted  # noqa: E402
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
@@ -195,8 +199,8 @@ CAPITALS = (
 )
 
 PROMPTS = {
-    "baseline": "Answer the question about {{ country }} helpfully.",
-    "candidate": "Answer the question about {{ country }} in one word.",
+    "baseline": "Answer this question helpfully: {{ question }}",
+    "candidate": "Answer this question in one word: {{ question }}",
 }
 
 #: What the worker was handed, to check nothing it expected reached it.
@@ -211,7 +215,8 @@ GATEWAYS: dict[str, str] = {}
 
 class Provider(BaseHTTPRequestHandler):
     """A stand-in model provider: one word when its system message asks for one —
-    reasoning first, then ``Answer:``, when the request's ``user`` says explain."""
+    reasoning first, then the answer in a fenced JSON block, when the request's
+    ``user`` says explain."""
 
     def log_message(self, format: str, *args: Any) -> None:
         del format, args
@@ -222,7 +227,10 @@ class Provider(BaseHTTPRequestHandler):
         country = question.removeprefix("What is the capital of ").removesuffix("?")
         said = application(system, country, dict(CAPITALS)[country])
         if body.get("user") == "explain":
-            said = f"It is where the government of {country} sits.\nAnswer: {said}"
+            said = (
+                f"It is where the government of {country} sits.\n"
+                f"```json\n{json.dumps({'capital': said, 'confidence': 0.9})}\n```"
+            )
         payload = json.dumps(
             {
                 # The version it served, as a provider names its snapshot.
@@ -351,33 +359,42 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     system = (
                         "Answer in one word."
                         if run.params.get("drift")
-                        else version.render(country=country)
+                        else version.render(question=question)
                     )
                     if run.params.get("around"):
                         # Somewhere else, through the witness; this case, around it.
-                        elsewhere = "Kenya" if country != "Kenya" else "Japan"
+                        elsewhere = (
+                            f"What is the capital of {'Kenya' if country != 'Kenya' else 'Japan'}?"
+                        )
                         through_gateway(
                             "witness",
                             llm.caller_headers(),
-                            version.render(country=elsewhere),
-                            f"What is the capital of {elsewhere}?",
-                            llm.caller_body(country=elsewhere),
+                            version.render(question=elsewhere),
+                            elsewhere,
+                            llm.caller_body(question=elsewhere),
                         )
+                    # How the application takes its answer out of a reasoned
+                    # reply, which the gateway is told before the reply comes.
+                    taking = {"steps": [{"fenced": "json"}, {"json_pointer": "/capital"}]}
+                    # A value the application made, beside the case's own.
+                    hint = f"It starts with {capital[:2]}."
                     told: dict[str, Any] = (
                         {}
                         if run.params.get("drift")
                         else llm.caller_body(
-                            country=country,
                             question=question,
-                            answer_from=(
-                                {"between": ["Answer:", None]}
-                                if run.params.get("explain")
-                                else None
-                            ),
+                            answer_from=taking if run.params.get("explain") else None,
+                            **({"hint": hint} if run.params.get("hint") else {}),
                         )
                     )
                     if run.params.get("explain"):
                         told["user"] = "explain"
+                    if run.params.get("hint"):
+                        told["messages"] = [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": question},
+                            {"role": "user", "content": hint},
+                        ]
                     if run.params.get("repeat"):
                         # The answer, obtained elsewhere, for the witnessed model to say.
                         told["messages"] = [
@@ -398,7 +415,7 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     )
                     said = str(reply["choices"][0]["message"]["content"])
                     if run.params.get("explain"):
-                        said = said.split("Answer:", 1)[1].strip()
+                        said = extracted(said, taking) or ""
                     llm.usage(
                         prompt_tokens=reply["usage"]["prompt_tokens"],
                         completion_tokens=reply["usage"]["completion_tokens"],
@@ -1312,10 +1329,14 @@ def main() -> int:
             {"traces": around, "gate": held.get("reasons")},
         )
 
-        # An application telling the witnessed model what to say, and one whose
-        # model reasons before it answers.
+        # An application telling the witnessed model what to say, one whose
+        # model reasons before it answers, and one handing it a value it made.
         told_runs: dict[str, dict[str, Any]] = {}
-        for which, measurement in (("repeat", "measurement-10"), ("explain", "measurement-11")):
+        for which, measurement in (
+            ("repeat", "measurement-10"),
+            ("explain", "measurement-11"),
+            ("hint", "measurement-12"),
+        ):
             declared = declare(
                 "candidate",
                 dataset,
@@ -1380,6 +1401,23 @@ def main() -> int:
             ),
             {"traces": explained["traces"], "gate": explained["gate"].get("reasons")},
         )
+        hinted = told_runs["hint"]
+        check(
+            20,
+            "an answer to a request rendered with a value the application made beside the "
+            "case's own is the reply and no exchange, and a gate requiring witnessed answers "
+            "says why",
+            hinted["state"] == "completed"
+            and hinted["traces"].get("witnessed_answer") == len(CAPITALS)
+            and hinted["traces"].get("witnessed_input") == len(CAPITALS)
+            and hinted["traces"].get("witnessed_exchange") == 0
+            and hinted["gate"].get("verdict") == "incomplete"
+            and any(
+                "a value the application made" in reason
+                for reason in hinted["gate"].get("reasons", [])
+            ),
+            {"traces": hinted["traces"], "gate": hinted["gate"].get("reasons")},
+        )
 
         # A request naming the pinned prompt with other words in it.
         drifting = declare(
@@ -1399,7 +1437,7 @@ def main() -> int:
             )["execution"]["execution_id"]
         )
         check(
-            20,
+            21,
             "a request whose text does not hold the pinned prompt is refused on the gateway's word",
             drifted["execution"]["state"]["state_type"] == "failed"
             and "does not hold that version's template" in json.dumps(drifted["execution"])
@@ -1457,7 +1495,7 @@ def main() -> int:
                 break
             time.sleep(1)
         check(
-            21,
+            22,
             "a restart that replays the log over the fold's saved state counts every run once",
             restarted.get("runs") == served + 5
             and restarted.get("runs_from_periods") == served + 3,
