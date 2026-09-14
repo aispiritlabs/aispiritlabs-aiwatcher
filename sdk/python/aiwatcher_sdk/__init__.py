@@ -693,7 +693,11 @@ class AiwatcherClient:
         — which is how a cycle with more than one way back is held to its rounds.
         Every edge under one has to lead back round the same cycle, or this
         raises :class:`ValueError` naming the bound: on anything else it counts
-        nothing a declaration could mean.
+        nothing a declaration could mean. So does an edge's own ``at_most`` no
+        smaller than the times its source can complete — once on a straight
+        path, once per side at a join — or than a bound it shares: it holds
+        nothing, and was usually meant for another edge. Out of a ``repeats``
+        node or round a cycle, a bound holds the rounds and is kept.
 
         `variant_id` and `evaluation_id` mean what they mean on :meth:`run`: the
         variant answering, and the measurement a run answers a case for.
@@ -710,7 +714,9 @@ class AiwatcherClient:
             }
             for bound in bounds or []
         ]
-        if problems := _misbounded(resolved_edges, resolved_bounds):
+        if problems := _misbounded(resolved_edges, resolved_bounds) + _idle_bounds(
+            resolved_nodes, resolved_edges, resolved_bounds
+        ):
             raise ValueError("; ".join(problems))
         context = Correlation(
             run_id=run_id or _new_id(),
@@ -940,6 +946,134 @@ def _misbounded(edges: list[dict[str, Any]], bounds: list[dict[str, Any]]) -> li
                 f"the bound of at most {at_most} that {named} share leads back into "
                 f"{' and into '.join(heads)}, the heads of different loops, whose rounds are "
                 "counted apart"
+            )
+    return said
+
+
+def _positive(value: object) -> int | None:
+    """A bound as the Rust reader takes one: a whole number above nought, never a bool."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _idle_bounds(
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]], bounds: list[dict[str, Any]]
+) -> list[str]:
+    """Each edge's own bound that holds nothing a run could do, in words.
+
+    The rule ``aiwatcher_core::topology::Topology::idle_bounds`` names in a
+    pinned declaration's trace: a bound no smaller than the times its source can
+    complete — once where a run enters, once per completion leading in, never
+    more than an edge into it may be followed nor than the node's own
+    ``at_most``, and without a count on a cycle, at a ``repeats`` node or past
+    anything unbounded — or than a bound it shares with other edges.
+    """
+    declared = {
+        (str(edge["from"]), str(edge["to"])) for edge in edges if "from" in edge and "to" in edge
+    }
+    edge_bounds: dict[tuple[str, str], int] = {}
+    for edge in edges:
+        if "from" in edge and "to" in edge and (at_most := _positive(edge.get("at_most"))):
+            edge_bounds[(str(edge["from"]), str(edge["to"]))] = at_most
+    shared: dict[tuple[tuple[str, str], ...], int] = {}
+    for declared_bound in bounds:
+        at_most = _positive(declared_bound.get("at_most"))
+        if at_most is None:
+            continue
+        under = tuple(
+            sorted(
+                {
+                    (str(edge[0]), str(edge[1]))
+                    if isinstance(edge, list)
+                    else (str(edge.get("from")), str(edge.get("to")))
+                    for edge in declared_bound.get("edges", [])
+                    if isinstance(edge, (list, dict))
+                }
+                & declared
+            )
+        )
+        if len(under) == 1:
+            edge_bounds[under[0]] = min(edge_bounds.get(under[0], at_most), at_most)
+        elif under:
+            shared[under] = min(shared.get(under, at_most), at_most)
+    node_ids = {str(node["id"]) for node in nodes if node.get("id")}
+    repeating = {
+        str(node["id"]) for node in nodes if node.get("id") and node.get("repeats") is True
+    }
+    node_bounds = {
+        str(node["id"]): at_most
+        for node in nodes
+        if node.get("id") and (at_most := _positive(node.get("at_most")))
+    }
+    following: dict[str, set[str]] = {}
+    leading: dict[str, list[str]] = {}
+    for source, target in declared:
+        following.setdefault(source, set()).add(target)
+        leading.setdefault(target, []).append(source)
+
+    def reached(start: str) -> set[str]:
+        seen, waiting = {start}, [start]
+        while waiting:
+            for target in following.get(waiting.pop(), ()):
+                if target not in seen:
+                    seen.add(target)
+                    waiting.append(target)
+        return seen
+
+    most: dict[str, int | None] = {}
+    while len(most) < len(node_ids):
+        before = len(most)
+        for node in sorted(node_ids - most.keys()):
+            into = leading.get(node, [])
+            own: int | None
+            if node in repeating or any(source in reached(node) for source in into):
+                own = None
+            elif not into:
+                own = 1
+            elif any(source not in most for source in into):
+                continue
+            else:
+                own = 0
+                for source in into:
+                    count, followed = most[source], edge_bounds.get((source, node))
+                    turns = (
+                        followed
+                        if count is None
+                        else count
+                        if followed is None
+                        else min(count, followed)
+                    )
+                    if turns is None:
+                        own = None
+                        break
+                    own += turns
+            held = node_bounds.get(node)
+            most[node] = held if own is None else own if held is None else min(own, held)
+        if len(most) == before:
+            break
+
+    said: list[str] = []
+    for (source, target), at_most in sorted(edge_bounds.items()):
+        completions = most.get(source)
+        if completions is not None and completions <= at_most:
+            times = "once" if completions == 1 else f"{completions} times"
+            said.append(
+                f"the bound of at most {at_most} on {source} to {target} holds nothing, since "
+                f"{source} completes at most {times} on this shape"
+            )
+            continue
+        covering = [
+            (under, together)
+            for under, together in sorted(shared.items())
+            if (source, target) in under and together <= at_most
+        ]
+        if covering:
+            under, together = min(covering, key=lambda held: held[1])
+            named = " and ".join(f"{start} to {end}" for start, end in under)
+            said.append(
+                f"the bound of at most {at_most} on {source} to {target} holds nothing the bound "
+                f"of at most {together} that {named} share does not"
             )
     return said
 

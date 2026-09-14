@@ -584,6 +584,10 @@ pub struct TracedAnswer {
     /// rest was not read and it is not seen executing the pinned workflow.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow_steps_unread: bool,
+    /// Edge bounds of the pinned workflow that hold nothing a run could do,
+    /// in words ([`Topology::idle_bounds`]): named, and never a refusal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_idle_bounds: Vec<String>,
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -631,6 +635,12 @@ pub struct GenerationTrace {
     /// past them was therefore not read.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub steps_unread: usize,
+    /// Edge bounds of the pinned workflow that hold nothing a run could do,
+    /// in words: a bound no smaller than the times its source may complete, or
+    /// than a bound it shares. Measured all the same — such a bound is true —
+    /// and usually meant for another edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub idle_bounds: Vec<String>,
     /// Seen runs whose call on the pinned model version a run published under
     /// another credential says it served; absent when the variant pins no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -706,6 +716,15 @@ impl GenerationTrace {
             on_workflow: counted(|row| row.on_workflow),
             workflow_undeclared: rows.iter().any(|row| row.workflow_undeclared),
             steps_unread: rows.iter().filter(|row| row.workflow_steps_unread).count(),
+            idle_bounds: {
+                let mut idle: Vec<String> = rows
+                    .iter()
+                    .flat_map(|row| row.workflow_idle_bounds.iter().cloned())
+                    .collect();
+                idle.sort();
+                idle.dedup();
+                idle
+            },
             witnessed_model: counted(|row| row.witnessed_model),
             witnessed_prompt: counted(|row| row.witnessed_prompt),
             witnessed_answer: counted(|row| row.witnessed_answer),
@@ -1589,6 +1608,7 @@ pub fn trace_answers(
     let mut rows = Vec::with_capacity(answers.len());
     let mut contradictions = Vec::new();
     let pinned_shape = workflow.map(Topology::digest);
+    let idle_bounds = workflow.map(Topology::idle_bounds).unwrap_or_default();
     for answer in answers {
         let traced = answer.run_id.as_ref().and_then(|run_id| runs.get(run_id));
         let mut row = TracedAnswer {
@@ -1614,6 +1634,7 @@ pub fn trace_answers(
             models: Vec::new(),
             workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
             workflow_steps_unread: false,
+            workflow_idle_bounds: idle_bounds.clone(),
         };
         if let (Some(run_id), Some(run)) = (&answer.run_id, traced) {
             let mut said = |sentence: String| {
@@ -2093,6 +2114,7 @@ mod tests {
                 on_workflow: None,
                 workflow_undeclared: false,
                 steps_unread: 0,
+                idle_bounds: Vec::new(),
                 witnessed_model: Some(0),
                 witnessed_prompt: Some(0),
                 witnessed_answer: Some(0),
@@ -2729,6 +2751,35 @@ mod tests {
             traversed(&together, &retried[..retried.len() - 2]).expect("a retry is no round")[0]
                 .on_workflow,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn a_pinned_bound_that_holds_nothing_is_still_measured_and_the_trace_names_it() {
+        let pinned = Topology::read(&serde_json::json!({
+            "nodes": ["retrieve", "answer"],
+            "edges": [{"from": "retrieve", "to": "answer", "at_most": 1}]
+        }))
+        .expect("a shape");
+
+        let rows = traversed(
+            &pinned,
+            &["retrieve:s", "retrieve:c", "answer:s", "answer:c"],
+        )
+        .expect("a bound that holds nothing is true, and refuses no run");
+        let trace = GenerationTrace::of(&rows);
+
+        assert_eq!(rows[0].on_workflow, Some(true));
+        assert_eq!(
+            trace.idle_bounds,
+            [
+                "the bound of at most 1 on retrieve to answer holds nothing, since retrieve \
+              completes at most once on this shape"
+            ]
+        );
+        assert!(
+            trace.complete(),
+            "a bound that holds nothing is no shortfall"
         );
     }
 

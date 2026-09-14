@@ -17,7 +17,9 @@
 //! more than one way back into its head is held to its rounds whichever way
 //! each one took —
 //! which is all such a bound may hold, so one on anything but the ways back
-//! into one loop's head is named ([`Topology::misbounded`]).
+//! into one loop's head is named ([`Topology::misbounded`]). An edge's own
+//! bound no smaller than the times its source may complete holds nothing, and
+//! is named as well ([`Topology::idle_bounds`]).
 //! Each changes what a run may do on the shape, so each is part of the digest;
 //! a declaration without any digests as it always did.
 
@@ -332,6 +334,124 @@ impl Topology {
         }
         said
     }
+
+    /// How many times at most each node may complete on this shape, and so
+    /// how many times at most a run may follow each edge out of it — `None`
+    /// where nothing in the declaration bounds it.
+    ///
+    /// A node where a run may enter completes once. Any other node completes
+    /// once per turn it is given, which is once per completion of a node leading
+    /// into it, and never more often than an edge into it may be followed. A
+    /// node on a cycle, a node declared `repeats` and a node anything unbounded
+    /// leads into have no count of their own. A node's own `at_most` counts
+    /// every start, retries included, so it holds each of them to that number.
+    #[must_use]
+    pub fn most_completions(&self) -> BTreeMap<String, Option<u64>> {
+        let reaches = self.reaches();
+        let mut into: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (from, to) in &self.edges {
+            into.entry(to.as_str()).or_default().push(from.as_str());
+        }
+        let mut most: BTreeMap<String, Option<u64>> = BTreeMap::new();
+        while most.len() < self.nodes.len() {
+            let before = most.len();
+            for node in &self.nodes {
+                if most.contains_key(node) {
+                    continue;
+                }
+                let leading: &[&str] = into.get(node.as_str()).map_or(&[], Vec::as_slice);
+                let cycled = leading
+                    .iter()
+                    .any(|from| reaches[node.as_str()].contains(from));
+                let own = if cycled || self.repeats.contains(node) {
+                    None
+                } else if leading.is_empty() {
+                    Some(1)
+                } else {
+                    // Once every node leading into it has its count: nothing
+                    // leading into a node off every cycle leads back from it.
+                    let Some(counts) = leading
+                        .iter()
+                        .map(|from| most.get(*from).copied())
+                        .collect::<Option<Vec<Option<u64>>>>()
+                    else {
+                        continue;
+                    };
+                    leading
+                        .iter()
+                        .zip(counts)
+                        .try_fold(0_u64, |sum, (from, count)| {
+                            let edge = self.edges_at_most.get(&((*from).to_owned(), node.clone()));
+                            let turns = match (count, edge) {
+                                (Some(count), Some(edge)) => count.min(*edge),
+                                (Some(count), None) => count,
+                                (None, edge) => *edge?,
+                            };
+                            Some(sum.saturating_add(turns))
+                        })
+                };
+                let held = match (own, self.at_most.get(node)) {
+                    (Some(own), Some(bound)) => Some(own.min(*bound)),
+                    (own, bound) => own.or(bound.copied()),
+                };
+                most.insert(node.clone(), held);
+            }
+            if most.len() == before {
+                break;
+            }
+        }
+        most
+    }
+
+    /// Each edge's own bound that holds nothing a run could do, in words: one no
+    /// smaller than the times its source may complete ([`Self::most_completions`]),
+    /// or than a bound it shares with other edges, which counts it together
+    /// with them. Such a bound is true and keeps nothing, and a bound that keeps
+    /// nothing is usually meant for another edge. A bound on an edge out of a
+    /// repeating node, or round a cycle, may hold the rounds and is not named.
+    #[must_use]
+    pub fn idle_bounds(&self) -> Vec<String> {
+        let most = self.most_completions();
+        let mut said = Vec::new();
+        for ((from, to), at_most) in &self.edges_at_most {
+            if let Some(completions) = most
+                .get(from)
+                .copied()
+                .flatten()
+                .filter(|completions| completions <= at_most)
+            {
+                let times = if completions == 1 { "once" } else { "times" };
+                let count = if completions == 1 {
+                    String::new()
+                } else {
+                    format!("{completions} ")
+                };
+                said.push(format!(
+                    "the bound of at most {at_most} on {from} to {to} holds nothing, since {from} \
+                     completes at most {count}{times} on this shape"
+                ));
+                continue;
+            }
+            let edge = (from.clone(), to.clone());
+            if let Some((shared, bound)) = self
+                .bounds
+                .iter()
+                .filter(|(shared, bound)| shared.contains(&edge) && *bound <= at_most)
+                .min_by_key(|(_, bound)| **bound)
+            {
+                said.push(format!(
+                    "the bound of at most {at_most} on {from} to {to} holds nothing the bound of \
+                     at most {bound} that {} share does not",
+                    shared
+                        .iter()
+                        .map(|(from, to)| format!("{from} to {to}"))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                ));
+            }
+        }
+        said
+    }
 }
 
 #[cfg(test)]
@@ -534,6 +654,114 @@ mod tests {
                 "the bound of at most 2 that check to draft and review to write share leads back \
               into draft and into write, the heads of different loops, whose rounds are counted \
               apart"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_edge_bound_no_smaller_than_what_its_source_can_complete_is_named_with_both_numbers() {
+        let idle = |declaration: serde_json::Value| {
+            Topology::read(&declaration).expect("a shape").idle_bounds()
+        };
+        assert_eq!(
+            idle(json!({
+                "nodes": ["retrieve", "rank", "answer"],
+                "edges": [["retrieve", "rank"], {"from": "rank", "to": "answer", "at_most": 1}]
+            })),
+            [
+                "the bound of at most 1 on rank to answer holds nothing, since rank completes at \
+              most once on this shape"
+            ],
+            "a straight path is followed once"
+        );
+
+        let joined = |at_most: u64| {
+            idle(json!({
+                "nodes": ["plan", "search", "browse", "merge", "answer"],
+                "edges": [
+                    ["plan", "search"], ["plan", "browse"], ["search", "merge"], ["browse", "merge"],
+                    {"from": "merge", "to": "answer", "at_most": at_most}
+                ]
+            }))
+        };
+        assert!(
+            joined(1).is_empty(),
+            "a join is reached once from each side, so it may complete twice"
+        );
+        assert_eq!(
+            joined(2),
+            [
+                "the bound of at most 2 on merge to answer holds nothing, since merge completes at \
+              most 2 times on this shape"
+            ]
+        );
+
+        assert!(
+            idle(json!({
+                "nodes": ["retrieve", {"id": "answer", "repeats": true}, "summarize"],
+                "edges": [["retrieve", "answer"], {"from": "answer", "to": "summarize", "at_most": 3}]
+            }))
+            .is_empty(),
+            "out of a repeating node, a bound holds how many of its items go on"
+        );
+        assert!(
+            idle(json!({
+                "nodes": ["write", "review", "publish"],
+                "edges": [
+                    ["write", "review"], {"from": "review", "to": "write", "at_most": 2},
+                    {"from": "review", "to": "publish", "at_most": 1}
+                ]
+            }))
+            .is_empty(),
+            "round a cycle, and out of one, a bound holds the rounds"
+        );
+
+        let capped = |at_most: u64| {
+            idle(json!({
+                "nodes": [{"id": "write", "at_most": 3}, "review"],
+                "edges": [{"from": "write", "to": "review", "at_most": at_most}, ["review", "write"]]
+            }))
+        };
+        assert!(capped(2).is_empty());
+        assert_eq!(
+            capped(3),
+            [
+                "the bound of at most 3 on write to review holds nothing, since write completes at \
+              most 3 times on this shape"
+            ],
+            "a node's own bound counts every start, so it holds its completions too"
+        );
+        assert_eq!(
+            idle(json!({
+                "nodes": [{"id": "fetch", "repeats": true}, "parse", "store"],
+                "edges": [
+                    {"from": "fetch", "to": "parse", "at_most": 2},
+                    {"from": "parse", "to": "store", "at_most": 2}
+                ]
+            })),
+            [
+                "the bound of at most 2 on parse to store holds nothing, since parse completes at \
+              most 2 times on this shape"
+            ],
+            "a node is given no more turns than the edges into it may be followed"
+        );
+
+        let shared = |own: u64| {
+            idle(json!({
+                "nodes": ["write", "review", "fix"],
+                "edges": [
+                    ["write", "review"], {"from": "review", "to": "write", "at_most": own},
+                    ["review", "fix"], ["fix", "write"]
+                ],
+                "bounds": [{"edges": [["review", "write"], ["fix", "write"]], "at_most": 2}]
+            }))
+        };
+        assert!(shared(1).is_empty());
+        assert_eq!(
+            shared(3),
+            [
+                "the bound of at most 3 on review to write holds nothing the bound of at most 2 that \
+              fix to write and review to write share does not"
             ]
         );
     }

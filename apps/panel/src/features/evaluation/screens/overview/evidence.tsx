@@ -493,6 +493,11 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.steps_unread} runs took more node steps than a run's fold keeps, so the order of the rest was not read and they are not counted as executing the pinned workflow.`}
         </p>
       ) : null}
+      {/* True, and so measured: a bound that keeps nothing refuses no run, and
+          is shown because it was usually meant for another edge. */}
+      {(traces.idle_bounds ?? []).map((idle) => (
+        <p key={idle}>{`The pinned workflow declares a bound that keeps nothing: ${idle}.`}</p>
+      ))}
       {/* The application's telemetry is its own word; a serving host's run,
           published under another credential, is somebody else's. */}
       {traces.witnessed_model != null ? (

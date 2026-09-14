@@ -19488,6 +19488,13 @@
             "description": "Answers that would be an exchange but for which calls asked elsewhere\nwere not looked for, the measurement's start not being in the fold.",
             "minimum": 0
           },
+          "idle_bounds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Edge bounds of the pinned workflow that hold nothing a run could do,\nin words: a bound no smaller than the times its source may complete, or\nthan a bound it shares. Measured all the same — such a bound is true —\nand usually meant for another edge."
+          },
           "named": {
             "type": "integer",
             "description": "Answers naming the run they were made in.",

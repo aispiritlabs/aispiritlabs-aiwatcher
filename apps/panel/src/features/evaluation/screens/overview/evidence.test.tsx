@@ -527,6 +527,9 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
             seen: 2,
             on_model: 2,
             on_workflow: 2,
+            idle_bounds: [
+              'the bound of at most 1 on retrieve to answer holds nothing, since retrieve completes at most once on this shape',
+            ],
             witnessed_model: 1,
             witnessed_prompt: 2,
             witnessed_answer: 1,
@@ -559,6 +562,9 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   expect(screen.getByText(/1 of 2 were chosen among replies/)).toBeTruthy();
   expect(
     screen.getByText(/1 of 2 had their case asked on the pinned prompt in other runs/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/declares a bound that keeps nothing: the bound of at most 1 on retrieve/),
   ).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();

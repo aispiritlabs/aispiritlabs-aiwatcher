@@ -3856,6 +3856,13 @@ export type GenerationTrace = {
      */
     elsewhere_unread?: number;
     /**
+     * Edge bounds of the pinned workflow that hold nothing a run could do,
+     * in words: a bound no smaller than the times its source may complete, or
+     * than a bound it shares. Measured all the same — such a bound is true —
+     * and usually meant for another edge.
+     */
+    idle_bounds?: Array<string>;
+    /**
      * Answers naming the run they were made in.
      */
     named: number;

@@ -439,3 +439,70 @@ def test_a_shared_bound_on_anything_but_one_loop_s_ways_back_is_refused_naming_i
         ):
             pass
     assert not transport.of_type("workflow.declared"), "nothing declared a shape it cannot keep"
+
+
+def test_an_edge_bound_that_holds_nothing_is_refused_naming_both_numbers(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    with (
+        pytest.raises(
+            ValueError,
+            match="the bound of at most 1 on rank to answer holds nothing, since rank completes "
+            "at most once on this shape",
+        ),
+        client.workflow(
+            "rank",
+            nodes=["retrieve", "rank", "answer"],
+            edges=[("retrieve", "rank"), {"from": "rank", "to": "answer", "at_most": 1}],
+        ),
+    ):
+        pass
+    joined = [("plan", "search"), ("plan", "browse"), ("search", "merge"), ("browse", "merge")]
+    with (
+        pytest.raises(ValueError, match="since merge completes at most 2 times"),
+        client.workflow(
+            "join",
+            nodes=["plan", "search", "browse", "merge", "answer"],
+            edges=[*joined, {"from": "merge", "to": "answer", "at_most": 2}],
+        ),
+    ):
+        pass
+    loop = ["write", "review", "fix"]
+    ways_back = [("write", "review"), ("review", "fix"), ("fix", "write")]
+    with (
+        pytest.raises(
+            ValueError,
+            match="the bound of at most 3 on review to write holds nothing the bound of at most 2 "
+            "that fix to write and review to write share does not",
+        ),
+        client.workflow(
+            "revise",
+            nodes=loop,
+            edges=[*ways_back, {"from": "review", "to": "write", "at_most": 3}],
+            bounds=[{"edges": [("review", "write"), ("fix", "write")], "at_most": 2}],
+        ),
+    ):
+        pass
+    assert not transport.of_type("workflow.declared"), "nothing declared a bound that holds nothing"
+
+    with client.workflow(
+        "join",
+        nodes=["plan", "search", "browse", "merge", "answer"],
+        edges=[*joined, {"from": "merge", "to": "answer", "at_most": 1}],
+    ):
+        pass
+    with client.workflow(
+        "items",
+        nodes=["retrieve", {"id": "answer", "repeats": True}, "summarize"],
+        edges=[("retrieve", "answer"), {"from": "answer", "to": "summarize", "at_most": 3}],
+    ):
+        pass
+    with client.workflow(
+        "revise",
+        nodes=loop,
+        edges=[*ways_back, {"from": "review", "to": "write", "at_most": 2}],
+    ):
+        pass
+    assert len(transport.of_type("workflow.declared")) == 3, (
+        "past a join, out of a repeating node and round a cycle a bound holds something"
+    )
