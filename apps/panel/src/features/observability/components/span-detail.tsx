@@ -10,7 +10,14 @@ import {
 } from '@/features/observability/lib/span-facts';
 import { PromptRefLink } from '@/shared/components/prompt-bits';
 import { Badge, IdChip } from '@/shared/components/ui/primitives';
-import { cn, formatCount, formatDuration, formatTime, shortId } from '@/shared/lib/utils';
+import {
+  cn,
+  formatCount,
+  formatDuration,
+  formatTime,
+  formatUsd,
+  shortId,
+} from '@/shared/lib/utils';
 
 /**
  * One span, read out.
@@ -106,6 +113,9 @@ export function SpanDetail({
         ) : null}
         {facts.tokens && facts.tokens.cached > 0 ? (
           <Measure label="Cached" value={formatCount(facts.tokens.cached)} />
+        ) : null}
+        {facts.costUsd !== undefined ? (
+          <Measure label="Cost" value={formatUsd(facts.costUsd)} hint="as the provider billed it" />
         ) : null}
         <Measure label="Started" value={formatTime(span.start)} />
       </div>

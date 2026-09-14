@@ -141,6 +141,19 @@ pub struct RunSummary {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What the producers said this run's model calls cost, in US dollars —
+    /// the sum of `llm.completed`'s `cost_usd`.
+    ///
+    /// A provider that reports a cost is reporting what it charged, which a
+    /// price table can only estimate from tokens. Absent where no call
+    /// reported one, never nought: a run whose cost nobody stated has an
+    /// unknown cost, not a free one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// How many of this run's model calls reported that cost. Below
+    /// `llm_calls`, the figure above is part of the bill rather than the bill.
+    #[serde(default)]
+    pub costed_calls: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// The newest checkpoint folded into this row. A client can resume the
@@ -176,6 +189,8 @@ impl RunSummary {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            cost_usd: None,
+            costed_calls: 0,
             error: None,
             last_checkpoint: Checkpoint::beginning(),
         }
@@ -273,6 +288,13 @@ impl RunSummary {
                 .or_else(|| event.data_i64("output_tokens"))
                 .unwrap_or(0);
             self.cached_tokens += event.data_i64("cached_tokens").unwrap_or(0);
+            // Summed only where it was reported. A call that said nothing about
+            // what it cost leaves the total naming fewer calls than the run
+            // made, which is the honest reading of a partial bill.
+            if let Some(cost) = event.data_f64("cost_usd").filter(|cost| cost.is_finite()) {
+                self.cost_usd = Some(self.cost_usd.unwrap_or(0.0) + cost);
+                self.costed_calls += 1;
+            }
         }
 
         // A managed execution never emits `run.completed`: the engine owns the
@@ -1000,6 +1022,8 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            cost_usd: None,
+            costed_calls: 0,
             error: None,
             last_checkpoint: Checkpoint::from_global_position(1),
         }
@@ -1280,6 +1304,62 @@ mod tests {
 
         let observed = model.variant_observations(&["v1"], None, None).await;
         assert_eq!((observed[0].runs, observed[0].measured_runs), (1, 1));
+    }
+
+    /// A bill is the provider's word, and a partial one has to read as partial.
+    #[tokio::test]
+    async fn a_run_sums_the_costs_its_calls_reported_and_counts_how_many_did() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-14 12:00:00 UTC);
+        let calls = [
+            serde_json::json!({ "call_id": "c1", "prompt_tokens": 1_240, "cost_usd": 0.000_2 }),
+            // The second call said nothing about what it cost, so it is counted
+            // as a call and not as a cost.
+            serde_json::json!({ "call_id": "c2", "prompt_tokens": 300 }),
+            serde_json::json!({ "call_id": "c3", "cost_usd": 0.000_3 }),
+        ];
+        for (at_position, data) in calls.into_iter().enumerate() {
+            let position = at_position as u64 + 1;
+            let envelope = EventEnvelope::new(
+                EventType::LlmCompleted,
+                "run-cost",
+                at,
+                Source::new("api", Sdk::Other("go".to_owned())),
+            )
+            .with_data(data);
+            model
+                .apply(&envelope.record(position, position, at, None))
+                .await;
+        }
+
+        let summary = model.run("run-cost").await.expect("folded").summary;
+        assert_eq!(summary.costed_calls, 2);
+        let cost = summary.cost_usd.expect("two calls reported one");
+        assert!((cost - 0.000_5).abs() < 1e-9, "got {cost}");
+    }
+
+    /// A run whose calls all stayed quiet about money has an unknown cost,
+    /// which is not the same claim as a free one.
+    #[tokio::test]
+    async fn a_run_no_call_priced_reports_no_cost_rather_than_nought() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-14 12:00:00 UTC);
+        let envelope = EventEnvelope::new(
+            EventType::LlmCompleted,
+            "run-quiet",
+            at,
+            Source::new("api", Sdk::Other("go".to_owned())),
+        )
+        .with_data(serde_json::json!({ "call_id": "c1", "prompt_tokens": 10 }));
+        model.apply(&envelope.record(1, 1, at, None)).await;
+
+        let summary = model.run("run-quiet").await.expect("folded").summary;
+        assert_eq!(summary.cost_usd, None);
+        assert_eq!(summary.costed_calls, 0);
     }
 
     /// What a traces step reads off a run beyond its calls: who published its

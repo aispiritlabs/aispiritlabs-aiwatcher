@@ -19,7 +19,7 @@ import {
   Stat,
 } from '@/shared/components/ui/primitives';
 import { openRunStream, type LiveEventFrame, type StreamPhase } from '@/shared/lib/live';
-import { formatAge, formatCount, formatDuration, shortId } from '@/shared/lib/utils';
+import { formatAge, formatCount, formatDuration, formatUsd, shortId } from '@/shared/lib/utils';
 
 const routeApi = getRouteApi('/runs/$runId');
 
@@ -234,7 +234,7 @@ export function RunPage() {
       ) : null}
 
       <Card>
-        <CardContent className="grid grid-cols-2 gap-6 p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <CardContent className="grid grid-cols-2 gap-6 p-4 sm:grid-cols-3 lg:grid-cols-7">
           <Stat label="Duration" value={formatDuration(summary.duration_ms)} />
           <Stat label="Events" value={formatCount(summary.event_count)} />
           <Stat label="LLM calls" value={summary.llm_calls} />
@@ -253,6 +253,20 @@ export function RunPage() {
                 : undefined
             }
           />
+          {/* What the providers billed, where they said so. A run whose calls
+              all stayed quiet has an unknown cost, and an unknown cost is not
+              a stat worth a column of zeroes. */}
+          {summary.cost_usd !== undefined && summary.cost_usd !== null ? (
+            <Stat
+              label="Cost"
+              value={formatUsd(summary.cost_usd)}
+              hint={
+                (summary.costed_calls ?? 0) < summary.llm_calls
+                  ? `${summary.costed_calls ?? 0} of ${summary.llm_calls} calls reported one`
+                  : 'as the providers billed it'
+              }
+            />
+          ) : null}
         </CardContent>
       </Card>
 

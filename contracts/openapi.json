@@ -25745,6 +25745,20 @@
               "null"
             ]
           },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the producers said this run's model calls cost, in US dollars —\nthe sum of `llm.completed`'s `cost_usd`.\n\nA provider that reports a cost is reporting what it charged, which a\nprice table can only estimate from tokens. Absent where no call\nreported one, never nought: a run whose cost nobody stated has an\nunknown cost, not a free one."
+          },
+          "costed_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of this run's model calls reported that cost. Below\n`llm_calls`, the figure above is part of the bill rather than the bill.",
+            "minimum": 0
+          },
           "duration_ms": {
             "type": [
               "integer",

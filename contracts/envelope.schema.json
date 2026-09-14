@@ -188,6 +188,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "What the provider said this call cost, in US dollars. A charge, not an estimate from a price table; leave it out where the provider reports none."
+        },
         "finish_reason": {
           "type": "string"
         },

@@ -170,6 +170,27 @@ func TestAgent_StartLLM(t *testing.T) {
 	}
 }
 
+func TestLLMCall_End_cost(t *testing.T) {
+	t.Parallel()
+
+	client, sent := newRecordingClient(t)
+	agent := client.StartRun("run-1", aiwatcher.RunOptions{}).StartAgent("assistant")
+
+	billed := agent.StartLLM(aiwatcher.LLMRequest{Model: "gemini-flash", CallID: "gen-1"})
+	billed.End(aiwatcher.Usage{InputTokens: 1_240, OutputTokens: 164, CostUSD: 0.000213}, nil)
+	quiet := agent.StartLLM(aiwatcher.LLMRequest{Model: "gemini-flash", CallID: "gen-2"})
+	quiet.End(aiwatcher.Usage{InputTokens: 10}, nil)
+
+	events := sent.sent()
+	completed := events[3].Data
+	if completed["cost_usd"] != 0.000213 {
+		t.Errorf("llm.completed cost_usd %v, want the charge the provider reported", completed["cost_usd"])
+	}
+	if _, reported := events[5].Data["cost_usd"]; reported {
+		t.Errorf("llm.completed data %v states a cost the provider never gave", events[5].Data)
+	}
+}
+
 func TestLLMCall_End_failure(t *testing.T) {
 	t.Parallel()
 

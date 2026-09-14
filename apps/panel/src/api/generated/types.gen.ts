@@ -7453,6 +7453,21 @@ export type RunSummary = {
      */
     caller_run_id?: string | null;
     conversation_id?: string | null;
+    /**
+     * What the producers said this run's model calls cost, in US dollars —
+     * the sum of `llm.completed`'s `cost_usd`.
+     *
+     * A provider that reports a cost is reporting what it charged, which a
+     * price table can only estimate from tokens. Absent where no call
+     * reported one, never nought: a run whose cost nobody stated has an
+     * unknown cost, not a free one.
+     */
+    cost_usd?: number | null;
+    /**
+     * How many of this run's model calls reported that cost. Below
+     * `llm_calls`, the figure above is part of the bill rather than the bill.
+     */
+    costed_calls?: number;
     duration_ms?: number | null;
     ended_at?: string | null;
     error?: string | null;

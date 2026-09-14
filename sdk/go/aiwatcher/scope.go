@@ -167,9 +167,15 @@ type LLMRequest struct {
 // Usage is what a model call reported back. A zero field means the provider
 // did not say, and is not sent.
 type Usage struct {
-	InputTokens   int
-	OutputTokens  int
-	CachedTokens  int
+	InputTokens  int
+	OutputTokens int
+	CachedTokens int
+	// CostUSD is what the provider said the call cost, in US dollars, where it
+	// says so at all — OpenRouter's `usage.cost`, for one. A charge rather than
+	// an estimate from a price table, which is why it travels beside the tokens
+	// instead of being derived from them. Left at zero it is not sent, and the
+	// call reads as one whose cost nobody stated.
+	CostUSD       float64
 	FinishReason  string
 	ResponseModel string
 	ResponseID    string
@@ -235,6 +241,9 @@ func (c *LLMCall) End(usage Usage, err error) {
 	putPositive(data, "input_tokens", usage.InputTokens)
 	putPositive(data, "output_tokens", usage.OutputTokens)
 	putPositive(data, "cached_tokens", usage.CachedTokens)
+	if usage.CostUSD > 0 {
+		data["cost_usd"] = usage.CostUSD
+	}
 	putNonEmpty(data, "finish_reason", usage.FinishReason)
 	putNonEmpty(data, "response_model", usage.ResponseModel)
 	putNonEmpty(data, "response_id", usage.ResponseID)

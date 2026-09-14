@@ -6,7 +6,7 @@ import {
   type Span,
   type SpanFamily,
 } from '@/features/observability/lib/span-facts';
-import { cn, formatCount, formatDuration } from '@/shared/lib/utils';
+import { cn, formatCount, formatDuration, formatUsd } from '@/shared/lib/utils';
 
 /**
  * The trace waterfall.
@@ -165,6 +165,9 @@ export function Waterfall({
               {facts.tokens
                 ? `${formatCount(facts.tokens.input)} → ${formatCount(facts.tokens.output)}`
                 : ''}
+              {facts.costUsd !== undefined ? (
+                <span className="ml-2 text-foreground/70">{formatUsd(facts.costUsd)}</span>
+              ) : null}
             </span>
 
             <span className="text-right text-xs tabular-nums text-muted-foreground">

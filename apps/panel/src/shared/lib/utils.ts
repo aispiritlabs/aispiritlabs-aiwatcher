@@ -23,6 +23,17 @@ export function formatCount(value: number | null | undefined): string {
   return `${(value / 1_000_000).toFixed(2)}M`;
 }
 
+/**
+ * A cost in US dollars.
+ *
+ * Three significant digits rather than two decimal places: one model call
+ * costs a fraction of a cent, and `$0.00` is the wrong answer to what it cost.
+ */
+export function formatUsd(amount: number | null | undefined): string {
+  if (amount === null || amount === undefined) return '—';
+  return `$${amount.toLocaleString(undefined, { maximumSignificantDigits: 3 })}`;
+}
+
 /** Ids are 32 hex characters; show enough to recognise, not enough to wrap. */
 export function shortId(id: string | null | undefined, length = 8): string {
   if (!id) return '—';

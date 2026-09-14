@@ -712,6 +712,15 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             if let Some(cached) = event.data_i64("cached_tokens") {
                 out.push(attr("gen_ai.usage.cached_tokens", cached));
             }
+            // What the provider charged, where it said so. No `gen_ai.*`
+            // convention covers cost, and squatting on one would be claiming a
+            // meaning this project does not get to define.
+            if let Some(cost) = event
+                .data_f64("cost_usd")
+                .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            {
+                out.push(attr(own::usage::COST_USD, cost));
+            }
             // A witness's digests of the call's words: digests only, of the
             // length the gateway writes, and never more than it keeps.
             for (key, attribute) in [

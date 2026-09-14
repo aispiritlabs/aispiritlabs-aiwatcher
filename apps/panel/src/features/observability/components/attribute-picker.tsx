@@ -5,7 +5,11 @@ import { Check, ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 import { listDimension } from '@/api/generated/sdk.gen';
 import { Badge, Spinner } from '@/shared/components/ui/primitives';
 import { windowParam } from '@/shared/components/time-range';
-import { ATTRIBUTES, type Attribute, type AttributeId } from '@/features/observability/lib/query-builder';
+import {
+  ATTRIBUTES,
+  type Attribute,
+  type AttributeId,
+} from '@/features/observability/lib/query-builder';
 import { cn, formatCount, isStalled, shortId } from '@/shared/lib/utils';
 
 /**

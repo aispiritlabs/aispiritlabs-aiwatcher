@@ -197,6 +197,17 @@ pub mod aiwatcher {
         pub const EXACT: &str = "aiwatcher.prompt.exact";
     }
 
+    /// What a call cost, where the provider says so.
+    ///
+    /// A price table can only estimate a call's cost from its tokens; a
+    /// provider reporting one is reporting what it charged. The two are
+    /// different claims, so this is its own attribute rather than a figure
+    /// mixed into an estimate, and its unit is in the name because a sum has
+    /// to be in one currency to be a sum.
+    pub mod usage {
+        pub const COST_USD: &str = "aiwatcher.usage.cost_usd";
+    }
+
     /// Which declared variant answered in the run: Evaluation's content
     /// address of its pins. On every span of a run whose producer named one.
     pub mod variant {

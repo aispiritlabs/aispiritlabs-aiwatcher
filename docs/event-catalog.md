@@ -148,6 +148,7 @@ Anything else in `data` is stored and displayed but not interpreted.
 | `prompt_tokens` / `input_tokens` | `gen_ai.usage.input_tokens`, token metric |
 | `completion_tokens` / `output_tokens` | `gen_ai.usage.output_tokens`, token metric |
 | `cached_tokens` | `gen_ai.usage.cached_tokens`, token metric |
+| `cost_usd` | `aiwatcher.usage.cost_usd`, and the run's `cost_usd` — what the provider *charged*, which a price table can only estimate. Absent where the provider says nothing; a run then reports the cost of the calls that did report one, and how many those were |
 | `finish_reason` | `gen_ai.response.finish_reasons` |
 | `temperature`, `max_tokens` | `gen_ai.request.*` |
 | `duration_ms` | back-dates the span start when no start event was ever seen |

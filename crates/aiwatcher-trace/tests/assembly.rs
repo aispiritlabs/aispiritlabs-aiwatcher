@@ -88,6 +88,15 @@ fn string_attr<'a>(span: &'a CompletedSpan, key: &str) -> Option<&'a str> {
         })
 }
 
+fn double_attr(span: &CompletedSpan, key: &str) -> Option<f64> {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            AttrValue::Double(inner) if name == key => Some(*inner),
+            _ => None,
+        })
+}
+
 fn int_attr(span: &CompletedSpan, key: &str) -> Option<i64> {
     span.attributes
         .iter()
@@ -1183,4 +1192,45 @@ fn a_span_names_its_publisher_only_when_one_credential_sent_both_ends() {
         1,
         "the call another credential finished names nobody"
     );
+}
+
+#[test]
+fn a_cost_the_provider_reported_lands_on_the_span_beside_the_tokens() {
+    let mut assembler = SpanAssembler::default();
+    let mut run = Run::new("run-cost");
+    let events = vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5).emit(
+            EventType::LlmStarted,
+            Some("assistant"),
+            json!({ "call_id": "call-1", "model": "gemini-3.7-flash" }),
+        ),
+        run.after(400).emit(
+            EventType::LlmCompleted,
+            Some("assistant"),
+            json!({
+                "call_id": "call-1",
+                "model": "gemini-3.7-flash",
+                "prompt_tokens": 1_240,
+                "completion_tokens": 164,
+                "cost_usd": 0.000_213
+            }),
+        ),
+    ];
+    let assembled = collect(&mut assembler, &events);
+    let llm = find(&assembled.spans, "chat gemini-3.7-flash");
+
+    assert_eq!(
+        double_attr(llm, "aiwatcher.usage.cost_usd"),
+        Some(0.000_213)
+    );
+}
+
+#[test]
+fn a_cost_nobody_reported_is_absent_rather_than_nought() {
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &realistic_run());
+    let llm = find(&assembled.spans, "chat claude-opus-5");
+
+    assert_eq!(double_attr(llm, "aiwatcher.usage.cost_usd"), None);
 }

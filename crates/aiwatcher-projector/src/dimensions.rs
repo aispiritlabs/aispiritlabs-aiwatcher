@@ -355,6 +355,8 @@ mod tests {
             input_tokens: 10,
             output_tokens: 5,
             cached_tokens: 0,
+            cost_usd: None,
+            costed_calls: 0,
             error: None,
             last_checkpoint: Checkpoint::beginning(),
         }

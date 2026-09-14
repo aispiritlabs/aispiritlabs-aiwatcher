@@ -604,6 +604,8 @@ mod tests {
             input_tokens: 800,
             output_tokens: 200,
             cached_tokens: 400,
+            cost_usd: None,
+            costed_calls: 0,
             error: None,
             last_checkpoint: aiwatcher_core::Checkpoint::from_global_position(1),
         }

@@ -172,6 +172,8 @@ mod tests {
             input_tokens: 100,
             output_tokens: 20,
             cached_tokens: 10,
+            cost_usd: None,
+            costed_calls: 0,
             error: None,
             last_checkpoint: Checkpoint::from_global_position(1),
         }

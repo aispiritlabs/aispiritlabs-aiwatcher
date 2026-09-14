@@ -72,6 +72,11 @@ export interface SpanFacts {
   /** The model or the tool: what the row is about, past its span name. */
   headline?: string;
   tokens?: TokenUsage;
+  /**
+   * What the provider said this call cost, in US dollars. Absent where it said
+   * nothing — an unpriced call cost something nobody stated, not nothing.
+   */
+  costUsd?: number;
   prompt?: PromptReference;
   groups: FactGroup[];
 }
@@ -109,6 +114,7 @@ const OWN = {
   instance: 'aiwatcher.source.instance',
   sdk: 'aiwatcher.source.sdk',
   publishedBy: 'aiwatcher.source.published_by',
+  costUsd: 'aiwatcher.usage.cost_usd',
   documentCount: 'aiwatcher.step.document_count',
   topK: 'aiwatcher.step.top_k',
   candidateCount: 'aiwatcher.step.candidate_count',
@@ -197,6 +203,7 @@ export function factsOf(span: Span): SpanFacts {
     family,
     headline: text(held.get(GENAI.requestModel) ?? held.get(GENAI.tool) ?? held.get(OWN.stepName)),
     tokens: tokensOf(held),
+    costUsd: count(held.get(OWN.costUsd)),
     prompt: promptOf(held),
     groups,
   };
