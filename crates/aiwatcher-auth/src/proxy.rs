@@ -94,6 +94,7 @@ pub fn identity_from<'a>(
         // No expiry of our own. The proxy decides when the session ends, and
         // the next request simply does not carry the headers.
         expires_at: None,
+        attempt: None,
         credential: Credential::Proxy,
     })
 }

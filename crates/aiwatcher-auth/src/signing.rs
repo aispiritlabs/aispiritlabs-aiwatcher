@@ -91,6 +91,12 @@ impl Signer {
     /// The signature is checked *before* the payload is parsed. Parsing first
     /// would run a deserialiser over bytes an attacker chose.
     pub fn open<T: DeserializeOwned>(&self, token: &str) -> AuthResult<T> {
+        self.open_with_expiry(token).map(|(value, _)| value)
+    }
+
+    /// The value back with the Unix second it stops being believed, which a
+    /// caller that has no expiry of its own inside the value reports.
+    pub fn open_with_expiry<T: DeserializeOwned>(&self, token: &str) -> AuthResult<(T, i64)> {
         let (payload, signature) = token
             .split_once('.')
             .ok_or(AuthError::Session("malformed".into()))?;
@@ -110,7 +116,7 @@ impl Signer {
         if sealed.exp <= time::OffsetDateTime::now_utc().unix_timestamp() {
             return Err(AuthError::Session("expired".into()));
         }
-        Ok(sealed.value)
+        Ok((sealed.value, sealed.exp))
     }
 }
 

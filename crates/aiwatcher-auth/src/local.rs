@@ -95,6 +95,7 @@ impl LocalAuth {
             // mode that added a token and took claiming away would mean
             // adopting the credential broke that machine.
             queues: Vec::new(),
+            attempt: None,
             credential: Credential::Local,
         }
     }

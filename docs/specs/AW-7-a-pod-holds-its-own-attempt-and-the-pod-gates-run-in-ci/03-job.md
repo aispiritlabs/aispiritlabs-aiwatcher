@@ -131,7 +131,7 @@ Beyond what ADR_0031 decides:
     context does not exist — and `TMPDIR` is now set by a step.
 
 ### Part C1 — `aiwatcher-auth`
-- [ ] 7.4 **The credential.**
+- [x] 7.4 **The credential.**
   - An `attempt` module with `AttemptScope` (execution, step, attempt number,
     queue) and `AttemptCredentials::{new(secret: Option<&str>), mint(scope, ttl),
     open(token)}`, on a `Signer` over HMAC-SHA256(secret,
@@ -145,16 +145,27 @@ Beyond what ADR_0031 decides:
     - one sealed under another secret is refused;
     - a session sealed under the *same* secret does not open;
     - a value without the prefix never reaches `open`.
-- [ ] 7.5 **Accepted where it may be.**
+  - Done. `open` returns the `Identity` rather than the scope, carrying the
+    expiry the seal holds (`Signer::open_with_expiry`). A value that does not
+    open is `AuthError::Token`, a 401, never the session's wording.
+- [x] 7.5 **Accepted where it may be.**
   - `Authenticator::authenticate` accepts it in `oidc` before the ingest tokens,
     in `proxy` beside them, and in `local` beside the local token.
   - A test per mode.
   - An attempt credential set as the cookie is refused.
-- [ ] 7.6 **The key's source.**
+  - Done. Anything with the prefix is answered by the credentials alone, so an
+    expired one is a 401 about itself and never reaches the ingest tokens or the
+    JWT verifier. An instance with no credentials refuses one by name. The `oidc`
+    test builds the authenticator without discovery, which none of these paths
+    reaches.
+- [x] 7.6 **The key's source.**
   - `AuthConfig` takes an `AttemptCredentials`, not a string, so the server can
     hand the launcher the same instance.
   - With no secret, the ephemeral key warns once, and only when pods launch
     under auth.
+  - Done in the crate: `AuthConfig.attempts: Option<AttemptCredentials>`, shared
+    by cloning, and `is_ephemeral` for the caller's warning. The warning itself
+    is the server's, in 7.12, which is where it knows pods launch.
 
 ### Part C2 — `aiwatcher-api`
 - [ ] 7.7 **The two doors.**

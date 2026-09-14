@@ -23,6 +23,7 @@
 //!
 //! ADR_0013.
 
+pub mod attempt;
 pub mod cookie;
 pub mod error;
 pub mod identity;
@@ -38,6 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::signing::constant_time_eq;
 
+pub use attempt::{AttemptCredentials, AttemptScope};
 pub use cookie::{CookieSpec, SameSite};
 pub use error::{AuthError, AuthResult};
 pub use identity::{Credential, Identity, NotEntitled, Role, RoleMapping, UnknownRole};
@@ -152,6 +154,15 @@ pub struct AuthConfig {
     /// The single-user credential, when [`AuthMode::Local`] is the mode. See
     /// [`local::LocalAuth`].
     pub local: Option<local::LocalAuth>,
+    /// The key launched pods' credentials are minted and opened under
+    /// (ADR_0031), accepted in every mode that authenticates.
+    ///
+    /// An instance rather than a secret, so the process that builds this hands
+    /// the launcher the *same* one: two instances over no secret are two
+    /// generated keys, and every pod would be refused by the server that
+    /// started it. `None` accepts none, which is right only where nothing
+    /// launches a pod.
+    pub attempts: Option<AttemptCredentials>,
     /// What to call the provider on the sign-in button.
     pub provider_name: String,
     pub http_timeout: Duration,
@@ -188,6 +199,7 @@ impl Default for AuthConfig {
             userinfo_fallback: true,
             proxy_headers: ProxyHeaders::default(),
             local: None,
+            attempts: None,
             provider_name: "authentik".to_owned(),
             http_timeout: Duration::from_secs(10),
             discovery_attempts: 5,
@@ -210,6 +222,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("groups_claim", &self.groups_claim)
             .field("allow_bearer", &self.allow_bearer)
             .field("ingest_tokens", &self.ingest_tokens.len())
+            .field("attempts", &self.attempts)
             .finish_non_exhaustive()
     }
 }
@@ -362,6 +375,7 @@ impl IngestToken {
             // only ever narrows: empty is a producer, and a producer claims
             // nothing.
             queues: self.queues.clone(),
+            attempt: None,
             credential: Credential::Token,
         }
     }
@@ -635,6 +649,11 @@ impl Authenticator {
                 Err(error @ AuthError::ProxyIdentityMissing { .. }) => error,
                 Err(other) => return Err(other),
             };
+            // A launched pod is a producer of that kind too, and presents the
+            // credential it was minted rather than the proxy's headers.
+            if let Some(attempt) = self.identity_from_attempt(authorization) {
+                return attempt;
+            }
             return self
                 .identity_from_ingest_token(authorization)
                 .ok_or(missing);
@@ -649,6 +668,12 @@ impl Authenticator {
                     "AIWATCHER_AUTH_MODE=local with no token; run `aiwatcher token create`".into(),
                 )
             })?;
+            // Beside the local token, which is otherwise the only credential
+            // this mode takes: a step's process on a single-user install holds
+            // its own attempt rather than the owner's admin token.
+            if let Some(attempt) = self.identity_from_attempt(authorization) {
+                return attempt;
+            }
             return authorization
                 .and_then(bearer_token)
                 .and_then(|presented| local.authenticate(presented))
@@ -659,6 +684,14 @@ impl Authenticator {
             cookie_header.and_then(|raw| cookie::read(raw, &self.config.cookie_name))
         {
             return self.signer.open::<Identity>(session);
+        }
+
+        // Before the ingest tokens and the JWT path, and recognised by its
+        // prefix rather than tried: an attempt credential is neither, and one
+        // that does not open is a refusal naming it rather than a value handed
+        // to a verifier that can only refuse it less clearly.
+        if let Some(attempt) = self.identity_from_attempt(authorization) {
+            return attempt;
         }
 
         // Before the JWT path, and cheaper: a static token is a string
@@ -675,6 +708,23 @@ impl Authenticator {
         }
 
         Err(AuthError::Unauthenticated)
+    }
+
+    /// A launched pod's credential, when the bearer is shaped like one.
+    ///
+    /// `Some` for anything carrying the prefix, whether or not it opens, so an
+    /// expired one is a 401 about itself rather than a bearer that falls
+    /// through to the next check.
+    fn identity_from_attempt(&self, authorization: Option<&str>) -> Option<AuthResult<Identity>> {
+        let presented = authorization
+            .and_then(bearer_token)
+            .filter(|presented| attempt::is_attempt_credential(presented))?;
+        Some(match &self.config.attempts {
+            Some(credentials) => credentials.open(presented),
+            None => Err(AuthError::Token(
+                "this instance accepts no attempt credential".to_owned(),
+            )),
+        })
     }
 
     /// A producer's shared secret, if it is one of the configured ones.
@@ -722,6 +772,7 @@ impl Authenticator {
             // says, and this identity did not present one.
             queues: Vec::new(),
             expires_at: claims.exp,
+            attempt: None,
             credential,
         })
     }
@@ -1236,6 +1287,150 @@ mod tests {
         let rendered = format!("{token:?}");
         assert!(rendered.contains("agents"));
         assert!(!rendered.contains("0123456789"), "{rendered}");
+    }
+
+    fn credentials() -> AttemptCredentials {
+        AttemptCredentials::new(Some("a pod credential secret")).expect("a secret")
+    }
+
+    fn minted(ttl: time::Duration) -> String {
+        let scope = AttemptScope {
+            execution: "run-1".to_owned(),
+            step: "analyze".to_owned(),
+            attempt: 1,
+            queue: "houses".to_owned(),
+        };
+        format!("Bearer {}", credentials().mint(&scope, ttl).expect("mints"))
+    }
+
+    /// An `oidc` authenticator with no provider behind it. Nothing an attempt
+    /// credential, a cookie or an ingest token does reaches the provider, so
+    /// the discovery `connect` would make is the one part left out.
+    fn oidc() -> Authenticator {
+        Authenticator {
+            config: AuthConfig {
+                mode: AuthMode::Oidc,
+                attempts: Some(credentials()),
+                ..AuthConfig::default()
+            },
+            http: reqwest::Client::new(),
+            signer: signing::Signer::new(b"a session secret"),
+            provider: None,
+            verifier: None,
+        }
+    }
+
+    const NO_HEADER: fn(&str) -> Option<&'static str> = |_| None;
+
+    #[tokio::test]
+    async fn an_attempt_credential_authenticates_in_oidc_as_its_attempt() {
+        let auth = oidc();
+        let identity = auth
+            .authenticate(None, Some(&minted(time::Duration::minutes(5))), NO_HEADER)
+            .await
+            .expect("accepted");
+        assert_eq!(identity.credential, Credential::Attempt);
+        assert_eq!(identity.subject, "attempt:run-1/analyze/1");
+
+        // An expired one is refused as the caller's to fix, and never reaches
+        // the JWT verifier — which this instance does not even have.
+        let error = auth
+            .authenticate(None, Some(&minted(time::Duration::seconds(-1))), NO_HEADER)
+            .await
+            .expect_err("expired");
+        assert!(error.is_caller_fault(), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_attempt_credential_set_as_the_session_cookie_is_refused() {
+        let auth = oidc();
+        let token = minted(time::Duration::minutes(5));
+        let value = token.strip_prefix("Bearer ").expect("a bearer");
+        for cookie in [
+            value,
+            value.strip_prefix(attempt::PREFIX).expect("prefixed"),
+        ] {
+            let error = auth
+                .authenticate(
+                    Some(&format!("aiwatcher_session={cookie}")),
+                    None,
+                    NO_HEADER,
+                )
+                .await
+                .expect_err("not a session");
+            assert!(error.is_caller_fault(), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_attempt_credential_authenticates_behind_a_proxy_beside_the_ingest_tokens() {
+        let auth = Authenticator::connect(AuthConfig {
+            mode: AuthMode::Proxy,
+            attempts: Some(credentials()),
+            ingest_tokens: vec!["agents=0123456789abcdef0123456789".parse().expect("valid")],
+            ..AuthConfig::default()
+        })
+        .await
+        .expect("nothing to reach")
+        .expect("an authenticator");
+
+        let pod = auth
+            .authenticate(None, Some(&minted(time::Duration::minutes(5))), NO_HEADER)
+            .await
+            .expect("a pod presents no proxy headers");
+        assert_eq!(pod.credential, Credential::Attempt);
+
+        let producer = auth
+            .authenticate(None, Some("Bearer 0123456789abcdef0123456789"), NO_HEADER)
+            .await
+            .expect("the ingest tokens still answer");
+        assert_eq!(producer.credential, Credential::Token);
+    }
+
+    #[tokio::test]
+    async fn an_attempt_credential_authenticates_in_local_beside_the_local_token() {
+        let secret = local::LocalAuth::generate().expect("generates");
+        let auth = Authenticator::connect(AuthConfig {
+            mode: AuthMode::Local,
+            local: Some(local::LocalAuth::new(secret.clone(), Role::Admin).expect("accepts")),
+            attempts: Some(credentials()),
+            ..AuthConfig::default()
+        })
+        .await
+        .expect("nothing to reach")
+        .expect("an authenticator");
+
+        let pod = auth
+            .authenticate(None, Some(&minted(time::Duration::minutes(5))), NO_HEADER)
+            .await
+            .expect("accepted beside the local token");
+        assert_eq!(pod.credential, Credential::Attempt);
+        assert!(
+            !pod.can(Role::Admin),
+            "a step does not hold the owner's admin"
+        );
+
+        let owner = auth
+            .authenticate(None, Some(&format!("Bearer {secret}")), NO_HEADER)
+            .await
+            .expect("the local token still answers");
+        assert_eq!(owner.credential, Credential::Local);
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_mints_nothing_refuses_an_attempt_credential() {
+        let auth = Authenticator {
+            config: AuthConfig {
+                attempts: None,
+                ..oidc().config
+            },
+            ..oidc()
+        };
+        let error = auth
+            .authenticate(None, Some(&minted(time::Duration::minutes(5))), NO_HEADER)
+            .await
+            .expect_err("nothing here minted it");
+        assert!(error.is_caller_fault(), "{error}");
     }
 
     #[test]

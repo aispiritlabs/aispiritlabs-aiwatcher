@@ -120,6 +120,11 @@ pub enum Credential {
     /// `proxy` mode, and only because the deployment guarantees nothing else
     /// can reach this port.
     Proxy,
+    /// A credential the pod launcher minted for one attempt (ADR_0031). Held by
+    /// that attempt's pod, and opens that attempt's worker routes and ingest
+    /// and nothing else — the authentication layer refuses it everywhere
+    /// else, before a handler runs.
+    Attempt,
     /// No provider is configured. Every caller is this, and every role check
     /// passes — which is what `AIWATCHER_AUTH_MODE=none` means.
     Anonymous,
@@ -162,6 +167,14 @@ pub struct Identity {
     /// something has to renew, and a browser is not that something.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queues: Vec<String>,
+    /// The one attempt this caller may act on, for an attempt credential and
+    /// for nothing else.
+    ///
+    /// A narrowing on top of the queue, never instead of it: a worker route
+    /// checks both, so a credential for one attempt settles no other on the
+    /// same queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<crate::attempt::AttemptScope>,
     pub credential: Credential,
 }
 
@@ -182,6 +195,7 @@ impl Identity {
             // no worker can claim anything, which is not what "none" means
             // anywhere else in this crate.
             queues: Vec::new(),
+            attempt: None,
             credential: Credential::Anonymous,
         }
     }
@@ -190,7 +204,8 @@ impl Identity {
     ///
     /// Two credentials are unrestricted and the rest may claim exactly what
     /// their token named — which for a person's session and for a producer's
-    /// token is nothing.
+    /// token is nothing, and for an attempt credential its attempt's one
+    /// queue.
     ///
     /// [`Credential::Anonymous`] is unrestricted because with no provider
     /// configured every role check passes, and this is a scope rather than an
