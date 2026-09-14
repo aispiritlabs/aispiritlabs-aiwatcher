@@ -107,13 +107,31 @@ What it checks:
 25. an application that answers with the capital and the country from two
     witnessed calls, in the shape the variant's response schema pins, has every
     exchange witnessed part by part;
-26. the server stops with runs still in a period it has not written, starts
+26. two witnessed replies joined in the words the variant pins are an exchange;
+27. an answer most of three witnessed replies gave is an exchange where the
+    variant pins choosing by the most of three, and a choice where it does not;
+28. a country from an atlas the application called directly, witnessed on the
+    atlas's host under the witness's token, is an exchange;
+29. an answer a witnessed judging call named — its reply, taken out the way the
+    variant pins, naming the placeholder the answer was rendered into on the
+    judging prompt the variant pins — is an exchange, and the reply the judge
+    did not name is a choice the application made;
+30. an application that first asks each question on the pinned prompt through
+    the witness in a run of no measurement's, saying nothing of what it
+    rendered, has no exchange: every case was asked elsewhere, and a gate says so;
+31. an atlas whose host publishes under a token of its own, digesting under the
+    gateway's witness key as the deployment says it may, is an exchange;
+32. an atlas the gateway answers itself, in its own process, is an exchange;
+33. the server stops with runs still in a period it has not written, starts
     again on the same data and replays its log over the period fold's saved
     state: the window counts every run once — the three before the restart
     from their written period, the two after from the period the fold still
     holds open. (A restart that does not replay, as on Laser, is the projector's
     own test.) And the journal of what that fold reads has paged the log beside
-    it, keeping no word said in a run.
+    it, keeping no word said in a run;
+34. a run whose every event its transport dropped is counted as lost;
+35. so is the first run of a client new after the restart, whose count began
+    while the fold was reading, once its second run arrives.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -149,8 +167,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, AiwatcherClient, HttpTransport  # noqa: E402
-from aiwatcher_sdk.gateway import Gateway, ToolWitness, extracted  # noqa: E402
+from aiwatcher_sdk import (  # noqa: E402
+    CALLER_RUN_HEADER,
+    PROMPT_HEADER,
+    AiwatcherClient,
+    HttpTransport,
+)
+from aiwatcher_sdk.gateway import Gateway, ToolWitness, extracted, witness_key  # noqa: E402
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
@@ -177,6 +200,8 @@ QUEUE = "e2e-generate"
 APPLICATION_SECRET = "a1" * 16
 SERVING_SECRET = "5e" * 16
 WORKER_SECRET = "0b" * 16
+#: The atlas's host's own token, digesting under the witness's key.
+ATLAS_SECRET = "a7" * 16
 #: What a person's request carries from the proxy in front of the server.
 PERSON = {
     "x-authentik-uid": "e2e",
@@ -225,7 +250,13 @@ PROMPTS = {
     "joined": "Answer this question in one word: {{ question }}",
     "chosen": "Answer this question in one word: {{ question }}",
     "chosen-loose": "Answer this question in one word: {{ question }}",
+    "judged": "Answer this question in one word: {{ question }}",
 }
+#: The prompt a judging call is asked on, and how its answer is taken out.
+JUDGE_PROMPT = "e2e.judge"
+JUDGE = "Which answers {{ question }} rightly, {{ first }} or {{ second }}? Reply in JSON."
+JUDGE_VERSION = hashlib.sha256(JUDGE.encode()).hexdigest()
+PICK: dict[str, Any] = {"json_pointer": "/best"}
 
 #: The label a model answers each capital with, and the way the labelled
 #: variants take the capital back out — which only "labelled" pins.
@@ -268,6 +299,9 @@ class Provider(BaseHTTPRequestHandler):
             said = next(label for label, capital in LABELS.items() if capital == said) + "."
         if body.get("user") == "country":
             said = country
+        if body.get("user") == "judge":
+            # The judge names the first candidate it was shown.
+            said = json.dumps({"best": "first"})
         if body.get("user") == "other":
             # Another capital than the one asked about: a reply to choose against.
             at = [name for name, _ in CAPITALS].index(country)
@@ -315,12 +349,14 @@ class Atlas(BaseHTTPRequestHandler):
 class WitnessedAtlas(Atlas):
     """The same atlas, witnessing each call where it runs rather than through a gateway."""
 
+    witnessed_by = "witness"
+
     def do_POST(self) -> None:
         raw = self.rfile.read(int(self.headers["content-length"]))
         asked = json.loads(raw)
         country = str(asked["question"]).removeprefix("What is the capital of ").removesuffix("?")
         payload = json.dumps({"country": country}).encode()
-        witness: ToolWitness = WITNESSED_ATLAS["witness"]
+        witness: ToolWitness = WITNESSED_ATLAS[self.witnessed_by]
         with witness.call("atlas", asked, caller=self.headers.get(CALLER_RUN_HEADER)) as call:
             call.answered(payload)
         self.send_response(200)
@@ -328,6 +364,19 @@ class WitnessedAtlas(Atlas):
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+
+class HostedAtlas(WitnessedAtlas):
+    """The atlas again, on a host publishing under its own token with the witness's key."""
+
+    witnessed_by = "hosted"
+
+
+def atlas_here(asked: Any) -> dict[str, str]:
+    """The atlas as a function the gateway answers with in its own process."""
+    return {
+        "country": str(asked["question"]).removeprefix("What is the capital of ").removesuffix("?")
+    }
 
 
 def through_gateway(
@@ -399,6 +448,10 @@ def generation_of(which: str) -> bytes:
         config["answer_joined"] = {"separator": ", "}
     if which == "chosen":
         config["answer_chosen"] = {"most_of": 3}
+    if which == "judged":
+        config["answer_chosen"] = {
+            "judged": {"prompt": {"name": JUDGE_PROMPT, "version": JUDGE_VERSION}, "pick": PICK}
+        }
     return json.dumps(config).encode()
 
 
@@ -427,6 +480,15 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     capital = dict(CAPITALS)[country]
     if run.params.get("decline") == country:
         return Declined("the application would not say")
+    if run.params.get("peek"):
+        # The question first, on the pinned prompt through the witness, for no
+        # run of the measurement's — saying nothing of what it rendered.
+        through_gateway(
+            "witness",
+            {PROMPT_HEADER: f"{prompt['name']}@{prompt['version']}"},
+            text.replace("{{ question }}", question),
+            question,
+        )
     # The application's run for this case: the variant's, and a measurement's —
     # and the prompt version it renders, which is the variant's unless the run
     # was told to render another.
@@ -468,15 +530,27 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                 ):
                     cut_from = {"between": ["capital of ", "?"]}
                     found = ""
-                    looked_up = run.params.get("atlas") or run.params.get("witnessed_atlas")
+                    looked_up = next(
+                        (
+                            way
+                            for way in ("atlas", "witnessed_atlas", "hosted_atlas", "gateway_atlas")
+                            if run.params.get(way)
+                        ),
+                        None,
+                    )
                     if looked_up:
                         # Which country, from the deployment's atlas, asked
                         # through the gateway with the case's own question —
-                        # or of the atlas itself, which witnesses its own calls.
+                        # or of the atlas itself, which witnesses its own calls
+                        # under the witness's token or its own, or answered by
+                        # the gateway in its own process.
                         atlas = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
-                            WITNESSED_ATLAS["url"]
-                            if run.params.get("witnessed_atlas")
-                            else GATEWAYS["witness"] + "/tools/atlas",
+                            {
+                                "atlas": GATEWAYS["witness"] + "/tools/atlas",
+                                "witnessed_atlas": WITNESSED_ATLAS["url"],
+                                "hosted_atlas": WITNESSED_ATLAS["hosted_url"],
+                                "gateway_atlas": GATEWAYS["witness"] + "/tools/atlas-here",
+                            }[looked_up],
                             data=json.dumps({"question": question}).encode(),
                             method="POST",
                         )
@@ -592,6 +666,41 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                                 again.usage(model_version=answered["model"])
                             replies.append(str(answered["choices"][0]["message"]["content"]))
                         said = max(replies, key=replies.count)
+                    if run.params.get("judged") or run.params.get("judged_against"):
+                        # Another reply, about somewhere else, and a judging call
+                        # on the prompt the variant pins shown both.
+                        with agent.llm(
+                            model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                        ) as again:
+                            other_asked = again.caller_body(question=question)
+                            other_asked["user"] = "other"
+                            other_reply = through_gateway(
+                                "witness", again.caller_headers(), system, question, other_asked
+                            )
+                            again.usage(model_version=other_reply["model"])
+                        other = str(other_reply["choices"][0]["message"]["content"])
+                        with (
+                            PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts,
+                            agent.llm(
+                                model=str(model["name"]), prompt=(JUDGE_PROMPT, JUDGE_VERSION)
+                            ) as judge,
+                        ):
+                            judging = prompts.get_version(JUDGE_PROMPT, JUDGE_VERSION).render(
+                                question=question, first=said, second=other
+                            )
+                            asked_judge = judge.caller_body(
+                                question=question, first=said, second=other, answer_from=PICK
+                            )
+                            asked_judge["user"] = "judge"
+                            verdict = through_gateway(
+                                "witness", judge.caller_headers(), judging, question, asked_judge
+                            )
+                            judge.usage(model_version=verdict["model"])
+                        named_best = extracted(
+                            str(verdict["choices"][0]["message"]["content"]), PICK
+                        )
+                        best, rest = (said, other) if named_best == "first" else (other, said)
+                        said = rest if run.params.get("judged_against") else best
                     if run.params.get("composed") or run.params.get("joined"):
                         # A second witnessed call in the same stage, for the
                         # country, and an answer made of both replies.
@@ -696,13 +805,16 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
         # A journal of what the period fold reads, which a gap is refilled from.
         "AIWATCHER_OBSERVATION_JOURNAL_DAYS": "1",
         "AIWATCHER_MODEL_PRICES": str(prices(home)),
-        # The one credential whose runs witness a generated answer.
-        "AIWATCHER_WITNESSES": "serving",
+        # The credentials whose runs witness a generated answer — the atlas's
+        # host among them, digesting under the gateway's key.
+        "AIWATCHER_WITNESSES": "serving,atlas",
+        "AIWATCHER_WITNESS_DIGESTS": "atlas=serving",
         "AIWATCHER_AUTH_MODE": "proxy",
         "AIWATCHER_AUTH_INGEST_TOKENS": ",".join(
             [
                 f"application={APPLICATION_SECRET}",
                 f"serving={SERVING_SECRET}",
+                f"atlas={ATLAS_SECRET}",
                 f"worker[{QUEUE}]={WORKER_SECRET}",
             ]
         ),
@@ -843,6 +955,11 @@ def declare(
     """
     with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
         version = prompts.publish(PROMPT, PROMPTS[which], author="e2e").version_id
+        if (
+            which == "judged"
+            and prompts.publish(JUDGE_PROMPT, JUDGE, author="e2e").version_id != JUDGE_VERSION
+        ):
+            raise SystemExit("the judging prompt's version is not the digest of its text")
     code = code_of(which) if code is None else code
     generation = generation_of(which)
     run = {
@@ -925,6 +1042,9 @@ def main() -> int:
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-e2e-generate-"))
     server = serve(home / "server")
+    # When the fold could first have read anything: a client's count beginning
+    # within a minute of it is one a clock running ahead could be dating late.
+    reading_since = time.time()
     TELEMETRY.append(
         AiwatcherClient(service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET)
     )
@@ -934,6 +1054,8 @@ def main() -> int:
     threading.Thread(target=atlas.serve_forever, daemon=True).start()
     witnessed_atlas = ThreadingHTTPServer(("127.0.0.1", 0), WitnessedAtlas)
     threading.Thread(target=witnessed_atlas.serve_forever, daemon=True).start()
+    hosted_atlas = ThreadingHTTPServer(("127.0.0.1", 0), HostedAtlas)
+    threading.Thread(target=hosted_atlas.serve_forever, daemon=True).start()
     # The witness's own token, on the atlas's host: the gateway's key, so its
     # digests are the ones a call the gateway relayed is rendered with.
     WITNESSED_ATLAS["witness"] = ToolWitness(
@@ -941,7 +1063,14 @@ def main() -> int:
         credential=SERVING_SECRET,
     )
     WITNESSED_ATLAS["url"] = f"http://127.0.0.1:{witnessed_atlas.server_address[1]}/atlas"
-    gateways = [atlas, witnessed_atlas]
+    # A host of its own, with its own token — and the gateway's witness key,
+    # which the deployment says its digests are made under.
+    WITNESSED_ATLAS["hosted"] = ToolWitness(
+        AiwatcherClient(service="e2e-atlas-host", base_url=BASE, token=ATLAS_SECRET),
+        key=witness_key(SERVING_SECRET),
+    )
+    WITNESSED_ATLAS["hosted_url"] = f"http://127.0.0.1:{hosted_atlas.server_address[1]}/atlas"
+    gateways = [atlas, witnessed_atlas, hosted_atlas]
     for which, secret in (("witness", SERVING_SECRET), ("shared", APPLICATION_SECRET)):
         relay = Gateway(
             f"http://127.0.0.1:{provider.server_address[1]}",
@@ -949,7 +1078,10 @@ def main() -> int:
             prompts=PromptRegistry(BASE, token=secret),
             upstream_token="provider-key",  # noqa: S106 — the stand-in provider's
             credential=secret,
-            tools={"atlas": f"http://127.0.0.1:{atlas.server_address[1]}/atlas"},
+            tools={
+                "atlas": f"http://127.0.0.1:{atlas.server_address[1]}/atlas",
+                "atlas-here": atlas_here,
+            },
         )
         gateway = relay.server(port=0)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
@@ -1671,6 +1803,11 @@ def main() -> int:
             ("chosen", {"chosen": True}, "measurement-19"),
             ("chosen-loose", {"chosen": True}, "measurement-20"),
             ("cut", {"witnessed_atlas": True}, "measurement-21"),
+            ("judged", {"judged": True}, "measurement-22"),
+            ("judged", {"judged_against": True}, "measurement-23"),
+            ("candidate", {"peek": True}, "measurement-24"),
+            ("cut", {"hosted_atlas": True}, "measurement-25"),
+            ("cut", {"gateway_atlas": True}, "measurement-26"),
         ):
             declared = declare(
                 which,
@@ -1793,6 +1930,53 @@ def main() -> int:
             accounted["cut:witnessed_atlas"]["traces"],
         )
 
+        against = accounted["judged:judged_against"]
+        check(
+            29,
+            "an answer a witnessed judging call named, on the judging prompt the variant pins and "
+            "taken out the way it pins, is an exchange on every answer; the reply it did not name "
+            "is a choice the application made",
+            accounted["judged:judged"]["state"] == "completed"
+            and exchanged("judged:judged") == len(CAPITALS)
+            and against["state"] == "completed"
+            and exchanged("judged:judged_against") == 0
+            and against["traces"].get("chosen") == len(CAPITALS),
+            {"named": accounted["judged:judged"]["traces"], "against": against["traces"]},
+        )
+        peeked = accounted["candidate:peek"]
+        check(
+            30,
+            "an application that first asks each question on the pinned prompt through the "
+            "witness in a run of no measurement's, saying nothing of what it rendered, has no "
+            "exchange, and a gate says each case was asked elsewhere",
+            peeked["state"] == "completed"
+            and exchanged("candidate:peek") == 0
+            and peeked["traces"].get("asked_elsewhere") == len(CAPITALS)
+            and peeked["gate"].get("verdict") == "incomplete"
+            and any(
+                "asked on the pinned prompt in other runs" in reason
+                for reason in peeked["gate"].get("reasons", [])
+            ),
+            {"traces": peeked["traces"], "gate": peeked["gate"].get("reasons")},
+        )
+        check(
+            31,
+            "a country from an atlas whose host publishes under a token of its own, digesting "
+            "under the gateway's witness key as the deployment says it may, is an exchange on "
+            "every answer",
+            accounted["cut:hosted_atlas"]["state"] == "completed"
+            and exchanged("cut:hosted_atlas") == len(CAPITALS),
+            accounted["cut:hosted_atlas"]["traces"],
+        )
+        check(
+            32,
+            "a country from an atlas the gateway answers itself, in its own process, is an "
+            "exchange on every answer",
+            accounted["cut:gateway_atlas"]["state"] == "completed"
+            and exchanged("cut:gateway_atlas") == len(CAPITALS),
+            accounted["cut:gateway_atlas"]["traces"],
+        )
+
         # A restart with a period open: the fold's saved state carries it.
         before = AiwatcherClient(
             service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
@@ -1850,7 +2034,7 @@ def main() -> int:
             "What is the capital" in json.dumps(event) for page in paged for event in page["events"]
         )
         check(
-            29,
+            33,
             "a restart that replays the log over the fold's saved state counts every run once, "
             "and the journal paged what the fold reads without a word said in a run",
             restarted.get("runs") == served + 5
@@ -1863,11 +2047,49 @@ def main() -> int:
             },
         )
         check(
-            30,
+            34,
             "a run whose every event its transport dropped is counted as lost, by the gap in its "
             "client's count of the runs it opened, and in no other figure",
             restarted.get("lost_runs") == 1 and restarted.get("runs") == served + 5,
             {key: restarted.get(key) for key in ("runs", "lost_runs", "lost_events")},
+        )
+
+        # A client new since the restart, whose very first run the transport
+        # drops: the fold was reading when its count began — more than the
+        # minute a client's clock is allowed to run ahead after it started.
+        time.sleep(max(0.0, reading_since + 65 - time.time()))
+        fresh = AiwatcherClient(
+            service="e2e-capitals",
+            transport=Dropping(HttpTransport(BASE, token=APPLICATION_SECRET), "fresh-lost"),
+            variant_id=variant_id,
+        )
+        for request in ("lost", "1"):
+            with (
+                fresh.run(f"fresh-{request}") as traced,
+                traced.agent("capitals") as agent,
+                agent.llm(model="capitals-stand-in") as llm,
+            ):
+                llm.usage(prompt_tokens=6, completion_tokens=1)
+        fresh.flush()
+        renewed: dict[str, Any] = {}
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            watched = ok(
+                *call("GET", f"/api/v1/experiments/{context_id}?window_seconds=3600")[:2],
+                "reading what was observed of a client new since the restart",
+            )
+            renewed = next(
+                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+            )
+            if renewed.get("lost_runs") == 2 and renewed.get("runs") == served + 6:
+                break
+            time.sleep(1)
+        check(
+            35,
+            "the first run of a client whose count began while the fold was reading, dropped "
+            "whole, is counted as lost once the client's second run arrives",
+            renewed.get("lost_runs") == 2 and renewed.get("runs") == served + 6,
+            {key: renewed.get(key) for key in ("runs", "lost_runs")},
         )
     finally:
         for relay in gateways:
