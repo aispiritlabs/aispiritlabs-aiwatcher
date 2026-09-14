@@ -112,9 +112,8 @@ existing behaviour for anything the fold does not recognise.
 
 A managed execution draws itself in the workflow tab before any panel work
 exists for it: `workflow.declared` gives the graph with every step `Pending`,
-and `step.*` fills them in. That is the Phase 3 exit in
-`docs/PIPELINE_ARCHITECTURE.md`, and it is deliberately reached before the
-panel changes.
+and `step.*` fills them in. That is deliberately reached before the panel
+changes.
 
 **What would make this wrong.** A producer that also opens its own `node()`
 scope for a step the engine runs — then one node has two publishers, and

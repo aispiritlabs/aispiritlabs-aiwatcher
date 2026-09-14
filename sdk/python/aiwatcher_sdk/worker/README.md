@@ -4,10 +4,7 @@ Application setup belongs to [Runtime](../runtime/README.md), which hosts
 workflows and owns pools and lifecycle. This guide covers the lower-level
 worker API used by Runtime.
 
-The [SDK design comparison](../../../../docs/PYTHON_SDK_DESIGN.md) explains
-which patterns were adopted from Temporal, Prefect and ZenML.
-
-This is the Python half of Phase 10: execute registered functions over the
+This is the Python half of the worker protocol: execute registered functions over the
 existing managed-execution HTTP API, without importing an orchestrator or Kubernetes.
 The server owns dispatch, retries, leases, dependency ordering and settlement.
 

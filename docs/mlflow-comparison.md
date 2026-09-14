@@ -1,6 +1,6 @@
 # aiwatcher and MLflow
 
-> Historical comparison — flagged on 2026-09-11. The text below describes an earlier integration and benchmark, not the current feature set. In particular, aiwatcher now has model and artifact registries, and current MLflow covers GenAI evaluation, monitoring and OpenTelemetry-compatible tracing. Use the [current Langfuse/MLflow analysis](FTI_LANGFUSE_MLFLOW_ANALYSIS.md) and [implementation plan](FTI_IMPLEMENTATION_PLAN.md) for product decisions. The benchmark has not been rerun; its numbers must not be generalized to current releases or other configurations. The original text is retained as historical evidence.
+> Historical comparison — flagged on 2026-09-11. The text below describes an earlier integration and benchmark, not the current feature set. In particular, aiwatcher now has model and artifact registries, and current MLflow covers GenAI evaluation, monitoring and OpenTelemetry-compatible tracing. Product decisions about evaluation live in [ADR_0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), not here. The benchmark has not been rerun; its numbers must not be generalized to current releases or other configurations. The original text is retained as historical evidence.
 
 `ai_spirit_agent` already traces through MLflow (`MlflowLLMTracer`, `data/mlflow.db`,
 `make mlflow-ui`). The aiwatcher integration does not replace it — `create_tracer`

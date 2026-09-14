@@ -128,7 +128,7 @@ A separate process or the panel can start the same registered workflow through
 Message-driven workflows with `decide/evolve/initial_state`, as in the linked
 Emmett proposal, fit the same runtime ownership model but need the hosted
 decider protocol. They are not replaced by a Python loop over these static
-steps. See the [design decisions](../../../../docs/PYTHON_SDK_DESIGN.md).
+steps.
 
 ## Hosting agents
 

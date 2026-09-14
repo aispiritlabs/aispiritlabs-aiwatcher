@@ -7,19 +7,11 @@ means it is sitting on that column waiting for something.
 
 ## Backlog
 
-- [ ] [AW-6 · Compare kept evaluation evidence, and run evaluations from aiwatcher](AW-6-compare-kept-evaluation-evidence-and-run-evaluations/_index.md)
-
 ## Investigation
 
 ## Spec
 
-- [ ] [AW-2 · Merge ai_spirit_agent into aiwatcher as the agent SDK](AW-2-merge-ai-spirit-agent-into-aiwatcher-as-the-agent-sdk/_index.md)
-
 ## Job
-
-- [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
-
-- [ ] [AW-7 · A pod holds its own attempt, and the pod gates run in CI](AW-7-a-pod-holds-its-own-attempt-and-the-pod-gates-run-in-ci/_index.md)
 
 ## Tests
 
@@ -28,6 +20,14 @@ means it is sitting on that column waiting for something.
 ## Deploy
 
 ## Done
+
+- [x] [AW-7 · A pod holds its own attempt, and the pod gates run in CI](AW-7-a-pod-holds-its-own-attempt-and-the-pod-gates-run-in-ci/_index.md)
+
+- [x] [AW-6 · Compare kept evaluation evidence, and run evaluations from aiwatcher](AW-6-compare-kept-evaluation-evidence-and-run-evaluations/_index.md)
+
+- [x] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
+
+- [x] [AW-2 · Merge ai_spirit_agent into aiwatcher as the agent SDK](AW-2-merge-ai-spirit-agent-into-aiwatcher-as-the-agent-sdk/_index.md)
 
 - [x] [AW-5 · Optimise, evaluate and promote a prompt in one managed run](AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md)
 

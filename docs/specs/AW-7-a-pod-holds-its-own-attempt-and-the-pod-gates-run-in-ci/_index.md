@@ -1,13 +1,13 @@
 ---
 id: AW-7
 title: A pod holds its own attempt, and the pod gates run in CI
-step: job
-status: doing
+step: deploy
+status: done
 branch: main
 repo: aiwatcher
 created: 2026-09-12
 updated: 2026-09-14
-tags: [spec/AW-7, step/job, branch/main, status/doing]
+tags: [spec/AW-7, step/deploy, branch/main, status/done]
 ---
 <!-- spec-card -->
 
@@ -23,7 +23,7 @@ tags: [spec/AW-7, step/job, branch/main, status/doing]
 - [x] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
-- [ ] [⑥ Deploy](06-deploy.md)
+- [x] [⑥ Deploy](06-deploy.md)
 
 ## Summary
 What AW-4's last two backends left open, found while reviewing what is left
@@ -46,3 +46,7 @@ Three parts, cheapest first:
 - 2026-09-13 — Part A+B done: pod gates green in CI on Linux (process, docker) and on kind (nightly workflow, dispatched once)
 - 2026-09-14 — part C built and committed (7.4–7.21; 7.22 local half): a pod holds its attempt's credential alone, on all three backends and every auth mode, and the watch holds each Job's deadline; ADR_0031 accepted; not pushed
 - 2026-09-14 — pushed; CI and the kind gate green on `1405292`. Every task of the job done
+- 2026-09-14 11:47 — closed at the owner's ask: pushed, CI and kind green on `1405292`
+
+## Shipped
+- 2026-09-14 — see [⑥ Deploy](06-deploy.md)

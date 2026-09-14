@@ -20,32 +20,16 @@ extend-exclude = [
   # four letters that spell something the dictionary has an opinion about.
   "crates/aiwatcher-auth/tests/fixtures/",
   # Written in Polish. Every finding here is a real word the English dictionary
-  # reads as a near-miss for another one — `proces`, `tekst`, `minut`, `daty` —
+  # reads as a near-miss for another one — `proces`, `tekst`, `blok`, `serwer` —
   # so there is nothing to correct and no per-word entry that would help. A
-  # review document written in English is checked like everything else; this
+  # document written in English is checked like everything else; this
   # exclusion is by file, so the next one is a deliberate decision rather than
-  # an inherited exemption.
-  "docs/PIPELINE_REVIEW_2026-09-08.md",
-  # The same decision, made again rather than inherited: the SDK review is also
-  # written in Polish, and `proces` is the word it means.
-  "docs/PYTHON_SDK_REVIEW_2026-09-08.md",
-  # And again, for the walkthrough a reader follows in Polish while clicking
-  # through the example. `blok`, `nowe` and `serwer` are the words it means;
-  # the dictionary reads each as a near-miss for an English one. By directory
-  # rather than by file, because a walkthrough is written as a set.
+  # an inherited exemption. The walkthrough a reader follows while clicking
+  # through the example is excluded by directory, because it is written as a set.
   "examples/titanic/",
-  # The FTI design and acceptance documents are also written in Polish.
-  "docs/FTI_KICKOFF.md",
-  # Listed rather than globbed as `docs/FTI_*`, for the reason above: the
-  # kickoff for B2 is Polish like its predecessor, and the next FTI document
-  # should be a decision rather than an inherited exemption.
-  "docs/FTI_KICKOFF_B2.md",
   "docs/FTI_IMPLEMENTATION_PLAN.md",
-  "docs/FTI_ARCHITECTURE_REVIEW.md",
-  "docs/FTI_FEATURE_CATALOG.md",
-  "docs/FTI_FEATURE_GAPS.md",
-  "docs/FTI_LANGFUSE_MLFLOW_ANALYSIS.md",
-  "docs/FTI_UX_WANDB_PLAN.md",
+  "docs/ux-audit-agent-workflows-2026-09-14.md",
+  "docs/design-skills-selection.md",
 ]
 
 [default.extend-words]

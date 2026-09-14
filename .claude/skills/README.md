@@ -100,3 +100,9 @@ so, and `just skills` overwrites it. Fork it under a different name instead.
 directory behind it, the check says that too. The bar is the one above — a
 skill about *this repository's reasoning* belongs in `CLAUDE.md` or an ADR, not
 here.
+
+## Frontend, UX and system design
+
+Seven additional skills cover visual direction (`frontend-design`), local UX lookup (`ui-ux-pro-max`), UI auditing (`web-design-guidelines`), tokens and themes (`design-system-patterns`), distributed architecture (`system-design`), React performance (`vercel-react-best-practices`) and composition (`vercel-composition-patterns`).
+
+See [selection and usage](../../docs/design-skills-selection.md) for sources, tradeoffs, SPA scope and script invocation. `.agents/skills/` exposes these same directories to Codex through relative symlinks. Upstream Web Interface Guidelines are fetched live by the audit skill; this is an explicit exception to fully offline reference material. The Vercel license record preserves upstream metadata because that repository has no standalone LICENSE.

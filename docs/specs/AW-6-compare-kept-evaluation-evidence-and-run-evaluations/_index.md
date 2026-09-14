@@ -1,13 +1,13 @@
 ---
 id: AW-6
 title: Compare kept evaluation evidence, and run evaluations from aiwatcher
-step: backlog
-status: open
+step: deploy
+status: done
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-13
-tags: [spec/AW-6, step/backlog, branch/main, status/open]
+updated: 2026-09-14
+tags: [spec/AW-6, step/deploy, branch/main, status/done]
 ---
 <!-- spec-card -->
 
@@ -23,7 +23,7 @@ tags: [spec/AW-6, step/backlog, branch/main, status/open]
 - [ ] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
-- [ ] [⑥ Deploy](06-deploy.md)
+- [x] [⑥ Deploy](06-deploy.md)
 
 ## Summary
 The rest of FTI, which until now has been run out of `docs/FTI_*.md` rather than
@@ -229,3 +229,7 @@ The comparison itself followed in section 20.
   weights a job sent by digest. A result's case is proposed in the words the
   result holds, and a case's judgements show its reviews. `just e2e-generate`
   12/12, `just e2e-gate` 7/7, `just e2e-review` 8/8
+- 2026-09-14 11:47 — closed at the owner's ask: stages B and C delivered through plan section 40; section 41 and stage D stay in `docs/FTI_IMPLEMENTATION_PLAN.md`, cut down to what is left
+
+## Shipped
+- 2026-09-14 — see [⑥ Deploy](06-deploy.md)

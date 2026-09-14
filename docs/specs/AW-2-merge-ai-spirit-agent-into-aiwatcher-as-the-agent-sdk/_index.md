@@ -1,13 +1,13 @@
 ---
 id: AW-2
 title: Merge ai_spirit_agent into aiwatcher as the agent SDK
-step: spec
-status: doing
+step: deploy
+status: done
 branch: feat/agent-sdk-merge
 repo: aiwatcher
 created: 2026-09-10
-updated: 2026-09-11
-tags: [spec/AW-2, step/spec, branch/feat-agent-sdk-merge, status/doing]
+updated: 2026-09-14
+tags: [spec/AW-2, step/deploy, branch/feat-agent-sdk-merge, status/done]
 ---
 <!-- spec-card -->
 
@@ -23,7 +23,7 @@ tags: [spec/AW-2, step/spec, branch/feat-agent-sdk-merge, status/doing]
 - [ ] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
-- [ ] [⑥ Deploy](06-deploy.md)
+- [x] [⑥ Deploy](06-deploy.md)
 
 ## Summary
 `ai_spirit_agent`'s SDK layer becomes aiwatcher's, and agent-to-agent messaging
@@ -58,3 +58,7 @@ workflow on its own.
 - 2026-09-11 10:40 — The owner's two follow-ups. `ai_spirit_agent` is PolyForm Noncommercial 1.0.0 too — `LICENSE`, a `NOTICE`, `license-files` in its root `pyproject` and the MIT classifier gone — and its `NOTICE` says copies received under the earlier MIT licence stay under it; committed on `feat/agent-sdk-merge`, not pushed. `CONTRIBUTING.md` opens with the rights a contribution grants: a perpetual licence AI Spirit Labs may sublicense on any terms, commercial ones included; no copyleft and nobody else's noncommercial code; `git commit -s` from anyone outside AI Spirit Labs — because a commercial licence can only be sold over code whose rights are held. `uv lock --check` in the agent repository and `typos` on the texts pass; the `commit-msg` hook reads only the subject, so a sign-off passes it.
 - 2026-09-11 11:00 — The GUI reviewed, not ported: [gui-review.md](gui-review.md). Nothing moves. The run overlay the investigation counted on is not live — the Runner lights every node before a run and after it — and the panel's Workflows view already draws a turn node by node; the Events tab is the panel's feeds after the fact; a Gradio turn is already a declared execution in aiwatcher when `AIWATCHER_URL` is set. Authoring an agent graph is the one real gap and a spec of its own; the panel's smaller gaps (the prompt a span ran on, a node inspector that names model and prompt, a composer for a hosted agent) wait for the panel rebuild. For the application: it listens on `0.0.0.0` with no sign-in, loads PixiJS from a CDN, and its Runner canvas is dead — both tabs share one DOM id.
 - 2026-09-11 11:10 — Parked by the owner: `ai_spirit_agent` is left where it is (`feat/agent-sdk-merge` at `2fd7db0`, not pushed — its path sources to this checkout still break its CI). Open when this resumes: `packages/workshops`, which `evaluation` scorers move, the unticked Phase B criterion (a candidate admitted on held-out and one refused, both in the panel), a traversal joined to the hosted execution it runs in, and a summarizer fired outside `run` that declares nothing.
+- 2026-09-14 11:47 — closed at the owner's ask: the aiwatcher half shipped through PR #2 and after it; `ai_spirit_agent`'s half stays parked
+
+## Shipped
+- 2026-09-14 — see [⑥ Deploy](06-deploy.md)

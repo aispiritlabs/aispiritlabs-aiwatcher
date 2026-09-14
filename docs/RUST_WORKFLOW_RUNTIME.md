@@ -100,7 +100,8 @@ This uses the application's existing Runtime setup, executes one attempt and
 closes its resources. It does not update the registered definition head. The
 lower-level `aiwatcher-worker run-attempt --ref ... --queue ... --task ...` is
 also available. A fresh runtime can call `run_attempt(ref, pool=...)` directly.
-Process/pod provisioning remains the infrastructure controller's responsibility.
+A step that needs a pod of its own names a template, and the work role starts
+one per attempt ([ADR_0029](ADR/ADR_0029_POD_PER_STEP.md)).
 
 Before accepting success, Rust verifies required output names and kinds,
 duplicate names and object existence. The SDK reports omitted outputs as a
@@ -138,12 +139,11 @@ are included in the recovery script. Workspace tests passed (936 Rust tests,
 24 ignored; 276 SDK tests; 43 panel tests), along with Clippy, Ruff, mypy,
 the panel production build and the OpenAPI freshness check.
 
-## Migration boundary
+## Boundary
 
-This delivers the Python definition/compiler/start path of Phase 10 and keeps
-event sourcing and observability intrinsic to every run. Hosted agent deciders
-(`ExecutionOwner::Worker`, dynamic messages and durable joins) remain Phase 13;
-this static compiler does not execute agent decisions in Rust. Container jobs,
-cluster autoscaling and Planner's four-stage parity gate remain their separate
-plan steps. The Flyte integration was removed later, by AW-4 (2026-09-11), and
-container jobs are Phase 12, which AW-4 reopened.
+This is the Python definition/compiler/start path, and it keeps event sourcing
+and observability intrinsic to every run. The static compiler does not execute
+agent decisions in Rust: a hosted decider (`ExecutionOwner::Worker`, dynamic
+messages, durable joins) is a protocol of its own. A pod started for one
+attempt holds a credential for that attempt alone
+([ADR_0031](ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md)).

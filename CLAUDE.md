@@ -103,7 +103,7 @@ just run-serve     # the API, the read model and the object store, no ingress ou
 just run-work      # the outbox and the reactors, no ingress in
 ```
 
-The last two are the split of section 27, and they need three shared backends —
+The last two are the split into two roles, and they need three shared backends —
 `postgres`, `laser` and `s3` — because that is what stops being per-process when
 the binary is two processes. The start-up refuses each by name. One process
 holding both roles is the default and needs none of them, which is what `just
@@ -1023,11 +1023,11 @@ there.
 ### Agent skills
 
 `.claude/skills/` holds reference material an agent loads on demand, vendored
-at pinned commits rather than fetched — `.claude/skills/README.md` says which
-nine are there and what each one earns its place with. Four are
-OpenTelemetry (instrumentation, semantic conventions, the Collector, OTTL),
-one is Rust, two are the panel's TanStack Query and Router, and two are the
-Hugging Face hub this repository already searches.
+at pinned commits. `.claude/skills/README.md` describes the observability,
+Rust, TanStack, Hugging Face, frontend, UX and system-design skills.
+`docs/design-skills-selection.md` records the design selection and when to use
+it. `.agents/skills/` exposes the design set to Codex. The Web Interface
+Guidelines audit fetches its rules live; its wrapper alone is pinned.
 
 None of them is about *this* repository. This file and the ADRs under
 `docs/ADR/` are that, and a skill restating either would be a second copy free
@@ -1088,13 +1088,13 @@ the review.
   step's `step_started` reads as a redelivery of the first's, the decider never
   hears about it, and the step sits `pending` behind a lease nothing releases.
   It names the execution, the step, the attempt and which of the two facts it
-  is. Section 43.10.
+  is.
 - **Never derive a command's message id without the run's version.** The same
   rule, arriving from the other side. `execution + command name` makes a
   double-click idempotent and makes a Pause *after* a Resume a redelivery of
   the first Pause — accepted, deduplicated, and the run keeps going with a
   success on the wire. `RunProjection::last_message_version` is the
-  discriminator. Section 43.20.
+  discriminator.
 - **Never list an action whose command would be refused.**
   `ContextSnapshot::allowed` carries `Retry` only from `Failed` or `Crashed`
   and not while the run is cancelling, and `Answer` only while a step actually
@@ -1111,17 +1111,17 @@ the review.
   because retention is opt-in. Nothing reads a finished attempt back — a
   redelivery is recognised by the stream's inbox key, and a takeover reads
   `previous_owner` on a row that is still live. `awaiting_input` keeps its row,
-  because it is not an ending. Section 43.34.
+  because it is not an ending.
 - **Never leave a parked attempt holding its lease.** `AttemptWrite::Park` is
   the third shape and the one that changes a row rather than adding or removing
   one: the row stays, because a question is not an ending and the attempt that
   asked has to stay readable, and the lease goes, because a worker that stopped
   to ask does not hold a pod for the answer. Left running, the lease expires
   and the next claimant runs the work again having been told nothing about the
-  question — 43.34 reserved `awaiting_input`'s row for exactly this and nothing
-  wrote one until now. Only a step the plan *dispatched* gets one: a
-  `HumanInput` step is parked by the decider when it schedules it and reaches
-  the claim table never. Section 43.40.
+  question — the rule that retires a finished attempt reserved
+  `awaiting_input`'s row for exactly this, and nothing wrote one until now.
+  Only a step the plan *dispatched* gets one: a `HumanInput` step is parked by
+  the decider when it schedules it and reaches the claim table never.
 - **Never let an answer leave the row it parked.** A park keeps its row because
   a question is not an ending; an answer *is* one, so `InputProvided` retires it
   in the same decision that dispatches attempt *n+1* under its own key. The
@@ -1130,7 +1130,6 @@ the review.
   walked straight past. Left behind, the table gains a row per park for ever,
   which is the claim table growing with the history that rule exists to prevent,
   and the `file` adapter pays for it on every claim and every heartbeat.
-  Section 43.40.
 - **Never retire an attempt by a number the event does not carry.**
   `StepSkipped` is a fact about a *step* — a cancel or an upstream failure
   overtook it — and names no attempt, so the handler read one as attempt `0`
@@ -1150,7 +1149,7 @@ the review.
   `NoSuchStep` and the run stayed parked for ever behind a clock that had
   already passed. The cancel side is the same mistake from the other end: it
   is read from the decision's own facts, because `evolve` clears `awaiting` on
-  the very events a cancel follows. Section 43.40.
+  the very events a cancel follows.
 - **Never let an answer be a step's result unless the step was the question.**
   `ProvideInput` completes a `HumanInput` step, because that step *is* the
   question and there is nothing else for it to do. An attempt that stopped in
@@ -1160,7 +1159,6 @@ the review.
   retry already lives under — so the answers are kept on the **step** and
   accumulate: attempt two replays to the first question and must read it rather
   than ask again, and a task that asks twice needs both by attempt three.
-  Section 43.40.
 - **Never decide what an answer does in two places.** A person answers through
   `ProvideInput` and a lapsed deadline answers through `OnTimeout::Answer`, and
   what an answer *does* is one question — so both go through `answer_lands`.
@@ -1169,13 +1167,13 @@ the review.
   attempt that never finished and with no outputs, so anything bound to its rows
   read nothing. What follows is part of the same rule: `continue_after` belongs
   to the arm that actually ended the step, because a shared one declares the run
-  finished over a step `Answer` has just re-scheduled. Section 43.40.
+  finished over a step `Answer` has just re-scheduled.
 - **Never cache a step somebody answered.** A human decision is addressed by
   nothing, so a step that has one no longer has all its inputs addressed —
   `cache_key`'s own rule. Two runs of one step answered differently would share
   a key, and the second would be served the first one's rows without ever
   seeing its own answer. `None`, rather than a key that means "probably the
-  same". Section 43.40.
+  same".
 - **Never make a caller recover a classification from a status code.** The
   scheduler's one question about a refused start is whether the slot stays due,
   and it read that off the HTTP status an `ApiError` carried: 4xx permanent,
@@ -1209,7 +1207,7 @@ the review.
   stays with the caller is only what the caller knows: **who is asking** (a role
   check against a session, which a tick does not have and must not fake) and
   **which id** (`RunIdentity` — a slot names its own, a browser sends a key, a
-  click gets a fresh one). AR3, before C0.
+  click gets a fresh one).
 - **Never let a measurement cost a run.** The scheduler reports its lateness and
   its backlog *after* it has started the slots, and a sink that is down is a
   warning rather than a failed tick — the cursor still moves, because whether a
@@ -1218,35 +1216,34 @@ the review.
   started, which would fold the store's latency and the compiler's into a number
   about the clock; and it is reported beside the backlog from the same tick,
   because one slot four minutes behind and forty of them are the same lateness
-  and very different news. Section 43.41.
+  and very different news.
 - **Never report a number for a disk this process cannot see.** A notebook's
   staged rows live in `services/ml_pipeline`, keyed by a hash of the context in
   that process's own scratch directory, and nothing here can list them — so the
   staging figure is `GET /ml-pipeline/staging` and not a zero reported beside
   the artifact totals. The artifact half is this binary's, hourly, and a count
   rather than an opinion: whether an object is still reachable is a question
-  about streams retention has already been deleting. Section 43.41.
+  about streams retention has already been deleting.
 - **Never put a run's timings in the workflow store.** When an execution
   started and ended is the log fold's answer — with `duration_ms` — and an
   attempt's is the span assembler's, from `step.*`. `RunProjection` and
   `AttemptRecord` carried four such fields, written by nothing and read by
   nothing; filling them in would have been the second answer, not the fix. The
   projection is for accepting the next command and for the run's own page.
-  Section 43.33.
 - **Never build a second live view of one run.** ADR_0026 puts a managed run's
   facts on the log carrying the execution as `workflow_run_id`, and
   `/api/v1/workflow-executions/{id}/stream` scopes by that field — so a managed
-  execution has been streamable since the first one ran. Section 20's
-  `/executions/{id}/stream` is struck rather than built, and
+  execution has been streamable since the first one ran. A dedicated
+  `/executions/{id}/stream` was struck rather than built, and
   `every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is what
-  keeps the reason true. Section 43.21.
+  keeps the reason true.
 - **Never decide whether a scheduled run may start from the read model.** It is
   an asynchronous fold and it is *empty in the `work` role*, where the tick
   runs — `bin/aiwatcher.rs` ends that path before the projector starts — so
   `overlap = skip` never skipped there, and in the combined role it read a
   projection that lagged the start it was meant to block. `admit_slot` asks the
   workflow store, in the transaction that takes the slot, against the
-  projection written by the decision itself. Review R1.
+  projection written by the decision itself.
 - **Never write a transient failure down as a decision.** A refused compile
   says the same thing on the next tick; an unreachable store does not. The tick
   wrote both as `refused` and then advanced a global cursor past the slot, so
@@ -1254,7 +1251,6 @@ the review.
   claiming it had been refused. `SlotSettlement::TryAgain` drops the lease and
   leaves the slot due, and the caller draws the line from the status the API
   gave it — 4xx is about the definition, 5xx is about reaching something.
-  Review R2.
 - **Never let the tick write a schedule's configuration.** It read every
   schedule, did its work and wrote the whole object back, so an edit or a
   DELETE landing in between was overwritten by the snapshot — a deleted
@@ -1262,7 +1258,7 @@ the review.
   object store offers no compare-and-set. Configuration and slot outcomes have
   different writers and now live in different places, and the tick is handed a
   `ScheduleReader` so widening that trait is what a future change has to do
-  first. Review R3.
+  first.
 - **Never resolve a local time by the offset of the instant that found it.**
   Twice a year a wall-clock time is ambiguous or does not exist, and an offset
   read from the sampling instant answers whichever the sample happened to land
@@ -1282,7 +1278,7 @@ the review.
   *when* it fires would then silently drop a slot that was already due.
   `Schedule::fires_the_same_as` decides, over cadence, timezone and enabled
   only, so switching `overlap` at 08:59 keeps nine o'clock and re-enabling
-  starts from now rather than running the days it was off. Review R7.
+  starts from now rather than running the days it was off.
 - **Never write the derived files of one decision without journalling it
   first.** The `file` adapter touches five — stream, projection, outbox,
   attempts, checkpoint — and a filesystem writes one at a time. It used to
@@ -1294,7 +1290,7 @@ the review.
   is the commit point, everything after it is idempotent, and the record is
   deleted only once it has all been applied. `recover` runs at `open` **and** at
   the top of every `append` — the second is not belt-and-braces, because A1's
-  reproduction never restarted anything. Review A1.
+  reproduction never restarted anything.
 - **Never hold a single-process lock by a file's existence.** The lock is the
   operating system's, taken with `File::try_lock` on the open file, because the
   kernel releases it however the process ends. `create_new` plus a `Drop` that
@@ -1313,17 +1309,18 @@ the review.
   them back. And an applied migration is never edited: a version is recorded
   once and skipped forever after, so a rewrite reaches no database that already
   ran it and only makes two installations at one version disagree about what
-  that version did. What withdraws a migration is another migration. Review R4.
+  that version did. What withdraws a migration is another migration.
 - **Never split the binary in two without sharing all three backends.** The
   workflow store (`postgres`), the log the outbox publishes to and the projector
   folds (`laser`), and the object store one role writes a step's result into for
   the other to read (`s3`). `Config::validate` refuses each by name, because two
   of the three fail silently and the third fails three attempts later with
-  "holds no object". Section 43.11.
+  "holds no object".
 - **Never put the projector in the `work` role.** It *is* the read model the API
   answers from, in process, under `AIWATCHER_MAX_SPANS_TOTAL`'s memory contract.
   A `serve` role without it answers every read from an empty fold. Moving the
-  folds out of process is Phase 8, behind its own gate.
+  folds out of process needs its own ADR, and is not started before a measured
+  replay-on-start over a minute, or history wanted past `AIWATCHER_MAX_RUNS`.
 - **Never let a lookup's two answers become one question.** A runtime says
   whether it is *still executing* a key — nothing else can know that. The object
   store's receipt says what the finished attempt *produced* — the query service
@@ -1352,7 +1349,7 @@ the review.
   (a slot missed during an outage is simply inside the next interval) and why
   the tick rate is an operational choice rather than a correctness one. A loop
   that asked "is it 09:00?" would answer no at 10:05 and lose the day's run with
-  nothing to say so. Section 43.31.
+  nothing to say so.
 - **Never let a schedule fire without writing down what happened.** The tick
   records the slot, the outcome and the reason on the schedule head — what it
   logged before was a warning nobody reads, and a schedule refused every morning
@@ -1360,7 +1357,7 @@ the review.
   it records is the *scheduler's* decision and never the run's outcome: whether
   the run succeeded is the log's answer, one click away by the id beside it, and
   a second copy would be free to disagree with the fold. Written after the run,
-  so a stored `started` always has one behind it. Section 43.32.
+  so a stored `started` always has one behind it.
 - **Never work out in the panel when a schedule next fires.** `next_run` comes
   from the server, from `Schedule::next_after` — which is `slots_between` over
   eight days rather than a second walk, so the hour a card shows and the hour
@@ -1440,7 +1437,7 @@ the review.
   runtime recomputes the digest from the stored bytes, and a comparison after
   against what the subprocess imported. `UserCode`, so neither is retried. A
   cache *hit* re-checks nothing, and that is correct: the key holds the pinned
-  revision. Section 43.24.
+  revision.
 - **Never make an edit strand the runs that came before it.** This read the
   *head's* digest once and refused a run whose pin no longer matched, which
   protected provenance by making every earlier execution unrepeatable — and a
@@ -1481,13 +1478,13 @@ the review.
   wrong often enough to be worth saying out loud. A pinned window counts because
   the query service reads one: `POST /query/query` takes `window_from`/`window_to`
   and the API's windowed routes take `as_of`, so a plan that pinned 09:00–10:00
-  and a retry five minutes later read the same rows. Sections 43.15 and 43.18.
+  and a retry five minutes later read the same rows.
 - **Never decide from the request what only the runtime can answer.** Whether a
   cache key is *well defined* is `cache_key`'s question; whether the run that
   produced a result happened under those conditions is the executor's, on
   `ActivityResult::cacheable`. An older query service that never learnt `as_of`
   reads a drifting window and says so by omission — its rows are produced,
-  reported and not remembered. Section 43.18.
+  reported and not remembered.
 - **Never let a window mean "the last hour" to one reader and a span to
   another.** `as_of` is absent for every panel query, which is what keeps a
   shared link meaning the hour it is opened in; a managed step pins it, and only
@@ -1500,7 +1497,7 @@ the review.
   fact that has not reached the log; deleting the decision behind it leaves the
   publisher a message with no explanation and the log a gap nothing records.
   `aiwatcher_jobs::ORDERING` in a sixth place, and the second half of
-  `store::prunable`'s candidate test. Section 43.25.
+  `store::prunable`'s candidate test.
 - **Never let retention decide a run has died.** `prune` takes terminal
   executions only. A run with no end is `Running` and age tells an OOM kill from
   a twenty-minute think in neither direction — the projector's rule for agent
@@ -1524,7 +1521,7 @@ the review.
   The fact is on the event log, which is the durable copy and the one every fold
   reads; a second copy answers no question and grows with every step of every
   run. The `file` adapter rewrites the whole outbox on each publish, so
-  remembering was quadratic. Section 43.16.
+  remembering was quadratic.
 - **Never let a plan know what a pod is.** A `container_job` step names a
   template and an image on that template's list; whether that becomes a Job in
   a cluster, a container on this host or a bare process is
@@ -1556,7 +1553,7 @@ the review.
   it again costs one call and gets ten attempts over ten minutes. `Timeout` and
   `Infrastructure` may have done the work, so they keep three. Counted by kind,
   because one budget of three sized for a job shard killed a run over a
-  forty-second outage. Section 43.17.
+  forty-second outage.
 - **Never put rows, notebook source, a prompt, a completion or an agent's
   inter-node text in a workflow message.** A step hands data on as an
   `ArtifactRef` and its answer as a bounded inline value. The last of those is
@@ -1624,9 +1621,9 @@ the review.
   makes that legal. One cursor bound the publisher to an output no step
   declares: a dataset version over no rows, which is the one failure that looks
   like a success.
-- **Never issue a token to a service that cannot check one.** §16.3 asked an
-  editor session to carry permissions, expiry and a signature; the notebook
-  runtime has no authentication at all, so a signed token presented to it would
+- **Never issue a token to a service that cannot check one.** The first design
+  asked an editor session to carry permissions, expiry and a signature; the
+  notebook runtime has no authentication at all, so a signed token presented to it would
   be ceremony rather than a boundary. The gate is the route that mints the
   session — `Editor`, because staging replaces what everybody looking at that
   notebook's live app is shown — and aiwatcher reads the rows from its own
@@ -1662,7 +1659,7 @@ the review.
   parent produced, the attempt a staging key is named after — so a canvas that
   guessed would guess from the draft on screen, which is certainly not what an
   old run read. `ContextSnapshot` is the answer, and it carries the plan's own
-  `RuntimeBinding` rather than a second description of it. Section 19, 43.19.
+  `RuntimeBinding` rather than a second description of it.
 - **Never put a service's address in a context's actions.** `allowed` says
   *which* actions apply, because only the server knows the state; where they
   live is the panel's own routing or the generated client's. And an action whose
@@ -1673,13 +1670,13 @@ the review.
   ride back with the thing they describe — `GET /executions/{id}` and every
   command route return a `RunView`, the projection *and* what may be done to
   it. `state.is_terminal()` in TypeScript is three lines and a second copy of
-  `decide`'s preconditions in another language. Section 43.27.
+  `decide`'s preconditions in another language.
 - **Never keep a managed run's id out of the URL.** ADR_0025's claim is that
   the browser may close, so a run held in `useState` is a run a reload loses —
   the panel's own URL-state rule, in the one place where it is load-bearing
   rather than a convenience. And the way back to an old run is
   `GET /api/v1/workflow-executions`, which folds the log: a list over the
-  inline projection is the second read path ADR_0026 forbids. Section 43.27.
+  inline projection is the second read path ADR_0026 forbids.
 - **Never let the generated client's default decide whether a call worked.** It
   does not throw: a 403 comes back as `{ data: undefined, error }` and the
   promise *resolves*, so a mutation that returns the SDK call runs react-query's
@@ -1689,7 +1686,7 @@ the review.
   `answerOrNone` where "no such thing" is an ordinary answer, and `confirmDone`
   where success carries no body at all. That last one is not a nicety — a
   successful DELETE is a 204, which the client turns into `{}`, so "is there
-  data" answers yes for the refusal and yes for the success alike. Review R6.
+  data" answers yes for the refusal and yes for the success alike.
 - **Never draw a failed read as an empty state.** 404 is the server saying there
   is no such thing; a 501, a 503 or an expired session is the server saying
   nothing usable, and rendering the second as the first tells somebody their run
@@ -1705,7 +1702,7 @@ the review.
   variable arrives as `Path "rows" does not exists`. `CheckedClient` throws at
   the seam, carrying aiwatcher's own message, and a permanent answer is relayed
   as a 4xx so a managed step reads it as `UserCode` rather than spending ten
-  attempts on a flag that is still off. Section 43.28. The Python engines' pager
+  attempts on a flag that is still off. The Python engines' pager
   (`aiwatcher_query.api`) reads the status before the body for the same reason.
 - **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
   decides whether blocks form a runnable chain and returns every problem as
@@ -1732,7 +1729,6 @@ the review.
   things depend on it not doing that: `GET /ml-pipeline/executions/{key}` has to
   be answerable *while* a notebook runs, which is the only case it exists for,
   and marimo's live app is served by the same process for the panel's iframe.
-  Section 43.30.
 - **Never let a runtime be asked only about what it stored.** A receipt says
   what a finished attempt produced; only the runtime knows whether it is *still
   executing* a key, and after a timeout that is the question. Both runtimes
@@ -2751,9 +2747,9 @@ the review.
   the service. `tests/Dsl/ParserRejectionTest.php` is the list of things that
   must keep failing; adding to it is cheap and is the point.
 - **Never give a transform a second representation.** `BlockSpec::Transform` is
-  Flow DSL text and stays text (decision 15, settled). A structured model would
-  be the enumeration of 43.22 one layer up — every transform a user could write
-  would have to be a case this repository has, and Flow ships 239 functions.
+  Flow DSL text and stays text (settled). A structured model would
+  be the hand-written function list `Dsl\Registry` replaced, one layer up —
+  every transform a user could write would have to be a case this repository has, and Flow ships 239 functions.
   Structure *beside* the text is worse than either: two authored representations
   of one thing, free to drift, with no rule saying which is the truth. The cost
   is named rather than hidden — a second query engine reads `FlowSourceRef` and
@@ -2841,7 +2837,7 @@ the review.
   `now()`, `uuid_v4()` and `random_string()` are honest work in the Query tab
   and a wrong cache entry in a managed step. The answer carries `deterministic`
   beside `window_applied`, for the same reason: only the engine knows what its
-  query resolved to. Section 43.22. Every engine answers it: false for a corpus
+  query resolved to. Every engine answers it: false for a corpus
   read, and for a call to a volatile function — DuckDB's read from the stability
   `duckdb_functions()` reports, through `FunctionExpression`'s text as well as a
   call's own name; DataFusion's from a declared set, because its binding says
@@ -2967,7 +2963,7 @@ the review.
   aiwatcher reaching that service directly, and the refusal arrives as a refused
   connection the retry budget reads as a transient outage and spends ten
   attempts on. Whichever pod holds the reactor is the one to admit: `server`
-  combined, `worker` split. Section 43.25.
+  combined, `worker` split.
 - **Never reuse a database the cluster happens to be running.**
   `detect-stack.py` reports PostgreSQL and derives nothing, which is the object
   store's rule with a sharper reason: what this release would do with a database

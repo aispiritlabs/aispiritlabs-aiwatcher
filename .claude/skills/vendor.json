@@ -48,6 +48,53 @@
         "skills/hf-cli": "hf-cli",
         "skills/huggingface-datasets": "huggingface-datasets"
       }
+    },
+    {
+      "repo": "https://github.com/anthropics/skills",
+      "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+      "license": "LicenseRef-Anthropic",
+      "license_file": "skills/frontend-design/LICENSE.txt",
+      "skills": {
+        "skills/frontend-design": "frontend-design"
+      }
+    },
+    {
+      "repo": "https://github.com/vercel-labs/agent-skills",
+      "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+      "license": "See upstream metadata",
+      "license_file": "skills/react-best-practices/SKILL.md",
+      "skills": {
+        "skills/web-design-guidelines": "web-design-guidelines",
+        "skills/react-best-practices": "vercel-react-best-practices",
+        "skills/composition-patterns": "vercel-composition-patterns"
+      }
+    },
+    {
+      "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "commit": "7f69fed6a2717900085f1bc3b263721f8ba025e2",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skills": {
+        ".claude/skills/ui-ux-pro-max": "ui-ux-pro-max"
+      }
+    },
+    {
+      "repo": "https://github.com/wshobson/agents",
+      "commit": "4236bb91f8395b0435f1d8b8baf9e8e4c69a8620",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skills": {
+        "plugins/ui-design/skills/design-system-patterns": "design-system-patterns"
+      }
+    },
+    {
+      "repo": "https://github.com/wondelai/skills",
+      "commit": "c172996495bed0fcd26896a9416b2093fd7073f0",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skills": {
+        "system-design": "system-design"
+      }
     }
   ]
 }

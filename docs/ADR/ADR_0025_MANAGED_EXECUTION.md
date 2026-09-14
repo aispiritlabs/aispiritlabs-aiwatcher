@@ -52,8 +52,7 @@ against a transactional store. The panel authors definitions, edits code,
 sends commands, follows links and renders state; it does not compile, sequence,
 retry, resume or publish a managed run.
 
-Four records, and they are different things (section 5.3 of
-`docs/PIPELINE_ARCHITECTURE.md`):
+Four records, and they are different things:
 
 | Record | Mutability |
 |---|---|

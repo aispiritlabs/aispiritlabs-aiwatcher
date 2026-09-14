@@ -1,13 +1,13 @@
 ---
 id: AW-4
 title: Retire Flyte, and run workflow steps in pods of our own
-step: job
-status: doing
+step: deploy
+status: done
 branch: main
 repo: aiwatcher
 created: 2026-09-11
-updated: 2026-09-12
-tags: [spec/AW-4, step/job, branch/main, status/doing]
+updated: 2026-09-14
+tags: [spec/AW-4, step/deploy, branch/main, status/done]
 ---
 <!-- spec-card -->
 
@@ -23,7 +23,7 @@ tags: [spec/AW-4, step/job, branch/main, status/doing]
 - [x] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
-- [ ] [⑥ Deploy](06-deploy.md)
+- [x] [⑥ Deploy](06-deploy.md)
 
 ## Summary
 The owner's decision, 2026-09-11: Flyte leaves aiwatcher. planner already runs
@@ -46,3 +46,7 @@ planner something aiwatcher now has.
 - 2026-09-12 07:55 — 2.5 built (`0ec11aa`, `409ec5d`): `just e2e-pods` runs four stages of one import as four pods on a local Kubernetes and the same four through one long-lived worker, and every stage's output has one digest across both paths while the artifacts saying who ran them differ — four pod names against one worker's. With it: the chart's Role covers every call the launcher makes and refuses four it must not, a cancel deleted a running pod's Job and the run reached `cancelled` in seconds, a stage over its memory limit failed twice as `infrastructure` carrying the cluster's own `OOMKilled` while the stages before it stood, and every pod's log was in the store with no Job left. It found what nothing before it could: two rustls crypto providers in one process, so the launcher panicked on its first call to any cluster. Part 2 is done; naming a template on planner's own four stages is planner's commit
 - 2026-09-12 09:34 — 2.6, the owner's ask: what a step's pod *is* is now the deployment's — `AIWATCHER_POD_RUNTIME=process` runs each attempt as a process on the work role's own host, behind the same `Cluster` port and from the same manifest, keeping the derived name, the claim by key, the watch, the cancel and the log, and keeping neither the image nor a resource limit. `just e2e-processes` proves the whole path on a binary with no cargo feature, no image and no kubeconfig; the chart offers it nowhere, because in a cluster it would be step code in the API pod
 - 2026-09-12 09:59 — 2.7, the owner's ask: a third backend, `AIWATCHER_POD_RUNTIME=docker` — one container per attempt on this host's own engine, which gives back the two things the process backend gave up: the step's **declared image** and the template's **limits**, so a stage over its memory ask is `OOMKilled` by the kernel exactly as in a cluster. `just e2e-docker` asks all six phases and passes them; the chart offers it nowhere, for the reason it offers `process` nowhere
+- 2026-09-14 11:47 — closed at the owner's ask: Flyte out, pods per step on three backends, gates green in CI on `1405292`
+
+## Shipped
+- 2026-09-14 — see [⑥ Deploy](06-deploy.md)
