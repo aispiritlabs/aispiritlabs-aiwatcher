@@ -20,7 +20,7 @@ const turn = {
   review: { state: 'pending' },
 };
 
-it('asks the archive only for the turns this call produced', async () => {
+it('asks the archive for the run, and shows the turns tied to this call', async () => {
   const server = serve([
     {
       method: 'GET',
@@ -60,6 +60,29 @@ it('reads a deployment with no archive as a configuration, not a failure', async
   );
 
   expect(await screen.findByText(/No content archive on this deployment/)).toBeTruthy();
+});
+
+it("leaves another call's turns to that call", async () => {
+  serve([
+    {
+      method: 'GET',
+      path: '/conversation-turns',
+      answer: {
+        status: 200,
+        body: {
+          turns: [{ ...turn, turn_id: 'turn-2', provenance: { span_id: 'span-elsewhere' } }],
+          total: 1,
+        },
+      },
+    },
+  ]);
+  render(
+    withQueries(
+      <SpanMessages conversationId="conversation:1" runId="run-1" spanId="span-1" reveal={false} />,
+    ),
+  );
+
+  expect(await screen.findByText(/holds nothing for this call/)).toBeTruthy();
 });
 
 it('says the archive holds nothing rather than showing an empty list', async () => {

@@ -39,13 +39,19 @@ export function SpanMessages({
   /** From the view menu: open every turn's content as it arrives. */
   reveal: boolean;
 }) {
+  // Asked by run rather than by span, because a producer only knows a span id
+  // when it minted one itself: the server derives the rest from the run, the
+  // agent and the call. A turn that names this span is shown against it, and a
+  // run whose turns name no span at all is shown against every span of it —
+  // which for a one-call run is the same answer, reached without the producer
+  // having to reimplement the derivation.
   const turns = useQuery({
-    queryKey: ['conversation-turns', conversationId, runId, spanId],
+    queryKey: ['conversation-turns', conversationId, runId],
     retry: false,
     queryFn: async () => {
       const response = await listConversationTurns({
         throwOnError: true,
-        query: { conversation_id: conversationId, run_id: runId, span_id: spanId, limit: 50 },
+        query: { conversation_id: conversationId, run_id: runId, limit: 50 },
       });
       return response.data;
     },
@@ -65,7 +71,9 @@ export function SpanMessages({
     );
   }
 
-  const recorded = turns.data?.turns ?? [];
+  const all = turns.data?.turns ?? [];
+  const named = all.filter((turn) => turn.provenance?.span_id === spanId);
+  const recorded = named.length > 0 ? named : all.filter((turn) => !turn.provenance?.span_id);
   if (recorded.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
