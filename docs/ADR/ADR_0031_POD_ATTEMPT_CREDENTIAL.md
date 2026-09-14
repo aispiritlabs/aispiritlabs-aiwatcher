@@ -1,8 +1,9 @@
 # ADR_0031: A pod authenticates as its attempt, with a credential the launcher mints
 
-- **Status**: proposed. It builds the stricter mode ADR_0029 left for later and
-  makes it the only mode. AW-7 is the change
-  ([`docs/specs/AW-7-…`](../specs/AW-7-a-pod-holds-its-own-attempt-and-the-pod-gates-run-in-ci/02-spec.md))
+- **Status**: accepted, 2026-09-14. It builds the stricter mode ADR_0029 left for
+  later and makes it the only mode. AW-7 is the change
+  ([`docs/specs/AW-7-…`](../specs/AW-7-a-pod-holds-its-own-attempt-and-the-pod-gates-run-in-ci/02-spec.md)).
+  One amendment below, from building it
 - **Date**: 2026-09-12
 
 ## Context
@@ -239,3 +240,43 @@ through the worker routes. It is kept as a trigger below.
 - **The seconds a pod waits for its Secret turn out to matter**, say behind a
   slow admission webhook. Then the Secret is created first, and the Job adopts it
   afterwards.
+
+## Amendment, 2026-09-14: what building it changed
+
+The decision stands as written. Five things were settled while building it, and
+one of them changes the launcher beyond this ADR.
+
+**The launcher asks once per attempt, and no longer takes the listing's word.**
+It used to count a Job the cluster listed as launched, and never ask for it again.
+With the Secret created after the Job, that left two ways for a pod to wait for a
+Secret nobody would create: a pass whose Secret failed after its Job succeeded, and
+a launcher that restarted between the two. Its start allowance ended either one, as
+an infrastructure failure with a retry behind it. Now the launcher remembers only
+what it asked. Each attempt still waiting gets one create per launcher, which meets
+the Job already there and gives it its Secret. The watch still reads the listing.
+
+**A bearer with the prefix is answered by the credentials alone.** An expired or
+forged one is a 401 about itself rather than a value handed on to the ingest tokens
+or the JWT verifier. An instance built with no credentials refuses one by name.
+
+**`docker` holds it in the client's environment, never on its command line.** The
+table above says where the container keeps it. What starts the container is
+`docker run --env AIWATCHER_TOKEN`, with the value in that process's own
+environment, because an argument list is readable through `ps` by every user on the
+host while it runs. `process` builds its child's environment from the host's with
+every `AIWATCHER_*` variable left out, then adds the manifest's, so a step's process
+holds its attempt's credential and never the server's.
+
+**The deadline rides as `aiwatcher.dev/timeout`**, beside the three attempt
+annotations. The watch checks it before the start allowance, and ends a live pod
+past it as `Infrastructure` with `DeadlineExceeded` in its message. A Job carrying no
+such annotation is held to no deadline rather than one guessed at.
+
+**The two refusals have codes of their own.** `attempt_credential_refused` comes from
+the layer, and names the attempt and both doors. `attempt_not_held` comes from a
+worker route about another attempt, or from a claim naming none. Both are 403, and
+neither is `forbidden`, whose words are about roles.
+
+The gates run with authentication on: `proxy`, with the gate an admin by header and
+the long-lived worker holding a queue token. The process gate runs the four stages a
+second time under `aiwatcher up`'s local token.

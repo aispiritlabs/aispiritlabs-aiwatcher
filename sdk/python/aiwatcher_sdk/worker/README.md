@@ -44,6 +44,13 @@ aiwatcher-worker --queue planner-import --task planner_tasks:normalize
 `--queue` can be repeated. The server token is configured as
 `planner[planner-import]=<secret>` in `AIWATCHER_AUTH_INGEST_TOKENS`.
 
+That token is the operator's, and it is what a long-lived worker holds. A pod
+the launcher started for one attempt holds aiwatcher's instead: under
+authentication, `AIWATCHER_TOKEN` there is a credential minted for that attempt
+alone, which opens its own worker routes and `POST /api/v1/events` and nothing
+else, and a pod template may not set one (ADR_0031). The worker reads the
+variable the same way in both, so nothing in this package differs.
+
 To embed it in a process:
 
 ```python

@@ -5,7 +5,7 @@ status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-13
+updated: 2026-09-14
 tags: [spec/AW-7, step/job, branch/main, status/doing]
 ---
 
@@ -289,18 +289,34 @@ Beyond what ADR_0031 decides:
     test pod heartbeats, so the lease is not what ends it.
 
 ### Part C6 — gates and documents
-- [ ] 7.19 **The gates speak auth.**
+- [x] 7.19 **The gates speak auth.**
   - `e2e-pod-steps.py` runs its server in `proxy` mode, with the gate calling as
     an admin by header, and no template carries a token.
   - A phase lifts a pod's credential through a test task's output. It asserts
     the credential is refused on another attempt's heartbeat and on
     `GET /api/v1/runs`, and accepted on `POST /api/v1/events`.
   - `process` additionally runs one pass under `local`.
-- [ ] 7.20 **The deadline phase.**
+  - Done. The gate's server runs `proxy` with the long-lived worker on a
+    `gate[pods]` token; `acquire` gains `reveal_credential`, which writes the
+    pod's `AIWATCHER_TOKEN` into who-ran-it. The lifted credential is refused on
+    `normalize`'s heartbeat (`attempt_not_held`), on the runs and the spans
+    (`attempt_credential_refused`), answered `lease_lost` on its own finished
+    attempt, and its event accepted; on a cluster no listed Job holds it. The
+    `local` pass is `aiwatcher up` with a token file the gate wrote.
+    `e2e-pod-death` shares the server and passes the worker's token.
+- [x] 7.20 **The deadline phase.**
   - A step with a 5 s timeout sleeping 60 s is gone within two passes on
     `docker` and `process`, ending `infrastructure` with `DeadlineExceeded`.
   - On a cluster the same words come from the cluster itself.
-- [ ] 7.21 **The documents.**
+  - Done as `analyze` with a 5 s timeout, one attempt and a 120 s hold: the
+    template's 60 s start allowance comes first, so it ends about 65 s after its
+    Job. The docker gate's listing no longer fails when a container goes between
+    `ps` and `inspect`, which this change's extra runs made the gate hit. Two
+    older faults surfaced running `e2e-pod-death` on `process`, where it had
+    never been run: it took `analyze`'s second pod by sorting names, which are
+    hashes, so half the runs checked the killed pod's log; and a process is gone
+    a pass before its log is kept. Both fixed in the gate.
+- [x] 7.21 **The documents.**
   - ADR_0031 is accepted, with an amendment for anything built differently.
   - ADR_0029's status line and credential paragraph point at it.
   - `CLAUDE.md`: decision 13, and a guardrail next to *Never let an ingest token
@@ -309,6 +325,9 @@ Beyond what ADR_0031 decides:
   - The SDK worker README says a launched pod's token is aiwatcher's, and a
     long-lived worker's is still the operator's.
   - `docs/decisions/EXECUTION.md` moves 0031 from proposed to accepted.
+  - Done. ADR_0031's amendment records what building it changed, the launcher's
+    listing among it. `CLAUDE.md` was committed from the index, since it holds
+    another session's uncommitted work.
 - [ ] 7.22 **Verified.**
   - `cargo fmt --check`.
   - `cargo clippy --workspace --all-targets --all-features -- -Dwarnings`.
@@ -318,6 +337,23 @@ Beyond what ADR_0031 decides:
   - `just chart-check` and `just openapi-check`.
   - All three gates locally, and both CI workflows green.
   - What they printed goes into `04-tests.md`.
+  - Partly done, and what is not says why:
+    - `cargo fmt --check` on the three crates and `rustfmt --check` on the pod
+      files: clean.
+    - clippy `-Dwarnings`, all targets: `aiwatcher-auth`, `aiwatcher-api`,
+      `aiwatcher-execution` and `aiwatcher-server` (with and without `kube`),
+      clean.
+    - tests: auth 70, api 181 over HTTP plus its units, execution 283, the
+      server's pod tests 55 and config tests 33, all passing.
+    - `lint-comments.py` and `just chart-check`: clean.
+    - `just e2e-processes` (with the `local` pass), `just e2e-docker` and
+      `e2e-pod-death` on `process` and `docker`: green on OrbStack.
+    - Not run here: the workspace-wide clippy and tests with all features,
+      `just openapi-check` and `e2e-pods`. Another session's uncommitted
+      `scoring.rs` does not compile, the tree's contract holds its fields, this
+      machine has 13 GiB free for a second target directory, and `kind` is not
+      installed. CI runs all four once `main` is pushed.
+    - `04-tests.md` is `/spec-tests`' to write; the results above are for it.
 
 ## Risks
 
@@ -336,3 +372,4 @@ Beyond what ADR_0031 decides:
 - 2026-09-12 10:40 — job planned on `main`: A+B first (the host name, and the three gates in CI with kind for the cluster one), then C in six slices behind ADR_0031; ten further decisions made, the Docker argument list among them; nothing built
 - 2026-09-13 — 7.1 and 7.2 built: `--add-host=host.docker.internal:host-gateway` on every container and on the gate's probe; the gates load their image into kind and, on Linux, reach the runner by the `kind` network's gateway. `e2e-docker` (six phases, OOMKilled included) and `e2e-processes` pass on OrbStack. 7.3 written — a `pods` job in `ci.yml` and a nightly `pods-cluster.yml` on kind, both uploading the server log on failure — and waits on a push
 - 2026-09-13 — 7.3 done: `main` pushed at the owner's word; the first push broke both workflows' parsing (`runner.temp` in a job `env`), fixed in `21e83c9` and pushed; CI green in all 17 jobs including `pods`, and `pods-cluster.yml` dispatched and green on kind. Part A+B complete; C starts at 7.4
+- 2026-09-14 — part C built in five commits: the credential in `aiwatcher-auth` (`e91febe`); the layer's two doors, the worker routes' key check and the contract from this change's hunks alone (`44a7409`); minting, the Secret, the grant, the chart and the deadline (`9942814`); the shared key and the split refusal (`1f87eac`, from the index); the gates with auth on (`020fb87`). `e2e-processes` with a `local` pass, `e2e-docker` and `e2e-pod-death` on both host backends green on OrbStack; workspace-wide checks and the kind gate wait on CI

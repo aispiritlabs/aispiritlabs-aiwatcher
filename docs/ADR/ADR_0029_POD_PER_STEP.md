@@ -1,7 +1,9 @@
 # ADR_0029: A step that needs a pod names an operator's template, and the pod is a worker for one attempt
 
 - **Status**: accepted; reopens Phase 12, which ADR_0016's supersession left unbuilt.
-  One amendment below, from building the watch
+  Amendments below, from building the watch. What a pod holds is **superseded by
+  [ADR_0031](ADR_0031_POD_ATTEMPT_CREDENTIAL.md)**: a credential the launcher mints
+  for its attempt, not its template's token
 - **Date**: 2026-09-11
 
 The change is AW-4's Part 2
@@ -137,7 +139,11 @@ change, and nothing about a pod's step is decided in the pod or in the launcher.
   lacks `kube` are refused at start in the work and combined roles, naming
   `AIWATCHER_POD_TEMPLATES`. The serve role reads templates in any build.
 
-**A pod holds its template's worker token.** The template names a Secret holding an
+**A pod holds its template's worker token.** *Superseded by
+[ADR_0031](ADR_0031_POD_ATTEMPT_CREDENTIAL.md) on 2026-09-14: a pod holds a credential the
+launcher minted for its attempt alone, in a Secret its Job owns on a cluster, and a
+template that sets `AIWATCHER_TOKEN` is refused. The paragraph stands as what was
+decided first.* The template names a Secret holding an
 ingest token scoped to a queue (`name[queue]=secret`), which is today's credential
 with nothing new. The recommended configuration gives each template a queue of its
 own and a token for that queue only, and the chart's example does it. The design
@@ -274,7 +280,9 @@ a template, not a second engine.
   repository list is too coarse: the step's image has to be pinned by digest and
   its signature verified, not listed.
 - A leaked pod token used to settle another pod's attempt. Then the one-attempt
-  credential stops being optional.
+  credential stops being optional. It was made the only one before that happened,
+  because the host backends could hold the template token only as a literal
+  (ADR_0031).
 - Cold starts dominating a run, such as seconds of work behind a minute of pulls.
   Then a warm pool of long-lived workers per template beats a pod per attempt, and
   the template becomes a queue rather than a Job.

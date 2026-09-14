@@ -16,8 +16,8 @@ make it wrong. Two of them were made wrong on schedule.
 | [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one | Accepted |
 | [0026](../ADR/ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log | Accepted |
 | [0028](../ADR/ADR_0028_QUERY_ENGINES.md) | A deployment chooses its query engine, and a typed query is admitted or runs where code runs | Accepted, 2026-09-11 — amends 0008, 0014 and 0024 |
-| [0029](../ADR/ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt | Accepted, 2026-09-11 — reopens Phase 12; built by AW-4, **three amendments**, the last making the backend a choice of three |
-| [0031](../ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints | **Proposed**, 2026-09-12 — builds the stricter mode 0029 deferred and makes it the only one; AW-7 |
+| [0029](../ADR/ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt | Accepted, 2026-09-11 — reopens Phase 12; built by AW-4, **three amendments**, the last making the backend a choice of three; **what a pod holds superseded by [0031](../ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md)** |
+| [0031](../ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints | Accepted, 2026-09-14 — builds the stricter mode 0029 deferred and makes it the only one; built by AW-7, **one amendment** |
 
 ## The arc, in the order it happened
 
@@ -63,6 +63,14 @@ by key. The lease still decides how an attempt ended, and the Job only explains
 it. So the split this page is about holds one level down: nothing about a pod's
 step is decided in the pod or in the process that started it.
 
+**0031 took the token out of the template.** Once a pod could be a container or
+a process on the work role's host, the template's worker token could only be a
+literal in a file, shared by every pod and an admin's under `local`. So the
+launcher mints each pod a credential for its own attempt, and the API's
+authentication layer opens it on that attempt's worker routes and on ingest and
+refuses it everywhere else, before a handler runs. On a cluster it is a Secret
+the Job owns, and the watch now holds a Job's deadline on every backend.
+
 ## Where the boundary actually sits
 
 The amendments to 0008 are worth reading as a group, because they moved a line
@@ -97,4 +105,6 @@ anyone but its operator, or a `strict` refusal shown to be bypassable — either
 an allowed image is run by people who should not have its template's secrets,
 images have to be pinned by digest and signature rather than listed. If a leaked
 pod token is used on another pod's attempt, the one-attempt credential becomes
-the only credential.
+the only credential — which 0031 made it first. 0031's is aiwatcher reads showing up
+in most templates, which would add a read scope, or forged events, which would
+narrow ingest to the attempt's execution.

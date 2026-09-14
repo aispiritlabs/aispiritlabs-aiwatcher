@@ -6,7 +6,7 @@ status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-13
+updated: 2026-09-14
 tags: [spec/AW-7, step/job, branch/main, status/doing]
 ---
 <!-- spec-card -->
@@ -44,3 +44,4 @@ Three parts, cheapest first:
 - 2026-09-12 10:40 — spec opened on `main` after AW-4's 2.7; investigation, spec and job written together with ADR_0031 (proposed), at the owner's ask for "an ADR and a plan"; nothing built
 - 2026-09-13 — Part A+B built (7.1, 7.2) and CI written (7.3); both host gates green on OrbStack; the CI half waits on a push
 - 2026-09-13 — Part A+B done: pod gates green in CI on Linux (process, docker) and on kind (nightly workflow, dispatched once)
+- 2026-09-14 — part C built and committed (7.4–7.21; 7.22 local half): a pod holds its attempt's credential alone, on all three backends and every auth mode, and the watch holds each Job's deadline; ADR_0031 accepted; not pushed

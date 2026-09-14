@@ -372,7 +372,16 @@ area.
    the local cluster and on this host's engine: the watch ends the attempt as
    `Infrastructure` within seconds with what it saw — `BackoffLimitExceeded`
    for a pod deleted at once, `Error (exit 137)` for a killed container — a
-   second pod runs it again, the run completes and no Job is left.
+   second pod runs it again, the run completes and no Job is left. And what a
+   pod *holds* is its attempt and nothing else
+   ([ADR_0031](docs/ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md)): under
+   authentication the launcher mints each pod a credential for that attempt —
+   in a Secret its Job owns on a cluster — so no template carries an aiwatcher
+   token, and the watch holds a Job's whole deadline on all three backends. The
+   pod gates run with authentication on, lift a pod's credential through a
+   step's own output and find it refused everywhere but its attempt and
+   ingest; CI runs the two host gates on every push and `e2e-pods` nightly on
+   kind.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
@@ -1826,6 +1835,18 @@ the review.
   role is hard-coded in `IngestToken::identity` and never comes from the group
   mapping. Amended, not widened, by the queue scope above: `name[queue]=secret`
   adds what may be *claimed* and takes nothing away.
+- **Never give a pod a credential for more than its attempt.** A launched pod's
+  `AIWATCHER_TOKEN` is minted by the launcher for one attempt (ADR_0031), and
+  `auth::admits_attempt` — that attempt's worker routes and `POST
+  /api/v1/events`, nothing else — is checked in the authentication layer, before
+  any handler, because most read routes check no role and a credential let
+  through there reads every run. It fails closed, so a route added later refuses
+  it with nobody remembering to; `own_attempt` then holds each worker route to
+  the key the credential names, before the lease and the queue. Its key is
+  derived from `AIWATCHER_POD_CREDENTIAL_SECRET` under a label of its own, so a
+  session never opens as one; a split release refuses to start without that
+  secret; and on a cluster the value is a Secret the Job owns, never in the pod
+  spec a namespace's viewer reads.
 - **Never take the issuer from the discovery document.** `ProviderMetadata::discover`
   compares what the document declares against what was configured and refuses a
   mismatch. Every token accepted afterwards is validated against that issuer, so
