@@ -205,13 +205,16 @@ Beyond what ADR_0031 decides:
     one, and the panel's client was generated from that.
 
 ### Part C3 — `aiwatcher-server`
-- [ ] 7.11 **Configuration.**
+- [x] 7.11 **Configuration.**
   - `AIWATCHER_POD_CREDENTIAL_SECRET` is read.
   - `Config::validate` refuses `serve` or `work` with auth on, templates set and
     no secret, naming the variable.
   - The combined role is not refused.
   - `.env.example` documents it.
-- [ ] 7.12 **Minting.**
+  - Done. The secret is read straight into `config.auth.attempts`, the one
+    instance, and the refusal is for either split role. Committed from the index,
+    because `config.rs` holds another session's uncommitted work.
+- [x] 7.12 **Minting.**
   - `pods::OWNED_ENV` gains `AIWATCHER_TOKEN`, so a template setting it is
     refused at start, with a test.
   - Under auth, the launcher mints for the attempt with an expiry of the start

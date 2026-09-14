@@ -9,7 +9,9 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use aiwatcher_auth::{AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping};
+use aiwatcher_auth::{
+    AttemptCredentials, AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping,
+};
 use aiwatcher_datasets::QueryEngine;
 use aiwatcher_execution::message::PayloadPolicy;
 use thiserror::Error;
@@ -1405,6 +1407,27 @@ impl Config {
             }
         }
 
+        // A pod's credential is minted by the role that launches and opened by
+        // the role serving the worker routes (ADR_0031): one more thing a split
+        // binary has to share, and a generated key is one only its process has.
+        // One process holding both roles starts on its own key, and says so.
+        if self.role != ProcessRole::Both
+            && self.auth.mode != AuthMode::None
+            && self.pod_templates.is_some()
+            && self
+                .auth
+                .attempts
+                .as_ref()
+                .is_none_or(AttemptCredentials::is_ephemeral)
+        {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_POD_CREDENTIAL_SECRET",
+                because: "AIWATCHER_ROLE splits the binary in two with authentication on and \
+                          pod templates set: one role mints each pod's credential and the other \
+                          opens it, and a key generated at start-up is one only that process has",
+            });
+        }
+
         self.auth.validate()?;
 
         // A wildcard CORS policy on an instance that has a login says "every
@@ -1500,6 +1523,11 @@ fn read_auth(config: &mut Config) -> Result<(), ConfigError> {
         config.auth.session_ttl = Duration::from_secs(seconds);
     }
     config.auth.session_secret = var("AIWATCHER_AUTH_SESSION_SECRET");
+    // One instance, handed to the launcher as well as to the authenticator, so
+    // what one mints the other opens (ADR_0031).
+    config.auth.attempts = Some(AttemptCredentials::new(
+        var("AIWATCHER_POD_CREDENTIAL_SECRET").as_deref(),
+    )?);
     if let Some(raw) = var("AIWATCHER_AUTH_COOKIE_NAME") {
         config.auth.cookie_name = raw;
     }
@@ -1813,6 +1841,49 @@ mod tests {
             prompt_s3_secret_key: Some("secret".to_owned()),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn a_split_release_launching_pods_under_authentication_shares_the_credential_key() {
+        let split = |role, secret: Option<&str>| Config {
+            pod_runtime: PodRuntime::Process,
+            pod_api_url: Some("http://127.0.0.1:8080".to_owned()),
+            auth: AuthConfig {
+                mode: AuthMode::Proxy,
+                attempts: Some(AttemptCredentials::new(secret).expect("a key")),
+                ..AuthConfig::default()
+            },
+            ..with_pod_templates(role)
+        };
+        for role in [ProcessRole::Serve, ProcessRole::Work] {
+            let error = split(role, None)
+                .validate()
+                .expect_err("each role would have a key of its own")
+                .to_string();
+            assert!(
+                error.contains("AIWATCHER_POD_CREDENTIAL_SECRET"),
+                "{}: {error}",
+                role.as_str()
+            );
+            split(role, Some("a secret both roles are given"))
+                .validate()
+                .expect("one key, given to both");
+        }
+
+        // One process holds both keys, so its own is enough.
+        Config {
+            role: ProcessRole::Both,
+            ..split(ProcessRole::Both, None)
+        }
+        .validate()
+        .expect("one process mints and opens with one key");
+        // And with nothing checking, nothing is minted.
+        Config {
+            auth: AuthConfig::default(),
+            ..split(ProcessRole::Work, None)
+        }
+        .validate()
+        .expect("no authentication, no credential");
     }
 
     #[test]
