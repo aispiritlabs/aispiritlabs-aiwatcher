@@ -31,21 +31,37 @@ export interface EventFeedEvent {
 export function EventFeed({
   events,
   autoScroll = true,
+  dense = false,
 }: {
   events: EventFeedEvent[];
   autoScroll?: boolean;
+  /**
+   * Beside one span, where every row carries the same span id: the column that
+   * repeats it is a column of noise, and dropping it is what lets the feed fit
+   * a column rather than scroll sideways under one.
+   */
+  dense?: boolean;
 }) {
   if (events.length === 0) {
     return <p className="p-6 text-center text-sm text-muted-foreground">No events yet.</p>;
   }
 
+  const columns = dense
+    ? 'grid-cols-[5.5rem_minmax(6rem,0.7fr)_minmax(8rem,1.6fr)]'
+    : 'grid-cols-[5.5rem_minmax(10rem,0.8fr)_8rem_minmax(16rem,1.6fr)]';
+
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[46rem] text-left text-sm">
-        <div className="grid grid-cols-[5.5rem_minmax(10rem,0.8fr)_8rem_minmax(16rem,1.6fr)] border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+      <div className={cn('text-left text-sm', dense ? 'min-w-[20rem]' : 'min-w-[46rem]')}>
+        <div
+          className={cn(
+            'grid border-b border-border text-xs uppercase tracking-wide text-muted-foreground',
+            columns,
+          )}
+        >
           <span className="px-3 py-2 font-medium">Time</span>
           <span className="px-3 py-2 font-medium">Event</span>
-          <span className="px-3 py-2 font-medium">Span</span>
+          {dense ? null : <span className="px-3 py-2 font-medium">Span</span>}
           <span className="px-3 py-2 font-medium">Payload</span>
         </div>
         <VirtualList
@@ -55,7 +71,12 @@ export function EventFeed({
           followEnd={autoScroll}
           keyOf={(event) => `${event.checkpoint}-${event.span_id}`}
           renderRow={(event) => (
-            <div className="grid grid-cols-[5.5rem_minmax(10rem,0.8fr)_8rem_minmax(16rem,1.6fr)] border-b border-border/40 align-top last:border-b-0 hover:bg-accent/40">
+            <div
+              className={cn(
+                'grid border-b border-border/40 align-top last:border-b-0 hover:bg-accent/40',
+                columns,
+              )}
+            >
               <span className="whitespace-nowrap px-3 py-1.5 text-xs tabular-nums text-muted-foreground">
                 {formatTime(event.occurred_at)}
               </span>
@@ -67,9 +88,11 @@ export function EventFeed({
               >
                 {event.event_type}
               </span>
-              <span className="px-3 py-1.5">
-                <IdChip value={shortId(event.span_id)} full={event.span_id} label="span" />
-              </span>
+              {dense ? null : (
+                <span className="px-3 py-1.5">
+                  <IdChip value={shortId(event.span_id)} full={event.span_id} label="span" />
+                </span>
+              )}
               <span className="px-3 py-1.5">
                 <Payload data={event.data} />
               </span>

@@ -5,7 +5,9 @@ import * as React from 'react';
 import { getRun, getRunEvents } from '@/api/generated/sdk.gen';
 import type { RecordedEvent, RunStatus } from '@/api/generated/types.gen';
 import { EventFeed, type EventFeedEvent } from '@/features/observability/components/event-feed';
-import { Waterfall, type Span } from '@/features/observability/components/waterfall';
+import { SpanDetail } from '@/features/observability/components/span-detail';
+import { Waterfall } from '@/features/observability/components/waterfall';
+import type { Span } from '@/features/observability/lib/span-facts';
 import { StatusBadge, StreamBadge } from '@/shared/components/status-badge';
 import {
   Card,
@@ -38,7 +40,23 @@ const EVENT_PAGE_SIZE = 1_000;
  */
 export function RunPage() {
   const { runId } = routeApi.useParams();
+  const { span: selectedSpanId, attrs = false, chunks = true } = routeApi.useSearch();
+  const navigate = routeApi.useNavigate();
   const queryClient = useQueryClient();
+
+  // Clicking the open span closes it: the row is the control that opened it,
+  // and a control that only ever opens leaves the reader hunting for a Close.
+  const selectSpan = React.useCallback(
+    (spanId: string | undefined) =>
+      void navigate({
+        search: (previous) => ({
+          ...previous,
+          span: spanId === previous.span ? undefined : spanId,
+        }),
+        replace: true,
+      }),
+    [navigate],
+  );
 
   const [liveEvents, setLiveEvents] = React.useState<LiveEventFrame[]>([]);
   const [phase, setPhase] = React.useState<StreamPhase>('catching-up');
@@ -141,6 +159,17 @@ export function RunPage() {
   const currentLiveEvents = liveEvents.filter((event) => event.run_id === runId);
   const events = mergeEvents(historicalEvents, currentLiveEvents);
 
+  // The API types spans as bare objects because `CompletedSpan` is the trace
+  // store's shape rather than one of the read model's own.
+  const runSpans = spans as unknown as Span[];
+  const selectedSpan = runSpans.find((span) => span.span_id === selectedSpanId);
+  const spanEvents = selectedSpan
+    ? events.filter((event) => event.span_id === selectedSpan.span_id)
+    : [];
+  // A streaming call is mostly `llm.chunk`, which is why the feed can drop it —
+  // and why it never does so without being asked.
+  const feedEvents = chunks ? events : events.filter((event) => event.event_type !== 'llm.chunk');
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -164,7 +193,29 @@ export function RunPage() {
             <span>· cursor</span>
             <IdChip value={summary.last_checkpoint} label="checkpoint" />
           </div>
+          {/* Who ran it, which the six stats below cannot say. A run is
+              normally one service and one agent; the case worth seeing is the
+              one where it is two. */}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {summary.agents.length > 0 ? <Named label="agent" values={summary.agents} /> : null}
+            {summary.runtimes && summary.runtimes.length > 0 ? (
+              <Named label="runtime" values={summary.runtimes} />
+            ) : null}
+            {summary.workflow ? <Named label="workflow" values={[summary.workflow]} /> : null}
+            {summary.variant_id ? <Named label="variant" values={[summary.variant_id]} /> : null}
+            {summary.published_by ? (
+              <Named label="published by" values={[summary.published_by]} />
+            ) : null}
+          </div>
         </div>
+
+        <ViewMenu
+          attrs={attrs}
+          chunks={chunks}
+          onChange={(next) =>
+            void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true })
+          }
+        />
       </div>
 
       {resyncedFrom ? (
@@ -206,11 +257,34 @@ export function RunPage() {
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Trace</CardTitle>
+          <span className="text-xs text-muted-foreground">
+            {selectedSpan ? 'Selected span is on the right' : 'Select a span to read it'}
+          </span>
         </CardHeader>
         <CardContent className="p-0">
-          <Waterfall spans={spans as unknown as Span[]} />
+          <div
+            className={
+              selectedSpan
+                ? 'grid grid-cols-1 divide-y divide-border xl:grid-cols-[minmax(0,1fr)_28rem] xl:divide-x xl:divide-y-0'
+                : ''
+            }
+          >
+            <Waterfall
+              spans={runSpans}
+              selected={selectedSpan?.span_id ?? null}
+              onSelect={selectSpan}
+            />
+            {selectedSpan ? (
+              <SpanDetail
+                span={selectedSpan}
+                events={spanEvents}
+                everything={attrs}
+                onClose={() => selectSpan(undefined)}
+              />
+            ) : null}
+          </div>
         </CardContent>
       </Card>
 
@@ -218,7 +292,8 @@ export function RunPage() {
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Events</CardTitle>
           <span className="text-xs text-muted-foreground">
-            {events.length} total · {currentLiveEvents.length} received live
+            {feedEvents.length} shown · {events.length} total · {currentLiveEvents.length} received
+            live
             {history.isFetchingNextPage ? ' · loading history' : ''}
           </span>
         </CardHeader>
@@ -230,11 +305,89 @@ export function RunPage() {
               Event history could not be loaded. New live events will still appear here.
             </p>
           ) : (
-            <EventFeed events={events} autoScroll={isRunning} />
+            <EventFeed events={feedEvents} autoScroll={isRunning} />
           )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** One dimension of a run, named rather than left to a colour or a position. */
+function Named({ label, values }: { label: string; values: string[] }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span>{label}</span>
+      {values.map((value) => (
+        <IdChip key={value} value={value} label={label} />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * What the page shows, as a menu rather than as a preference.
+ *
+ * Both switches add rather than remove, and both live in the URL: a reader who
+ * turns the wire on and sends the link sends the same view, which is the whole
+ * reason filters are not component state here.
+ */
+function ViewMenu({
+  attrs,
+  chunks,
+  onChange,
+}: {
+  attrs: boolean;
+  chunks: boolean;
+  onChange: (next: { attrs?: boolean; chunks?: boolean }) => void;
+}) {
+  return (
+    <details className="relative shrink-0 text-xs">
+      <summary className="cursor-pointer rounded border border-border px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+        View
+      </summary>
+      <div className="absolute right-0 z-30 mt-2 grid w-72 gap-2 rounded border border-border bg-card p-3 shadow-lg">
+        <Toggle
+          checked={attrs}
+          onChange={(value) => onChange({ attrs: value ? true : undefined })}
+          label="All span attributes"
+          hint="Includes the correlation ids a span carries for other systems."
+        />
+        <Toggle
+          checked={chunks}
+          onChange={(value) => onChange({ chunks: value ? undefined : false })}
+          label="Token chunks"
+          hint="`llm.chunk` is most of a streaming call's log by volume."
+        />
+      </div>
+    </details>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-0.5"
+      />
+      <span className="flex flex-col gap-0.5">
+        <span>{label}</span>
+        <span className="text-muted-foreground">{hint}</span>
+      </span>
+    </label>
   );
 }
 

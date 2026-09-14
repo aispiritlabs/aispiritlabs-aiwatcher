@@ -1,6 +1,12 @@
 import * as React from 'react';
-import { cn, formatDuration, shortId } from '@/shared/lib/utils';
-import { IdChip } from '@/shared/components/ui/primitives';
+
+import {
+  factsOf,
+  stepTypeOf,
+  type Span,
+  type SpanFamily,
+} from '@/features/observability/lib/span-facts';
+import { cn, formatCount, formatDuration } from '@/shared/lib/utils';
 
 /**
  * The trace waterfall.
@@ -11,19 +17,21 @@ import { IdChip } from '@/shared/components/ui/primitives';
  * Rendered here rather than read back from the trace store on purpose: for a run
  * that is still going, the spans that exist are the ones the projector has closed,
  * and this view updates as they close. A trace store cannot show a run in progress.
+ *
+ * A row is a button, because the interesting half of a span is everything a bar
+ * cannot draw — which model, on which settings, at what cost in tokens.
+ * Selecting one opens `SpanDetail`, and the selection lives in the URL, so a
+ * pasted link lands the next reader on the same span.
  */
 
-export interface Span {
-  trace_id: string;
-  span_id: string;
-  parent_span_id?: string | null;
-  name: string;
-  kind: string;
-  start: string;
-  end: string;
-  status: { status: string; message?: string };
-  attributes: Array<[string, unknown]>;
-}
+/** One hue per family, so the tree reads without a legend. */
+export const familyColor: Record<SpanFamily, string> = {
+  run: 'bg-span-run',
+  agent: 'bg-span-agent',
+  llm: 'bg-span-llm',
+  tool: 'bg-span-tool',
+  step: 'bg-span-step',
+};
 
 interface Node {
   span: Span;
@@ -31,37 +39,6 @@ interface Node {
   startMs: number;
   endMs: number;
 }
-
-/**
- * Which hue a bar gets.
- *
- * Read from the span's attributes where possible rather than parsed out of its
- * name: a step names itself after what it is (`knowledge_base`), so the name
- * says nothing about the family it belongs to.
- */
-function subjectOf(span: Span): 'run' | 'agent' | 'llm' | 'tool' | 'step' {
-  if (stepType(span)) return 'step';
-  if (span.name === 'run') return 'run';
-  if (span.name.startsWith('invoke_agent')) return 'agent';
-  if (span.name.startsWith('execute_tool')) return 'tool';
-  return 'llm';
-}
-
-/** `retriever`, `embedding`, `guardrail`… when this span is a step. */
-export function stepType(span: Span): string | undefined {
-  for (const [key, value] of span.attributes ?? []) {
-    if (key === 'aiwatcher.span.step_type' && typeof value === 'string') return value;
-  }
-  return undefined;
-}
-
-const barColor: Record<string, string> = {
-  run: 'bg-span-run',
-  agent: 'bg-span-agent',
-  llm: 'bg-span-llm',
-  tool: 'bg-span-tool',
-  step: 'bg-span-step',
-};
 
 /**
  * Depth-first flatten, parents before children, siblings by start time.
@@ -103,7 +80,15 @@ function flatten(spans: Span[]): Node[] {
   return out;
 }
 
-export function Waterfall({ spans }: { spans: Span[] }) {
+export function Waterfall({
+  spans,
+  selected,
+  onSelect,
+}: {
+  spans: Span[];
+  selected?: string | null;
+  onSelect?: (spanId: string) => void;
+}) {
   const nodes = React.useMemo(() => flatten(spans), [spans]);
 
   if (nodes.length === 0) {
@@ -126,57 +111,70 @@ export function Waterfall({ spans }: { spans: Span[] }) {
         const offset = ((node.startMs - first) / total) * 100;
         const width = Math.max(((node.endMs - node.startMs) / total) * 100, 0.5);
         const failed = node.span.status.status === 'error';
-        const subject = subjectOf(node.span);
+        const facts = factsOf(node.span);
+        const isSelected = selected === node.span.span_id;
+        const step = stepTypeOf(node.span);
 
         return (
-          <div
+          <button
             key={node.span.span_id}
-            // `minmax(0, …)` rather than a `14rem` floor: the id chip and the
-            // step badge are unshrinkable, so a floor lets the track refuse to
-            // go below its content on a narrow viewport. Precautionary — the
-            // layout measured clean at 1186px — but the failure it prevents is
-            // the duration column sliding off the right edge.
-            className="group grid grid-cols-[minmax(0,20rem)_1fr_4.5rem] items-center gap-3 overflow-hidden border-b border-border/50 px-3 py-1.5 last:border-b-0 hover:bg-accent/40"
+            type="button"
+            onClick={() => onSelect?.(node.span.span_id)}
+            aria-pressed={isSelected}
+            title={node.span.status.message ?? node.span.name}
+            // `minmax(0, …)` rather than a `14rem` floor: the step badge and
+            // the token count are unshrinkable, so a floor lets the track
+            // refuse to go below its content on a narrow viewport.
+            className={cn(
+              'group grid w-full grid-cols-[minmax(0,18rem)_1fr_auto_4.5rem] items-center gap-3 overflow-hidden border-b border-border/50 px-3 py-1.5 text-left last:border-b-0 hover:bg-accent/40',
+              isSelected && 'bg-accent/60',
+            )}
           >
-            <div
+            <span
               className="flex min-w-0 items-center gap-2"
               style={{ paddingLeft: `${node.depth * 14}px` }}
             >
               <span
-                className={cn('h-2 w-2 shrink-0 rounded-full', barColor[subject])}
+                className={cn('h-2 w-2 shrink-0 rounded-full', familyColor[facts.family])}
                 aria-hidden
               />
               <span className="truncate text-sm" title={node.span.name}>
                 {node.span.name}
               </span>
               {/* The kind as a label, so the family reads without colour. */}
-              {stepType(node.span) ? (
+              {step ? (
                 <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
-                  {stepType(node.span)}
+                  {step}
                 </span>
               ) : null}
-              <span className="shrink-0">
-                <IdChip value={shortId(node.span.span_id)} full={node.span.span_id} label="span" />
-              </span>
-            </div>
+            </span>
 
-            <div className="relative h-5" title={node.span.status.message ?? node.span.name}>
-              <div
+            <span className="relative block h-5">
+              <span
                 className={cn(
-                  'absolute top-1 h-3 rounded-sm',
-                  failed ? 'bg-danger' : barColor[subject],
+                  'absolute top-1 block h-3 rounded-sm',
+                  failed ? 'bg-danger' : familyColor[facts.family],
                   'opacity-80 group-hover:opacity-100',
                 )}
                 style={{ left: `${offset}%`, width: `${width}%` }}
               />
-            </div>
+            </span>
+
+            {/* What a bar cannot say and a reader is counting anyway. */}
+            <span className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+              {facts.tokens
+                ? `${formatCount(facts.tokens.input)} → ${formatCount(facts.tokens.output)}`
+                : ''}
+            </span>
 
             <span className="text-right text-xs tabular-nums text-muted-foreground">
               {formatDuration(node.endMs - node.startMs)}
             </span>
-          </div>
+          </button>
         );
       })}
     </div>
   );
 }
+
+export type { Span } from '@/features/observability/lib/span-facts';
