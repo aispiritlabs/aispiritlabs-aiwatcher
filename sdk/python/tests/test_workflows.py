@@ -82,17 +82,17 @@ def test_the_version_is_a_hash_of_the_shape_not_of_the_call(
 def test_edges_sharing_a_bound_are_declared_with_it_and_move_the_version(
     client: AiwatcherClient, transport: RecordingTransport
 ) -> None:
-    edges = [("write", "review"), ("review", "write"), ("review", "fix"), ("fix", "review")]
+    edges = [("write", "review"), ("review", "write"), ("review", "fix"), ("fix", "write")]
     with client.workflow("revise", nodes=["write", "review", "fix"], edges=edges):
         pass
-    bound = [{"edges": [("review", "write"), ("fix", "review")], "at_most": 3}]
+    bound = [{"edges": [("review", "write"), ("fix", "write")], "at_most": 3}]
     with client.workflow("revise", nodes=["write", "review", "fix"], edges=edges, bounds=bound):
         pass
 
     plain, bounded = transport.of_type("workflow.declared")
     assert "bounds" not in plain["data"], "a declaration without one sends what it always did"
     assert bounded["data"]["bounds"] == [
-        {"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}
+        {"edges": [["review", "write"], ["fix", "write"]], "at_most": 3}
     ]
     assert plain["data"]["version"] != bounded["data"]["version"]
 
@@ -395,13 +395,15 @@ def test_events_from_many_threads_reach_the_transport_in_the_order_they_were_num
     assert [event["sequence"] for event in received] == list(range(160))
 
 
-def test_a_shared_bound_on_anything_but_one_cycle_s_ways_back_is_refused_naming_it(
+def test_a_shared_bound_on_anything_but_one_loop_s_ways_back_is_refused_naming_it(
     client: AiwatcherClient, transport: RecordingTransport
 ) -> None:
-    nodes = ["write", "review", "publish", "draft", "check"]
+    nodes = ["write", "review", "fix", "publish", "draft", "check"]
     edges = [
         ("write", "review"),
         ("review", "write"),
+        ("review", "fix"),
+        ("fix", "review"),
         ("review", "publish"),
         ("draft", "check"),
         ("check", "draft"),
@@ -416,14 +418,15 @@ def test_a_shared_bound_on_anything_but_one_cycle_s_ways_back_is_refused_naming_
         ),
     ):
         pass
-    with (
-        pytest.raises(ValueError, match="separate cycles"),
-        client.workflow(
-            "revise",
-            nodes=nodes,
-            edges=edges,
-            bounds=[{"edges": [("review", "write"), ("check", "draft")], "at_most": 2}],
-        ),
-    ):
-        pass
+    for other_loop in (("check", "draft"), ("fix", "review")):
+        with (
+            pytest.raises(ValueError, match="the heads of different loops"),
+            client.workflow(
+                "revise",
+                nodes=nodes,
+                edges=edges,
+                bounds=[{"edges": [("review", "write"), other_loop], "at_most": 2}],
+            ),
+        ):
+            pass
     assert not transport.of_type("workflow.declared"), "nothing declared a shape it cannot keep"

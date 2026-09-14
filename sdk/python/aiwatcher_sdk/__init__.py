@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
@@ -884,11 +884,12 @@ def _normalize_edges(
 
 
 def _misbounded(edges: list[dict[str, Any]], bounds: list[dict[str, Any]]) -> list[str]:
-    """Each bound several edges share that is not on one cycle's ways back, in words.
+    """Each bound several edges share that is not on one loop's ways back, in words.
 
     The rule ``aiwatcher_core::topology::Topology::misbounded`` holds a pinned
     declaration to: every edge under a shared bound leads back to where it
-    left, and all of them round one part of the shape.
+    left, and all of them into one node, the loop's head — two loops through a
+    node they share are counted apart.
     """
     declared = {
         (str(edge["from"]), str(edge["to"])) for edge in edges if "from" in edge and "to" in edge
@@ -930,17 +931,13 @@ def _misbounded(edges: list[dict[str, Any]], bounds: list[dict[str, Any]]) -> li
                 f"the bound of at most {at_most} that {named} share is on "
                 f"{' and '.join(nowhere_back)}, which leads nowhere back"
             )
-        elif len({frozenset(_reaching(source, reached)) for source, _ in shared}) > 1:
+        elif len(heads := sorted({target for _, target in shared})) > 1:
             said.append(
-                f"the bound of at most {at_most} that {named} share is on the ways back of "
-                "separate cycles, which are the rounds of neither"
+                f"the bound of at most {at_most} that {named} share leads back into "
+                f"{' and into '.join(heads)}, the heads of different loops, whose rounds are "
+                "counted apart"
             )
     return said
-
-
-def _reaching(node: str, reached: Callable[[str], set[str]]) -> set[str]:
-    """The nodes that reach ``node``, among those it reaches: its cycle's part."""
-    return {other for other in reached(node) if node in reached(other)}
 
 
 def _topology_version(

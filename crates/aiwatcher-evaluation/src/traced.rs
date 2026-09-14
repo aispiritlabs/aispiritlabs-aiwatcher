@@ -2364,7 +2364,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_two_ways_back_share_holds_the_cycle_to_its_rounds_whichever_way_each_went() {
+    fn a_bound_two_ways_back_share_holds_the_loop_to_its_rounds_whichever_way_each_went() {
         let declared = |bounds: serde_json::Value| {
             Topology::read(&serde_json::json!({
                 "nodes": ["write", "review", "fix", "publish"],
@@ -2372,7 +2372,7 @@ mod tests {
                     ["write", "review"],
                     ["review", "write"],
                     ["review", "fix"],
-                    ["fix", "review"],
+                    ["fix", "write"],
                     ["review", "publish"]
                 ],
                 "bounds": bounds
@@ -2380,15 +2380,21 @@ mod tests {
             .expect("a shape")
         };
         let together = declared(serde_json::json!([
-            {"edges": [["review", "write"], ["fix", "review"]], "at_most": 2}
+            {"edges": [["review", "write"], ["fix", "write"]], "at_most": 2}
         ]));
+        assert!(
+            together.misbounded().is_empty(),
+            "both lead back into write"
+        );
         let apart = declared(serde_json::json!([
             {"edges": [["review", "write"]], "at_most": 2},
-            {"edges": [["fix", "review"]], "at_most": 2}
+            {"edges": [["fix", "write"]], "at_most": 2}
         ]));
-        let back_to_write = ["write:s", "write:c", "review:s", "review:c"];
-        let through_fix = ["fix:s", "fix:c", "review:s", "review:c"];
-        let run = |rounds: &[&[&'static str; 4]]| {
+        let back_to_write: &[&'static str] = &["write:s", "write:c", "review:s", "review:c"];
+        let through_fix: &[&'static str] = &[
+            "fix:s", "fix:c", "write:s", "write:c", "review:s", "review:c",
+        ];
+        let run = |rounds: &[&[&'static str]]| {
             let mut steps = vec!["write:s", "write:c", "review:s", "review:c"];
             for round in rounds {
                 steps.extend(round.iter());
@@ -2397,12 +2403,12 @@ mod tests {
             steps
         };
 
-        let twice = run(&[&back_to_write, &through_fix]);
+        let twice = run(&[back_to_write, through_fix]);
         assert_eq!(
             traversed(&together, &twice).expect("once each way")[0].on_workflow,
             Some(true)
         );
-        let four = run(&[&back_to_write, &through_fix, &back_to_write, &through_fix]);
+        let four = run(&[back_to_write, through_fix, back_to_write, through_fix]);
         assert_eq!(
             traversed(&apart, &four).expect("twice each way, each within its own bound")[0]
                 .on_workflow,
@@ -2412,14 +2418,21 @@ mod tests {
         let refused = traversed(&together, &four).expect_err("four rounds in all");
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(
-            refused[0].contains("went along fix to review and review to write more than 2 times"),
+            refused[0].contains("went along fix to write and review to write more than 2 times"),
             "{refused:?}"
         );
 
         let retried = run(&[
-            &back_to_write,
-            &["fix:s", "fix:c", "review:s", "review:f"],
-            &["review:s", "review:c", "publish:s", "publish:c"],
+            back_to_write,
+            &["fix:s", "fix:c", "write:s", "write:f"],
+            &[
+                "write:s",
+                "write:c",
+                "review:s",
+                "review:c",
+                "publish:s",
+                "publish:c",
+            ],
         ]);
         assert_eq!(
             traversed(&together, &retried[..retried.len() - 2]).expect("a retry is no round")[0]

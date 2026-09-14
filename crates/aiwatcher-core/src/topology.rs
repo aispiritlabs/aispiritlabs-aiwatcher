@@ -13,10 +13,11 @@
 //! which bounds a declared loop and a repeating node alike. An edge may say how
 //! many times at most a run may follow it (`at_most` on the edge), which bounds
 //! the rounds of a cycle through several nodes by the edge that leads back —
-//! and several edges may share one bound (`bounds`), which is how a cycle with
-//! more than one way back is held to its rounds whichever way each one took —
-//! which is all such a bound may hold, so one on anything but the ways back of
-//! one cycle is named ([`Topology::misbounded`]).
+//! and several edges may share one bound (`bounds`), which is how a loop with
+//! more than one way back into its head is held to its rounds whichever way
+//! each one took —
+//! which is all such a bound may hold, so one on anything but the ways back
+//! into one loop's head is named ([`Topology::misbounded`]).
 //! Each changes what a run may do on the shape, so each is part of the digest;
 //! a declaration without any digests as it always did.
 
@@ -280,14 +281,17 @@ impl Topology {
     }
 
     /// Each bound several edges share that is not on the ways back of one
-    /// cycle, in words. A shared bound counts a cycle's rounds whichever way
-    /// back each took, so every edge under it has to lead back to where it
-    /// left — its target reaches its source — and all of them round one part
-    /// of the shape: an edge that leads nowhere back is followed once per
-    /// completion of its source and goes round nothing, and edges of two
-    /// separate cycles are the rounds of neither. Empty when every shared
-    /// bound is on one cycle's ways back; a bound of one edge is that edge's
-    /// own `at_most` and is not asked.
+    /// loop, in words. A shared bound counts a loop's rounds whichever way back
+    /// each took, and a round is a return to the loop's head — so every edge
+    /// under it has to lead back to where it left (its target reaches its
+    /// source), and all of them into one node, the head. An edge that leads
+    /// nowhere back is followed once per completion of its source and goes
+    /// round nothing; edges leading back into two nodes go round two loops —
+    /// separate cycles, or two loops through a node they share — and a count
+    /// of both is the rounds of neither. Two bodies returning into one head are
+    /// one loop, and a body's own rounds are its edge's own `at_most`. Empty
+    /// when every shared bound is on one loop's ways back; a bound of one edge
+    /// is that edge's own `at_most` and is not asked.
     #[must_use]
     pub fn misbounded(&self) -> Vec<String> {
         let reaches = self.reaches();
@@ -316,22 +320,13 @@ impl Topology {
                 ));
                 continue;
             }
-            // The part an edge rounds: the nodes its source reaches and that
-            // reach it, named by the first of them.
-            let parts: BTreeSet<&str> = edges
-                .iter()
-                .filter_map(|(from, _)| {
-                    self.nodes.iter().map(String::as_str).find(|node| {
-                        reaches[from.as_str()].contains(node)
-                            && reaches[node].contains(from.as_str())
-                    })
-                })
-                .collect();
-            if parts.len() > 1 {
+            let heads: BTreeSet<&str> = edges.iter().map(|(_, to)| to.as_str()).collect();
+            if heads.len() > 1 {
                 said.push(format!(
-                    "the bound of at most {at_most} that {} share is on the ways back of separate \
-                     cycles, which are the rounds of neither",
-                    spelled(&mut edges.iter())
+                    "the bound of at most {at_most} that {} share leads back into {}, the heads of \
+                     different loops, whose rounds are counted apart",
+                    spelled(&mut edges.iter()),
+                    heads.into_iter().collect::<Vec<_>>().join(" and into ")
                 ));
             }
         }
@@ -494,23 +489,23 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_bound_holds_only_where_every_edge_under_it_leads_back_round_one_cycle() {
-        let two_ways_back = json!({
+    fn a_shared_bound_holds_only_where_every_edge_under_it_leads_back_into_one_head() {
+        let loops = json!({
             "nodes": ["write", "review", "fix", "publish", "draft", "check"],
             "edges": [
-                ["write", "review"], ["review", "write"], ["review", "fix"], ["fix", "review"],
-                ["review", "publish"], ["draft", "check"], ["check", "draft"]
+                ["write", "review"], ["review", "write"], ["review", "fix"], ["fix", "write"],
+                ["fix", "review"], ["review", "publish"], ["draft", "check"], ["check", "draft"]
             ],
         });
         let bounded = |bounds: serde_json::Value| {
-            let mut declaration = two_ways_back.clone();
+            let mut declaration = loops.clone();
             declaration["bounds"] = bounds;
             Topology::read(&declaration).expect("a shape").misbounded()
         };
         assert!(
-            bounded(json!([{"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}]))
+            bounded(json!([{"edges": [["review", "write"], ["fix", "write"]], "at_most": 3}]))
                 .is_empty(),
-            "two ways back round one cycle"
+            "two ways back into one head are one loop's"
         );
         assert!(
             bounded(json!([{"edges": [["review", "publish"]], "at_most": 1}])).is_empty(),
@@ -524,10 +519,21 @@ mod tests {
             ]
         );
         assert_eq!(
+            bounded(json!([{"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}])),
+            [
+                "the bound of at most 3 that fix to review and review to write share leads back \
+              into review and into write, the heads of different loops, whose rounds are counted \
+              apart"
+            ],
+            "two loops through the node they share, write and review round one and review and \
+             fix the other"
+        );
+        assert_eq!(
             bounded(json!([{"edges": [["review", "write"], ["check", "draft"]], "at_most": 2}])),
             [
-                "the bound of at most 2 that check to draft and review to write share is on the \
-              ways back of separate cycles, which are the rounds of neither"
+                "the bound of at most 2 that check to draft and review to write share leads back \
+              into draft and into write, the heads of different loops, whose rounds are counted \
+              apart"
             ]
         );
     }
