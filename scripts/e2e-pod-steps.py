@@ -40,6 +40,13 @@ What it proves, in order:
    stored and recorded, so no Job left behind *is* the assertion — and the
    stored objects are counted beside it.
 
+All of it with **authentication on** (AW-7, ADR_0031): the server runs in
+`proxy` mode, the gate calls as an admin by header, and no template carries a
+token — each pod holds a credential the launcher minted for its attempt. Two
+more phases ask what that buys: a credential lifted out of a pod through a
+step's own output opens its attempt's routes and ingest and nothing else, and a
+step past its timeout is stopped by the watch, on every backend.
+
 The same five against the other backend: `--runtime process` runs each attempt
 as a **process on this host** (`just e2e-processes`), which needs no cluster and
 no image and not even the `kube` feature — a plain `cargo build`. Everything
@@ -74,6 +81,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -120,6 +128,19 @@ READY_WITHIN = 60
 CANCEL_WITHIN = 60
 
 BASE = ""
+
+#: How the gate authenticates, set by `serve`: the headers an authenticating
+#: proxy would set for an admin, or the local token.
+HEADERS: dict[str, str] = {}
+#: What the long-lived worker presents: a token that may claim on `QUEUE`, or
+#: the local token.
+TOKEN = ""
+
+#: The admin the gate calls as, in the headers authentik's outpost sets.
+ADMIN = {"x-authentik-username": "pod-gate", "x-authentik-groups": "aiwatcher-admins"}
+#: How long a step whose deadline stops it is allowed, and how long it sleeps.
+DEADLINE_TIMEOUT = 5
+DEADLINE_HOLD = 120
 
 #: How a step's process is recognised on this host, for the two assertions that
 #: are about a process being *gone*. The launcher's own record says which
@@ -401,7 +422,10 @@ class Containers:
         ).split()
         if not ids:
             return []
-        inspected = json.loads(self.engine("inspect", *ids))
+        # Not checked: the launcher removes a container once its log is kept,
+        # so one listed a moment ago may be gone by the time it is inspected,
+        # and the engine then prints what it still found and fails for the rest.
+        inspected = json.loads(self.engine("inspect", *ids, check=False) or "[]")
         found: list[dict[str, Any]] = []
         for container in inspected:
             if not isinstance(container, dict):
@@ -722,10 +746,18 @@ def grant(cluster: Cluster) -> None:
 
 
 def serve(
-    home: Path, backend: Backend, templates: Path, api_host: str
+    home: Path, backend: Backend, templates: Path, api_host: str, auth: str = "proxy"
 ) -> tuple[subprocess.Popen[bytes], str]:
-    """An aiwatcher of our own, listening where a pod can reach it."""
-    global BASE
+    """An aiwatcher of our own, listening where a pod can reach it.
+
+    Authenticating, because that is where a pod's credential is minted at all.
+    `proxy` is the gate's usual mode: it calls as an admin by header, and a
+    lifted credential sends none, so it lands on the credential path. `local`
+    is the single-user install, started the way one is — `aiwatcher up` — and
+    it binds nothing but loopback, so only a process on this host is asked
+    under it.
+    """
+    global BASE, HEADERS, TOKEN
     binary = Path(os.environ.get("AIWATCHER_BINARY", ROOT / "target" / "debug" / "aiwatcher"))
     if not binary.exists():
         raise SystemExit(f"no server binary at {binary}: `cargo build --bin aiwatcher`")
@@ -755,9 +787,29 @@ def serve(
         "AIWATCHER_LOG_FORMAT": "json",
     }
     env |= backend.server_environment()
+    command = [str(binary)]
+    if auth == "proxy":
+        TOKEN = secrets.token_hex(32)
+        HEADERS = dict(ADMIN)
+        env |= {
+            "AIWATCHER_AUTH_MODE": "proxy",
+            # An editor that may claim on the pods' queue: the long-lived
+            # worker's, and nothing any pod is given.
+            "AIWATCHER_AUTH_INGEST_TOKENS": f"gate[{QUEUE}]={TOKEN}",
+        }
+    elif auth == "local":
+        TOKEN = secrets.token_hex(32)
+        HEADERS = {"authorization": f"Bearer {TOKEN}"}
+        token_file = home / "local-token"
+        token_file.write_text(f"{TOKEN}\n")
+        token_file.chmod(0o600)
+        env["AIWATCHER_AUTH_LOCAL_TOKEN_FILE"] = str(token_file)
+        command += ["up", "log=wal", "flow=off", f"port={port}", f"listen={backend.listen}"]
+    else:
+        raise SystemExit(f"no such auth mode for this gate: {auth}")
     log = (home / "server.log").open("wb")
     process = subprocess.Popen(  # noqa: S603 — the binary this repository builds
-        [str(binary)], cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT
+        command, cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT
     )
     BASE = f"http://127.0.0.1:{port}"
     deadline = time.monotonic() + READY_WITHIN
@@ -778,11 +830,16 @@ def serve(
     raise SystemExit(f"aiwatcher did not come up on {BASE}:\n{tail}")
 
 
-def call(method: str, path: str, body: Any = None) -> tuple[int, Any]:
+def call(
+    method: str, path: str, body: Any = None, headers: dict[str, str] | None = None
+) -> tuple[int, Any]:
+    """One request, as the gate unless `headers` says who else."""
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(  # noqa: S310 — a URL this script composed
         BASE + path, data=data, method=method
     )
+    for name, value in (HEADERS if headers is None else headers).items():
+        request.add_header(name, value)
     if data is not None:
         request.add_header("content-type", "application/json")
     try:
@@ -817,6 +874,8 @@ class Seen:
     """
 
     jobs: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: Each Job as the backend listed it, for what only its full text shows.
+    listed: dict[str, str] = field(default_factory=dict)
 
     def take(self, backend: Backend) -> None:
         for job in backend.jobs():
@@ -825,6 +884,7 @@ class Seen:
             if not isinstance(name, str):
                 continue
             annotations = metadata.get("annotations", {})
+            self.listed[name] = json.dumps(job)
             self.jobs[name] = {
                 "step": str(annotations.get("aiwatcher.dev/step", "")),
                 "attempt": str(annotations.get("aiwatcher.dev/attempt", "")),
@@ -1027,6 +1087,104 @@ def cancel_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> None
     after.take(backend)
 
 
+def credential_phase(runtime: Runtime, backend: Backend, workflow: Workflow, home: Path) -> None:
+    """A pod's credential, lifted the way leaked step code would lift it.
+
+    `acquire` writes what its pod holds in `AIWATCHER_TOKEN` into an output,
+    and the gate reads it back out of the store: the same on every backend,
+    with no `docker inspect` and no `/proc`. What it may do is ADR_0031's two
+    doors — its own attempt, and ingest — and nothing else.
+    """
+    print("· a pod's credential, lifted")
+    handle = runtime.run(workflow)
+    view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
+    if view["execution"]["state"]["state_type"] != "completed":
+        raise SystemExit(f"the run that lifts a credential ended {view['execution']['state']}")
+    lifted = ("acquire", "acquired_by")
+    ran = rows_of(home, artifacts_of(fold(handle.execution_id, {lifted}))[lifted])[0]
+    credential, pod = str(ran.get("credential", "")), str(ran["worker"])
+    if not credential.startswith("aw-attempt."):
+        raise SystemExit(f"the pod held no minted credential: {credential[:24]!r}")
+    if isinstance(backend, Cluster):
+        # A namespace's viewer reads Jobs and pods, never Secrets.
+        for name, text in seen.listed.items():
+            if credential in text:
+                raise SystemExit(f"the Job {name} carries the credential in its spec")
+        print("  ✓ no Job this run started carries it: each held a Secret's reference")
+    bearer = {"authorization": f"Bearer {credential}"}
+    execution = handle.execution_id
+    asked = [
+        (
+            "another attempt's heartbeat",
+            "POST",
+            f"/api/v1/worker/claims/{execution}/normalize/1/heartbeat",
+            {"worker": pod},
+            403,
+            "attempt_not_held",
+        ),
+        ("the runs", "GET", "/api/v1/runs", None, 403, "attempt_credential_refused"),
+        ("the spans", "GET", "/api/v1/spans", None, 403, "attempt_credential_refused"),
+        # Its own attempt is over, so the lease is gone — and it is asked about
+        # it as its own rather than refused.
+        (
+            "its own heartbeat",
+            "POST",
+            f"/api/v1/worker/claims/{execution}/acquire/1/heartbeat",
+            {"worker": pod},
+            409,
+            "lease_lost",
+        ),
+    ]
+    for what, method, path, body, status, code in asked:
+        answered, answer = call(method, path, body, headers=bearer)
+        if answered != status or not isinstance(answer, dict) or answer.get("code") != code:
+            raise SystemExit(f"{what} answered a lifted credential {answered} {answer}")
+    event = {
+        "event_type": "run.started",
+        "occurred_at": "2026-09-14T00:00:00Z",
+        "run_id": f"lifted-{execution}",
+        "source": {"service": "pod-gate", "sdk": "python"},
+        "data": {},
+    }
+    answered, answer = call("POST", "/api/v1/events", {"events": [event]}, headers=bearer)
+    if answered != 202:
+        raise SystemExit(f"ingest refused a pod's credential: {answered} {answer}")
+    print(
+        "  ✓ refused on another attempt and on reads, its own attempt answered as its own, "
+        "and its events accepted"
+    )
+
+
+def deadline_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> None:
+    """A step past its timeout is stopped, on a backend that never read a deadline.
+
+    `analyze` is given five seconds and sleeps for two minutes. A cluster stops
+    its pod at `activeDeadlineSeconds` on its own; a container and a process
+    are stopped by the watch, in the cluster's word for it.
+    """
+    print(f"· a step past its {DEADLINE_TIMEOUT}s timeout")
+    handle = runtime.run(workflow)
+    view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
+    state = view["execution"]["state"]
+    if state["state_type"] != "failed":
+        raise SystemExit(f"a run whose stage overran ended {state}")
+    steps = {step["step_id"]: step for step in view["execution"]["steps"]}
+    attempts = steps["analyze"]["attempts"]
+    error = (attempts[-1].get("error") or {}) if attempts else {}
+    stopped = "DeadlineExceeded" in str(error.get("message"))
+    if error.get("class") != "infrastructure" or not stopped:
+        raise SystemExit(f"analyze did not end at its deadline: {attempts}")
+    held = {name for name, step in seen.steps(handle.execution_id).items() if step == "analyze"}
+    deadline, live = time.monotonic() + 30, held
+    while time.monotonic() < deadline and live:
+        live = backend.alive(held)
+        if live:
+            time.sleep(1)
+    if live:
+        raise SystemExit(f"analyze's pod outlived its deadline: {live}")
+    print(f"  ✓ {error['message']}; its pod is gone")
+
+
 def oom_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> None:
     """One stage over its limit fails that stage, and the budget decides next.
 
@@ -1092,9 +1250,15 @@ def logs_kept(home: Path, backend: Backend, pods: set[str]) -> None:
         time.sleep(2)
     if left:
         raise SystemExit(f"pods the launcher never finished with: {left} — its log is why")
-    stored = sorted((home / ".data" / "prompts" / "artifacts" / "log").glob("*/*/data"))
-    kept = [path.read_text(errors="replace") for path in stored]
-    missing = {pod for pod in pods if not any(pod in text for text in kept)}
+    # Waited for as well: on this host a process is gone the moment it exits,
+    # and its log is kept on the launcher's next pass.
+    while True:
+        stored = sorted((home / ".data" / "prompts" / "artifacts" / "log").glob("*/*/data"))
+        kept = [path.read_text(errors="replace") for path in stored]
+        missing = {pod for pod in pods if not any(pod in text for text in kept)}
+        if not missing or time.monotonic() > deadline:
+            break
+        time.sleep(1)
     if missing:
         raise SystemExit(f"nothing in the store holds what these pods printed: {sorted(missing)}")
     size = sum(path.stat().st_size for path in stored)
@@ -1173,6 +1337,9 @@ def main() -> None:
         templates = templates_file(home, arguments.runtime)
         server, api_url = serve(home, backend, templates, api_host)
         backend.probe(api_url)
+        unminted = templates.read_text()
+        if "AIWATCHER_TOKEN" in unminted:
+            raise SystemExit("a template carries a token, which is what this gate says it need not")
 
         # 192Mi is the step's own ask, which is its request and its limit both,
         # so a `hog_mb` above it is a pod the kernel stops.
@@ -1181,10 +1348,15 @@ def main() -> None:
         direct = pod_stages.build_workflow()
         holding = pod_stages.build_workflow(pod, hold_seconds=120)
         hogging = pod_stages.build_workflow(pod, hog_mb=512)
-        flows = (in_pods, direct, holding, hogging)
+        lifting = pod_stages.build_workflow(pod, reveal_credential=True)
+        overrunning = pod_stages.build_workflow(
+            pod, hold_seconds=DEADLINE_HOLD, timeout_seconds=DEADLINE_TIMEOUT
+        )
+        flows = (in_pods, direct, holding, hogging, lifting, overrunning)
         runtime = Runtime(
             name="pods-e2e",
             url=BASE,
+            token=TOKEN,
             workflows=list(flows),
             pools=[ExecutionPool("local", QUEUE, concurrency=1)],
             placement={flow.ref: "local" for flow in flows},
@@ -1199,7 +1371,9 @@ def main() -> None:
             in_pods_id, _ = pod_phase(runtime, backend, in_pods)
             direct_id = direct_phase(runtime, backend, direct)
             pods = compare(home, in_pods_id, direct_id)
+            credential_phase(runtime, backend, lifting, home)
             cancel_phase(runtime, backend, holding)
+            deadline_phase(runtime, backend, overrunning)
             oom_phase(runtime, backend, hogging)
         logs_kept(home, backend, pods)
     finally:
@@ -1213,16 +1387,60 @@ def main() -> None:
             backend.teardown()
         if arguments.keep:
             print(f"· kept {home}")
+    if arguments.runtime == "process":
+        local_pass(arguments, api_host)
     where = {
         "pods": "four pods",
         "docker": "four containers on this host",
         "process": "four processes on this host",
     }[arguments.runtime]
     stopped = ", a stage the kernel stopped" if in_image else ""
+    local_too = ""
+    if arguments.runtime == "process":
+        local_too = ", and again under a local install's token"
     print(
-        f"\n✓ four stages in {where}, the same review, a cancel that arrived"
-        f"{stopped}, every log kept"
+        f"\n✓ four stages in {where} with authentication on, the same review, a credential "
+        f"that opened its own attempt only, a cancel that arrived, a deadline held"
+        f"{stopped}, every log kept{local_too}"
     )
+
+
+def local_pass(arguments: argparse.Namespace, api_host: str) -> None:
+    """The four stages once more, under `aiwatcher up`'s local token.
+
+    The single-user case: that mode takes one token, an admin's, and a step's
+    process now holds its own attempt's credential beside it rather than that.
+    """
+    print("· the four stages under a local install's token")
+    home = Path(tempfile.mkdtemp(prefix="aiwatcher-pods-"))
+    backend = Host(log=home / "server.log")
+    server: subprocess.Popen[bytes] | None = None
+    try:
+        templates = templates_file(home, arguments.runtime)
+        server, _ = serve(home, backend, templates, api_host, auth="local")
+        in_pods = pod_stages.build_workflow(PodRequest(template=TEMPLATE, image=IMAGE))
+        runtime = Runtime(
+            name="pods-e2e-local",
+            url=BASE,
+            token=TOKEN,
+            workflows=[in_pods],
+            pools=[ExecutionPool("local", QUEUE, concurrency=1)],
+            placement={in_pods.ref: "local"},
+            poll_interval=0.2,
+        )
+        with runtime:
+            runtime.register()
+            runtime.start()
+            pod_phase(runtime, backend, in_pods)
+    finally:
+        if server is not None and server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                server.kill()
+        if not arguments.keep:
+            backend.teardown()
 
 
 if __name__ == "__main__":

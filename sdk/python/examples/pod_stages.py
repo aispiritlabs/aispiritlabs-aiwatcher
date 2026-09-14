@@ -92,11 +92,20 @@ def _by(stage: str) -> list[JsonObject]:
 
 
 @task("pods.acquire", version="1")
-def acquire() -> dict[str, int]:
-    """Read the drawing. One pod's worth of work, and the graph's root."""
+def acquire(reveal_credential: bool = False) -> dict[str, int]:
+    """Read the drawing. One pod's worth of work, and the graph's root.
+
+    `reveal_credential` is for a gate, which needs what step code could leak:
+    the credential this pod holds goes into who-ran-it, the way code writing
+    its environment into an output would put it there (ADR_0031). Never
+    printed, so a kept log does not hold it too.
+    """
     ctx = get_task_context()
     ctx.write_artifact("plan", [dict(row) for row in PLAN])
-    ctx.write_artifact("acquired_by", _by("acquire"))
+    ran = _by("acquire")
+    if reveal_credential:
+        ran[0]["credential"] = os.environ.get("AIWATCHER_TOKEN", "")
+    ctx.write_artifact("acquired_by", ran)
     return {"rooms": len(PLAN)}
 
 
@@ -177,8 +186,14 @@ def persist() -> dict[str, int]:
     return {"rooms": len(rows)}
 
 
-def _version(pod: PodRequest | None, hold_seconds: int, hog_mb: int) -> str:
-    """Which of the four shapes this is.
+def _version(
+    pod: PodRequest | None,
+    hold_seconds: int,
+    hog_mb: int,
+    timeout_seconds: int | None,
+    reveal_credential: bool,
+) -> str:
+    """Which of the shapes this is.
 
     Derived rather than passed in: a definition is pinned by name and version,
     and two of these registered under one version would be one workflow whose
@@ -186,6 +201,10 @@ def _version(pod: PodRequest | None, hold_seconds: int, hog_mb: int) -> str:
     """
     if pod is None:
         return "1"
+    if reveal_credential:
+        return "6"
+    if timeout_seconds is not None:
+        return "5"
     if hold_seconds:
         return "3"
     if hog_mb:
@@ -194,7 +213,11 @@ def _version(pod: PodRequest | None, hold_seconds: int, hog_mb: int) -> str:
 
 
 def build_workflow(
-    pod: PodRequest | None = None, hold_seconds: int = 0, hog_mb: int = 0
+    pod: PodRequest | None = None,
+    hold_seconds: int = 0,
+    hog_mb: int = 0,
+    timeout_seconds: int | None = None,
+    reveal_credential: bool = False,
 ) -> Workflow:
     """The four stages, in pods or not.
 
@@ -205,18 +228,35 @@ def build_workflow(
     to be the same bytes.
 
     ``hold_seconds`` and ``hog_mb`` go to ``analyze`` and are how a gate asks
-    for a stage that can be cancelled in and a stage the kernel stops.
+    for a stage that can be cancelled in and a stage the kernel stops;
+    ``timeout_seconds`` is that stage's own, one attempt only, for a stage its
+    deadline stops. ``reveal_credential`` goes to ``acquire``.
     """
     analyze_params: dict[str, object] = {}
     if hold_seconds:
         analyze_params["hold_seconds"] = hold_seconds
     if hog_mb:
         analyze_params["hog_mb"] = hog_mb
+    if timeout_seconds is not None:
+        analyze_retry = RetryPolicy(max_attempts=1)
+    elif hog_mb:
+        # Two attempts rather than three, for the variant that is built to
+        # fail: enough to show the budget scheduling another pod, few enough
+        # that the gate is not waiting on a third.
+        analyze_retry = RetryPolicy(max_attempts=2, delays_seconds=(0,))
+    else:
+        analyze_retry = RetryPolicy()
     return Workflow(
         "pods.house-import",
-        _version(pod, hold_seconds, hog_mb),
+        _version(pod, hold_seconds, hog_mb, timeout_seconds, reveal_credential),
         (
-            WorkflowStep("acquire", acquire, outputs=("plan", "acquired_by"), pod=pod),
+            WorkflowStep(
+                "acquire",
+                acquire,
+                outputs=("plan", "acquired_by"),
+                params={"reveal_credential": True} if reveal_credential else {},
+                pod=pod,
+            ),
             WorkflowStep(
                 "normalize",
                 normalize,
@@ -230,10 +270,8 @@ def build_workflow(
                 inputs=(WorkflowInput("normalize", "normalized"),),
                 outputs=("analysis", "analyzed_by"),
                 params=analyze_params,
-                # Two attempts rather than three, for the one variant that is
-                # built to fail: enough to show the budget scheduling another
-                # pod, few enough that the gate is not waiting on a third.
-                retry=RetryPolicy(max_attempts=2, delays_seconds=(0,)) if hog_mb else RetryPolicy(),
+                retry=analyze_retry,
+                timeout_seconds=300 if timeout_seconds is None else timeout_seconds,
                 pod=pod,
             ),
             WorkflowStep(

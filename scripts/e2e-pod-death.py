@@ -163,6 +163,7 @@ def main() -> None:
         runtime = steps.Runtime(
             name="pod-death-e2e",
             url=steps.BASE,
+            token=steps.TOKEN,
             workflows=[holding],
             pools=[steps.ExecutionPool("local", steps.QUEUE, concurrency=1)],
             placement={holding.ref: "local"},
@@ -232,8 +233,15 @@ def main() -> None:
             said = error["message"]
             print(f"  ✓ attempt 1 ended as infrastructure {ended_after:.0f}s after: {said}")
 
+            # By attempt, never by name: a name is a hash of the key, so the
+            # killed pod's sorts after its successor's as often as before it.
             jobs = sorted(
-                name for name, step in seen.steps(handle.execution_id).items() if step == "analyze"
+                (
+                    name
+                    for name, step in seen.steps(handle.execution_id).items()
+                    if step == "analyze"
+                ),
+                key=lambda name: int(seen.jobs[name]["attempt"] or 0),
             )
             if len(records) != 2 or records[1].get("state", {}).get("state_type") != "completed":
                 raise SystemExit(
