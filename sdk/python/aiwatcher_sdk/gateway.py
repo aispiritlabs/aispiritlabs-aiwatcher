@@ -51,6 +51,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import uuid
@@ -75,6 +76,7 @@ __all__ = [
     "holds_template",
     "knows_more_than_the_reply",
     "main",
+    "normalized",
     "witness_digest",
     "witness_key",
 ]
@@ -102,6 +104,31 @@ _WHITE_SPACE = (
 def witness_key(secret: str) -> bytes:
     """The witness key of a credential, from its secret."""
     return hmac.new(secret.encode(), WITNESS_KEY_LABEL, hashlib.sha256).digest()
+
+
+def normalized(text: str) -> str:
+    """A text as a question asked in other words still reads.
+
+    ``aiwatcher_core::witness::normalized``: NFKC, lower case, every punctuation
+    character (general category P) gone, and each run of white space one
+    space, none at either end. Byte for byte what the deployment and the
+    TypeScript SDK compute, for every character this Python's Unicode version
+    assigns.
+    """
+    folded = unicodedata.normalize("NFKC", text).lower()
+    out: list[str] = []
+    space = False
+    for character in folded:
+        if unicodedata.category(character).startswith("P"):
+            continue
+        if character in _WHITE_SPACE:
+            space = bool(out)
+            continue
+        if space:
+            out.append(" ")
+            space = False
+        out.append(character)
+    return "".join(out)
 
 
 def witness_digest(key: bytes, said: str, text: str) -> str:
@@ -932,11 +959,16 @@ class Gateway:
         variables: Mapping[str, Any] | None,
         rendered: bool,
         template: str | None = None,
+        *,
+        normal: bool = False,
     ) -> list[str]:
         """Keyed digests of each text the request held — and of the values the
         template was found rendered with, where it was, or else of what stands
         between the template's literal parts where only those were found: what a
-        caller asked is looked for whether it said what it rendered or not."""
+        caller asked is looked for whether it said what it rendered or not.
+
+        ``normal`` digests each of those texts :func:`normalized` instead: what
+        finds a question asked again in another case, spacing or punctuation."""
         if self.key is None:
             return []
         texts = _texts_asked(body)
@@ -947,6 +979,9 @@ class Gateway:
             )
         elif template is not None and isinstance(body.get("messages"), list):
             texts.extend(filled(template, body["messages"]))
+        if normal:
+            texts = [normalized(text) for text in texts]
+            texts = [text for text in texts if text]
         return _digested(self.key, "asked", texts)
 
     def digests_rendered(self, variables: Mapping[str, Any] | None) -> list[str]:
@@ -1128,6 +1163,7 @@ class Gateway:
         status: int,
         started: float,
         asked: Sequence[str] = (),
+        asked_normalized: Sequence[str] = (),
         answer_from: Mapping[str, Any] | None = None,
         rendered: Sequence[str] = (),
         derived: Sequence[str] = (),
@@ -1155,6 +1191,8 @@ class Gateway:
                 outcome["response_model"] = relayed.served_model
             if asked:
                 outcome["asked_digests"] = list(asked)
+            if asked_normalized:
+                outcome["asked_normalized_digests"] = list(asked_normalized)
             if rendered:
                 outcome["rendered_digests"] = list(rendered)
             if derived:
@@ -1335,6 +1373,13 @@ class Gateway:
                     prompt is not None and prompt.rendered,
                     gateway.known_template(prompt),
                 )
+                asked_normalized = gateway.digests_asked(
+                    body,
+                    told.variables,
+                    prompt is not None and prompt.rendered,
+                    gateway.known_template(prompt),
+                    normal=True,
+                )
                 relayed = Relayed()
                 try:
                     status, content_type, chunks = gateway.forward(self.path, raw, authorization)
@@ -1367,6 +1412,7 @@ class Gateway:
                     status=int(status),
                     started=started,
                     asked=asked,
+                    asked_normalized=asked_normalized,
                     answer_from=told.answer_from,
                     rendered=gateway.digests_rendered(told.variables)
                     if prompt is not None and prompt.rendered

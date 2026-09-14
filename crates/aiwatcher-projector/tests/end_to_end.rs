@@ -148,6 +148,7 @@ impl Harness {
                 dead_letters: Arc::clone(&dead_letters) as _,
                 read_model: Arc::clone(&read_model),
                 periods: None,
+                asked: None,
             },
             config,
         ));
@@ -660,6 +661,7 @@ async fn a_restart_rebuilds_the_read_model_from_the_log() {
             dead_letters: Arc::new(InMemoryDeadLetters::new()) as _,
             read_model: Arc::clone(&read_model),
             periods: None,
+            asked: None,
         },
         ProjectorConfig {
             flush_interval: Duration::from_millis(20),
@@ -982,6 +984,7 @@ async fn project(
             dead_letters: Arc::new(InMemoryDeadLetters::new()) as _,
             read_model: Arc::new(ReadModel::default()),
             periods,
+            asked: None,
         },
         ProjectorConfig {
             flush_interval: Duration::from_millis(10),

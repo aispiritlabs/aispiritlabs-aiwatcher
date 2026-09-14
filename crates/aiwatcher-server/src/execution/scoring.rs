@@ -75,6 +75,7 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
                 bundles: state.evaluation_bundles.clone(),
                 witnesses: state.witnesses.clone(),
                 prompts: state.prompts.clone(),
+                asked: state.asked.clone(),
                 wait: TELEMETRY_WAIT,
             })),
         None => registry,
@@ -783,6 +784,9 @@ pub struct TracesExecutor {
     /// Where a pinned judging prompt's text is read: the order of its
     /// placeholders is what an order a judge was shown is held to.
     prompts: Option<Arc<aiwatcher_prompts::Registry>>,
+    /// The projector's index of what witnesses saw asked, which outlives the
+    /// read model; without one, calls asked elsewhere are read from the fold.
+    asked: Option<Arc<aiwatcher_projector::AskedIndex>>,
     wait: std::time::Duration,
 }
 
@@ -801,8 +805,17 @@ impl TracesExecutor {
             bundles: None,
             witnesses: aiwatcher_evaluation::Witnesses::default(),
             prompts: None,
+            asked: None,
             wait,
         }
+    }
+
+    /// Where calls asked elsewhere are read from: the index of what witnesses
+    /// saw asked, rather than the read model.
+    #[must_use]
+    pub fn reading_asked_from(mut self, asked: Arc<aiwatcher_projector::AskedIndex>) -> Self {
+        self.asked = Some(asked);
+        self
     }
 
     /// Where a pinned judging prompt's text is read from.
@@ -1029,6 +1042,7 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),
             cached_tokens: number(span, "gen_ai.usage.cached_tokens"),
             asked: list(span, own::witness::ASKED),
+            asked_normalized: list(span, own::witness::ASKED_NORMALIZED),
             replied: list(span, own::witness::REPLIED),
             rendered: list(span, own::witness::RENDERED),
             placed: list(span, own::witness::PLACED)
@@ -1181,31 +1195,86 @@ impl ActivityExecutor for TracesExecutor {
             {
                 witnesses = witnesses.judged_with(&template);
             }
-            // Every call a witness relayed since the measurement started, in any
-            // run: a case asked elsewhere is a question the application could
-            // have chosen the run it answered in by.
-            match self
+            // Every call a witness relayed since the measurement started — or
+            // from as long before it as the run pinned — in any run: a case asked
+            // elsewhere is a question the application could have chosen the run
+            // it answered in by. Where the fold no longer holds when the run
+            // started, from when it was declared, which is earlier.
+            let started = self
                 .read_model
                 .workflow_execution(&command.key.execution_id.to_string())
                 .await
-            {
-                Some(execution) => witnesses.asked_elsewhere(
-                    self.read_model
-                        .asked_since(execution.summary.started_at)
-                        .await
-                        .iter()
-                        .flat_map(|detail| {
-                            let caller = detail.summary.caller_run_id.clone();
-                            traced_calls(detail).into_iter().map(move |call| {
-                                aiwatcher_evaluation::CallElsewhere {
-                                    caller_run_id: caller.clone(),
-                                    call,
-                                }
+                .map(|execution| execution.summary.started_at);
+            let before = i64::try_from(declared.run.settings.asked_since_seconds.unwrap_or(0))
+                .unwrap_or(i64::MAX);
+            match &self.asked {
+                Some(index) => {
+                    let start = started
+                        .map(time::OffsetDateTime::unix_timestamp)
+                        .unwrap_or(declared.declared_at);
+                    let from_ms = start.saturating_sub(before).saturating_mul(1_000);
+                    let read = index.since(from_ms).await.map_err(|error| {
+                        if error.is_retryable() {
+                            ActivityError::transient(error.to_string())
+                        } else {
+                            ActivityError::new(FailureClass::Infrastructure, error.to_string())
+                        }
+                    })?;
+                    let witnesses = witnesses.asked_elsewhere(
+                        read.calls
+                            .into_iter()
+                            .map(|call| aiwatcher_evaluation::CallElsewhere {
+                                caller_run_id: call.caller_run_id,
+                                call: TracedCall {
+                                    model: call.model,
+                                    prompt_name: call.prompt_name,
+                                    prompt_version: call.prompt_version,
+                                    prompt_verified: call.prompt_verified,
+                                    published_by: call.published_by,
+                                    asked: call.asked,
+                                    asked_normalized: call.asked_normalized,
+                                    ..TracedCall::default()
+                                },
                             })
+                            .collect(),
+                    );
+                    match read
+                        .reaches_from_ms
+                        .filter(|reaches| *reaches > from_ms)
+                        .and_then(|reaches| {
+                            time::OffsetDateTime::from_unix_timestamp_nanos(
+                                i128::from(reaches) * 1_000_000,
+                            )
+                            .ok()
                         })
-                        .collect(),
-                ),
-                None => witnesses.elsewhere_unread(),
+                        .and_then(|reaches| {
+                            reaches
+                                .format(&time::format_description::well_known::Rfc3339)
+                                .ok()
+                        }) {
+                        Some(date) => witnesses.elsewhere_unread_before(date),
+                        None => witnesses,
+                    }
+                }
+                None => match started {
+                    Some(started) => witnesses.asked_elsewhere(
+                        self.read_model
+                            .asked_since(started - time::Duration::seconds(before))
+                            .await
+                            .iter()
+                            .flat_map(|detail| {
+                                let caller = detail.summary.caller_run_id.clone();
+                                traced_calls(detail).into_iter().map(move |call| {
+                                    aiwatcher_evaluation::CallElsewhere {
+                                        caller_run_id: caller.clone(),
+                                        call,
+                                    }
+                                })
+                            })
+                            .collect(),
+                    ),
+                    None => witnesses.elsewhere_unread(),
+                },
             }
         } else {
             witnesses

@@ -220,6 +220,10 @@ pub struct AppState {
     /// periods it wrote and from its own memory. `None` without an object
     /// store to write periods to: a window is then the read model's.
     pub observations: Option<Arc<aiwatcher_projector::PeriodOutput>>,
+    /// The projector's index of what witnesses saw asked, call by call, which
+    /// a traces step holds answers to questions asked elsewhere by. `None`
+    /// without an object store: the step then reads the read model.
+    pub asked: Option<Arc<aiwatcher_projector::AskedIndex>>,
     /// What models' tokens cost, as the deployment loaded it. `None` prices
     /// nothing.
     pub model_prices: Option<Arc<aiwatcher_core::prices::ModelPrices>>,

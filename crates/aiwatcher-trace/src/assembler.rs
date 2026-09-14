@@ -716,6 +716,7 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             // length the gateway writes, and never more than it keeps.
             for (key, attribute) in [
                 ("asked_digests", own::witness::ASKED),
+                ("asked_normalized_digests", own::witness::ASKED_NORMALIZED),
                 ("replied_digests", own::witness::REPLIED),
                 ("rendered_digests", own::witness::RENDERED),
             ] {

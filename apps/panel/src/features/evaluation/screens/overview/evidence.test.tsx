@@ -550,6 +550,9 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
             ],
             judged_unordered: 1,
             asked_elsewhere: 1,
+            asked_elsewhere_unpinned: 1,
+            elsewhere_unread: 1,
+            elsewhere_unread_before: '2026-09-01T00:00:00Z',
             witnesses: ['gateway'],
             self_witnessed: 1,
             served: [{ model: 'support-model-q4', answers: 2 }],
@@ -582,6 +585,12 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   ).toBeTruthy();
   expect(
     screen.getByText(/declares a bound that keeps nothing: the bound of at most 1 on retrieve/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/1 of 2 were exchanges whose case was also asked on another prompt/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/calls asked in other runs before 2026-09-01T00:00:00Z, which the index/),
   ).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();

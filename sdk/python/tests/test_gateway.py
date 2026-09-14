@@ -21,6 +21,7 @@ from aiwatcher_sdk.gateway import (
     canonical,
     extracted,
     holds_template,
+    normalized,
     witness_digest,
     witness_key,
 )
@@ -843,3 +844,36 @@ def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_prov
         "the request relayed is the version rendered with the values where the gateway placed them"
     )
     assert as_sent["placed_digests"] == [pair("first", high), pair("second", low)]
+
+
+def test_a_question_normalises_to_the_bytes_the_deployment_does_and_is_digested_so_beside_itself(
+    gateway: tuple[str, Recording],
+) -> None:
+    """The vectors ``aiwatcher_core::witness::normalized`` holds itself to."""
+    for text, normal in [
+        ("  What is the CAPITAL of France?  ", "what is the capital of france"),
+        (
+            "\uff30\uff41\uff52\uff49\uff53\uff0c\u3000\uff26\uff32\uff21\uff2e\uff23\uff25\uff01",
+            "paris france",
+        ),
+        ("Don\u2019t\tstop\u2014e-mail\u2026\ufb01ne", "dont stopemailfine"),
+        ("\u039f\u0394\u039f\u03a3 \u03a3", "\u03bf\u03b4\u03bf\u03c2 \u03c3"),
+        ("\u0130stanbul", "i\u0307stanbul"),
+        ("\u00a0\u00bfQu\u00e9\u2003pasa?\u200b", "qu\u00e9 pasa\u200b"),
+    ]:
+        assert normalized(text) == normal, text
+
+    base, recording = gateway
+    ask(
+        base,
+        {
+            "model": "capitals",
+            "messages": [{"role": "user", "content": "WHAT is the capital  of Peru"}],
+        },
+        {CALLER_RUN_HEADER: "app-run"},
+    )
+    [call] = completed(recording)
+    assert call["asked_normalized_digests"] == [
+        witness_digest(KEY, "asked", "what is the capital of peru")
+    ]
+    assert witness_digest(KEY, "asked", "What is the capital of Peru?") not in call["asked_digests"]

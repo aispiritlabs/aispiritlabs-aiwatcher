@@ -3746,6 +3746,13 @@ export type GateMetric = EvidenceMetricDelta & {
  */
 export type GatePolicy = {
     /**
+     * Beside `require_witnessed_answer`: an answer whose case was asked on
+     * another prompt or model in another run, from when the run read calls
+     * asked elsewhere, is no witnessed answer either. Off by default, since
+     * production traffic on other prompts asks what cases ask all the time.
+     */
+    asked_elsewhere_unpinned_denies?: boolean;
+    /**
      * Cases that must be measured and no worse than the baseline on any
      * metric, whatever the means did: a critical case lost is a regression
      * even beside a better average.
@@ -3850,6 +3857,12 @@ export type GenerationTrace = {
      */
     asked_elsewhere?: number;
     /**
+     * Exchanges whose cases' inputs witnessed calls on another prompt or
+     * model asked in other runs ([`TracedAnswer::asked_elsewhere_unpinned`]):
+     * exchanges all the same, unless a gate's policy denies them.
+     */
+    asked_elsewhere_unpinned?: number;
+    /**
      * Of those, why the way of choosing the variant pins picked none of them,
      * each reason once.
      */
@@ -3862,9 +3875,15 @@ export type GenerationTrace = {
     chosen?: number;
     /**
      * Answers that would be an exchange but for which calls asked elsewhere
-     * were not looked for, the measurement's start not being in the fold.
+     * were not looked for, the measurement's start not being in the fold —
+     * or not before `elsewhere_unread_before`.
      */
     elsewhere_unread?: number;
+    /**
+     * Where calls asked elsewhere were read only from a moment after the one
+     * the run pinned: that moment.
+     */
+    elsewhere_unread_before?: string | null;
     /**
      * Edge bounds of the pinned workflow that hold nothing a run could do,
      * in words: a bound no smaller than the times its source may complete, or
@@ -8216,6 +8235,15 @@ export type ScoringRun = {
  * must read the deadline the first attempt had.
  */
 export type ScoringRunSettings = {
+    /**
+     * How long before the run started a call asking a case's question counts
+     * as asked elsewhere, in seconds — so an application that looked at the
+     * cohort's cases before the measurement began is held to it. Absent is
+     * from the run's start. What the index of questions asked does not reach
+     * back to is named on the result with its date, and no answer is an
+     * exchange then.
+     */
+    asked_since_seconds?: number | null;
     /**
      * How many questions are put to a judge at once. Absent is the
      * deployment's `AIWATCHER_JUDGE_CONCURRENCY`, which is also the most a

@@ -798,6 +798,15 @@ pub async fn build(config: Config) -> Result<Runtime> {
             .reading_journal(config.observation_journal_days.is_some()),
         )
     });
+    // What witnesses saw asked, call by call, wherever there is an object
+    // store to keep it in — and read back by every traces step.
+    let asked = registries.objects.clone().map(|store| {
+        let index = aiwatcher_projector::AskedIndex::new(store, config.processor_id.clone());
+        Arc::new(match config.asked_index_days {
+            0 => index,
+            days => index.keeping(std::time::Duration::from_secs(days.saturating_mul(86_400))),
+        })
+    });
     // The journal reads the log under its own name and commits its own
     // position, and keeps its pages beside the periods it refills.
     let journal_of = |days: u64| {
@@ -819,6 +828,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         // period, wherever there is an object store to write it to — and read
         // back by every window over it.
         periods: observations.clone(),
+        asked: asked.clone(),
     };
 
     // Each arm produces the same three things, and the journal where one is
@@ -1012,6 +1022,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         evaluations: registries.evaluations,
         evaluation_bundles: registries.evaluation_bundles,
         observations,
+        asked,
         model_prices: build_model_prices(&config)?,
         // A witness's digests of a call's words are keyed by the credential it
         // published with, which this deployment issued — or by the credential

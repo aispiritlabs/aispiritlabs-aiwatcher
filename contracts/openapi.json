@@ -19342,6 +19342,10 @@
         "type": "object",
         "description": "What a gate holds a result to.",
         "properties": {
+          "asked_elsewhere_unpinned_denies": {
+            "type": "boolean",
+            "description": "Beside `require_witnessed_answer`: an answer whose case was asked on\nanother prompt or model in another run, from when the run read calls\nasked elsewhere, is no witnessed answer either. Off by default, since\nproduction traffic on other prompts asks what cases ask all the time."
+          },
           "critical_cases": {
             "type": "array",
             "items": {
@@ -19484,6 +19488,11 @@
             "description": "Answers that would be an exchange but whose cases' inputs witnessed\ncalls on the pinned prompt asked in other runs while the measurement ran\n([`TracedAnswer::asked_elsewhere`]).",
             "minimum": 0
           },
+          "asked_elsewhere_unpinned": {
+            "type": "integer",
+            "description": "Exchanges whose cases' inputs witnessed calls on another prompt or\nmodel asked in other runs ([`TracedAnswer::asked_elsewhere_unpinned`]):\nexchanges all the same, unless a gate's policy denies them.",
+            "minimum": 0
+          },
           "choices_refused": {
             "type": "array",
             "items": {
@@ -19498,8 +19507,15 @@
           },
           "elsewhere_unread": {
             "type": "integer",
-            "description": "Answers that would be an exchange but for which calls asked elsewhere\nwere not looked for, the measurement's start not being in the fold.",
+            "description": "Answers that would be an exchange but for which calls asked elsewhere\nwere not looked for, the measurement's start not being in the fold —\nor not before `elsewhere_unread_before`.",
             "minimum": 0
+          },
+          "elsewhere_unread_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where calls asked elsewhere were read only from a moment after the one\nthe run pinned: that moment."
           },
           "idle_bounds": {
             "type": "array",
@@ -27416,6 +27432,16 @@
         "type": "object",
         "description": "How a run is carried out, as opposed to what it measures.\n\nNeither setting reaches the manifest: a result measured in ten minutes and\nthe same one measured in an hour are one measurement, and two contexts for\nthem would make the second incomparable with the first for no reason. They\nare part of the declaration, because a declaration is the run and a retry\nmust read the deadline the first attempt had.",
         "properties": {
+          "asked_since_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long before the run started a call asking a case's question counts\nas asked elsewhere, in seconds — so an application that looked at the\ncohort's cases before the measurement began is held to it. Absent is\nfrom the run's start. What the index of questions asked does not reach\nback to is named on the result with its date, and no answer is an\nexchange then.",
+            "maximum": 7776000,
+            "minimum": 0
+          },
           "concurrency": {
             "type": [
               "integer",

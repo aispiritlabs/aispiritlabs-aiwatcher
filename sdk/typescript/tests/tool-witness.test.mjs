@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AiwatcherClient } from '../src/index.ts';
-import { ToolWitness, canonical, witnessDigest, witnessKey } from '../src/tool-witness.ts';
+import { ToolWitness, canonical, normalized, witnessDigest, witnessKey } from '../src/tool-witness.ts';
 
 class Recording {
   events = [];
@@ -77,4 +77,20 @@ test("a tool's call is witnessed where it runs, by digests of its arguments and 
   assert.deepEqual(new Set(started.map((event) => event.data.caller_run_id)), new Set(['app-run']));
   assert.ok(!JSON.stringify(sent.events).includes('Lima'));
   assert.ok(!JSON.stringify(sent.events).includes('Peru'));
+});
+
+test('a question normalises to the bytes the deployment and the Python gateway compute', () => {
+  for (const [text, normal] of [
+    ['  What is the CAPITAL of France?  ', 'what is the capital of france'],
+    [
+      '\uff30\uff41\uff52\uff49\uff53\uff0c\u3000\uff26\uff32\uff21\uff2e\uff23\uff25\uff01',
+      'paris france',
+    ],
+    ['Don\u2019t\tstop\u2014e-mail\u2026\ufb01ne', 'dont stopemailfine'],
+    ['\u039f\u0394\u039f\u03a3 \u03a3', '\u03bf\u03b4\u03bf\u03c2 \u03c3'],
+    ['\u0130stanbul', 'i\u0307stanbul'],
+    ['\u00a0\u00bfQu\u00e9\u2003pasa?\u200b', 'qu\u00e9 pasa\u200b'],
+  ]) {
+    assert.equal(normalized(text), normal, text);
+  }
 });

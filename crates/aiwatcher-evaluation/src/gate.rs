@@ -63,6 +63,12 @@ pub struct GatePolicy {
     /// default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_witnessed_answer: bool,
+    /// Beside `require_witnessed_answer`: an answer whose case was asked on
+    /// another prompt or model in another run, from when the run read calls
+    /// asked elsewhere, is no witnessed answer either. Off by default, since
+    /// production traffic on other prompts asks what cases ask all the time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asked_elsewhere_unpinned_denies: bool,
 }
 
 impl GatePolicy {
@@ -242,6 +248,18 @@ pub fn decide(
                 reasons.extend(traces.unwitnessed_answers().into_iter().map(|missing| {
                     format!("the policy requires every answer witnessed as the reply: {missing}")
                 }));
+                true
+            }
+            Some(traces)
+                if policy.asked_elsewhere_unpinned_denies
+                    && traces.asked_elsewhere_unpinned > 0 =>
+            {
+                reasons.push(format!(
+                    "the policy requires every answer witnessed as the reply, and denies one \
+                     whose case was asked on another prompt or model in another run: {} of {} \
+                     answers' cases were",
+                    traces.asked_elsewhere_unpinned, traces.answers
+                ));
                 true
             }
             Some(_) => false,

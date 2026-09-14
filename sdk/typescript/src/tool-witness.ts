@@ -63,6 +63,31 @@ export function trimmed(text: string): string {
   return characters.slice(from, to).join('');
 }
 
+/**
+ * A text as a question asked in other words still reads —
+ * `aiwatcher_core::witness::normalized`: NFKC, lower case, every punctuation
+ * character (general category P) gone, and each run of white space one space,
+ * none at either end. Byte for byte what the deployment and the Python gateway
+ * compute, for every character this runtime's Unicode version assigns.
+ */
+export function normalized(text: string): string {
+  let out = '';
+  let space = false;
+  for (const character of text.normalize('NFKC').toLowerCase()) {
+    if (/\p{P}/u.test(character)) continue;
+    if (WHITE_SPACE.has(character)) {
+      space = out.length > 0;
+      continue;
+    }
+    if (space) {
+      out += ' ';
+      space = false;
+    }
+    out += character;
+  }
+  return out;
+}
+
 /** The witness key of a credential, from its secret. */
 export async function witnessKey(secret: string): Promise<Uint8Array> {
   return hmac(encoder.encode(secret), encoder.encode(WITNESS_KEY_LABEL));

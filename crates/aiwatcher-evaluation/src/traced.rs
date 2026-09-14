@@ -52,6 +52,9 @@ pub struct TracedCall {
     /// A witness's keyed digests of what the request held and what came back
     /// ([`aiwatcher_core::witness`]); empty on the application's own calls.
     pub asked: Vec<String>,
+    /// The same texts normalised before they were digested
+    /// (`aiwatcher_core::witness::normalized`).
+    pub asked_normalized: Vec<String>,
     pub replied: Vec<String>,
     /// The same witness's digests of each value the named template was found
     /// rendered with, made as a reply's are.
@@ -121,6 +124,10 @@ pub struct Witnesses {
     /// The measurement's start was not in the log's fold, so no such call was
     /// looked for.
     elsewhere_unread: bool,
+    /// Calls were looked for from a moment the index of questions asked does
+    /// not reach back to — before it began, or past its retention — so those
+    /// before this one were not.
+    elsewhere_unread_before: Option<String>,
 }
 
 /// A call a witness relayed while a measurement ran, and the run it named as
@@ -395,6 +402,15 @@ impl Witnesses {
         self
     }
 
+    /// Calls asked elsewhere were looked for, but what was read reaches back
+    /// only to `date`, short of where the run pinned they be read from: no
+    /// answer is an exchange, and the trace names the date.
+    #[must_use]
+    pub fn elsewhere_unread_before(mut self, date: impl Into<String>) -> Self {
+        self.elsewhere_unread_before = Some(date.into());
+        self
+    }
+
     /// When the measurement started is not known, so calls asked elsewhere
     /// during it could not be looked for: no answer is an exchange.
     #[must_use]
@@ -608,11 +624,21 @@ pub struct TracedAnswer {
     /// it answered in by, before it answered or beside it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_elsewhere: usize,
+    /// It is such an exchange, and witnessed calls on another prompt or model
+    /// asked its case's input this many times in runs other than its own —
+    /// counted, and denying nothing unless a gate's policy says so, since
+    /// traffic on other prompts asks what cases ask all the time.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asked_elsewhere_unpinned: usize,
     /// It would be such an exchange, but when the measurement started was not
     /// in the log's fold, so calls asked elsewhere during it were not looked
-    /// for.
+    /// for — or, with a date, those before it were not.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub elsewhere_unread: bool,
+    /// The moment before which calls asked elsewhere were not read, where
+    /// they were read from one after the moment the run pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elsewhere_unread_before: Option<String>,
     /// The credentials whose runs witnessed it, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnessed_by: Vec<String>,
@@ -809,10 +835,20 @@ pub struct GenerationTrace {
     /// ([`TracedAnswer::asked_elsewhere`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub asked_elsewhere: usize,
+    /// Exchanges whose cases' inputs witnessed calls on another prompt or
+    /// model asked in other runs ([`TracedAnswer::asked_elsewhere_unpinned`]):
+    /// exchanges all the same, unless a gate's policy denies them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asked_elsewhere_unpinned: usize,
     /// Answers that would be an exchange but for which calls asked elsewhere
-    /// were not looked for, the measurement's start not being in the fold.
+    /// were not looked for, the measurement's start not being in the fold —
+    /// or not before `elsewhere_unread_before`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub elsewhere_unread: usize,
+    /// Where calls asked elsewhere were read only from a moment after the one
+    /// the run pinned: that moment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elsewhere_unread_before: Option<String>,
     /// Answers whose serving runs were published under their own run's
     /// credential, which witnesses nothing: one token on two hosts.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -880,6 +916,14 @@ impl GenerationTrace {
             judged_unordered: rows.iter().filter(|row| row.judged_unordered).count(),
             asked_elsewhere: rows.iter().filter(|row| row.asked_elsewhere > 0).count(),
             elsewhere_unread: rows.iter().filter(|row| row.elsewhere_unread).count(),
+            asked_elsewhere_unpinned: rows
+                .iter()
+                .filter(|row| row.asked_elsewhere_unpinned > 0)
+                .count(),
+            elsewhere_unread_before: rows
+                .iter()
+                .filter_map(|row| row.elsewhere_unread_before.clone())
+                .max(),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
             witnesses: {
                 let mut witnesses: Vec<String> = rows
@@ -1045,17 +1089,24 @@ impl GenerationTrace {
         if self.asked_elsewhere > 0 {
             said.push(format!(
                 "{} of {} answers' cases were asked on the pinned prompt in other runs while this \
-                 measurement ran — replies the application could have seen before it answered, \
-                 and chosen the run it answered in by",
+                 measurement ran or before it, from when the run reads — replies the application \
+                 could have seen before it answered, and chosen the run it answered in by",
                 self.asked_elsewhere, self.answers
             ));
         }
         if self.elsewhere_unread > 0 {
-            said.push(format!(
-                "{} of {} answers could not be held to calls asked in other runs, because when \
-                 this measurement started is not in the log's fold",
-                self.elsewhere_unread, self.answers
-            ));
+            match &self.elsewhere_unread_before {
+                Some(date) => said.push(format!(
+                    "{} of {} answers could not be held to calls asked in other runs before {date}, \
+                     which the index of questions asked does not reach back to",
+                    self.elsewhere_unread, self.answers
+                )),
+                None => said.push(format!(
+                    "{} of {} answers could not be held to calls asked in other runs, because \
+                     when this measurement started is not in the log's fold",
+                    self.elsewhere_unread, self.answers
+                )),
+            }
         }
         said
     }
@@ -1860,11 +1911,13 @@ fn judged_as_pinned(
     }
 }
 
-/// How many calls witnesses relayed while the measurement ran, in runs other
-/// than `run_id` and than `alike` — the runs of cases asking the same — asked
-/// the case's whole input on the pinned prompt, or the judging prompt a pinned
-/// way of choosing names, of the pinned model where one is pinned: its text, or
-/// every text in it.
+/// How many calls witnesses relayed while the measurement ran — or from the
+/// moment the run pinned they be read from — in runs other than `run_id` and
+/// than `alike` (the runs of cases asking the same) asked the case's whole
+/// input: its text, or every text in it, as it was asked or normalised. The
+/// first count is of calls on the pinned prompt, or the judging prompt a pinned
+/// way of choosing names, of the pinned model where one is pinned; the second
+/// of every other such call — another prompt, another model, or none.
 fn asked_elsewhere(
     variant: &VariantManifest,
     witnesses: &Witnesses,
@@ -1872,57 +1925,55 @@ fn asked_elsewhere(
     run_id: &str,
     run: &TracedRun,
     alike: &std::collections::BTreeSet<&str>,
-) -> usize {
-    use aiwatcher_core::witness::{Said, asked_as, digest};
+) -> (usize, usize) {
+    use aiwatcher_core::witness::{Said, asked_as, digest, normalized};
     let (Some(pin), Some(input)) = (&variant.prompt, input) else {
-        return 0;
+        return (0, 0);
     };
     let judging = witnesses.chosen.as_ref().and_then(Choosing::judge_prompt);
-    witnesses
-        .elsewhere
-        .iter()
-        .filter(|elsewhere| {
-            elsewhere
-                .caller_run_id
-                .as_deref()
-                .is_none_or(|caller| caller != run_id && !alike.contains(caller))
-        })
-        .filter(|elsewhere| {
-            let call = &elsewhere.call;
-            let Some(witness) = call.published_by.as_deref() else {
-                return false;
-            };
-            let admitted = run
-                .published_by
-                .as_deref()
-                .is_some_and(|publisher| publisher != witness)
-                && witnesses.admits(witness);
-            let Some(key) = witnesses.keys.get(witness).filter(|_| admitted) else {
-                return false;
-            };
-            let on = |name: &str, version: &str| {
-                call.prompt_name.as_deref() == Some(name)
-                    && call.prompt_version.as_deref() == Some(version)
-            };
-            if call.prompt_verified != Some(true)
-                || !(on(&pin.name, &pin.version)
-                    || judging.is_some_and(|(name, version)| on(name, version)))
-                || variant
-                    .model
-                    .as_ref()
-                    .is_some_and(|model| call.model.as_deref() != Some(model.name.as_str()))
-            {
-                return false;
-            }
-            let holds = |text: &String| call.asked.contains(&digest(key, Said::Asked, text));
-            match asked_as(input).split_first() {
-                None => false,
-                Some((whole, parts)) => {
-                    holds(whole) || (!parts.is_empty() && parts.iter().all(holds))
-                }
-            }
-        })
-        .count()
+    let texts = asked_as(input);
+    let (mut pinned, mut unpinned) = (0, 0);
+    for elsewhere in witnesses.elsewhere.iter().filter(|elsewhere| {
+        elsewhere
+            .caller_run_id
+            .as_deref()
+            .is_none_or(|caller| caller != run_id && !alike.contains(caller))
+    }) {
+        let call = &elsewhere.call;
+        let Some(key) = witness_key(run, witnesses, call.published_by.as_deref()) else {
+            continue;
+        };
+        let holds = |text: &String| {
+            call.asked.contains(&digest(key, Said::Asked, text))
+                || call
+                    .asked_normalized
+                    .contains(&digest(key, Said::Asked, &normalized(text)))
+        };
+        let asked = match texts.split_first() {
+            None => false,
+            Some((whole, parts)) => holds(whole) || (!parts.is_empty() && parts.iter().all(holds)),
+        };
+        if !asked {
+            continue;
+        }
+        let on = |name: &str, version: &str| {
+            call.prompt_name.as_deref() == Some(name)
+                && call.prompt_version.as_deref() == Some(version)
+        };
+        if call.prompt_verified == Some(true)
+            && (on(&pin.name, &pin.version)
+                || judging.is_some_and(|(name, version)| on(name, version)))
+            && variant
+                .model
+                .as_ref()
+                .is_none_or(|model| call.model.as_deref() == Some(model.name.as_str()))
+        {
+            pinned += 1;
+        } else {
+            unpinned += 1;
+        }
+    }
+    (pinned, unpinned)
 }
 
 /// Hold each generated answer to the run it names.
@@ -1968,6 +2019,8 @@ pub fn trace_answers(
             chosen: false,
             asked_elsewhere: 0,
             elsewhere_unread: false,
+            asked_elsewhere_unpinned: 0,
+            elsewhere_unread_before: None,
             witnessed_by: Vec::new(),
             self_witnessed: false,
             served_models: Vec::new(),
@@ -2216,9 +2269,11 @@ pub fn trace_answers(
             // The same question asked in another run while the measurement ran:
             // the application could have chosen this run by what came back.
             if row.witnessed_exchange == Some(true) {
-                if witnesses.elsewhere_unread {
+                if witnesses.elsewhere_unread || witnesses.elsewhere_unread_before.is_some() {
                     row.witnessed_exchange = Some(false);
                     row.elsewhere_unread = true;
+                    row.elsewhere_unread_before
+                        .clone_from(&witnesses.elsewhere_unread_before);
                 } else {
                     let input = witnesses.inputs.get(&answer.case_id);
                     let alike: std::collections::BTreeSet<&str> = answers
@@ -2230,10 +2285,13 @@ pub fn trace_answers(
                         })
                         .filter_map(|other| other.run_id.as_deref())
                         .collect();
-                    let asked = asked_elsewhere(variant, witnesses, input, run_id, run, &alike);
+                    let (asked, unpinned) =
+                        asked_elsewhere(variant, witnesses, input, run_id, run, &alike);
                     if asked > 0 {
                         row.witnessed_exchange = Some(false);
                         row.asked_elsewhere = asked;
+                    } else {
+                        row.asked_elsewhere_unpinned = unpinned;
                     }
                 }
             }
@@ -2396,6 +2454,7 @@ mod tests {
             output_tokens: 3,
             cached_tokens: 0,
             asked: Vec::new(),
+            asked_normalized: Vec::new(),
             replied: Vec::new(),
             rendered: Vec::new(),
             placed: Vec::new(),
@@ -2476,6 +2535,8 @@ mod tests {
                 judged_unordered: 0,
                 asked_elsewhere: 0,
                 elsewhere_unread: 0,
+                asked_elsewhere_unpinned: 0,
+                elsewhere_unread_before: None,
                 self_witnessed: 0,
                 witnesses: Vec::new(),
                 served: Vec::new(),
@@ -4500,6 +4561,124 @@ mod tests {
                     .iter()
                     .any(|line| line.contains("no witnessed call relaying")),
             "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_case_asked_in_other_words_is_found_and_one_asked_on_another_prompt_is_only_counted() {
+        use aiwatcher_core::witness::{Said, digest, key_for, normalized};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let question = "What is the capital of France?";
+        let asked_as = |text: &str| digest(&key, Said::Asked, text);
+        let call = |replied: &str| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            prompt_exact: Some(true),
+            published_by: Some("gateway".to_owned()),
+            rendered: vec![digest(&key, Said::Replied, question)],
+            asked: vec![asked_as(question)],
+            replied: vec![digest(&key, Said::Replied, replied)],
+            started_ms: Some(1),
+            ..TracedCall::default()
+        };
+        let elsewhere = |call: TracedCall| CallElsewhere {
+            caller_run_id: Some("somewhere".to_owned()),
+            call: TracedCall {
+                replied: Vec::new(),
+                ..call
+            },
+        };
+        let traced = |witnesses: Witnesses| {
+            let runs = BTreeMap::from([(
+                "case".to_owned(),
+                TracedRun {
+                    served_for_it: vec![call("Paris")],
+                    ..run(vec![on_the_pins()])
+                },
+            )]);
+            let witnesses = witnesses
+                .keyed([("gateway".to_owned(), key)])
+                .asked(BTreeMap::from([(
+                    "case".to_owned(),
+                    serde_json::json!({"question": question}),
+                )]))
+                .pinned(Some(&serde_json::json!({})), None);
+            trace_answers(
+                &pins,
+                "variant",
+                "answers",
+                &[RecordedAnswer {
+                    answer: serde_json::json!("Paris"),
+                    ..answer("case", Some("case"))
+                }],
+                &runs,
+                None,
+                &witnesses,
+            )
+            .expect("nothing contradicts the pins")
+        };
+
+        let in_other_words = traced(Witnesses::named(Vec::new()).asked_elsewhere(vec![elsewhere(
+            TracedCall {
+                asked: vec![asked_as("WHAT is the capital of  France")],
+                asked_normalized: vec![asked_as(&normalized("WHAT is the capital of  France"))],
+                ..call("Lyon")
+            },
+        )]));
+        assert_eq!(
+            (
+                in_other_words[0].witnessed_exchange,
+                in_other_words[0].asked_elsewhere
+            ),
+            (Some(false), 1),
+            "the same question in another case and spacing is the same question asked"
+        );
+
+        let on_another_prompt = traced(Witnesses::named(Vec::new()).asked_elsewhere(vec![
+            elsewhere(TracedCall {
+                prompt_name: Some("chit-chat".to_owned()),
+                prompt_version: Some("c".repeat(64)),
+                ..call("Lyon")
+            }),
+            elsewhere(TracedCall {
+                prompt_name: None,
+                prompt_version: None,
+                prompt_verified: None,
+                ..call("Lyon")
+            }),
+        ]));
+        let trace = GenerationTrace::of(&on_another_prompt);
+        assert_eq!(
+            (
+                on_another_prompt[0].witnessed_exchange,
+                on_another_prompt[0].asked_elsewhere_unpinned,
+                trace.asked_elsewhere_unpinned
+            ),
+            (Some(true), 2, 1),
+            "on another prompt, or none, a case asked is counted and denies nothing"
+        );
+
+        let unread = traced(
+            Witnesses::named(Vec::new())
+                .asked_elsewhere(Vec::new())
+                .elsewhere_unread_before("2026-09-01T00:00:00Z"),
+        );
+        let trace = GenerationTrace::of(&unread);
+        assert_eq!(unread[0].witnessed_exchange, Some(false));
+        assert_eq!(
+            trace.elsewhere_unread_before.as_deref(),
+            Some("2026-09-01T00:00:00Z")
+        );
+        assert!(
+            trace.unwitnessed_answers().iter().any(|line| line.contains(
+                "calls asked in other runs before 2026-09-01T00:00:00Z, which the index"
+            )),
+            "{:?}",
+            trace.unwitnessed_answers()
         );
     }
 

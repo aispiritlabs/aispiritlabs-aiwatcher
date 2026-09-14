@@ -108,6 +108,10 @@ pub mod aiwatcher {
         /// The texts the request held: each message, and each value the
         /// named template was found rendered with.
         pub const ASKED: &str = "aiwatcher.witness.asked";
+        /// The same texts normalised (`witness::normalized`) before they were
+        /// digested: what finds a question asked again in another case,
+        /// spacing or punctuation.
+        pub const ASKED_NORMALIZED: &str = "aiwatcher.witness.asked_normalized";
         /// The texts the provider replied with.
         pub const REPLIED: &str = "aiwatcher.witness.replied";
         /// Each value the named template was found rendered with, digested as

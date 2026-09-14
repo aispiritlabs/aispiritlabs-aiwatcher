@@ -15,6 +15,7 @@
 //! write turns a crash into silent data loss; committing after turns it into a
 //! redelivery, which the deterministic span ids make harmless.
 
+pub mod asked;
 pub mod conversations;
 pub mod deadletter;
 pub mod dedup;
@@ -35,6 +36,7 @@ pub mod window;
 pub mod workflows;
 
 pub use aiwatcher_core::Comparability;
+pub use asked::{AskedCall, AskedIndex, AskedSince};
 pub use conversations::{ConversationFilter, ConversationPage, ConversationSummary};
 pub use deadletter::{FileDeadLetters, InMemoryDeadLetters};
 pub use dedup::Deduplicator;

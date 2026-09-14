@@ -517,6 +517,11 @@ pub struct Config {
     /// one process, and on its own in the `work` role, where it outlives the
     /// projector being down.
     pub observation_journal_days: Option<u64>,
+    /// How many days the index of what witnesses saw asked keeps a page — how
+    /// far back a scoring run can hold its answers to a case asked in another
+    /// run. Thirty unless a deployment says otherwise; `0` keeps every page.
+    /// Written by the projector, wherever there is an object store.
+    pub asked_index_days: u64,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
     /// pod is refused at registration naming this variable.
@@ -739,6 +744,7 @@ impl Default for Config {
             witness_digests: std::collections::BTreeMap::new(),
             observation_period: Duration::from_secs(300),
             observation_journal_days: None,
+            asked_index_days: 30,
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
@@ -1053,6 +1059,13 @@ impl Config {
                         expected: "a whole number of days, at least one; unset keeps no journal",
                     })?;
             config.observation_journal_days = Some(days);
+        }
+        if let Some(raw) = var("AIWATCHER_ASKED_INDEX_DAYS") {
+            config.asked_index_days = raw.parse::<u64>().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_ASKED_INDEX_DAYS",
+                value: raw,
+                expected: "a whole number of days; 0 keeps every page",
+            })?;
         }
         config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
         config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");

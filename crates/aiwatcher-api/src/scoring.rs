@@ -724,6 +724,7 @@ mod tests {
         let chosen = aiwatcher_evaluation::RunSettings {
             timeout_seconds: Some(600),
             concurrency: None,
+            asked_since_seconds: None,
         };
         assert_eq!(
             plan_for(&declared(chosen.clone(), false), "variant", false).steps[0].timeout_seconds,

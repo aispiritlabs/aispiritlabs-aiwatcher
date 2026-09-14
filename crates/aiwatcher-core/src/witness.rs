@@ -70,6 +70,41 @@ pub fn key_for(secret: &str) -> [u8; 32] {
     hmac(secret.as_bytes(), &[KEY_LABEL])
 }
 
+/// A text as a question asked in other words still reads: NFKC, lower case,
+/// every punctuation character (general category P) gone, and each run of
+/// white space (the Unicode `White_Space` property) one space, none at either
+/// end.
+///
+/// What a witness digests a second time beside what a request asked, so a case
+/// asked again in another case, another spacing or with its question mark gone
+/// is found where the text itself would not be. Byte for byte what the Python
+/// gateway and the TypeScript SDK compute, for every character the Unicode
+/// version each language ships assigns; a change here is a new digest, not a
+/// fix. A paraphrase is not found, by design: that would take the words.
+#[must_use]
+pub fn normalized(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
+    let folded = text.nfkc().collect::<String>().to_lowercase();
+    let mut out = String::with_capacity(folded.len());
+    let mut space = false;
+    for character in folded.chars() {
+        if character.general_category_group() == GeneralCategoryGroup::Punctuation {
+            continue;
+        }
+        if character.is_whitespace() {
+            space = !out.is_empty();
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        out.push(character);
+    }
+    out
+}
+
 /// The digest of one text on one side of a call, trimmed of surrounding
 /// whitespace first.
 #[must_use]
@@ -432,6 +467,45 @@ mod tests {
                 &canonical(&json!({"map": {"A": "Lima"}}))
             ),
             "3b1d627f22d3a4b86fcd29126042cd6e"
+        );
+    }
+
+    /// The vectors the Python gateway and the TypeScript SDK normalise alike.
+    #[test]
+    fn a_question_in_other_case_spacing_and_punctuation_normalises_to_one_text() {
+        for (text, normal) in [
+            (
+                "  What is the CAPITAL of France?  ",
+                "what is the capital of france",
+            ),
+            (
+                "\u{ff30}\u{ff41}\u{ff52}\u{ff49}\u{ff53}\u{ff0c}\u{3000}\u{ff26}\u{ff32}\u{ff21}\u{ff2e}\u{ff23}\u{ff25}\u{ff01}",
+                "paris france",
+            ),
+            (
+                "Don\u{2019}t\tstop\u{2014}e-mail\u{2026}\u{fb01}ne",
+                "dont stopemailfine",
+            ),
+            (
+                "\u{39f}\u{394}\u{39f}\u{3a3} \u{3a3}",
+                "\u{3bf}\u{3b4}\u{3bf}\u{3c2} \u{3c3}",
+            ),
+            ("\u{130}stanbul", "i\u{307}stanbul"),
+            (
+                "\u{a0}\u{bf}Qu\u{e9}\u{2003}pasa?\u{200b}",
+                "qu\u{e9} pasa\u{200b}",
+            ),
+        ] {
+            assert_eq!(normalized(text), normal, "{text:?}");
+        }
+        let key = key_for("serving-secret");
+        assert_eq!(
+            digest(
+                &key,
+                Said::Asked,
+                &normalized("  What is the CAPITAL of France?  ")
+            ),
+            digest(&key, Said::Asked, "what is the capital of france"),
         );
     }
 

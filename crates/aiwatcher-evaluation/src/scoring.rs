@@ -313,10 +313,14 @@ pub const MIN_RUN_TIMEOUT_SECONDS: u64 = 60;
 /// The most questions one run may put to a judge at once, whatever a
 /// deployment allows. A number past it is a mistake before it is a setting.
 pub const MAX_RUN_CONCURRENCY: u32 = 64;
+/// How far before its start a run may read the calls asked elsewhere its
+/// answers are held to, in seconds: ninety days, past any index's retention
+/// a deployment would keep.
+pub const MAX_ASKED_SINCE_SECONDS: u64 = 90 * 86_400;
 
 /// How a run is carried out, as opposed to what it measures.
 ///
-/// Neither setting reaches the manifest: a result measured in ten minutes and
+/// No setting reaches the manifest: a result measured in ten minutes and
 /// the same one measured in an hour are one measurement, and two contexts for
 /// them would make the second incomparable with the first for no reason. They
 /// are part of the declaration, because a declaration is the run and a retry
@@ -337,6 +341,15 @@ pub struct RunSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(minimum = 1, maximum = 64)]
     pub concurrency: Option<u32>,
+    /// How long before the run started a call asking a case's question counts
+    /// as asked elsewhere, in seconds — so an application that looked at the
+    /// cohort's cases before the measurement began is held to it. Absent is
+    /// from the run's start. What the index of questions asked does not reach
+    /// back to is named on the result with its date, and no answer is an
+    /// exchange then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(maximum = 7776000)]
+    pub asked_since_seconds: Option<u64>,
 }
 
 impl RunSettings {
@@ -360,6 +373,13 @@ impl RunSettings {
                 (1..=MAX_RUN_CONCURRENCY).contains(&count),
                 "run.settings.concurrency",
                 "is between 1 and 64 questions at once",
+            )?;
+        }
+        if let Some(seconds) = self.asked_since_seconds {
+            require(
+                seconds <= MAX_ASKED_SINCE_SECONDS,
+                "run.settings.asked_since_seconds",
+                "reaches at most ninety days before the run",
             )?;
         }
         Ok(())

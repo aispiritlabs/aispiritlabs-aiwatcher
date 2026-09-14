@@ -209,6 +209,7 @@ impl Fixture {
             evaluations: None,
             evaluation_bundles: None,
             observations: None,
+            asked: None,
             model_prices: None,
             witnesses: aiwatcher_evaluation::Witnesses::default(),
             answer_limits: Default::default(),

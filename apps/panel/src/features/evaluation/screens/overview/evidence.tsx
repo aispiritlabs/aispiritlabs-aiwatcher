@@ -549,12 +549,21 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
       ) : null}
       {traces.asked_elsewhere ? (
         <p className="text-danger">
-          {`${traces.asked_elsewhere} of ${traces.answers} had their case asked on the pinned prompt in other runs while the measurement ran — replies the application could have seen before it answered.`}
+          {`${traces.asked_elsewhere} of ${traces.answers} had their case asked on the pinned prompt in other runs while the measurement ran, or from as long before it as the run reads — replies the application could have seen before it answered.`}
+        </p>
+      ) : null}
+      {/* Counted, and an exchange all the same: traffic on other prompts asks
+          what cases ask. A gate's policy may deny them. */}
+      {traces.asked_elsewhere_unpinned ? (
+        <p>
+          {`${traces.asked_elsewhere_unpinned} of ${traces.answers} were exchanges whose case was also asked on another prompt or model in other runs.`}
         </p>
       ) : null}
       {traces.elsewhere_unread ? (
         <p className="text-danger">
-          {`${traces.elsewhere_unread} of ${traces.answers} could not be held to calls asked in other runs: when the measurement started is not in the log's fold.`}
+          {traces.elsewhere_unread_before
+            ? `${traces.elsewhere_unread} of ${traces.answers} could not be held to calls asked in other runs before ${traces.elsewhere_unread_before}, which the index of questions asked does not reach back to.`
+            : `${traces.elsewhere_unread} of ${traces.answers} could not be held to calls asked in other runs: when the measurement started is not in the log's fold.`}
         </p>
       ) : null}
       {traces.witnessed_input != null ? (

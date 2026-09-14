@@ -152,6 +152,12 @@ tower = "0.5.3"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+# A witness's second digest of what a request asked is of its text normalised
+# — NFKC, lower case, no punctuation, one space — and has to agree byte for
+# byte with Python's `unicodedata` and JavaScript's `normalize`. Both already in
+# the graph, and a normalisation table is not something to hand-roll.
+unicode-normalization = "0.1.25"
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "time"] }
 utoipa-axum = "0.2.0"
 url = "2.5.8"

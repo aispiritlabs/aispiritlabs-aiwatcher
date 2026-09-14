@@ -107,6 +107,9 @@ pub struct Outputs {
     /// What variants were observed doing, period by period, with a state of
     /// its own. `None` without an object store to write periods to.
     pub periods: Option<Arc<crate::period_fold::PeriodOutput>>,
+    /// What witnesses saw asked, call by call, kept in the object store past
+    /// the read model. `None` without an object store to keep it in.
+    pub asked: Option<Arc<crate::asked::AskedIndex>>,
 }
 
 impl std::fmt::Debug for Outputs {
@@ -190,6 +193,21 @@ where
             }
             None => None,
         };
+        // So does the index of what was asked, which writes its calls a
+        // minute at a time.
+        let asked = match &self.outputs.asked {
+            Some(asked) => {
+                asked
+                    .reads_contiguous_positions(self.source.positions_are_contiguous())
+                    .await;
+                asked.load().await
+            }
+            None => None,
+        };
+        let folded = match (folded, asked) {
+            (Some(folded), Some(asked)) => Some(folded.min(asked)),
+            (folded, asked) => folded.or(asked),
+        };
         let from = if self.config.rebuild_on_start {
             StartFrom::Beginning
         } else {
@@ -238,6 +256,9 @@ where
                     self.flush(&mut pending).await;
                     if let Some(periods) = &self.outputs.periods {
                         periods.flush(true).await;
+                    }
+                    if let Some(asked) = &self.outputs.asked {
+                        asked.flush(true).await;
                     }
                     return Ok(());
                 }
@@ -328,6 +349,9 @@ where
         if let Some(periods) = &self.outputs.periods {
             periods.apply(event).await;
         }
+        if let Some(asked) = &self.outputs.asked {
+            asked.apply(event).await;
+        }
 
         let assembled = self.assembler.lock().await.ingest(event);
         pending.spans.extend(assembled.spans);
@@ -395,6 +419,13 @@ where
             Some(periods) => periods.flush(false).await,
             None => true,
         };
+        // So does a page of the asked index: its calls stay in memory, and a
+        // restart before they are written reads their events again.
+        let periods_written = periods_written
+            && match &self.outputs.asked {
+                Some(asked) => asked.flush(false).await,
+                None => true,
+            };
 
         // Commit last, and only if the durable write went through. A failed
         // span write leaves the checkpoint where it was, so a restart replays
