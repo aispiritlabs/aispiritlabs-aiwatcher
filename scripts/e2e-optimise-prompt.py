@@ -8,9 +8,9 @@
 # ///
 """One managed run optimises a prompt, evaluates it, and asks an admin (AW-5).
 
-Phase 15's exit: an optimise → evaluate → promote definition runs end to end
-with the verdict computed on the server. Every piece existed before; what this
-proves is that they know about each other. The workflow is
+An optimise → evaluate → promote definition runs end to end with the verdict
+computed on the server, as ADR_0011 requires. Every piece existed before; what
+this proves is that they know about each other. The workflow is
 
     evaluate_baseline ─┐
     optimise ──────────┼─► evaluate_candidate ─► record ─► promote

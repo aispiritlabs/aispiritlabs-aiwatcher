@@ -157,12 +157,12 @@ def pick_artifact(
     """Which artifact the loader starts from.
 
     ``entry_point`` first, and it is read as *a name in this package* — the
-    artifact's own name, or the last segment of its URI. That is the answer to
-    the question plan.md asked of this profile: free text is enough to act on
-    exactly when it names something the package contains, and a value that
-    names nothing is a refusal rather than a guess. A package with one file
-    needs no entry point; one with several and no entry point has to say which,
-    because picking for it is how a server loads the tokeniser as the graph.
+    artifact's own name, or the last segment of its URI. Free text is enough to
+    act on exactly when it names something the package contains, and a value
+    that names nothing is a refusal rather than a guess (ADR_0023). A package
+    with one file needs no entry point; one with several and no entry point has
+    to say which, because picking for it is how a server loads the tokeniser as
+    the graph.
     """
     artifacts: Sequence[Mapping[str, Any]] = package.get("artifacts") or []
     if not artifacts:
@@ -202,7 +202,8 @@ class OnceReader:
     loader that parses them and the digest that names them — and a fetch is
     about to stop being a file read. Scoped to one load, so there is no
     eviction policy to get wrong: the long-lived cache keyed by the immutable
-    version is a separate item in plan.md, with a directory and a bound.
+    version is :class:`~aiwatcher_sdk.serving.artifact.VersionCacheReader`, with
+    a directory and a bound.
     """
 
     def __init__(self, inner: ArtifactReader) -> None:

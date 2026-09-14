@@ -434,7 +434,7 @@ fn an_answered_step_is_not_cached() {
 
 #[test]
 fn a_parked_attempt_with_a_deadline_gets_a_timer_row() {
-    // The kickoff said this might follow for free. The scheduling half does:
+    // This might be expected to follow for free. The scheduling half does:
     // the row is derived from `InputRequested` carrying a deadline, and a
     // worker's park emits the same fact.
     let state = running();

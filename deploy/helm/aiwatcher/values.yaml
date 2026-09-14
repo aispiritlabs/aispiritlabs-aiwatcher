@@ -371,8 +371,8 @@ scorers:
   replicas: 1
 
   # Measured at 174 MiB resident with both frameworks imported and 280 MiB with
-  # their graded metrics' model clients loaded too (plan section 30). The
-  # limit is headroom for a batch of cases, whose model calls hold replies.
+  # their graded metrics' model clients loaded too. The limit is headroom for a
+  # batch of cases, whose model calls hold replies.
   resources:
     requests: { cpu: 100m, memory: 384Mi }
     limits: { memory: 1Gi }
@@ -445,7 +445,8 @@ execution:
   # `query.timeoutSeconds` says otherwise.
   queryStepTimeoutSeconds: 300
 
-  # Whether to run the API and the worker as two Deployments (section 27).
+  # Whether to run the binary's two roles — `serve`, the API, and `work`, the
+  # outbox and the reactors — as two Deployments (ADR_0025).
   #
   # Off is not a lesser configuration — `both` is one process holding both
   # halves, and it is what `just run` and every development install are. The

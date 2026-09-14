@@ -181,9 +181,9 @@ def test_a_message_written_through_this_store_comes_back_as_the_caller_s_own_typ
 
 
 def test_the_words_go_to_the_payload_store_and_the_stream_carries_a_reference() -> None:
-    # Section 40.4. Every hop in an agent graph carries text, and it is
-    # conversation content: the stream gets a reference, a plaintext digest and
-    # a size, and never the words.
+    # Every hop in an agent graph carries text, and it is conversation content
+    # (ADR_0021): the stream gets a reference, a plaintext digest and a size,
+    # and never the words.
     server = Server()
     payloads = MemoryPayloadStore()
     subject = store(server, payloads)
@@ -256,8 +256,9 @@ def test_a_run_somebody_else_is_deciding_is_not_a_conflict_to_retry() -> None:
 
 
 def test_a_repeated_batch_is_one_append_because_its_key_names_its_messages() -> None:
-    # Section 43.10, and the kickoff's first trap. A key derived from the
-    # execution alone would make the second batch a redelivery of the first.
+    # A derived key names everything that tells two appends apart. One derived
+    # from the execution alone would make the second batch a redelivery of the
+    # first.
     server = Server()
     subject = store(server)
     subject.append_to_stream(EXECUTION, (turn("m-1"),), expected_version=0)

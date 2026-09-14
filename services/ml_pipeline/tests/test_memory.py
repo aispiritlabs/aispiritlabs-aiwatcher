@@ -1,7 +1,7 @@
 """The three answers, and why each one is what it is.
 
-Section 15.4 at the second runtime. A reactor asks after a timeout it did not
-expect, and what it does next is decided entirely by which of these it gets:
+A reactor asks the notebook runtime after a timeout it did not expect, and
+what it does next is decided entirely by which of these it gets:
 `running` means wait, `done` means go and read the receipt, `absent` means the
 work is safe to do again.
 """

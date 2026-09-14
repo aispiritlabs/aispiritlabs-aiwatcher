@@ -67,8 +67,9 @@ anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 # The work role's one outbound client: the Flow query service, whose address is
-# configuration. `aiwatcher-runner` holds its own for the same reason — this
-# crate is where a reactor lives (section 27).
+# configuration. `aiwatcher-runner` holds its own for the same reason — a client
+# that holds a socket and a credential lives beside the reactor that uses it, in
+# this crate, and never in the API's (ADR_0025).
 reqwest.workspace = true
 serde.workspace = true
 sha2.workspace = true

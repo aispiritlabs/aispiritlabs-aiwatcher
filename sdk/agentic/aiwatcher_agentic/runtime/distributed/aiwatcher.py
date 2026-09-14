@@ -29,10 +29,12 @@ message id is the `Idempotency-Key`, a message sent twice is one run.
 ## The words
 
 The message goes to a payload store; the run is handed a reference, a digest and
-a size — §40.4's `external` policy, the join's rule. The store is a directory
-under `AIWATCHER_PAYLOAD_ROOT` unless one is given, and every process that reads
-a hop has to be able to open it: workers on one machine share it as it is,
-workers on several need a shared volume.
+a size, and never the words. A hop's text is conversation content, which never
+rides the stream or the log (ADR_0021): under the `external` policy it stays
+where the worker keeps it, as it does for the durable join. The store is a
+directory under `AIWATCHER_PAYLOAD_ROOT` unless one is given, and every process
+that reads a hop has to be able to open it: workers on one machine share it as
+it is, workers on several need a shared volume.
 
 ## A reply
 
@@ -214,7 +216,7 @@ class AiwatcherTransport:
         return f"{self._prefix}.{resolved}"
 
     def queue_for(self, agent: str) -> str:
-        """The queue *agent*'s workers claim — §40.6: the target agent."""
+        """The queue *agent*'s workers claim: a hop waits on its target's queue."""
         return self.workflow_name(agent)
 
     def reply_address(self, name: str) -> str:

@@ -157,8 +157,8 @@ def create_app(config: Config | None = None) -> Starlette:
         name = _named(body)
         # A managed run pins a revision and gets exactly that; the panel's
         # editor test sends none and gets the head, which is the unsaved code
-        # somebody is looking at. Section 16.3's `ad_hoc`, expressed as an
-        # absent field rather than a flag that could disagree with it.
+        # somebody is looking at. Which of the two a run was is the absence of
+        # the field, rather than a flag that could disagree with it.
         revision = _revision(body)
         notebook = (
             directory.get_revision(name, revision)

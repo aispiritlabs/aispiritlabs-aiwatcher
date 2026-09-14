@@ -1,7 +1,8 @@
 {{- if .Values.execution.splitRoles }}
 {{- $fullname := include "aiwatcher.fullname" . -}}
 {{- /*
-Section 27's other half.
+The `work` role, as a Deployment of its own when `execution.splitRoles` runs
+the binary as two processes (ADR_0025).
 
 `serve` holds the API, the read model and the object store; `work` holds the
 outbox and the reactors, and is the only role that opens a socket to Flow, a

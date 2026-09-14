@@ -8,19 +8,25 @@ Two rules, both about the same thing: a comment explains the code beside it.
      carry structure rather than argument. Anything longer is an essay, and an
      essay about a decision belongs in docs/ADR/.
 
-  2. No references to plan.md sections, phases or review ids. They point at
+  2. No references to a plan's sections, phases or review ids. They point at
      moving documents a reader of the code cannot open, and they rot silently
      — the document is edited, the comment is not, and nobody finds out. Say
      the rule the section decided, and cite an ADR when one decided it.
+
+Python gets the second rule and not the first: a module docstring is where this
+repository explains a module, and its length is the house style there.
 
 Usage: scripts/lint-comments.py [--list]
 """
 
 from __future__ import annotations
 
+import ast
+import io
 import re
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 MAX_LINES = 25
@@ -33,6 +39,9 @@ MARKERS = {
     ".ts": ("/**", "*/", "*", "//"),
     ".tsx": ("/**", "*/", "*", "//"),
 }
+# Checked for stale references only. Neither a docstring nor a comment is marked
+# on every line, so these are found by parsing rather than by a leading marker.
+PROSE_ONLY = (".py",)
 SKIP = ("apps/panel/src/api/generated/", "routeTree.gen.ts")
 ROT = re.compile(
     r"(?:[Ss]ection|§)\s*[0-9]+(?:\.[0-9]+)*"
@@ -76,8 +85,34 @@ def blocks(lines: list[str], markers: tuple[str, ...]):
         yield kind, start, count
 
 
+def python_prose_lines(source: str) -> set[int]:
+    """The line numbers of a Python file's comments and docstrings.
+
+    A docstring's middle lines start with prose rather than a marker, so the
+    tree says where each one is; a `#` comment comes from the tokenizer, which
+    also keeps a `#` inside a string from reading as one.
+    """
+    lines = {
+        token.start[0]
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        if token.type == tokenize.COMMENT
+    }
+    owners = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, owners) or not node.body:
+            continue
+        first = node.body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            lines.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+    return lines
+
+
 def tracked_files() -> list[Path]:
-    globs = [f"*{suffix}" for suffix in MARKERS]
+    globs = [f"*{suffix}" for suffix in (*MARKERS, *PROSE_ONLY)]
     out = subprocess.run(
         ["git", "ls-files", *globs], capture_output=True, text=True, check=True
     ).stdout
@@ -94,10 +129,24 @@ def main() -> int:
     listing = "--list" in sys.argv
     long_blocks: list[tuple[Path, int, str, int]] = []
     refs: list[tuple[Path, int, str]] = []
+    unparsed: list[tuple[Path, str]] = []
 
     for path in tracked_files():
+        source = path.read_text(encoding="utf-8", errors="replace")
+        lines = source.splitlines()
+        if path.suffix in PROSE_ONLY:
+            try:
+                prose = python_prose_lines(source)
+            except (SyntaxError, tokenize.TokenError) as error:
+                # Skipping it would pass a file nobody checked, which reads as
+                # one that was clean.
+                unparsed.append((path, str(error)))
+                continue
+            for number in sorted(prose):
+                if ROT.search(lines[number - 1]):
+                    refs.append((path, number, lines[number - 1].strip()))
+            continue
         markers = MARKERS[path.suffix]
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         for kind, start, count in blocks(lines, markers):
             if count > MAX_LINES:
                 long_blocks.append((path, start, kind, count))
@@ -106,6 +155,14 @@ def main() -> int:
                 refs.append((path, number, line.strip()))
 
     failed = False
+
+    if unparsed:
+        failed = True
+        version = ".".join(str(part) for part in sys.version_info[:2])
+        print(f"Python files that {version} cannot parse:", file=sys.stderr)
+        for path, reason in unparsed:
+            print(f"  {path}  {reason}", file=sys.stderr)
+        print(file=sys.stderr)
 
     if long_blocks:
         failed = True
@@ -122,7 +179,7 @@ def main() -> int:
     if refs:
         failed = True
         print(
-            f"{len(refs)} reference(s) to plan.md sections, phases or reviews:",
+            f"{len(refs)} reference(s) to a plan's sections, phases or reviews:",
             file=sys.stderr,
         )
         print(

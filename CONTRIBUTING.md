@@ -108,7 +108,7 @@ decided it.
 
 `scripts/lint-comments.py` runs in `just check` and enforces both, for Rust,
 PHP and the panel: no comment block over 25 lines of prose, and no stale
-references at all.
+references at all. Python's comments and docstrings get the second rule.
 
 ```rust
 //! One time window, shared by every list.

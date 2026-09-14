@@ -786,7 +786,7 @@ def test_invalid_settlement_never_repeats_or_contradicts_a_report(reply: dict[st
 
 
 def test_a_task_that_asks_parks_the_attempt_instead_of_failing_it() -> None:
-    """The whole of §41's protocol change, from the worker's end.
+    """Stopping to ask is a third report, ``parked``, seen from the worker's end.
 
     A capability hook that wants a tool call approved raises out of the task.
     That is neither a result nor a failure, and reporting it as either would be

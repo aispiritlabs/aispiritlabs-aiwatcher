@@ -22,9 +22,10 @@ runtime expects, and it lives with that runtime.
 ## Where the words go
 
 The reply is a completion, and a completion is conversation content. It goes to
-a `PayloadStore` under §40.4's `external` policy, and the step's result — which
-lands on the execution's stream and in its projection — carries the reference,
-a digest and a size. The same rule the durable join keeps for a hop.
+a `PayloadStore` under the `external` policy, which keeps the words where the
+worker put them, and the step's result — which lands on the execution's stream
+and in its projection — carries the reference, a digest and a size. The same
+rule the durable join keeps for a hop.
 
 ## What a turn is for: training data
 

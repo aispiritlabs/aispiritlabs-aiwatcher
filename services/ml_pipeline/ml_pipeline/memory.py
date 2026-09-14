@@ -1,6 +1,6 @@
 """What this service remembers about a managed step: that it ran. Never the rows.
 
-Section 15.4 of `docs/PIPELINE_ARCHITECTURE.md`, arriving at the second runtime.
+The same lookup the query service answers, arriving at the second runtime.
 A reactor's timeout says the caller stopped waiting and nothing about whether
 this service stopped working, so before it runs the same key again it asks.
 Three answers, and each sends the reactor somewhere different:

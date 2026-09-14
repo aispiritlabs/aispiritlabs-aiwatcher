@@ -323,10 +323,10 @@ outside: {{ $host }}
 {{/*
 Everything both roles put in the environment.
 
-Section 27 splits this binary in two — `serve` holds the API and the read
-model, `work` holds the outbox and the reactors — and they are the *same
-binary reading the same configuration*: the same store, the same log, the same
-object store, the same identity provider. So the environment is written once
+`execution.splitRoles` runs this binary as two processes (ADR_0025) — `serve`
+holds the API and the read model, `work` holds the outbox and the reactors —
+and they are the *same binary reading the same configuration*: the same store,
+the same log, the same object store, the same identity provider. So the environment is written once
 and rendered twice, and the two things that differ are rendered beside each
 call: `AIWATCHER_ROLE`, and the listen address the work role has no use for
 because it opens no socket.

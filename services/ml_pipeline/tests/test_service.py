@@ -331,7 +331,7 @@ def test_a_run_that_pins_a_revision_executes_that_source_after_the_head_moved(
 
 
 def test_a_run_that_pins_nothing_gets_the_head_somebody_is_editing(scratch: Config) -> None:
-    """The editor's own path, section 16.3's `ad_hoc`.
+    """The editor's own path: unsaved code, run without pinning a revision.
 
     Expressed as an absent field rather than a flag, so there is no way for the
     flag and the revision to disagree.

@@ -1,10 +1,10 @@
 """``Runtime::Onnx`` — a serialized graph read by one interpreter.
 
-The second profile, and the one plan.md sequenced first among the real ones:
-a fixed operator set, no packaged code, and the loader most deployments
-actually want. What it adds over :mod:`~aiwatcher_sdk.serving.runtimes.weights`
-is not a bigger model — it is a graph that **declares its own shapes**, and
-that changes what a package is for.
+The second profile, and the first of the real ones (ADR_0023): a fixed
+operator set, no packaged code, and the loader most deployments actually want.
+What it adds over :mod:`~aiwatcher_sdk.serving.runtimes.weights` is not a
+bigger model — it is a graph that **declares its own shapes**, and that changes
+what a package is for.
 
 Everywhere else in this system a declaration is the source: a workflow's
 topology is what the producer said, a licence is what a human recorded, a
@@ -25,7 +25,7 @@ other check in this profile compares bytes against a digest somebody wrote
 down; this one compares two independent descriptions of the same thing, and it
 is the only place in the chain where the model itself gets a vote.
 
-What the profile learned about the two free-text fields plan.md asked about:
+What the profile learned about the package's two free-text fields:
 
 ``entry_point``   enough to act on, and only because it is read as *a name in
                   this package* — an artifact's name or the last segment of its
