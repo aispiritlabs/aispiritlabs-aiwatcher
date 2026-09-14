@@ -110,6 +110,32 @@ promptStore:
     accessKeyKey: RUSTFS_ACCESS_KEY
     secretKeyKey: RUSTFS_SECRET_KEY
 
+# ── Treść rozmów ─────────────────────────────────────────────────────────────
+#
+# planner's chat writes what was asked and what was answered here, with the run
+# and the call they belong to, so a trace can show an answer instead of only
+# counting its tokens. It is on in this environment and off everywhere else,
+# because it holds somebody's words and that is a decision per deployment.
+#
+# `open` rather than `protected`: planner's producer sends a consent record and
+# a retention with every turn, and the one thing it has no hook for yet is
+# redaction. Under `protected` that missing record would refuse the write and
+# the archive would stay empty; under `open` the gap is recorded and every
+# export excludes those turns by name.
+#
+# The key lives in a Secret this chart never generates — see
+# docs/INSTALL.md and ADR_0021. Create it once, keep it, and remember that
+# deleting it is how the content is destroyed on purpose:
+#
+#   kubectl -n planner create secret generic aiwatcher-conversation-keys \
+#     --from-literal=keys="k1:$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
+conversationArchive:
+  enabled: true
+  keysSecret:
+    name: aiwatcher-conversation-keys
+    key: keys
+  policy: open
+
 # ── Managed execution ────────────────────────────────────────────────────────
 #
 # This is the half of planner's import that lives on aiwatcher's side. Every
