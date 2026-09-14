@@ -1213,6 +1213,11 @@ impl ActivityExecutor for TracesExecutor {
                 .map(|execution| execution.summary.started_at);
             let before = i64::try_from(declared.run.settings.asked_since_seconds.unwrap_or(0))
                 .unwrap_or(i64::MAX);
+            // How far back they were looked for is on every row, so the score
+            // step's own reading of the table says it too — and a gate's policy
+            // may hold the result to it.
+            let witnesses =
+                witnesses.asked_since(declared.run.settings.asked_since_seconds.unwrap_or(0));
             match &self.asked {
                 Some(index) => {
                     // To the millisecond: a question asked a moment before
@@ -1306,11 +1311,17 @@ impl ActivityExecutor for TracesExecutor {
             ))
         })?;
         // Of the runs not on the log, which a client counted and lost and which
-        // no client opened for this result.
-        let counted: Vec<aiwatcher_evaluation::RunsCounted> = self
-            .read_model
-            .measured_runs(&declared.run.evaluation_id)
-            .await
+        // no client opened for this result — from the asked index, which keeps
+        // the counts across a restart, and from the read model without one.
+        let counts = match &self.asked {
+            Some(asked) => asked.measured_runs(&declared.run.evaluation_id).await,
+            None => {
+                self.read_model
+                    .measured_runs(&declared.run.evaluation_id)
+                    .await
+            }
+        };
+        let counted: Vec<aiwatcher_evaluation::RunsCounted> = counts
             .into_iter()
             .map(|count| aiwatcher_evaluation::RunsCounted {
                 client: count.client,

@@ -85,7 +85,13 @@ def run() -> dict[str, Any]:
     }
 
 
-def gate(tmp_path: Path, *, admitted: bool = True) -> tuple[Outcome, list[tuple[str, str, Any]]]:
+def gate(
+    tmp_path: Path,
+    *,
+    admitted: bool = True,
+    policy: dict[str, Any] | None = None,
+    declared: dict[str, Any] | None = None,
+) -> tuple[Outcome, list[tuple[str, str, Any]]]:
     seen, transport = server(admitted=admitted)
     recording = tmp_path / "answers.json"
     recording.write_text(
@@ -100,9 +106,9 @@ def gate(tmp_path: Path, *, admitted: bool = True) -> tuple[Outcome, list[tuple[
     ) as registry:
         outcome = run_gate(
             registry,
-            run(),
+            declared or run(),
             baseline="answers-main",
-            policy={"critical_cases": ["capital-kenya"]},
+            policy=policy or {"critical_cases": ["capital-kenya"]},
             artifacts={"generation_config": config},
             recording=recording,
             staged=[weights],
@@ -153,3 +159,16 @@ def test_a_variant_nothing_admits_is_an_error_that_names_the_line(tmp_path: Path
     assert outcome.verdict == "error"
     assert outcome.exit_code == 3
     assert "evaluation-approval-lines" in outcome.reasons[0]
+
+
+def test_a_policy_holding_results_to_a_lookback_declares_the_run_with_at_least_as_much(
+    tmp_path: Path,
+) -> None:
+    declared = run() | {"settings": {"asked_since_seconds": 60, "timeout_seconds": 600}}
+    _, seen = gate(
+        tmp_path,
+        policy={"require_witnessed_answer": True, "asked_since_seconds": 3600},
+        declared=declared,
+    )
+    [body] = [body for method, path, body in seen if path == "/api/v1/evaluation-runs"]
+    assert body["settings"] == {"asked_since_seconds": 3600, "timeout_seconds": 600}

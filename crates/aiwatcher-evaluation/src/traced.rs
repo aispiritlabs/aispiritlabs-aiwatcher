@@ -134,6 +134,9 @@ pub struct Witnesses {
     /// not reach back to — before it began, or past its retention — so those
     /// before this one were not.
     elsewhere_unread_before: Option<String>,
+    /// How long before the measurement's start calls asked elsewhere were
+    /// looked for, in seconds.
+    asked_since_seconds: Option<u64>,
 }
 
 /// A call a witness relayed while a measurement ran, and the run it named as
@@ -408,6 +411,14 @@ impl Witnesses {
         self
     }
 
+    /// Calls asked elsewhere were looked for from this many seconds before the
+    /// measurement started, which a gate's policy may hold a result to.
+    #[must_use]
+    pub fn asked_since(mut self, seconds: u64) -> Self {
+        self.asked_since_seconds = Some(seconds);
+        self
+    }
+
     /// Calls asked elsewhere were looked for, but what was read reaches back
     /// only to `date`, short of where the run pinned they be read from: no
     /// answer is an exchange, and the trace names the date.
@@ -658,6 +669,11 @@ pub struct TracedAnswer {
     /// they were read from one after the moment the run pinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elsewhere_unread_before: Option<String>,
+    /// How long before the measurement's start calls asked elsewhere were
+    /// looked for, in seconds; absent where none were, the variant pinning no
+    /// prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_since_seconds: Option<u64>,
     /// The credentials whose runs witnessed it, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnessed_by: Vec<String>,
@@ -877,6 +893,12 @@ pub struct GenerationTrace {
     /// the run pinned: that moment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elsewhere_unread_before: Option<String>,
+    /// How long before the measurement's start the step read calls asked
+    /// elsewhere from, in seconds — `0` from the start itself; absent where it
+    /// read none, the variant pinning no prompt. What a gate's
+    /// `asked_since_seconds` holds a result to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_since_seconds: Option<u64>,
     /// Answers whose serving runs were published under their own run's
     /// credential, which witnesses nothing: one token on two hosts.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -961,6 +983,7 @@ impl GenerationTrace {
                 .iter()
                 .filter_map(|row| row.elsewhere_unread_before.clone())
                 .max(),
+            asked_since_seconds: rows.iter().filter_map(|row| row.asked_since_seconds).min(),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
             witnesses: {
                 let mut witnesses: Vec<String> = rows
@@ -1062,6 +1085,24 @@ impl GenerationTrace {
             }
         }
         said
+    }
+
+    /// Why calls asked elsewhere were not read from as long before the
+    /// measurement as `wanted` seconds, in words; `None` where they were.
+    #[must_use]
+    pub fn asked_since_short_of(&self, wanted: u64) -> Option<String> {
+        match self.asked_since_seconds {
+            Some(read) if read >= wanted => None,
+            Some(read) => Some(format!(
+                "calls asked elsewhere were read from {read} s before the measurement started, \
+                 not the {wanted} s wanted: a case asked in between was not looked for"
+            )),
+            None => Some(format!(
+                "the result records no lookback for calls asked elsewhere — the variant pinning \
+                 no prompt, none was looked for, or it was measured before a result recorded \
+                 one — so none was from {wanted} s before the measurement started"
+            )),
+        }
     }
 
     /// Whether every answer is a reply a witness relayed, to a request that
@@ -2075,6 +2116,10 @@ pub fn trace_answers(
             elsewhere_unread: false,
             asked_elsewhere_unpinned: 0,
             elsewhere_unread_before: None,
+            asked_since_seconds: variant
+                .prompt
+                .as_ref()
+                .map(|_| witnesses.asked_since_seconds.unwrap_or(0)),
             witnessed_by: Vec::new(),
             self_witnessed: false,
             served_models: Vec::new(),
@@ -2640,12 +2685,47 @@ mod tests {
                 elsewhere_unread: 0,
                 asked_elsewhere_unpinned: 0,
                 elsewhere_unread_before: None,
+                asked_since_seconds: Some(0),
                 self_witnessed: 0,
                 witnesses: Vec::new(),
                 served: Vec::new(),
             }
         );
         assert!(!trace.complete());
+        assert_eq!(
+            trace.asked_since_short_of(0),
+            None,
+            "a variant pinning a prompt looked from the start"
+        );
+        let looked = GenerationTrace::of(
+            &trace_answers(
+                &variant(),
+                "variant",
+                "answers",
+                &answers,
+                &runs,
+                None,
+                &Witnesses::default().asked_since(600),
+            )
+            .expect("nothing contradicts the pins"),
+        );
+        assert_eq!(looked.asked_since_short_of(600), None);
+        assert!(
+            looked
+                .asked_since_short_of(3_600)
+                .is_some_and(|reason| reason.contains("from 600 s")),
+            "ten minutes back is short of an hour"
+        );
+        let unlooked = GenerationTrace {
+            asked_since_seconds: None,
+            ..trace.clone()
+        };
+        assert!(
+            unlooked
+                .asked_since_short_of(0)
+                .is_some_and(|reason| reason.contains("pinning no prompt")),
+            "a result that looked for nothing asked elsewhere holds no lookback at all"
+        );
         assert_eq!(
             rows[1].models,
             [

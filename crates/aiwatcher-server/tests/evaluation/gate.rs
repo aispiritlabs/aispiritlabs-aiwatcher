@@ -287,3 +287,43 @@ async fn a_policy_requiring_witnessed_answers_holds_a_result_no_witness_relayed_
         decision.reasons
     );
 }
+
+#[tokio::test]
+async fn a_policy_asking_for_a_lookback_beside_no_witnessed_answer_is_refused_by_name() {
+    let registry = registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    );
+    let refused = registry
+        .gate(
+            "candidate-run",
+            "baseline-run",
+            &GatePolicy {
+                asked_since_seconds: Some(3_600),
+                ..GatePolicy::default()
+            },
+            "ci",
+            3000,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("policy.asked_since_seconds"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_policy_asking_for_a_lookback_holds_a_result_no_trace_was_read_for_incomplete() {
+    let decision = gated(
+        &[Some(1.0), Some(0.0)],
+        &[Some(1.0), Some(1.0)],
+        GatePolicy {
+            require_witnessed_answer: true,
+            asked_since_seconds: Some(3_600),
+            ..GatePolicy::default()
+        },
+    )
+    .await;
+    assert_eq!(decision.verdict, GateVerdict::Incomplete);
+}

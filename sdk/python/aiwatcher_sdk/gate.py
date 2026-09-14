@@ -115,6 +115,13 @@ def run_gate(
     if recording is not None:
         answers = json.loads(recording.read_bytes())
         run["answers"] = registry.stage_recording(recording.name, answers["answers"])
+    # A policy holding results to a lookback declares the run with at least as
+    # much, so the run it starts reads what the gate will ask it to have read.
+    if (lookback := policy.get("asked_since_seconds")) is not None:
+        settings = run.setdefault("settings", {})
+        settings["asked_since_seconds"] = max(
+            int(settings.get("asked_since_seconds") or 0), int(lookback)
+        )
 
     try:
         view = registry.declare_scoring_run(run)  # type: ignore[arg-type]

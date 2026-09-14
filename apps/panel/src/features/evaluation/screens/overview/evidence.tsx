@@ -566,6 +566,11 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.asked_elsewhere_unpinned} of ${traces.answers} were exchanges whose case was also asked on another prompt or model in other runs.`}
         </p>
       ) : null}
+      {traces.asked_since_seconds ? (
+        <p>
+          {`Calls asked in other runs were looked for from ${traces.asked_since_seconds} s before the measurement started.`}
+        </p>
+      ) : null}
       {traces.elsewhere_unread ? (
         <p className="text-danger">
           {traces.elsewhere_unread_before

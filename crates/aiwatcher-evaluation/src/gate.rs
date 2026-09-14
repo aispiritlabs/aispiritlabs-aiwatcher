@@ -69,6 +69,13 @@ pub struct GatePolicy {
     /// production traffic on other prompts asks what cases ask all the time.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub asked_elsewhere_unpinned_denies: bool,
+    /// Beside `require_witnessed_answer`: calls asked elsewhere must have been
+    /// read from at least this many seconds before the measurement started,
+    /// whatever the run declared, or the result is `incomplete`. A pipeline
+    /// that sets it declares its runs with at least as much
+    /// (`settings.asked_since_seconds`); `aiwatcher-gate` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_since_seconds: Option<u64>,
 }
 
 impl GatePolicy {
@@ -78,6 +85,18 @@ impl GatePolicy {
                 tolerance.is_finite() && *tolerance >= 0.0,
                 &format!("policy.tolerance.{metric}"),
                 "must be a finite amount, nought or more",
+            )?;
+        }
+        if let Some(seconds) = self.asked_since_seconds {
+            require(
+                self.require_witnessed_answer,
+                "policy.asked_since_seconds",
+                "holds a result only beside require_witnessed_answer",
+            )?;
+            require(
+                seconds <= crate::scoring::MAX_ASKED_SINCE_SECONDS,
+                "policy.asked_since_seconds",
+                "reaches at most ninety days before the run",
             )?;
         }
         require(
@@ -248,6 +267,18 @@ pub fn decide(
                 reasons.extend(traces.unwitnessed_answers().into_iter().map(|missing| {
                     format!("the policy requires every answer witnessed as the reply: {missing}")
                 }));
+                true
+            }
+            Some(traces)
+                if let Some(short) = policy
+                    .asked_since_seconds
+                    .and_then(|wanted| traces.asked_since_short_of(wanted)) =>
+            {
+                reasons.push(format!(
+                    "the policy requires every answer witnessed as the reply, looking for its \
+                     case asked elsewhere from {} s before the run: {short}",
+                    policy.asked_since_seconds.unwrap_or_default()
+                ));
                 true
             }
             Some(traces)

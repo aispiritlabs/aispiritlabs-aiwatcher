@@ -3753,6 +3753,14 @@ export type GatePolicy = {
      */
     asked_elsewhere_unpinned_denies?: boolean;
     /**
+     * Beside `require_witnessed_answer`: calls asked elsewhere must have been
+     * read from at least this many seconds before the measurement started,
+     * whatever the run declared, or the result is `incomplete`. A pipeline
+     * that sets it declares its runs with at least as much
+     * (`settings.asked_since_seconds`); `aiwatcher-gate` does.
+     */
+    asked_since_seconds?: number | null;
+    /**
      * Cases that must be measured and no worse than the baseline on any
      * metric, whatever the means did: a critical case lost is a regression
      * even beside a better average.
@@ -3862,6 +3870,13 @@ export type GenerationTrace = {
      * exchanges all the same, unless a gate's policy denies them.
      */
     asked_elsewhere_unpinned?: number;
+    /**
+     * How long before the measurement's start the step read calls asked
+     * elsewhere from, in seconds — `0` from the start itself; absent where it
+     * read none, the variant pinning no prompt. What a gate's
+     * `asked_since_seconds` holds a result to.
+     */
+    asked_since_seconds?: number | null;
     /**
      * Of those, why the way of choosing the variant pins picked none of them,
      * each reason once.

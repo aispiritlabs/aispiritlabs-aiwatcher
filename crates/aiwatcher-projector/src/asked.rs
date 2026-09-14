@@ -17,6 +17,10 @@
 //! the log's first event where it read that event, to the first event after a
 //! stretch of positions it never read otherwise, and never past its retention;
 //! a reader told where that is names what it could not look at.
+//!
+//! Beside the reach it keeps what clients counted of a measurement's runs
+//! ([`crate::measured`]), so a traces step tells a run lost in transport from
+//! one nobody opened after a restart as well.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -29,6 +33,8 @@ use aiwatcher_core::ports::PortError;
 use aiwatcher_core::prompts::PromptRef;
 use aiwatcher_core::storage::ObjectStore;
 use aiwatcher_core::{EventType, Phase, RecordedEvent, Subject};
+
+use crate::measured::{KeptMeasurement, MeasuredRuns, MeasuredState};
 
 /// The object store prefix this output owns.
 pub const PREFIX: &str = "asked-index/";
@@ -99,6 +105,9 @@ struct Reach {
     /// The moment it reads back to, where that is not the log's first event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reads_from_ms: Option<i64>,
+    /// What clients counted of measurements' runs, through the same position.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    measured: Vec<KeptMeasurement>,
 }
 
 #[derive(Debug, Default)]
@@ -113,6 +122,7 @@ struct State {
     caller_order: VecDeque<String>,
     pruned_at: Option<Instant>,
     contiguous: bool,
+    measured: MeasuredState,
 }
 
 fn hex(text: &str) -> String {
@@ -207,8 +217,9 @@ impl AskedIndex {
             }
         };
         let mut state = self.state.lock().await;
-        if let Some(reach) = loaded {
+        if let Some(mut reach) = loaded {
             state.applied_through = reach.through;
+            state.measured = MeasuredState::from_kept(std::mem::take(&mut reach.measured));
             state.reach = reach;
         }
         state.reach.through
@@ -245,6 +256,7 @@ impl AskedIndex {
             state.reach.began = true;
         }
         state.applied_through = Some(position);
+        state.measured.apply(event);
         let subject = event.event_type.subject();
         let run_id = &event.metadata.run_id;
         if event.event_type == EventType::RunStarted
@@ -315,6 +327,7 @@ impl AskedIndex {
                 }
                 let mut reach = state.reach.clone();
                 reach.through = Some(through);
+                reach.measured = state.measured.kept();
                 (None, reach)
             } else {
                 let due = force
@@ -330,6 +343,7 @@ impl AskedIndex {
                 let first = calls.first().map_or(through, |call| call.position);
                 let mut reach = state.reach.clone();
                 reach.through = Some(through);
+                reach.measured = state.measured.kept();
                 (
                     Some(Page {
                         first,
@@ -454,6 +468,12 @@ impl AskedIndex {
         if removed > 0 {
             tracing::info!(removed, "pages of the asked index past retention removed");
         }
+    }
+
+    /// What each client counted of the runs it opened for one measurement,
+    /// through the position the index has read.
+    pub async fn measured_runs(&self, evaluation_id: &str) -> Vec<MeasuredRuns> {
+        self.state.lock().await.measured.of(evaluation_id)
     }
 
     /// Every call a witness said what it asked in that ended at or after
@@ -621,6 +641,50 @@ mod tests {
             }]
         );
         assert_eq!(restarted.since(0).await.expect("reads").calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_client_s_count_of_a_measurement_s_runs_is_read_back_after_a_restart() {
+        let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::default());
+        let index = AskedIndex::new(Arc::clone(&store), "projector");
+        index.reads_contiguous_positions(true).await;
+        let measured = |event_type, position, data: serde_json::Value| {
+            let started = event_type == EventType::RunStarted;
+            let mut recorded = event(event_type, "case-run", position, 0, data);
+            recorded.metadata.source.client = Some("worker".to_owned());
+            if started {
+                recorded.metadata.run_sequence = Some(position - 1);
+            }
+            recorded
+        };
+        for recorded in [
+            measured(
+                EventType::RunStarted,
+                1,
+                serde_json::json!({"evaluation_id": "e1", "generation_attempt": 1}),
+            ),
+            measured(
+                EventType::ClientCounted,
+                2,
+                serde_json::json!({"evaluation_id": "e1", "generation_attempt": 1, "runs": 3}),
+            ),
+        ] {
+            index.apply(&recorded).await;
+        }
+        assert!(index.flush(true).await);
+
+        let restarted = AskedIndex::new(Arc::clone(&store), "projector");
+        assert_eq!(restarted.load().await, Some(2));
+        assert_eq!(
+            restarted.measured_runs("e1").await,
+            [MeasuredRuns {
+                client: "worker".to_owned(),
+                attempt: Some(1),
+                opened: 3,
+                arrived: 1,
+            }],
+            "two of three runs never arrived, whether or not the read model replays"
+        );
     }
 
     #[tokio::test]

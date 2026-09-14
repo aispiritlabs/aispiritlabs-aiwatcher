@@ -19346,6 +19346,15 @@
             "type": "boolean",
             "description": "Beside `require_witnessed_answer`: an answer whose case was asked on\nanother prompt or model in another run, from when the run read calls\nasked elsewhere, is no witnessed answer either. Off by default, since\nproduction traffic on other prompts asks what cases ask all the time."
           },
+          "asked_since_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Beside `require_witnessed_answer`: calls asked elsewhere must have been\nread from at least this many seconds before the measurement started,\nwhatever the run declared, or the result is `incomplete`. A pipeline\nthat sets it declares its runs with at least as much\n(`settings.asked_since_seconds`); `aiwatcher-gate` does.",
+            "minimum": 0
+          },
           "critical_cases": {
             "type": "array",
             "items": {
@@ -19491,6 +19500,15 @@
           "asked_elsewhere_unpinned": {
             "type": "integer",
             "description": "Exchanges whose cases' inputs witnessed calls on another prompt or\nmodel asked in other runs ([`TracedAnswer::asked_elsewhere_unpinned`]):\nexchanges all the same, unless a gate's policy denies them.",
+            "minimum": 0
+          },
+          "asked_since_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long before the measurement's start the step read calls asked\nelsewhere from, in seconds — `0` from the start itself; absent where it\nread none, the variant pinning no prompt. What a gate's\n`asked_since_seconds` holds a result to.",
             "minimum": 0
           },
           "choices_refused": {

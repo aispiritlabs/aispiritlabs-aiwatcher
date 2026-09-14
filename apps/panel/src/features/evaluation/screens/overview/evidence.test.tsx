@@ -554,6 +554,7 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
             asked_elsewhere_unpinned: 1,
             elsewhere_unread: 1,
             elsewhere_unread_before: '2026-09-01T00:00:00Z',
+            asked_since_seconds: 3600,
             witnesses: ['gateway'],
             self_witnessed: 1,
             served: [{ model: 'support-model-q4', answers: 2 }],
@@ -593,6 +594,7 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   expect(
     screen.getByText(/calls asked in other runs before 2026-09-01T00:00:00Z, which the index/),
   ).toBeTruthy();
+  expect(screen.getByText(/looked for from 3600 s before the measurement started/)).toBeTruthy();
   expect(screen.getByText(/runs that called search with no witness/)).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();

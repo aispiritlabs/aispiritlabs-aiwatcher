@@ -11,9 +11,13 @@
 //!
 //! Bounded like the rest of the read model: a measurement heard from longest
 //! ago is forgotten first, and a count past what this keeps says nothing rather
-//! than something wrong.
+//! than something wrong. The read model holds one copy, gone with a restart
+//! that does not replay; the asked index keeps another beside its reach
+//! ([`MeasuredState::kept`]), which is the one a traces step reads.
 
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 use aiwatcher_core::{EventType, RecordedEvent};
 
@@ -50,7 +54,49 @@ struct Count {
     overflowed: bool,
 }
 
+/// One count as it is kept in an object store: the numbers whose start
+/// arrived, as runs of consecutive numbers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptCount {
+    pub client: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    /// Each `[first, last]` stretch of numbers whose start arrived.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrived: Vec<[u64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overflowed: bool,
+}
+
+/// One measurement's counts as they are kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptMeasurement {
+    pub evaluation_id: String,
+    /// Where it stands in the order measurements were last heard from.
+    pub heard: u64,
+    pub counts: Vec<KeptCount>,
+}
+
 impl Count {
+    fn stretches(&self) -> Vec<[u64; 2]> {
+        let mut stretches: Vec<[u64; 2]> = Vec::new();
+        for (word_at, word) in self.seen.iter().enumerate() {
+            let base = u64::try_from(word_at)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(64);
+            for bit in (0..64).filter(|bit| word & (1 << bit) != 0) {
+                let number = base + bit;
+                match stretches.last_mut() {
+                    Some(last) if last[1] + 1 == number => last[1] = number,
+                    _ => stretches.push([number, number]),
+                }
+            }
+        }
+        stretches
+    }
+
     fn started(&mut self, number: u64) {
         if number >= MOST_NUMBERS {
             self.overflowed = true;
@@ -139,6 +185,68 @@ impl MeasuredState {
         if let Some(runs) = counted {
             count.counted = Some(count.counted.map_or(runs, |before| before.max(runs)));
         }
+    }
+
+    /// Every count, to be written down and read back with [`Self::from_kept`].
+    #[must_use]
+    pub fn kept(&self) -> Vec<KeptMeasurement> {
+        self.measurements
+            .iter()
+            .map(|(evaluation_id, measurement)| KeptMeasurement {
+                evaluation_id: evaluation_id.clone(),
+                heard: measurement.heard,
+                counts: measurement
+                    .counts
+                    .iter()
+                    .map(|((client, attempt), count)| KeptCount {
+                        client: client.clone(),
+                        attempt: *attempt,
+                        arrived: count.stretches(),
+                        counted: count.counted,
+                        overflowed: count.overflowed,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// The counts written down by [`Self::kept`], within this fold's bounds.
+    #[must_use]
+    pub fn from_kept(kept: Vec<KeptMeasurement>) -> Self {
+        let mut state = Self::default();
+        let mut kept = kept;
+        // The ones heard from last are the ones kept past the bound.
+        kept.sort_by_key(|measurement| std::cmp::Reverse(measurement.heard));
+        for measurement in kept.into_iter().take(MOST_MEASUREMENTS) {
+            state.heard = state.heard.max(measurement.heard);
+            let mut restored = Measurement {
+                heard: measurement.heard,
+                counts: BTreeMap::new(),
+            };
+            for kept_count in measurement.counts.into_iter().take(MOST_COUNTS) {
+                let mut count = Count {
+                    counted: kept_count.counted,
+                    overflowed: kept_count.overflowed,
+                    ..Count::default()
+                };
+                for [first, last] in kept_count.arrived {
+                    if first > last || last >= MOST_NUMBERS {
+                        count.overflowed = true;
+                        continue;
+                    }
+                    for number in first..=last {
+                        count.started(number);
+                    }
+                }
+                restored
+                    .counts
+                    .insert((kept_count.client, kept_count.attempt), count);
+            }
+            state
+                .measurements
+                .insert(measurement.evaluation_id, restored);
+        }
+        state
     }
 
     /// What each client said of the runs it opened for one measurement.
@@ -249,5 +357,17 @@ mod tests {
         );
         assert_eq!(state.of("e2")[0].opened, 4);
         assert!(state.of("nothing").is_empty());
+
+        let kept = state.kept();
+        assert_eq!(
+            kept[0].counts[1].arrived,
+            [[0, 0], [2, 2]],
+            "kept as the stretches that arrived"
+        );
+        let restored = MeasuredState::from_kept(
+            serde_json::from_slice(&serde_json::to_vec(&kept).expect("writes")).expect("reads"),
+        );
+        assert_eq!(restored.of("e1"), state.of("e1"));
+        assert_eq!(restored.of("e2"), state.of("e2"));
     }
 }
