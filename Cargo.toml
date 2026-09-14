@@ -157,7 +157,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 # byte with Python's `unicodedata` and JavaScript's `normalize`. Both already in
 # the graph, and a normalisation table is not something to hand-roll.
 unicode-normalization = "0.1.25"
-unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
+unicode-properties = { version = "0.1.4", default-features = false, features = [
+  "general-category",
+] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "time"] }
 utoipa-axum = "0.2.0"
 url = "2.5.8"

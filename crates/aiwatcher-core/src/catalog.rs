@@ -294,10 +294,8 @@ impl EventType {
     /// An execution's own lifecycle is the third, and it is the one that spans
     /// hours rather than milliseconds: a run can sit in `awaiting_input` until
     /// somebody answers it, and a waterfall bar the width of a lunch break is
-    /// noise in every trace it lands in. Its *attempts* are `step.*`.
-    ///
-    /// A client's count of its runs is the fourth: a statement a client makes
-    /// about itself, whose `run_id` names the client rather than a run.
+    /// noise in every trace it lands in. Its *attempts* are `step.*`. A client's
+    /// count of its runs is the fourth, and its `run_id` names no run at all.
     ///
     /// Distinct from [`Self::is_high_cardinality`], which suppresses a *record*
     /// for an event that still belongs to a span.

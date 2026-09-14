@@ -20,15 +20,8 @@
 //! log reaches; it runs in every role, under one group name, so in a split
 //! deployment it also outlives either half being down. What no journal read
 //! before the log evicted it is a gap for both, and the journal says so when it
-//! comes to a position past the one after its last.
-//!
-//! It also says how close that is: every minute, how far behind the log it is —
-//! the age of the oldest event it read and has not kept, or of the last one it
-//! read while it has not caught up — how many positions it holds unkept, and,
-//! where the deployment says how long the log keeps an event, how long before
-//! the oldest of those is gone. A metric and a line in the log, warning once
-//! the margin is under a quarter of the retention, so a journal that cannot
-//! keep up or cannot write is heard of before the gap it will leave.
+//! comes to a position past the one after its last — and, every minute, how
+//! close that is ([`JournalLag`]).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
