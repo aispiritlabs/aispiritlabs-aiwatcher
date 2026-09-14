@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { EventFeed, type EventFeedEvent } from '@/features/observability/components/event-feed';
+import { SpanMessages } from '@/features/observability/components/span-messages';
 import { familyColor } from '@/features/observability/components/waterfall';
 import {
   factsOf,
@@ -36,13 +37,21 @@ import {
 export function SpanDetail({
   span,
   events,
+  conversationId,
+  runId,
   everything,
+  content,
   onClose,
 }: {
   span: Span;
   events: EventFeedEvent[];
+  /** The session this run belongs to, which the archive is keyed by. */
+  conversationId?: string | null;
+  runId: string;
   /** Show the correlation ids too, from the view menu. */
   everything: boolean;
+  /** Open what was said without a click per turn, from the view menu. */
+  content: boolean;
   onClose: () => void;
 }) {
   const facts = React.useMemo(() => factsOf(span), [span]);
@@ -158,6 +167,17 @@ export function SpanDetail({
               </li>
             ))}
           </ul>
+        </Section>
+      ) : null}
+
+      {conversationId ? (
+        <Section title="Messages">
+          <SpanMessages
+            conversationId={conversationId}
+            runId={runId}
+            spanId={span.span_id}
+            reveal={content}
+          />
         </Section>
       ) : null}
 

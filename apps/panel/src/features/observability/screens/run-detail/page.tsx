@@ -40,7 +40,12 @@ const EVENT_PAGE_SIZE = 1_000;
  */
 export function RunPage() {
   const { runId } = routeApi.useParams();
-  const { span: selectedSpanId, attrs = false, chunks = true } = routeApi.useSearch();
+  const {
+    span: selectedSpanId,
+    attrs = false,
+    chunks = true,
+    content = false,
+  } = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
   const queryClient = useQueryClient();
 
@@ -212,6 +217,7 @@ export function RunPage() {
         <ViewMenu
           attrs={attrs}
           chunks={chunks}
+          content={content}
           onChange={(next) =>
             void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true })
           }
@@ -294,7 +300,10 @@ export function RunPage() {
               <SpanDetail
                 span={selectedSpan}
                 events={spanEvents}
+                conversationId={summary.conversation_id}
+                runId={summary.run_id}
                 everything={attrs}
+                content={content}
                 onClose={() => selectSpan(undefined)}
               />
             ) : null}
@@ -349,11 +358,13 @@ function Named({ label, values }: { label: string; values: string[] }) {
 function ViewMenu({
   attrs,
   chunks,
+  content,
   onChange,
 }: {
   attrs: boolean;
   chunks: boolean;
-  onChange: (next: { attrs?: boolean; chunks?: boolean }) => void;
+  content: boolean;
+  onChange: (next: { attrs?: boolean; chunks?: boolean; content?: boolean }) => void;
 }) {
   return (
     <details className="relative shrink-0 text-xs">
@@ -372,6 +383,12 @@ function ViewMenu({
           onChange={(value) => onChange({ chunks: value ? undefined : false })}
           label="Token chunks"
           hint="`llm.chunk` is most of a streaming call's log by volume."
+        />
+        <Toggle
+          checked={content}
+          onChange={(value) => onChange({ content: value ? true : undefined })}
+          label="What was said"
+          hint="Opens each message the content archive holds for a call, rather than one click each."
         />
       </div>
     </details>

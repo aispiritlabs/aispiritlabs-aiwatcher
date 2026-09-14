@@ -45,7 +45,16 @@ const events = [
 ];
 
 it('reads a model call out instead of leaving it in the payload', () => {
-  render(<SpanDetail span={call} events={events} everything={false} onClose={() => {}} />);
+  render(
+    <SpanDetail
+      span={call}
+      events={events}
+      runId="run-1"
+      content={false}
+      everything={false}
+      onClose={() => {}}
+    />,
+  );
 
   expect(screen.getByText('openrouter.ai')).toBeTruthy();
   expect(screen.getByText('google/gemini-3.7-flash')).toBeTruthy();
@@ -57,7 +66,16 @@ it('reads a model call out instead of leaving it in the payload', () => {
 });
 
 it('counts the events the span was assembled from and feeds them in', () => {
-  render(<SpanDetail span={call} events={events} everything={false} onClose={() => {}} />);
+  render(
+    <SpanDetail
+      span={call}
+      events={events}
+      runId="run-1"
+      content={false}
+      everything={false}
+      onClose={() => {}}
+    />,
+  );
 
   // The feed itself is virtualised, so jsdom mounts no rows for it; what this
   // holds is that the span's own events reached it rather than the run's.
@@ -67,25 +85,59 @@ it('counts the events the span was assembled from and feeds them in', () => {
 
 it('keeps a producer attribute and holds the correlation ids behind the view menu', () => {
   const { rerender } = render(
-    <SpanDetail span={call} events={events} everything={false} onClose={() => {}} />,
+    <SpanDetail
+      span={call}
+      events={events}
+      runId="run-1"
+      content={false}
+      everything={false}
+      onClose={() => {}}
+    />,
   );
 
   expect(screen.getByText('planner.owner')).toBeTruthy();
   expect(screen.queryByText('messaging.message.id')).toBeNull();
 
-  rerender(<SpanDetail span={call} events={events} everything onClose={() => {}} />);
+  rerender(
+    <SpanDetail
+      span={call}
+      events={events}
+      runId="run-1"
+      content={false}
+      everything
+      onClose={() => {}}
+    />,
+  );
   expect(screen.getByText('messaging.message.id')).toBeTruthy();
 });
 
 it('says why a span carries no event rather than showing an empty table', () => {
-  render(<SpanDetail span={call} events={[]} everything={false} onClose={() => {}} />);
+  render(
+    <SpanDetail
+      span={call}
+      events={[]}
+      runId="run-1"
+      content={false}
+      everything={false}
+      onClose={() => {}}
+    />,
+  );
 
   expect(screen.getByText(/No event on the log carries this span id/)).toBeTruthy();
 });
 
 it('closes on request, because the row that opened it is above the fold', async () => {
   const onClose = vi.fn();
-  render(<SpanDetail span={call} events={events} everything={false} onClose={onClose} />);
+  render(
+    <SpanDetail
+      span={call}
+      events={events}
+      runId="run-1"
+      content={false}
+      everything={false}
+      onClose={onClose}
+    />,
+  );
 
   await userEvent.click(screen.getByRole('button', { name: 'Close' }));
   expect(onClose).toHaveBeenCalled();

@@ -232,6 +232,11 @@ pub struct TurnsQuery {
     /// Narrow to turns carrying a finding of this kind.
     pub finding: Option<FindingKind>,
     pub role: Option<Role>,
+    /// Narrow to the turns one run produced — what a trace view asks for, and
+    /// what `Provenance.run_id` is recorded for.
+    pub run_id: Option<String>,
+    /// Narrow further to one model call's span.
+    pub span_id: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
 }
@@ -256,6 +261,8 @@ async fn list_conversation_turns(
         review: query.review,
         finding: query.finding,
         role: query.role,
+        run_id: query.run_id,
+        span_id: query.span_id,
     };
     Ok(Json(
         archive(&state)?

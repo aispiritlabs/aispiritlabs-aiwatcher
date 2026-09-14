@@ -2610,6 +2610,30 @@
             }
           },
           {
+            "name": "run_id",
+            "in": "query",
+            "description": "Narrow to the turns one run produced — what a trace view asks for, and\nwhat `Provenance.run_id` is recorded for.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "description": "Narrow further to one model call's span.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "offset",
             "in": "query",
             "required": false,

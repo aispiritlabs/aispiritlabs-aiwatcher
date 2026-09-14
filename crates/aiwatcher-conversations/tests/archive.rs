@@ -323,6 +323,45 @@ async fn a_reviewers_finding_survives_the_producers_next_flush() {
     );
 }
 
+#[tokio::test]
+async fn a_run_s_own_turns_are_listed_without_reading_the_whole_conversation() {
+    let store = store();
+    let registry = registry_with(Arc::clone(&store), ArchivePolicy::default());
+
+    let mut asked = turn("c1", "m1", Role::User, "what next");
+    asked.provenance.run_id = "run-1".to_owned();
+    asked.provenance.span_id = "span-call".to_owned();
+    let mut answered = turn("c1", "m2", Role::Assistant, "the schedule");
+    answered.provenance.run_id = "run-1".to_owned();
+    answered.provenance.span_id = "span-call".to_owned();
+    let mut later = turn("c1", "m3", Role::User, "and after that");
+    later.provenance.run_id = "run-2".to_owned();
+    later.provenance.span_id = "span-other".to_owned();
+    for request in [asked, answered, later] {
+        registry.record(request).await.expect("records");
+    }
+
+    let filter = TurnFilter {
+        run_id: Some("run-1".to_owned()),
+        ..TurnFilter::default()
+    };
+    let page = registry.turns("c1", &filter, 0, 50).await.expect("lists");
+    assert_eq!(page.turns.len(), 2, "the conversation holds three turns");
+    assert!(
+        page.turns
+            .iter()
+            .all(|turn| turn.provenance.run_id == "run-1")
+    );
+
+    let by_span = TurnFilter {
+        span_id: Some("span-other".to_owned()),
+        ..TurnFilter::default()
+    };
+    let page = registry.turns("c1", &by_span, 0, 50).await.expect("lists");
+    assert_eq!(page.turns.len(), 1);
+    assert_eq!(page.turns[0].message_id, "m3");
+}
+
 // ── Erasure and retention ────────────────────────────────────────────────────
 
 #[tokio::test]

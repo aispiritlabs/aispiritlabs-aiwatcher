@@ -21,6 +21,8 @@ export const searchSchema = z.object({
   attrs: z.boolean().optional(),
   /** Show `llm.chunk` in the event feed. */
   chunks: z.boolean().optional(),
+  /** Open what the content archive holds for each call, without a click each. */
+  content: z.boolean().optional(),
 });
 
 export type RunSearch = z.infer<typeof searchSchema>;

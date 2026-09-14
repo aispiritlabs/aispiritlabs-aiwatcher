@@ -222,11 +222,18 @@ struct SubjectMarker {
 }
 
 /// What a listing may narrow on.
+///
+/// The two provenance fields are what joins the archive back to the log. A
+/// trace view asks "what was said in *this* run", and without them the answer
+/// is the whole conversation with the reader picking the turns out — which is
+/// the join being done in the wrong place, and by eye.
 #[derive(Clone, Debug, Default)]
 pub struct TurnFilter {
     pub review: Option<ReviewState>,
     pub finding: Option<FindingKind>,
     pub role: Option<Role>,
+    pub run_id: Option<String>,
+    pub span_id: Option<String>,
 }
 
 impl TurnFilter {
@@ -234,6 +241,14 @@ impl TurnFilter {
         self.review.is_none_or(|state| turn.review.state == state)
             && self.finding.is_none_or(|kind| turn.has_finding(kind))
             && self.role.is_none_or(|role| turn.role == role)
+            && self
+                .run_id
+                .as_ref()
+                .is_none_or(|run| turn.provenance.run_id == *run)
+            && self
+                .span_id
+                .as_ref()
+                .is_none_or(|span| turn.provenance.span_id == *span)
     }
 }
 

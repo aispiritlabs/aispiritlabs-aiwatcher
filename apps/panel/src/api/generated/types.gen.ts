@@ -11030,6 +11030,15 @@ export type ListConversationTurnsData = {
          */
         finding?: null | FindingKind;
         role?: null | ConversationRole;
+        /**
+         * Narrow to the turns one run produced — what a trace view asks for, and
+         * what `Provenance.run_id` is recorded for.
+         */
+        run_id?: string | null;
+        /**
+         * Narrow further to one model call's span.
+         */
+        span_id?: string | null;
         offset?: number | null;
         limit?: number | null;
     };
