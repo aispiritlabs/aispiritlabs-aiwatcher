@@ -4,6 +4,10 @@ Publish agent-run telemetry to aiwatcher from Go: runs, the agents inside them,
 and their model and tool calls, as the envelopes in
 [`contracts/envelope.schema.json`](../../contracts/envelope.schema.json).
 
+Beside the telemetry client it carries two registry clients: `Archive` records
+what was said into the encrypted conversation archive, and `Prompts` publishes
+the prompt a service runs on so a trace can name the version that answered.
+
 It follows the Python and TypeScript SDKs on field names, id rules and event
 types. What it does not publish yet: declared workflows, evaluations, agent
 messages, and a client's count of the runs it opened per variant.
@@ -59,6 +63,9 @@ one into code under test changes nothing.
 - **The numbering matches the other SDKs.** Each client counts the events it
   sends into a run from 0 under an id of its own, and forgets a run's count
   when the run ends.
+- **The registry clients fail loudly.** `Archive.Record` and `Prompts.Publish`
+  return every error: keeping somebody's words, and knowing which prompt
+  answered, are the work rather than a report about it.
 
 ## Develop
 
