@@ -140,6 +140,10 @@ pub mod aiwatcher {
         /// what the tool returned, digested as a reply is.
         pub const ARGUMENTS: &str = "aiwatcher.witness.arguments";
         pub const RETURNED: &str = "aiwatcher.witness.returned";
+        /// On a tool call a witness answered with a function of its own: the
+        /// sha256 of the source that function is defined in, which a variant
+        /// may pin (`tool_code`).
+        pub const TOOL_CODE: &str = "aiwatcher.witness.tool_code";
     }
 
     pub mod source {

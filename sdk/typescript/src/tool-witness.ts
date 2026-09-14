@@ -16,6 +16,13 @@
  *     const witness = ToolWitness.withKey(telemetry, gatewayWitnessKey);
  *     await witness.call('atlas', args, { caller: request.headers[CALLER_RUN_HEADER] },
  *       async (call) => call.answered(JSON.stringify(await lookUp(args))));
+ *
+ * This is how a tool an application would compute in its own process becomes
+ * accountable: a value such a tool returned is the application's word, and a
+ * trace names the tool as where an unaccounted value may have come from. Move
+ * the tool here — onto a host with the key — or behind the gateway, whose
+ * `tools` relay a URL or answer with a function whose source's sha256 a
+ * variant's generation config may pin (`tool_code`).
  */
 import type { AiwatcherClient } from './index.js';
 

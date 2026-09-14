@@ -549,6 +549,7 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
               'the judge pick-best was not shown the candidates the second time in the reverse of the first order',
             ],
             judged_unordered: 1,
+            unaccounted_tools: ['search'],
             asked_elsewhere: 1,
             asked_elsewhere_unpinned: 1,
             elsewhere_unread: 1,
@@ -592,6 +593,7 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   expect(
     screen.getByText(/calls asked in other runs before 2026-09-01T00:00:00Z, which the index/),
   ).toBeTruthy();
+  expect(screen.getByText(/runs that called search with no witness/)).toBeTruthy();
   expect(screen.getByText('Witnessed by gateway.')).toBeTruthy();
   expect(screen.getByText(/needs a token of its own/)).toBeTruthy();
   expect(screen.getByText(/support-model-q4 \(2 answers\) — compared with nothing/)).toBeTruthy();

@@ -782,6 +782,11 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
                     out.push((attribute.to_owned(), AttrValue::StrList(digests)));
                 }
             }
+            if let Some(code) = event.data_str("code_sha256").filter(|code| {
+                code.len() == 64 && code.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
+                out.push(attr(own::witness::TOOL_CODE, code));
+            }
         }
         Subject::Agent => {
             push_str(genai::AGENT_NAME, event.data_str("agent_name"));

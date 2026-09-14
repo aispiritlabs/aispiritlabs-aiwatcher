@@ -895,6 +895,10 @@ impl TracesExecutor {
             }
             let served_for_it = servers.iter().flat_map(traced_calls).collect();
             let tools_served_for_it = servers.iter().flat_map(traced_tools).collect();
+            let tools_called = traced_tools(&detail)
+                .into_iter()
+                .filter_map(|tool| tool.name)
+                .collect();
             let summary = detail.summary;
             runs.insert(
                 (*run_id).to_owned(),
@@ -921,6 +925,7 @@ impl TracesExecutor {
                     node_steps_dropped: summary.node_steps_dropped,
                     served_for_it,
                     tools_served_for_it,
+                    tools_called,
                 },
             );
         }
@@ -1085,6 +1090,7 @@ fn traced_tools(detail: &aiwatcher_projector::RunDetail) -> Vec<aiwatcher_evalua
             published_by: text(span, own::source::PUBLISHED_BY),
             arguments: list(span, own::witness::ARGUMENTS),
             returned: list(span, own::witness::RETURNED),
+            code: text(span, own::witness::TOOL_CODE),
         })
         .collect()
 }

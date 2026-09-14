@@ -19585,6 +19585,13 @@
             "description": "Seen runs that took more node steps than the fold keeps, whose order\npast them was therefore not read.",
             "minimum": 0
           },
+          "unaccounted_tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tools called with no witness in the runs of answers holding a value\nnothing accounted for, each once: where such a value may have come from."
+          },
           "unknown_runs": {
             "type": "integer",
             "description": "Of the runs not on the log, those no client's count passes over: runs\nno client opened for this result, such as a run ID made up.",
@@ -27430,7 +27437,7 @@
       },
       "ScoringRunSettings": {
         "type": "object",
-        "description": "How a run is carried out, as opposed to what it measures.\n\nNeither setting reaches the manifest: a result measured in ten minutes and\nthe same one measured in an hour are one measurement, and two contexts for\nthem would make the second incomparable with the first for no reason. They\nare part of the declaration, because a declaration is the run and a retry\nmust read the deadline the first attempt had.",
+        "description": "How a run is carried out, as opposed to what it measures.\n\nNo setting reaches the manifest: a result measured in ten minutes and\nthe same one measured in an hour are one measurement, and two contexts for\nthem would make the second incomparable with the first for no reason. They\nare part of the declaration, because a declaration is the run and a retry\nmust read the deadline the first attempt had.",
         "properties": {
           "asked_since_seconds": {
             "type": [

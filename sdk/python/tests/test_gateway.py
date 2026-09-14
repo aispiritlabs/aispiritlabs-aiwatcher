@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import urllib.error
 import urllib.request
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -22,6 +24,7 @@ from aiwatcher_sdk.gateway import (
     extracted,
     holds_template,
     normalized,
+    tool_code,
     witness_digest,
     witness_key,
 )
@@ -791,6 +794,12 @@ def test_a_tool_s_host_with_the_gateway_s_key_and_a_tool_the_gateway_answers_dig
     assert done["arguments_digests"] == elsewhere["arguments_digests"]
     assert (refused["outcome"], refused["returned_digests"]) == ("failed", [])
     assert "Lima" not in json.dumps(relayed.events) + json.dumps(hosted.events)
+    assert (
+        done["code_sha256"]
+        == tool_code(atlas)
+        == hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    ), "a function the gateway answers with is named by its module's bytes"
+    assert "code_sha256" not in elsewhere, "a host names its code only where it says so"
 
 
 def test_the_witness_key_is_printed_for_a_tool_s_host_to_digest_under(

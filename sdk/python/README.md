@@ -188,6 +188,31 @@ every commit's variant start without anybody — one naming a registered model o
 workflow too, with its weights or declaration sent by `--stage`.
 `examples/ci-gate` is a whole job.
 
+## A tool a witness can vouch for
+
+A generated answer is an exchange only where every value its request held is
+accounted for, and a value a tool computed in the application's own process is
+the application's word: its telemetry says the tool ran and nothing says what it
+returned. The trace names such a tool as where an unaccounted value may have come
+from. Two ways make it accountable:
+
+- **Behind the gateway.** Name the tool in `Gateway(tools=…)` — a URL the
+  gateway posts the call to, or a function it answers in its own process — and
+  call `/tools/<name>` on the gateway instead. The gateway digests the arguments
+  and what came back under its key. A function is published with the sha256 of
+  the file it is defined in (`aiwatcher_sdk.gateway.tool_code`); pin it in the
+  variant's generation config, `{"tool_code": {"search": "<sha256>"}}`, and an
+  answer from a run where other code answered the tool is refused naming both
+  digests.
+- **On a host with the witness key.** Where the tool must run elsewhere, wrap
+  each call in `ToolWitness(telemetry, key=…)` on that host
+  (`aiwatcher_sdk.gateway`, or `@aiwatcher/sdk/tool-witness` in TypeScript),
+  published under a token of the host's own and with the key the gateway prints
+  (`AIWATCHER_WITNESS_DIGESTS` names it on the server).
+
+A tool the application computes itself stays unaccountable, by design: nothing
+outside that process can say what it returned.
+
 ## The prompt registry
 
 A prompt is the one thing aiwatcher keeps forever: the version a run used has

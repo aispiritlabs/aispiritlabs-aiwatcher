@@ -91,6 +91,9 @@ pub struct TracedTool {
     /// the tool returned, made as a reply's are.
     pub arguments: Vec<String>,
     pub returned: Vec<String>,
+    /// The sha256 of the code that answered it, where the witness answered it
+    /// with a function of its own and said so.
+    pub code: Option<String>,
 }
 
 /// Who may witness a generated answer, the key each one's digests of a call's
@@ -114,6 +117,9 @@ pub struct Witnesses {
     /// How the variant's generation config pins choosing an answer among its
     /// run's replies (`answer_chosen`).
     chosen: Option<Choosing>,
+    /// The code the variant's generation config pins each tool a witness
+    /// answers to (`tool_code`: a name and the sha256 of its source).
+    tool_code: BTreeMap<String, String>,
     /// The placeholders of the judging prompt that way names, in the order its
     /// text places them — what an order a judge was shown is held to.
     judge_places: Option<Vec<String>>,
@@ -440,6 +446,16 @@ impl Witnesses {
             .cloned();
         self.joined = field("answer_joined").and_then(Joining::read);
         self.chosen = field("answer_chosen").and_then(Choosing::read);
+        self.tool_code = field("tool_code")
+            .and_then(serde_json::Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, code)| {
+                code.as_str()
+                    .filter(|code| code.len() == 64 && code.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .map(|code| (name.clone(), code.to_ascii_lowercase()))
+            })
+            .collect();
         self.shaped = shaped;
         self
     }
@@ -541,6 +557,9 @@ pub struct TracedRun {
     pub served_for_it: Vec<TracedCall>,
     /// Tool calls such runs say they relayed for this one.
     pub tools_served_for_it: Vec<TracedTool>,
+    /// The names of the tools the run's own telemetry says it called: its own
+    /// word, which accounts for no value.
+    pub tools_called: Vec<String>,
 }
 
 /// One step of a workflow node, as a run's log holds it.
@@ -673,6 +692,11 @@ pub struct TracedAnswer {
     /// Why the way of choosing the variant pins did not pick it, where it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice_refused: Option<String>,
+    /// A call replied the answer to a request holding a value nothing accounts
+    /// for, and the run called these tools with no witness: where that value
+    /// may have come from, never taken for where it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unaccounted_tools: Vec<String>,
     /// The run it names never reached the log, and its client's count of the
     /// runs it opened for this result passes over one that never arrived
     /// ([`lost_or_unknown`]).
@@ -785,6 +809,10 @@ pub struct GenerationTrace {
     /// and usually meant for another edge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub idle_bounds: Vec<String>,
+    /// Tools called with no witness in the runs of answers holding a value
+    /// nothing accounted for, each once: where such a value may have come from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unaccounted_tools: Vec<String>,
     /// Of the runs not on the log, those its client's count says were opened
     /// for this result and never arrived: lost in transport.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -888,6 +916,15 @@ impl GenerationTrace {
             workflow_undeclared: rows.iter().any(|row| row.workflow_undeclared),
             steps_unread: rows.iter().filter(|row| row.workflow_steps_unread).count(),
             lost_in_transport: rows.iter().filter(|row| row.lost_in_transport).count(),
+            unaccounted_tools: {
+                let mut named: Vec<String> = rows
+                    .iter()
+                    .flat_map(|row| row.unaccounted_tools.iter().cloned())
+                    .collect();
+                named.sort();
+                named.dedup();
+                named
+            },
             unknown_runs: rows.iter().filter(|row| row.unknown_run).count(),
             idle_bounds: {
                 let mut idle: Vec<String> = rows
@@ -1086,6 +1123,14 @@ impl GenerationTrace {
             ));
         }
         said.extend(self.choices_refused.iter().cloned());
+        if !self.unaccounted_tools.is_empty() {
+            said.push(format!(
+                "answers holding a value nothing accounted for came from runs that called {} \
+                 with no witness, which may be where it came from — a tool the gateway relays or \
+                 answers, or one on a host digesting under the witness's key, is accounted for",
+                self.unaccounted_tools.join(", ")
+            ));
+        }
         if self.asked_elsewhere > 0 {
             said.push(format!(
                 "{} of {} answers' cases were asked on the pinned prompt in other runs while this \
@@ -1424,9 +1469,18 @@ fn grounded_calls(
             witness_key(call.published_by.as_deref()).filter(|_| made_of_the_prompt)
         })
         .collect();
+    // A tool the variant pins the code of accounts for what it returned only
+    // where the witness says that code answered it.
     let tool_keys: Vec<Option<&[u8; 32]>> = tools
         .iter()
-        .map(|tool| witness_key(tool.published_by.as_deref()))
+        .map(|tool| {
+            witness_key(tool.published_by.as_deref()).filter(|_| {
+                tool.name
+                    .as_ref()
+                    .and_then(|name| witnesses.tool_code.get(name))
+                    .is_none_or(|pinned| tool.code.as_ref() == Some(pinned))
+            })
+        })
         .collect();
     let carried = carried_as(input);
     let mut accounted: std::collections::BTreeSet<String> = call_keys
@@ -2030,6 +2084,7 @@ pub fn trace_answers(
             workflow_idle_bounds: idle_bounds.clone(),
             judged_unordered: false,
             choice_refused: None,
+            unaccounted_tools: Vec::new(),
             lost_in_transport: false,
             unknown_run: false,
         };
@@ -2105,10 +2160,33 @@ pub fn trace_answers(
                 witnesses,
                 witnesses.inputs.get(&answer.case_id),
             );
+            // A tool the variant pins the code of, answered by a witness with
+            // other code: what it returned is not the variant's.
+            for tool in &run.tools_served_for_it {
+                let (Some(name), Some(code), Some(witness)) =
+                    (&tool.name, &tool.code, tool.published_by.as_deref())
+                else {
+                    continue;
+                };
+                if witness_key(run, witnesses, Some(witness)).is_none() {
+                    continue;
+                }
+                if let Some(pinned) = witnesses.tool_code.get(name)
+                    && pinned != code
+                {
+                    said(format!(
+                        "{witness} answered the tool {name} with code {code}, and the variant \
+                         pins {pinned}"
+                    ));
+                }
+            }
             // The calls whose replies the answer is made of, and whether it is
             // made of several parts rather than one reply.
             let mut answered_by = std::collections::BTreeSet::new();
             let mut in_parts = false;
+            // A call replied the answer to a request holding a value nothing
+            // accounts for.
+            let mut unaccounted = false;
             // Another credential's word, or none: a call the answer's own
             // publisher reported for a serving run is still its word, and a
             // credential the deployment did not name a witness is nobody's.
@@ -2160,6 +2238,7 @@ pub fn trace_answers(
                         row.witnessed_exchange = Some(true);
                         answered_by.insert(at);
                     }
+                    unaccounted |= replied && !grounded[at];
                 }
                 if let Some(pinned) = &variant.model
                     && call.model.as_deref() == Some(pinned.name.as_str())
@@ -2252,6 +2331,29 @@ pub fn trace_answers(
                         answered_by.extend(replying(part));
                     }
                 }
+            }
+            // Where a value nothing accounted for may have come from: a tool the
+            // run called with no witness — its own telemetry's word, a host
+            // with no key, or code other than the pinned. Named, never taken
+            // for the source.
+            if unaccounted && row.witnessed_exchange != Some(true) {
+                let mut named: Vec<String> = run.tools_called.clone();
+                named.extend(
+                    run.tools_served_for_it
+                        .iter()
+                        .filter(|tool| {
+                            witness_key(run, witnesses, tool.published_by.as_deref()).is_none()
+                                || tool
+                                    .name
+                                    .as_ref()
+                                    .and_then(|name| witnesses.tool_code.get(name))
+                                    .is_some_and(|pinned| tool.code.as_ref() != Some(pinned))
+                        })
+                        .filter_map(|tool| tool.name.clone()),
+                );
+                named.sort();
+                named.dedup();
+                row.unaccounted_tools = named;
             }
             // Replies that went into nothing else: the application may have
             // chosen the answer among them.
@@ -2525,6 +2627,7 @@ mod tests {
                 idle_bounds: Vec::new(),
                 lost_in_transport: 0,
                 unknown_runs: 0,
+                unaccounted_tools: Vec::new(),
                 witnessed_model: Some(0),
                 witnessed_prompt: Some(0),
                 witnessed_answer: Some(0),
@@ -3235,6 +3338,123 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_s_value_is_accounted_only_from_the_pinned_code_and_an_unwitnessed_tool_is_named() {
+        use aiwatcher_core::witness::{Said, digest, key_for};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let said = |text: &str| digest(&key, Said::Replied, text);
+        let question = "What is the capital of France?";
+        let found = r#"{"capital":"Paris"}"#;
+        let call = |rendered: &[&str], replied: &[&str]| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            prompt_exact: Some(true),
+            published_by: Some("gateway".to_owned()),
+            rendered: rendered.iter().map(|text| said(text)).collect(),
+            replied: replied.iter().map(|text| said(text)).collect(),
+            ..TracedCall::default()
+        };
+        let searched = |code: Option<&str>, witnessed: bool| TracedRun {
+            served_for_it: vec![call(&[found], &["Paris"]), call(&[question], &["France"])],
+            tools_served_for_it: if witnessed {
+                vec![TracedTool {
+                    name: Some("search".to_owned()),
+                    published_by: Some("gateway".to_owned()),
+                    arguments: vec![said("France")],
+                    returned: vec![said(found)],
+                    code: code.map(ToOwned::to_owned),
+                }]
+            } else {
+                Vec::new()
+            },
+            tools_called: if witnessed {
+                Vec::new()
+            } else {
+                vec!["search".to_owned()]
+            },
+            ..run(vec![on_the_pins()])
+        };
+        let pinned = "a".repeat(64);
+        let traced = |cases: Vec<(&str, TracedRun)>| {
+            let witnesses = Witnesses::named(vec!["gateway".to_owned()])
+                .keyed([("gateway".to_owned(), key)])
+                .asked(
+                    cases
+                        .iter()
+                        .map(|(case, _)| {
+                            (
+                                (*case).to_owned(),
+                                serde_json::json!({"question": question}),
+                            )
+                        })
+                        .collect(),
+                )
+                .pinned(
+                    Some(&serde_json::json!({"tool_code": {"search": pinned}})),
+                    None,
+                );
+            let answers: Vec<RecordedAnswer> = cases
+                .iter()
+                .map(|(case, _)| answer(case, Some(case)))
+                .collect();
+            let runs: BTreeMap<String, TracedRun> = cases
+                .into_iter()
+                .map(|(case, run)| (case.to_owned(), run))
+                .collect();
+            trace_answers(
+                &pins, "variant", "answers", &answers, &runs, None, &witnesses,
+            )
+        };
+
+        let rows = traced(vec![
+            ("pinned-code", searched(Some(&pinned), true)),
+            ("no-code-said", searched(None, true)),
+            ("in-the-application", searched(None, false)),
+        ])
+        .expect("nothing contradicts the pins");
+        let trace = GenerationTrace::of(&rows);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.case_id.as_str(),
+                    row.witnessed_exchange,
+                    row.unaccounted_tools.clone()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("pinned-code", Some(true), Vec::new()),
+                ("no-code-said", Some(false), vec!["search".to_owned()]),
+                ("in-the-application", Some(false), vec!["search".to_owned()]),
+            ],
+            "a tool answered by the pinned code accounts for what it returned; one whose code \
+             nobody said, or that the application ran itself, is named as where the value may \
+             have come from"
+        );
+        assert!(
+            trace
+                .unwitnessed_answers()
+                .iter()
+                .any(|line| line.contains("runs that called search with no witness")),
+            "{:?}",
+            trace.unwitnessed_answers()
+        );
+
+        let refused = traced(vec![("other-code", searched(Some(&"b".repeat(64)), true))])
+            .expect_err("code other than the pinned answered the tool");
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].contains(&format!(
+                "gateway answered the tool search with code {}, and the variant pins {pinned}",
+                "b".repeat(64)
+            )),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
     fn a_pinned_bound_that_holds_nothing_is_still_measured_and_the_trace_names_it() {
         let pinned = Topology::read(&serde_json::json!({
             "nodes": ["retrieve", "answer"],
@@ -3697,6 +3917,7 @@ mod tests {
             published_by: Some("gateway".to_owned()),
             arguments: arguments.iter().map(|text| said(text)).collect(),
             returned: returned.iter().map(|text| said(text)).collect(),
+            code: None,
         };
         let with = |calls: Vec<TracedCall>, tools: Vec<TracedTool>| TracedRun {
             served_for_it: calls,
@@ -4485,6 +4706,7 @@ mod tests {
             published_by: Some("gateway".to_owned()),
             arguments: vec![said("Lyon")],
             returned: vec![said(returned)],
+            code: None,
         };
         let rendering = |value: &str| TracedCall {
             rendered: vec![said(value)],

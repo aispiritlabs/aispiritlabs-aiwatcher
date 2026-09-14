@@ -534,6 +534,13 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.witnessed_exchange} of ${traces.answers} were a witnessed call's reply — or, part by part in the pinned response schema's shape, several calls' — to a request that was nothing but the pinned prompt, rendered with their case's input, a reply or a tool's result relayed for a call so made, or a value taken out of one of those in steps the witness repeated.`}
         </p>
       ) : null}
+      {/* Where a value may have come from, never where it did: a tool run with
+          no witness is the application's word. */}
+      {(traces.unaccounted_tools ?? []).length > 0 ? (
+        <p className="text-danger">
+          {`Answers holding a value nothing accounted for came from runs that called ${(traces.unaccounted_tools ?? []).join(', ')} with no witness — move a tool behind the gateway, or onto a host digesting under the witness's key.`}
+        </p>
+      ) : null}
       {traces.chosen ? (
         <p className="text-danger">
           {`${traces.chosen} of ${traces.answers} were chosen among replies their run's witnessed calls gave that went into nothing else — the application's choice, unless the generation config pins answer_chosen and that way picks the answer.`}

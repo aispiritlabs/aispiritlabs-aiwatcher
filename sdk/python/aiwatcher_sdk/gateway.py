@@ -45,6 +45,7 @@ import contextlib
 import decimal
 import hashlib
 import hmac
+import inspect
 import json
 import math
 import os
@@ -59,6 +60,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Protocol
 
 from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
@@ -77,6 +79,7 @@ __all__ = [
     "knows_more_than_the_reply",
     "main",
     "normalized",
+    "tool_code",
     "witness_digest",
     "witness_key",
 ]
@@ -104,6 +107,25 @@ _WHITE_SPACE = (
 def witness_key(secret: str) -> bytes:
     """The witness key of a credential, from its secret."""
     return hmac.new(secret.encode(), WITNESS_KEY_LABEL, hashlib.sha256).digest()
+
+
+def tool_code(function: Callable[..., Any]) -> str | None:
+    """The sha256 of the source file a tool's function is defined in, or ``None``
+    where it has none a reader could hash — a builtin, or code made at run time.
+
+    What a variant pins as the code that answered a tool: the whole module, so a
+    helper the function calls is part of it.
+    """
+    try:
+        path = inspect.getsourcefile(inspect.unwrap(function))
+    except TypeError:
+        return None
+    if path is None:
+        return None
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def normalized(text: str) -> str:
@@ -749,9 +771,12 @@ class ToolWitness:
         returned: bytes,
         status: int,
         started: float,
+        code: str | None = None,
     ) -> None:
         """One tool call: keyed digests of each part of its arguments and of
-        what it returned, and nothing said in either."""
+        what it returned, and nothing said in either — and, where ``code`` is
+        given, the sha256 of the code that answered it, which a variant's
+        generation config may pin (``tool_code``)."""
         with (
             contextlib.suppress(Exception),
             self.telemetry.run(f"gateway-{uuid.uuid4().hex}", caller_run_id=caller) as run,
@@ -766,6 +791,8 @@ class ToolWitness:
                 "status_code": status,
                 "outcome": "succeeded" if status < 400 else "failed",
             }
+            if code is not None:
+                outcome["code_sha256"] = code
             if self.key is not None:
                 outcome["arguments_digests"] = _digested(self.key, "replied", _leaves(arguments))
                 texts: list[str] = []
@@ -803,7 +830,11 @@ class Gateway:
         deployment relays, the URL it is posted to — or the function that
         answers it in this process, so a tool an application would have
         computed itself runs where the witness is — and ``tool_tokens`` the
-        bearer token any URL needs, so the application holds none.
+        bearer token any URL needs, so the application holds none. A function's
+        call is published with the sha256 of the source file it is defined in
+        (:func:`tool_code`), which a variant's generation config pins as
+        ``{"tool_code": {name: sha256}}``: the code that answered is then held
+        to the pin, as what a task generated with is.
         """
         self.tools = dict(tools or {})
         self.tool_tokens = dict(tool_tokens or {})
@@ -1266,6 +1297,7 @@ class Gateway:
         started: float,
     ) -> None:
         """One tool call, as the gateway relayed it — see :meth:`ToolWitness.report`."""
+        tool = self.tools.get(name)
         self.tool_witness.report(
             caller=caller,
             name=name,
@@ -1273,6 +1305,7 @@ class Gateway:
             returned=returned,
             status=status,
             started=started,
+            code=tool_code(tool) if callable(tool) else None,
         )
 
     def handler(self) -> type[BaseHTTPRequestHandler]:

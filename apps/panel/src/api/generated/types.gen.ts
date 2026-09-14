@@ -3941,6 +3941,11 @@ export type GenerationTrace = {
      */
     steps_unread?: number;
     /**
+     * Tools called with no witness in the runs of answers holding a value
+     * nothing accounted for, each once: where such a value may have come from.
+     */
+    unaccounted_tools?: Array<string>;
+    /**
      * Of the runs not on the log, those no client's count passes over: runs
      * no client opened for this result, such as a run ID made up.
      */
@@ -8228,7 +8233,7 @@ export type ScoringRun = {
 /**
  * How a run is carried out, as opposed to what it measures.
  *
- * Neither setting reaches the manifest: a result measured in ten minutes and
+ * No setting reaches the manifest: a result measured in ten minutes and
  * the same one measured in an hour are one measurement, and two contexts for
  * them would make the second incomparable with the first for no reason. They
  * are part of the declaration, because a declaration is the run and a retry
