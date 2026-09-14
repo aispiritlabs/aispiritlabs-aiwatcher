@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator
@@ -232,6 +233,19 @@ def test_a_template_is_found_with_its_variables_filled_and_a_placeholder_alone_h
 
 def completed(recording: Recording) -> list[dict[str, Any]]:
     return [event["data"] for event in recording.events if event["event_type"] == "llm.completed"]
+
+
+def completions(recording: Recording, count: int) -> list[dict[str, Any]]:
+    """The completions, once ``count`` of them have been reported.
+
+    The gateway reports a call after the reply is written, so a client holding
+    the reply can be ahead of the report — by nothing on a laptop, and by
+    enough on a loaded CI runner to clear a recording before it arrives.
+    """
+    deadline = time.monotonic() + 5
+    while len(completed(recording)) < count and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return completed(recording)
 
 
 def test_a_digest_is_the_bytes_the_deployment_computes() -> None:
@@ -854,6 +868,7 @@ def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_prov
     assert placements == ['{"first": "second", "second": "first"}', None], (
         "the reply says which of the caller's values each placeholder now holds"
     )
+    completions(recording, 2)
     Provider.seen = []
     recording.events.clear()
     for ordered in (["first", "second"], []):
@@ -881,7 +896,7 @@ def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_prov
     assert left["messages"][0]["content"].startswith(
         f"Which is the capital of Peru, {high} or {low}?"
     ), "nothing named, nothing moved"
-    placed, as_sent = completed(recording)
+    placed, as_sent = completions(recording, 2)
 
     def pair(name: str, value: str) -> str:
         return f"{witness_digest(KEY, 'replied', name)}:{witness_digest(KEY, 'replied', value)}"
