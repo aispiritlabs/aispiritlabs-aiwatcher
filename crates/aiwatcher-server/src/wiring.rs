@@ -677,7 +677,18 @@ pub async fn build_journal(config: &Config) -> Result<Box<dyn JournalTask>> {
                         aiwatcher_bus::StartFrom::Now,
                     ),
                     config,
-                    None,
+                    // Where every other role's metrics go, so its margin to a
+                    // gap is on the same dashboard as theirs.
+                    match config.otlp_endpoint.as_deref() {
+                        Some(endpoint) => Some(Arc::new(
+                            OtlpMetricSink::new(OtlpConfig::new(
+                                endpoint,
+                                config.service_name.clone(),
+                            ))
+                            .context("building the OTLP metric exporter")?,
+                        ) as Arc<dyn MetricSink>),
+                        None => None,
+                    },
                 )),
             }))
         }
