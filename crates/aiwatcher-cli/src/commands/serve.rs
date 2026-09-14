@@ -43,6 +43,10 @@ pub async fn run(config: Config) -> Result<()> {
         "starting aiwatcher"
     );
 
+    if config.role == aiwatcher_server::config::ProcessRole::Journal {
+        return journal(&config).await;
+    }
+
     let runtime = aiwatcher_server::build(config).await?;
     let aiwatcher_server::Runtime {
         state,
@@ -169,6 +173,32 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The journal role: the observation journal and nothing else, until a signal
+/// or until it stops on its own — which is an error, since it reads a log that
+/// does not end.
+async fn journal(config: &Config) -> Result<()> {
+    let journal = aiwatcher_server::build_journal(config).await?;
+    let shutdown = CancellationToken::new();
+    let mut task = {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move { journal.run(shutdown).await })
+    };
+    tracing::info!("the journal role is running; no HTTP listener");
+    tokio::select! {
+        () = wait_for_signal() => {
+            tracing::info!("shutdown signal received");
+            shutdown.cancel();
+            stop_journal(Some(task)).await;
+            Ok(())
+        }
+        stopped = &mut task => match stopped {
+            Ok(Ok(())) => anyhow::bail!("the observation journal stopped with nothing asking it to"),
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(anyhow::anyhow!(error).context("the observation journal panicked")),
+        },
+    }
 }
 
 fn init_tracing(format: LogFormat) {

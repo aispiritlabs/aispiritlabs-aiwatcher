@@ -12,6 +12,6 @@ pub mod seed;
 pub mod wiring;
 
 pub use config::{BackendKind, Config, ConfigError};
-pub use wiring::{Runtime, build};
+pub use wiring::{JournalTask, Runtime, build, build_journal};
 
 pub mod evaluation;

@@ -17092,6 +17092,14 @@
               }
             ]
           },
+          "run_counted_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Beside `run_sequence`: when that count began — the moment the client\nopened the first run it counted for this variant. A reader that was\nalready reading the log then, and first hears of the count further on,\nnever read the runs before it: they are lost, the first among them."
+          },
           "run_id": {
             "type": "string",
             "description": "One execution of an agent. This is what a trace is scoped to."
@@ -24392,6 +24400,14 @@
               "null"
             ],
             "description": "See [`EventEnvelope::published_by`]: who the ingest route authenticated\nthis event under. Absent from an event a broker delivered, and from\nevery record written before it."
+          },
+          "run_counted_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "See [`EventEnvelope::run_counted_from`]. Absent from every record\nwritten before it."
           },
           "run_id": {
             "type": "string"

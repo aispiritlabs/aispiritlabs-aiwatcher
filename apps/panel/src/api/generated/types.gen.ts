@@ -2723,6 +2723,13 @@ export type EventEnvelope = {
     occurred_at: string;
     parent_span_id?: null | SpanId;
     /**
+     * Beside `run_sequence`: when that count began — the moment the client
+     * opened the first run it counted for this variant. A reader that was
+     * already reading the log then, and first hears of the count further on,
+     * never read the runs before it: they are lost, the first among them.
+     */
+    run_counted_from?: string | null;
+    /**
      * One execution of an agent. This is what a trace is scoped to.
      */
     run_id: string;
@@ -6547,6 +6554,11 @@ export type RecordedMetadata = {
      * every record written before it.
      */
     published_by?: string | null;
+    /**
+     * See [`EventEnvelope::run_counted_from`]. Absent from every record
+     * written before it.
+     */
+    run_counted_from?: string | null;
     run_id: string;
     /**
      * See [`EventEnvelope::run_sequence`]. Absent from every record written

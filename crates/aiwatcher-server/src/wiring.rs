@@ -92,28 +92,17 @@ struct Registries {
     objects: Option<Arc<dyn aiwatcher_core::prompts::ObjectStore>>,
 }
 
-/// The authored-data registries, or empty when this deployment has no object store.
-///
-/// Built before the server starts listening, and allowed to fail the start-up:
-/// an object store that is misconfigured answers 403 to everything, and
-/// discovering that when somebody saves a prompt puts the failure in front of
-/// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
-/// does not want one.
-async fn build_registries(
+/// The object store every registry and the journal write, or `None` when this
+/// deployment has none (`AIWATCHER_PROMPT_STORE=none`).
+async fn build_object_store(
     config: &Config,
-    images: Option<Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>>,
-) -> Result<Registries> {
-    let registry_config = RegistryConfig {
-        prefix: config.prompt_prefix.clone(),
-        ..RegistryConfig::default()
-    };
-
+) -> Result<Option<Arc<dyn aiwatcher_core::prompts::ObjectStore>>> {
     let store: Arc<dyn aiwatcher_core::prompts::ObjectStore> = match config.prompt_store {
         PromptStoreKind::None => {
             tracing::info!(
                 "AIWATCHER_PROMPT_STORE=none; the prompt, dataset, annotation and training registries are disabled"
             );
-            return Ok(Registries::default());
+            return Ok(None);
         }
         PromptStoreKind::Memory => {
             tracing::warn!("the prompt registry is in memory; prompts will not survive a restart");
@@ -153,6 +142,28 @@ async fn build_registries(
                 .context("connecting to the prompt object store")?,
             )
         }
+    };
+    Ok(Some(store))
+}
+
+/// The authored-data registries, or empty when this deployment has no object store.
+///
+/// Built before the server starts listening, and allowed to fail the start-up:
+/// an object store that is misconfigured answers 403 to everything, and
+/// discovering that when somebody saves a prompt puts the failure in front of
+/// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
+/// does not want one.
+async fn build_registries(
+    config: &Config,
+    images: Option<Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>>,
+) -> Result<Registries> {
+    let registry_config = RegistryConfig {
+        prefix: config.prompt_prefix.clone(),
+        ..RegistryConfig::default()
+    };
+
+    let Some(store) = build_object_store(config).await? else {
+        return Ok(Registries::default());
     };
 
     let prompts = Arc::new(Registry::new(Arc::clone(&store), registry_config));
@@ -594,7 +605,71 @@ impl Runtime {
     }
 }
 
+/// The observation journal on its own (`AIWATCHER_ROLE=journal`): the log, the
+/// object store its pages go to, and nothing else — no listener, no read model,
+/// no workflow store and no identity provider, so it stays up where they
+/// cannot and keeps reading while every process that accepts or drains work is
+/// down. It reads under the name the other roles' journals read under, so a
+/// broker gives the log to whichever of them is up.
+///
+/// # Errors
+///
+/// A log other than Laser, a deployment with no object store or no days to
+/// keep, and a broker or store that could not be reached.
+pub async fn build_journal(config: &Config) -> Result<Box<dyn JournalTask>> {
+    match config.bus {
+        #[cfg(feature = "laser")]
+        BackendKind::Laser => {
+            use aiwatcher_bus::adapters::laser::{LaserBus, LaserConfig};
+
+            let days = config.observation_journal_days.context(
+                "AIWATCHER_OBSERVATION_JOURNAL_DAYS is required for AIWATCHER_ROLE=journal",
+            )?;
+            let store = build_object_store(config)
+                .await?
+                .context("AIWATCHER_PROMPT_STORE is required for AIWATCHER_ROLE=journal")?;
+
+            let laser = Arc::new(
+                LaserBus::connect(LaserConfig {
+                    connection_string: config.laser_connection_string.clone().context(
+                        "AIWATCHER_LASER_CONNECTION_STRING is required for AIWATCHER_BUS=laser",
+                    )?,
+                    stream: config.laser_stream.clone(),
+                    topic: config.laser_topic.clone(),
+                    partitions: config.laser_partitions,
+                    batch_length: 256,
+                    ..LaserConfig::default()
+                })
+                .await
+                .context("connecting the observation journal to Laser")?,
+            );
+            Ok(Box::new(TypedJournal {
+                inner: Arc::new(aiwatcher_projector::Journal::new(
+                    Arc::clone(&laser),
+                    laser,
+                    aiwatcher_projector::PeriodStore::new(store),
+                    format!("{}-journal", config.processor_id),
+                    days,
+                    // The broker resumes the journal's group from its own
+                    // committed offset.
+                    aiwatcher_bus::StartFrom::Now,
+                )),
+            }))
+        }
+        other => anyhow::bail!(
+            "AIWATCHER_ROLE=journal reads the log other processes write through Laser, and this \
+             process has AIWATCHER_BUS={other:?}{}",
+            if cfg!(feature = "laser") {
+                ""
+            } else {
+                " in a build without the `laser` feature"
+            }
+        ),
+    }
+}
+
 /// Erases the projector's two generic parameters so `Runtime` does not have to
+/// carry them./// Erases the projector's two generic parameters so `Runtime` does not have to
 /// carry them.
 #[async_trait::async_trait]
 pub trait ProjectorTask: Send + Sync {

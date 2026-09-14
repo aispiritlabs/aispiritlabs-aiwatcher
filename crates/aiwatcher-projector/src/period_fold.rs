@@ -60,6 +60,10 @@ const MOST_CLIENTS_NUMBERED: usize = 64;
 /// Clients' counts of the runs they opened the fold keeps, for each variant;
 /// past it, the one heard from longest ago is forgotten and counts afresh.
 const MOST_RUN_COUNTS: usize = 10_000;
+/// How far a client's clock may run ahead of the log's before a count it says
+/// began after the fold started reading is taken for one the fold could not
+/// have read the beginning of.
+const CLIENT_CLOCK_SKEW: i64 = 60;
 /// How often the state is saved when nothing forces it.
 const SAVE_EVERY: Duration = Duration::from_secs(15);
 /// Periods read from the store at once when a window is answered.
@@ -159,6 +163,15 @@ pub struct PeriodFold {
     /// never reached the fold.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     run_counts: BTreeMap<String, RunCount>,
+    /// The log's clock at the first event this state folded: a count that began
+    /// after it began where the fold was already reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_read: Option<i64>,
+    /// When the latest of the counts forgotten to make room was last heard
+    /// from: a client first heard of now whose count began before it may be
+    /// one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forgotten: Option<i64>,
     /// Periods at their own width still open, by their start.
     open: BTreeMap<i64, BTreeMap<String, ObservedPeriod>>,
     /// Hours and days still open, by level and then start: what the closed
@@ -388,6 +401,7 @@ impl PeriodFold {
         if self.began.is_none() {
             self.began = Some(self.floor_at(bound));
         }
+        self.first_read.get_or_insert(bound);
         let subject = event.event_type.subject();
         if subject != Subject::Eval {
             self.fold(event, subject);
@@ -536,10 +550,13 @@ impl PeriodFold {
     /// its variant: numbers passed over since that count's last are runs whose
     /// start never reached the fold — a run lost whole among them — counted in
     /// the period this start reached, which says it is incomplete. A client's
-    /// first start counts nothing before it, since the fold cannot tell a count
-    /// it began reading midway from one it lost the beginning of; a number at
-    /// or below one already read passes nothing over. A measurement's run is in
-    /// no such count.
+    /// first start counts the numbers before it where the client says its count
+    /// began after the fold was already reading — past a client clock running
+    /// ahead — and after the latest count forgotten was last heard from, so the
+    /// fold would have read them; otherwise nothing, since it cannot tell a
+    /// count it began reading midway from one it lost the beginning of. A
+    /// number at or below one already read passes nothing over. A
+    /// measurement's run is in no such count.
     fn runs_numbered(&mut self, event: &RecordedEvent) {
         let (Some(number), Some(client), Some(variant_id)) = (
             event.metadata.run_sequence,
@@ -566,13 +583,14 @@ impl PeriodFold {
             }
             None => {
                 if self.run_counts.len() >= MOST_RUN_COUNTS
-                    && let Some(oldest) = self
+                    && let Some((oldest, count)) = self
                         .run_counts
                         .iter()
                         .min_by_key(|(_, count)| count.heard)
-                        .map(|(key, _)| key.clone())
+                        .map(|(key, count)| (key.clone(), count.heard))
                 {
                     self.run_counts.remove(&oldest);
+                    self.forgotten = Some(self.forgotten.map_or(count, |at| at.max(count)));
                 }
                 self.run_counts.insert(
                     key,
@@ -581,7 +599,18 @@ impl PeriodFold {
                         heard,
                     },
                 );
-                0
+                let began = event
+                    .metadata
+                    .run_counted_from
+                    .map(|at| at.unix_timestamp());
+                let read_from_its_start = began.is_some_and(|began| {
+                    self.first_read
+                        .is_some_and(|first| began >= first + CLIENT_CLOCK_SKEW)
+                        && self
+                            .forgotten
+                            .is_none_or(|forgotten| began > forgotten + CLIENT_CLOCK_SKEW)
+                });
+                if read_from_its_start { number } else { 0 }
             }
         };
         if passed > 0 {
@@ -1646,6 +1675,67 @@ mod tests {
             open.map(|record| record.lost_runs).sum::<u64>(),
             1,
             "run number 4, in the hour number 5 started"
+        );
+    }
+
+    #[test]
+    fn a_client_first_heard_of_past_nought_lost_the_runs_before_if_its_count_began_as_the_fold_read()
+     {
+        let mut log = Log::new();
+        log.served("first", 60, 62)
+            .served("began-later", 1_200, 1_205)
+            .served("began-before", 1_300, 1_305)
+            .served("unsaid", 1_400, 1_405)
+            .served("clock-ahead", 1_500, 1_505);
+        for event in &mut log.events {
+            let run = event.metadata.run_id.clone();
+            event.metadata.source.client = Some(run.clone());
+            if event.event_type != EventType::RunStarted {
+                continue;
+            }
+            let began = |seconds: i64| Some(HOUR_START + time::Duration::seconds(seconds));
+            (event.metadata.run_sequence, event.metadata.run_counted_from) = match run.as_str() {
+                "first" => (Some(0), began(60)),
+                // Its count began at 1 000, when the fold had been reading
+                // since 60: runs 0 and 1 started where it was reading, and it
+                // never read them.
+                "began-later" => (Some(2), began(1_000)),
+                // Its count began before the fold started reading, so what
+                // came before this start may lie before it too.
+                "began-before" => (Some(3), began(-600)),
+                "unsaid" => (Some(4), None),
+                // Within a minute of the fold's first read: a clock ahead of
+                // the log's could be saying so of a count that began earlier.
+                "clock-ahead" => (Some(1), began(100)),
+                _ => (None, None),
+            };
+        }
+
+        let (fold, _) = folded(3_600, &log.events);
+
+        let lost: u64 = fold
+            .open
+            .values()
+            .flat_map(BTreeMap::values)
+            .map(|record| record.lost_runs)
+            .sum();
+        assert_eq!(lost, 2, "the two runs before the one first heard of at 2");
+
+        let mut forgetting = PeriodFold::new(3_600);
+        forgetting.apply(&log.events[0]);
+        forgetting.forgotten = Some(HOUR_START.unix_timestamp() + 1_100);
+        for event in &log.events[1..] {
+            forgetting.apply(event);
+        }
+        assert_eq!(
+            forgetting
+                .open
+                .values()
+                .flat_map(BTreeMap::values)
+                .map(|record| record.lost_runs)
+                .sum::<u64>(),
+            0,
+            "a count forgotten after it began might be this one, heard of again"
         );
     }
 

@@ -203,6 +203,17 @@ pub struct EventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_sequence: Option<u64>,
 
+    /// Beside `run_sequence`: when that count began — the moment the client
+    /// opened the first run it counted for this variant. A reader that was
+    /// already reading the log then, and first hears of the count further on,
+    /// never read the runs before it: they are lost, the first among them.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub run_counted_from: Option<OffsetDateTime>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<TraceId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,6 +261,7 @@ impl EventEnvelope {
             published_by: None,
             sequence: None,
             run_sequence: None,
+            run_counted_from: None,
             trace_id: None,
             span_id: None,
             parent_span_id: None,
@@ -421,6 +433,7 @@ impl EventEnvelope {
                 published_by: self.published_by,
                 sequence: self.sequence,
                 run_sequence: self.run_sequence,
+                run_counted_from: self.run_counted_from,
                 span_key,
                 schema_version: self.schema_version,
                 source: self.source,
@@ -480,6 +493,14 @@ pub struct RecordedMetadata {
     /// before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_sequence: Option<u64>,
+    /// See [`EventEnvelope::run_counted_from`]. Absent from every record
+    /// written before it.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub run_counted_from: Option<OffsetDateTime>,
 
     /// The key `span_id` derived from. Carried so a projector can group a
     /// start and its end without re-deriving it.

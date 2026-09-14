@@ -1,0 +1,82 @@
+{{- if gt (int .Values.observationJournal.replicas) 0 }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- /*
+The observation journal on its own (ADR_0002, amended): a reader of the log that
+needs nothing the API or the worker needs, so what a broker would evict while
+they are down is still kept. The refusals are the ones `Config::validate` makes
+for AIWATCHER_ROLE=journal, made here so they cost a render rather than a
+rollout.
+*/ -}}
+{{- if ne .Values.server.bus "laser" -}}
+{{- fail "observationJournal.replicas is set but server.bus is not \"laser\". The journal role reads the log the other pods write, and the write-ahead log is one directory on one volume." -}}
+{{- end -}}
+{{- if eq .Values.promptStore.mode "none" -}}
+{{- fail "observationJournal.replicas is set but promptStore.mode is \"none\". The journal keeps its pages in the object store the period fold refills a gap from." -}}
+{{- end -}}
+{{- if le (int .Values.observationJournal.days) 0 -}}
+{{- fail "observationJournal.replicas is set but observationJournal.days is 0. A journal that keeps no days keeps nothing." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-journal
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: journal
+spec:
+  # More than one is safe: they read under one consumer group, so the broker
+  # gives the log to one of them and hands it to another when that one stops.
+  replicas: {{ .Values.observationJournal.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: journal
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: journal
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: aiwatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # No listener, so no Service and no probe: the process exits when
+            # the journal stops, and the pod restarts.
+            - { name: AIWATCHER_ROLE, value: "journal" }
+            {{- include "aiwatcher.serverEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.observationJournal.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/aiwatcher }
+            - { name: tmp, mountPath: /tmp }
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

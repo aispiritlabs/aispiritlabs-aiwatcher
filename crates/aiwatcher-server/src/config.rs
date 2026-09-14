@@ -272,12 +272,19 @@ impl FromStr for WorkflowStoreKind {
 /// it. A deployment that wants the network boundary runs two Deployments on
 /// `postgres`, and the one holding the cluster's credentials is the one holding
 /// no ingress.
+///
+/// `Journal` is neither half: the observation journal alone, reading the log
+/// and keeping its pages in the object store, with no listener, no read model
+/// and no workflow store — so a deployment can keep a reader of the log up that
+/// needs nothing the others need, and a stretch of it is kept while every
+/// process that accepts or drains work is down.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProcessRole {
     #[default]
     Both,
     Serve,
     Work,
+    Journal,
 }
 
 impl ProcessRole {
@@ -287,6 +294,7 @@ impl ProcessRole {
             Self::Both => "both",
             Self::Serve => "serve",
             Self::Work => "work",
+            Self::Journal => "journal",
         }
     }
 
@@ -311,10 +319,11 @@ impl FromStr for ProcessRole {
             "both" | "all" => Ok(Self::Both),
             "serve" | "server" | "api" => Ok(Self::Serve),
             "work" | "worker" => Ok(Self::Work),
+            "journal" => Ok(Self::Journal),
             other => Err(ConfigError::Invalid {
                 name: "AIWATCHER_ROLE",
                 value: other.to_owned(),
-                expected: "one of serve, work, both",
+                expected: "one of serve, work, both, journal",
             }),
         }
     }
@@ -1330,7 +1339,7 @@ impl Config {
         // per-process, and every one of them fails quietly if it is not
         // shared. Refused here, naming the variable, rather than discovered by
         // whoever reads the failure afterwards.
-        if self.role != ProcessRole::Both {
+        if matches!(self.role, ProcessRole::Serve | ProcessRole::Work) {
             // The workflow store. `file` takes an exclusive lock, so this
             // combination fails on whichever process starts second — in a
             // message about a lock file rather than about a decision somebody
@@ -1364,6 +1373,32 @@ impl Config {
                     name: "AIWATCHER_PROMPT_STORE",
                     because: "AIWATCHER_ROLE splits the binary in two, and one role stores \
                               a step's result for the other to read",
+                });
+            }
+        }
+
+        // The journal alone reads a log other processes write and keeps its
+        // pages where they read them: a broker, and an object store they share.
+        // Without its days it would keep nothing, and say nothing about it.
+        if self.role == ProcessRole::Journal {
+            if self.observation_journal_days.is_none() {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_OBSERVATION_JOURNAL_DAYS",
+                    because: "AIWATCHER_ROLE=journal, which keeps nothing else",
+                });
+            }
+            if self.bus != BackendKind::Laser {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_BUS",
+                    because: "AIWATCHER_ROLE=journal reads a log other processes write, and \
+                              `memory` and `wal` are one process's",
+                });
+            }
+            if self.prompt_store != PromptStoreKind::S3 {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_PROMPT_STORE",
+                    because: "AIWATCHER_ROLE=journal keeps pages the period fold of another \
+                              process reads",
                 });
             }
         }
@@ -1719,6 +1754,46 @@ mod tests {
             "the default has to be durable and need nothing running"
         );
         assert_eq!(config.prompt_dir(), "./.data/prompts");
+    }
+
+    #[test]
+    fn the_journal_role_keeps_pages_of_a_shared_log_in_a_shared_store_and_nothing_else() {
+        let journal = |config: Config| {
+            Config {
+                role: ProcessRole::Journal,
+                ..config
+            }
+            .validate()
+        };
+        let refused = |config: Config| journal(config).expect_err("refused").to_string();
+        assert!(refused(Config::default()).contains("AIWATCHER_OBSERVATION_JOURNAL_DAYS"));
+        let keeping = Config {
+            observation_journal_days: Some(7),
+            ..Config::default()
+        };
+        assert!(refused(keeping.clone()).contains("AIWATCHER_BUS"));
+        let on_a_broker = Config {
+            bus: BackendKind::Laser,
+            laser_connection_string: Some("iggy://iggy:iggy@iggy:8090".to_owned()),
+            ..keeping
+        };
+        assert!(refused(on_a_broker.clone()).contains("AIWATCHER_PROMPT_STORE"));
+        let kept = journal(Config {
+            prompt_store: PromptStoreKind::S3,
+            prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
+            prompt_s3_access_key: Some("journal".to_owned()),
+            prompt_s3_secret_key: Some("journal-secret".to_owned()),
+            ..on_a_broker
+        });
+        assert!(
+            kept.is_ok(),
+            "no workflow store, no listener: the journal needs neither — {kept:?}"
+        );
+        assert_eq!(
+            "journal".parse::<ProcessRole>().expect("a role"),
+            ProcessRole::Journal
+        );
+        assert!(!ProcessRole::Journal.serves() && !ProcessRole::Journal.works());
     }
 
     #[test]

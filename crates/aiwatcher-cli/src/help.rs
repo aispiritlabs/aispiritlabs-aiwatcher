@@ -41,6 +41,7 @@ Running an instance
   status                                what is running, and what commands talk to
   serve                                 the API and the read model (a deployment's half)
   work                                  the outbox and the reactors (the other half)
+  journal                               the observation journal alone, on Laser and S3
 
 Where commands go
 

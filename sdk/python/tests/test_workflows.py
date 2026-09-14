@@ -363,10 +363,19 @@ def test_each_client_numbers_the_runs_it_opens_for_a_variant_and_no_measurement_
     }
     assert starts == {"run-1": 0, "measured": None, "run-2": 1, "elsewhere": 0}
     assert all(
-        "run_sequence" not in event
+        "run_sequence" not in event and "run_counted_from" not in event
         for event in transport.events
         if event["event_type"] != "run.started"
     )
+    began = {
+        event["run_id"]: (event.get("run_counted_from"), event["occurred_at"])
+        for event in transport.of_type("run.started")
+    }
+    assert began["run-2"][0] == began["run-1"][0] == began["run-1"][1], (
+        "a count began when its first run started, and says so on every start after"
+    )
+    assert began["elsewhere"][0] == began["elsewhere"][1]
+    assert began["measured"][0] is None
 
 
 def test_events_from_many_threads_reach_the_transport_in_the_order_they_were_numbered() -> None:

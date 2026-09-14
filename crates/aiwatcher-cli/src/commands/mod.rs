@@ -55,6 +55,7 @@ pub async fn dispatch(mut args: Args) -> Result<(), CliError> {
         Some("serve" | "server") => return serve(Some(ProcessRole::Serve)).await,
         Some("work" | "worker") => return serve(Some(ProcessRole::Work)).await,
         Some("both" | "all") => return serve(Some(ProcessRole::Both)).await,
+        Some("journal") => return serve(Some(ProcessRole::Journal)).await,
         _ => {}
     }
 

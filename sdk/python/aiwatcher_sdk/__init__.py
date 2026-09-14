@@ -362,7 +362,7 @@ class AiwatcherClient:
             "client": _new_id(),
         }
         self._sequences: dict[str, int] = {}
-        self._run_sequences: dict[str, int] = {}
+        self._run_sequences: dict[str, tuple[int, str]] = {}
         self._sequence_lock = threading.Lock()
         if instance or os.environ.get("HOSTNAME"):
             self._source["instance"] = instance or os.environ["HOSTNAME"]
@@ -426,7 +426,9 @@ class AiwatcherClient:
                 and context.variant_id
                 and not (data or {}).get("evaluation_id")
             ):
-                envelope["run_sequence"] = self._next_run_sequence(context.variant_id)
+                envelope["run_sequence"], envelope["run_counted_from"] = self._next_run_sequence(
+                    context.variant_id, envelope["occurred_at"]
+                )
             self._transport.send([envelope])
         return event_id
 
@@ -445,21 +447,23 @@ class AiwatcherClient:
             self._sequences[run_id] = sequence + 1
         return sequence
 
-    def _next_run_sequence(self, variant_id: str) -> int:
-        """This client's count of the runs it has opened naming one variant, from nought.
+    def _next_run_sequence(self, variant_id: str, occurred_at: str) -> tuple[int, str]:
+        """This client's count of the runs it has opened naming one variant, from
+        nought, and when that count began: the first of those runs' start.
 
         A number the other end never read is a run whose start never reached it
-        — lost whole, perhaps, which no count inside a run can show. A
-        measurement's run is in no count. Called holding the lock the start is
-        sent under.
+        — lost whole, perhaps, which no count inside a run can show; when the
+        count began says whether a reader first hearing of it past nought was
+        already reading when those runs started. A measurement's run is in no
+        count. Called holding the lock the start is sent under.
         """
-        sequence = self._run_sequences.get(variant_id, 0)
+        sequence, began = self._run_sequences.get(variant_id, (0, occurred_at))
         if variant_id not in self._run_sequences and len(self._run_sequences) >= (
             MOST_VARIANTS_NUMBERED
         ):
             self._run_sequences.pop(next(iter(self._run_sequences)))
-        self._run_sequences[variant_id] = sequence + 1
-        return sequence
+        self._run_sequences[variant_id] = (sequence + 1, began)
+        return sequence, began
 
     @contextlib.contextmanager
     def run(

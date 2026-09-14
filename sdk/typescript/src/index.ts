@@ -53,6 +53,8 @@ export interface EventEnvelope {
    * variant and answering no measurement, from 0 — what shows a run lost whole.
    */
   run_sequence?: number;
+  /** On a run's start beside `run_sequence`: when that count began. */
+  run_counted_from?: string;
   trace_id?: string;
   span_id?: string;
   parent_span_id?: string;
@@ -231,7 +233,7 @@ export class AiwatcherClient {
   readonly #source: Source;
   readonly #variantId: string | undefined;
   readonly #sequences = new Map<string, number>();
-  readonly #runSequences = new Map<string, number>();
+  readonly #runSequences = new Map<string, { next: number; since: string }>();
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -273,17 +275,20 @@ export class AiwatcherClient {
 
   /**
    * This client's count of the runs it has opened naming one variant, from
-   * nought: a number the other end never read is a run whose start never
-   * reached it — lost whole, perhaps, which no count inside a run can show.
+   * nought, and when that count began — the first of those runs' start: a
+   * number the other end never read is a run whose start never reached it —
+   * lost whole, perhaps, which no count inside a run can show — and when the
+   * count began says whether a reader first hearing of it past nought was
+   * already reading when those runs started.
    */
-  #nextRunSequence(variantId: string): number {
-    const sequence = this.#runSequences.get(variantId) ?? 0;
+  #nextRunSequence(variantId: string, occurredAt: string): { run_sequence: number; run_counted_from: string } {
+    const count = this.#runSequences.get(variantId) ?? { next: 0, since: occurredAt };
     if (!this.#runSequences.has(variantId) && this.#runSequences.size >= MOST_VARIANTS_NUMBERED) {
       const oldest = this.#runSequences.keys().next();
       if (!oldest.done) this.#runSequences.delete(oldest.value);
     }
-    this.#runSequences.set(variantId, sequence + 1);
-    return sequence;
+    this.#runSequences.set(variantId, { next: count.next + 1, since: count.since });
+    return { run_sequence: count.next, run_counted_from: count.since };
   }
 
   /**
@@ -301,18 +306,19 @@ export class AiwatcherClient {
     occurredAt?: string,
   ): string {
     const eventId = newId();
+    const at = occurredAt ?? now();
     this.#transport.send([
       {
         schema_version: SCHEMA_VERSION,
         kind: 'Event',
         event_id: eventId,
         event_type: eventType,
-        occurred_at: occurredAt ?? now(),
+        occurred_at: at,
         run_id: context.runId,
         sequence: this.#nextSequence(context.runId, eventType),
         // A measurement's run is in no count: what it answers is a result's.
         ...(eventType === 'run.started' && context.variantId && data.evaluation_id === undefined
-          ? { run_sequence: this.#nextRunSequence(context.variantId) }
+          ? this.#nextRunSequence(context.variantId, at)
           : {}),
         correlation_id: context.correlationId,
         source: this.#source,

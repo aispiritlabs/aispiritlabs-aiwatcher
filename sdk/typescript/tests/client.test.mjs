@@ -50,6 +50,14 @@ test('each client numbers the runs it opens for a variant, and no measurement am
       .map((event) => [event.run_id, event.run_sequence]),
   );
   assert.deepEqual(starts, { 'run-1': 0, measured: undefined, 'run-2': 1, elsewhere: 0 });
+  const began = Object.fromEntries(
+    sent.events
+      .filter((event) => event.event_type === 'run.started')
+      .map((event) => [event.run_id, [event.run_counted_from, event.occurred_at]]),
+  );
+  assert.equal(began['run-2'][0], began['run-1'][1], 'a count began when its first run started');
+  assert.equal(began['elsewhere'][0], began['elsewhere'][1]);
+  assert.equal(began.measured[0], undefined);
   assert.ok(
     sent.events.every((event) => event.event_type === 'run.started' || event.run_sequence === undefined),
   );
