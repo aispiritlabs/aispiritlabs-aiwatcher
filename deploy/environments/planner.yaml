@@ -184,8 +184,14 @@ chatModel:
   contextSize: 8192
   threads: 2
   resources:
-    requests: { cpu: 500m, memory: 2Gi }
-    limits: { cpu: "2", memory: 3Gi }
+    # Measured on planner's node, 2026-09-14, after 43 h up: 885Mi held
+    # (almost all of it anonymous — the weights are read in, not mapped) and a
+    # peak of 2038Mi. The request covers what it holds with room, not the
+    # peak: the node is scheduled to 95% of its memory and actually uses 73%,
+    # and 2Gi here was the largest reservation on it. The limit stays above
+    # the peak, because an OOM kill mid-answer loses the whole cycle.
+    requests: { cpu: 500m, memory: 1280Mi }
+    limits: { cpu: "2", memory: 2560Mi }
   allowIngressFrom:
     # planner's import API and worker, and only those. The scout ticker is given
     # the endpoint in its environment but never calls it: it enqueues a cycle
