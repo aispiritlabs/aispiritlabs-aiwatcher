@@ -1215,10 +1215,14 @@ impl ActivityExecutor for TracesExecutor {
                 .unwrap_or(i64::MAX);
             match &self.asked {
                 Some(index) => {
-                    let start = started
-                        .map(time::OffsetDateTime::unix_timestamp)
-                        .unwrap_or(declared.declared_at);
-                    let from_ms = start.saturating_sub(before).saturating_mul(1_000);
+                    // To the millisecond: a question asked a moment before
+                    // the start is not asked while the measurement ran.
+                    let start_ms = started
+                        .and_then(|started| {
+                            i64::try_from(started.unix_timestamp_nanos() / 1_000_000).ok()
+                        })
+                        .unwrap_or_else(|| declared.declared_at.saturating_mul(1_000));
+                    let from_ms = start_ms.saturating_sub(before.saturating_mul(1_000));
                     let read = index.since(from_ms).await.map_err(|error| {
                         if error.is_retryable() {
                             ActivityError::transient(error.to_string())
