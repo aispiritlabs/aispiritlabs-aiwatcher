@@ -79,4 +79,24 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+{{- if ge (int .Values.observationJournal.replicas) 2 }}
+---
+# With two or more, a drained node or a rollout never stops every one at once:
+# the broker hands the group's log to a journal still up, and nothing it would
+# evict meanwhile goes unread. One replica has nothing to keep up, so no budget
+# is rendered that would only block a drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-journal
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: journal
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: journal
+{{- end }}
 {{- end }}

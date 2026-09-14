@@ -21,6 +21,14 @@
 //! deployment it also outlives either half being down. What no journal read
 //! before the log evicted it is a gap for both, and the journal says so when it
 //! comes to a position past the one after its last.
+//!
+//! It also says how close that is: every minute, how far behind the log it is —
+//! the age of the oldest event it read and has not kept, or of the last one it
+//! read while it has not caught up — how many positions it holds unkept, and,
+//! where the deployment says how long the log keeps an event, how long before
+//! the oldest of those is gone. A metric and a line in the log, warning once
+//! the margin is under a quarter of the retention, so a journal that cannot
+//! keep up or cannot write is heard of before the gap it will leave.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +37,7 @@ use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use aiwatcher_bus::{Checkpointer, MessageSource, SourceMessage, StartFrom, SubscribeOptions};
+use aiwatcher_core::ports::{AttrValue, MetricKind, MetricSample, MetricSink};
 use aiwatcher_core::{Checkpoint, RecordedEvent};
 
 use crate::period_fold::PeriodFold;
@@ -44,6 +53,8 @@ const PRUNE_EVERY: Duration = Duration::from_secs(3_600);
 /// let go and the journal says it holds nothing of those.
 const MOST_HELD: u64 = 64 * PAGE_POSITIONS;
 const DAY: i64 = 86_400;
+/// How often the journal says how far behind the log it is.
+const REPORT_EVERY: Duration = Duration::from_secs(60);
 
 /// The journal as a consumer of the log.
 #[derive(Debug)]
@@ -54,6 +65,54 @@ pub struct Journal<S, C> {
     processor_id: String,
     keep_days: u64,
     cold_start: StartFrom,
+    metrics: Option<Arc<dyn MetricSink>>,
+    /// How long the log keeps an event, where the deployment says.
+    log_retention: Option<Duration>,
+}
+
+/// How far behind the log a journal is, at one moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JournalLag {
+    /// Seconds: the age of the oldest event read and not kept, or of the last
+    /// read while not caught up; nought when every position read is kept.
+    pub behind_seconds: i64,
+    /// Positions read and not kept.
+    pub unkept_positions: u64,
+    /// Seconds before the log's retention removes the oldest event not kept,
+    /// where the retention is known.
+    pub margin_seconds: Option<i64>,
+}
+
+impl JournalLag {
+    /// Where a journal stands, from what it holds and reads.
+    #[must_use]
+    pub fn at(
+        oldest_unkept: Option<i64>,
+        unkept_positions: u64,
+        last_read: Option<i64>,
+        caught_up: bool,
+        now: i64,
+        retention: Option<Duration>,
+    ) -> Self {
+        let behind_since = oldest_unkept.or_else(|| last_read.filter(|_| !caught_up));
+        let behind_seconds = behind_since.map_or(0, |since| (now - since).max(0));
+        Self {
+            behind_seconds,
+            unkept_positions,
+            margin_seconds: retention.map(|retention| {
+                i64::try_from(retention.as_secs()).unwrap_or(i64::MAX) - behind_seconds
+            }),
+        }
+    }
+}
+
+/// Where the journal's reading of the log stands.
+#[derive(Clone, Copy, Debug, Default)]
+struct ReadState {
+    /// The subscription drained the backlog since the last event read.
+    caught_up: bool,
+    /// The log's clock at the last event read.
+    last_read: Option<i64>,
 }
 
 /// A page still being read.
@@ -106,7 +165,24 @@ where
             processor_id: processor_id.into(),
             keep_days: keep_days.max(1),
             cold_start,
+            metrics: None,
+            log_retention: None,
         }
+    }
+
+    /// The same journal, reporting how far behind the log it is to `metrics`.
+    #[must_use]
+    pub fn measuring(mut self, metrics: Arc<dyn MetricSink>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// The same journal, told how long the log keeps an event: what its
+    /// margin is counted against.
+    #[must_use]
+    pub const fn with_log_retention(mut self, retention: Duration) -> Self {
+        self.log_retention = Some(retention);
+        self
     }
 
     /// Read the log and keep what the fold reads of it until `shutdown`.
@@ -153,6 +229,8 @@ where
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut pruned: Option<Instant> = None;
+        let mut reported: Option<Instant> = None;
+        let mut reading = ReadState::default();
         loop {
             tokio::select! {
                 biased;
@@ -163,11 +241,20 @@ where
                 }
                 message = stream.next() => match message {
                     Some(SourceMessage::Event(event)) => {
+                        reading.caught_up = false;
+                        reading.last_read = Some(
+                            event
+                                .metadata
+                                .occurred_at
+                                .min(event.metadata.ingested_at)
+                                .unix_timestamp(),
+                        );
                         if self.read(&mut held, &event) {
                             self.keep(&mut held).await;
                         }
                     }
                     Some(SourceMessage::CaughtUp { .. }) => {
+                        reading.caught_up = true;
                         self.close(&mut held);
                         self.keep(&mut held).await;
                     }
@@ -185,6 +272,10 @@ where
                     if pruned.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
                         pruned = Some(Instant::now());
                         self.prune().await;
+                    }
+                    if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
+                        reported = Some(Instant::now());
+                        self.report(&held, reading).await;
                     }
                 }
             }
@@ -290,6 +381,72 @@ where
         }
     }
 
+    /// Say how far behind the log the journal is, as a metric and a line.
+    async fn report(&self, held: &Held, reading: ReadState) {
+        let oldest_unkept = held
+            .waiting
+            .front()
+            .or(held.reading.as_ref().map(|open| &open.page))
+            .map(|page| page.from);
+        let now = time::OffsetDateTime::now_utc();
+        let lag = JournalLag::at(
+            oldest_unkept,
+            held.positions(),
+            reading.last_read,
+            reading.caught_up,
+            now.unix_timestamp(),
+            self.log_retention,
+        );
+        let quarter = self
+            .log_retention
+            .map(|retention| i64::try_from(retention.as_secs() / 4).unwrap_or(i64::MAX));
+        match (lag.margin_seconds, quarter) {
+            (Some(margin), Some(quarter)) if margin < quarter => tracing::warn!(
+                processor_id = self.processor_id,
+                behind_seconds = lag.behind_seconds,
+                unkept_positions = lag.unkept_positions,
+                margin_seconds = margin,
+                "the observation journal is close to the log's retention: what it has not kept goes in this many seconds"
+            ),
+            _ if lag.behind_seconds > 0 || lag.unkept_positions > 0 => tracing::info!(
+                processor_id = self.processor_id,
+                behind_seconds = lag.behind_seconds,
+                unkept_positions = lag.unkept_positions,
+                margin_seconds = lag.margin_seconds,
+                "the observation journal is behind the log"
+            ),
+            _ => {}
+        }
+        let Some(metrics) = &self.metrics else {
+            return;
+        };
+        let attributes = vec![(
+            aiwatcher_core::attrs::aiwatcher::processor::ID.to_owned(),
+            AttrValue::Str(self.processor_id.clone()),
+        )];
+        let gauge = |name: &str, value: f64, unit: Option<&str>| MetricSample {
+            name: name.to_owned(),
+            kind: MetricKind::Gauge,
+            value,
+            unit: unit.map(ToOwned::to_owned),
+            at: now,
+            attributes: attributes.clone(),
+        };
+        use aiwatcher_core::attrs::aiwatcher::metrics;
+        #[allow(clippy::cast_precision_loss)] // seconds and positions, far below 2^53
+        let mut samples = vec![
+            gauge(metrics::JOURNAL_LAG, lag.behind_seconds as f64, Some("s")),
+            gauge(metrics::JOURNAL_UNKEPT, lag.unkept_positions as f64, None),
+        ];
+        if let Some(margin) = lag.margin_seconds {
+            #[allow(clippy::cast_precision_loss)]
+            samples.push(gauge(metrics::JOURNAL_MARGIN, margin as f64, Some("s")));
+        }
+        if let Err(error) = metrics.record(samples).await {
+            tracing::warn!(%error, "the observation journal could not record how far behind it is");
+        }
+    }
+
     async fn prune(&self) {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let before = now - i64::try_from(self.keep_days).unwrap_or(i64::MAX / DAY) * DAY;
@@ -327,6 +484,44 @@ mod tests {
             envelope.variant_id = Some("v1".to_owned());
         }
         envelope
+    }
+
+    #[test]
+    fn a_journal_behind_the_log_says_how_long_before_retention_takes_what_it_did_not_keep() {
+        let hour = Duration::from_secs(3_600);
+        assert_eq!(
+            JournalLag::at(Some(1_000), 12, Some(2_000), true, 2_500, Some(hour)),
+            JournalLag {
+                behind_seconds: 1_500,
+                unkept_positions: 12,
+                margin_seconds: Some(2_100),
+            },
+            "a page the store has not taken is as old as its first event"
+        );
+        assert_eq!(
+            JournalLag::at(None, 0, Some(2_000), false, 2_600, Some(hour)).margin_seconds,
+            Some(3_000),
+            "reading behind, the last event read is how far"
+        );
+        assert_eq!(
+            JournalLag::at(None, 0, Some(2_000), true, 9_000, Some(hour)),
+            JournalLag {
+                behind_seconds: 0,
+                unkept_positions: 0,
+                margin_seconds: Some(3_600),
+            },
+            "caught up with everything kept, a quiet log is no lag"
+        );
+        assert_eq!(
+            JournalLag::at(Some(0), 1, None, true, 4_000, Some(hour)).margin_seconds,
+            Some(-400),
+            "past the retention the margin is a gap"
+        );
+        assert_eq!(
+            JournalLag::at(Some(0), 1, None, true, 4_000, None).margin_seconds,
+            None,
+            "with no retention said, no margin is counted"
+        );
     }
 
     #[tokio::test]

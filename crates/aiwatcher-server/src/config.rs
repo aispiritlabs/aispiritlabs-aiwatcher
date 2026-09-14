@@ -522,6 +522,11 @@ pub struct Config {
     /// run. Thirty unless a deployment says otherwise; `0` keeps every page.
     /// Written by the projector, wherever there is an object store.
     pub asked_index_days: u64,
+    /// How long the log keeps an event, as the deployment configured its
+    /// broker: what the observation journal counts its margin against, and
+    /// says it is close to. Unset, the journal says how far behind it is and
+    /// counts no margin — no adapter reads a broker's retention yet.
+    pub log_retention: Option<Duration>,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
     /// pod is refused at registration naming this variable.
@@ -745,6 +750,7 @@ impl Default for Config {
             observation_period: Duration::from_secs(300),
             observation_journal_days: None,
             asked_index_days: 30,
+            log_retention: None,
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
@@ -1059,6 +1065,18 @@ impl Config {
                         expected: "a whole number of days, at least one; unset keeps no journal",
                     })?;
             config.observation_journal_days = Some(days);
+        }
+        if let Some(raw) = var("AIWATCHER_LOG_RETENTION_SECONDS") {
+            let seconds = raw
+                .parse::<u64>()
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .ok_or(ConfigError::Invalid {
+                    name: "AIWATCHER_LOG_RETENTION_SECONDS",
+                    value: raw,
+                    expected: "the whole number of seconds the log keeps an event, at least one",
+                })?;
+            config.log_retention = Some(Duration::from_secs(seconds));
         }
         if let Some(raw) = var("AIWATCHER_ASKED_INDEX_DAYS") {
             config.asked_index_days = raw.parse::<u64>().map_err(|_| ConfigError::Invalid {

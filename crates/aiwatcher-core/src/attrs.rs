@@ -225,5 +225,15 @@ pub mod aiwatcher {
         pub const OPEN_SPANS: &str = "aiwatcher.spans.open";
         pub const LIVE_SUBSCRIBERS: &str = "aiwatcher.live.subscribers";
         pub const PROCESSING_DURATION: &str = "aiwatcher.processor.processing.duration";
+        /// How far behind the log the observation journal is, in seconds: the
+        /// age of the oldest event it read and did not keep, or of the last it
+        /// read when it has not caught up.
+        pub const JOURNAL_LAG: &str = "aiwatcher.journal.lag";
+        /// Positions the journal read and has not kept a page of.
+        pub const JOURNAL_UNKEPT: &str = "aiwatcher.journal.unkept_positions";
+        /// How long, in seconds, before the log's retention removes the oldest
+        /// event the journal has not kept: nought or less is a gap nobody can
+        /// refill. Only where the deployment says what that retention is.
+        pub const JOURNAL_MARGIN: &str = "aiwatcher.journal.retention_margin";
     }
 }

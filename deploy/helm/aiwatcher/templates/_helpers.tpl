@@ -381,6 +381,10 @@ later as "holds no object".
 {{- if gt (int .Values.observationJournal.days) 0 }}
 - { name: AIWATCHER_OBSERVATION_JOURNAL_DAYS, value: {{ .Values.observationJournal.days | int64 | quote }} }
 {{- end }}
+{{- if gt (int64 .Values.observationJournal.logRetentionSeconds) 0 }}
+- { name: AIWATCHER_LOG_RETENTION_SECONDS, value: {{ .Values.observationJournal.logRetentionSeconds | int64 | quote }} }
+{{- end }}
+- { name: AIWATCHER_ASKED_INDEX_DAYS, value: {{ .Values.askedIndex.days | int64 | quote }} }
 {{- if .Values.evaluationEvidence.enabled }}
 - { name: AIWATCHER_EVALUATION_SOURCE_DIR, value: {{ .Values.evaluationEvidence.sourceDir | quote }} }
 # `int64` before `quote`, or a byte limit this size renders as 1.048576e+08 and

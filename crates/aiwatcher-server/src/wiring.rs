@@ -605,6 +605,27 @@ impl Runtime {
     }
 }
 
+/// A journal told how long the log keeps an event and where to say how far
+/// behind it is, where the deployment has either.
+fn observed_journal<S, C>(
+    journal: aiwatcher_projector::Journal<S, C>,
+    config: &Config,
+    metrics: Option<Arc<dyn MetricSink>>,
+) -> aiwatcher_projector::Journal<S, C>
+where
+    S: MessageSource + 'static,
+    C: Checkpointer + 'static,
+{
+    let journal = match metrics {
+        Some(metrics) => journal.measuring(metrics),
+        None => journal,
+    };
+    match config.log_retention {
+        Some(retention) => journal.with_log_retention(retention),
+        None => journal,
+    }
+}
+
 /// The observation journal on its own (`AIWATCHER_ROLE=journal`): the log, the
 /// object store its pages go to, and nothing else — no listener, no read model,
 /// no workflow store and no identity provider, so it stays up where they
@@ -644,15 +665,19 @@ pub async fn build_journal(config: &Config) -> Result<Box<dyn JournalTask>> {
                 .context("connecting the observation journal to Laser")?,
             );
             Ok(Box::new(TypedJournal {
-                inner: Arc::new(aiwatcher_projector::Journal::new(
-                    Arc::clone(&laser),
-                    laser,
-                    aiwatcher_projector::PeriodStore::new(store),
-                    format!("{}-journal", config.processor_id),
-                    days,
-                    // The broker resumes the journal's group from its own
-                    // committed offset.
-                    aiwatcher_bus::StartFrom::Now,
+                inner: Arc::new(observed_journal(
+                    aiwatcher_projector::Journal::new(
+                        Arc::clone(&laser),
+                        laser,
+                        aiwatcher_projector::PeriodStore::new(store),
+                        format!("{}-journal", config.processor_id),
+                        days,
+                        // The broker resumes the journal's group from its own
+                        // committed offset.
+                        aiwatcher_bus::StartFrom::Now,
+                    ),
+                    config,
+                    None,
                 )),
             }))
         }
@@ -851,13 +876,17 @@ pub async fn build(config: Config) -> Result<Runtime> {
                 journal = config.observation_journal_days.and_then(journal_of).map(
                     |(store, name, days)| {
                         Box::new(TypedJournal {
-                            inner: Arc::new(aiwatcher_projector::Journal::new(
-                                Arc::clone(&bus),
-                                Arc::clone(&bus),
-                                store,
-                                name,
-                                days,
-                                aiwatcher_bus::StartFrom::Beginning,
+                            inner: Arc::new(observed_journal(
+                                aiwatcher_projector::Journal::new(
+                                    Arc::clone(&bus),
+                                    Arc::clone(&bus),
+                                    store,
+                                    name,
+                                    days,
+                                    aiwatcher_bus::StartFrom::Beginning,
+                                ),
+                                &config,
+                                Some(Arc::clone(&metrics)),
                             )),
                         }) as Box<dyn JournalTask>
                     },
@@ -883,13 +912,17 @@ pub async fn build(config: Config) -> Result<Runtime> {
                 journal = config.observation_journal_days.and_then(journal_of).map(
                     |(store, name, days)| {
                         Box::new(TypedJournal {
-                            inner: Arc::new(aiwatcher_projector::Journal::new(
-                                Arc::clone(&wal),
-                                Arc::clone(&wal),
-                                store,
-                                name,
-                                days,
-                                aiwatcher_bus::StartFrom::Beginning,
+                            inner: Arc::new(observed_journal(
+                                aiwatcher_projector::Journal::new(
+                                    Arc::clone(&wal),
+                                    Arc::clone(&wal),
+                                    store,
+                                    name,
+                                    days,
+                                    aiwatcher_bus::StartFrom::Beginning,
+                                ),
+                                &config,
+                                Some(Arc::clone(&metrics)),
                             )),
                         }) as Box<dyn JournalTask>
                     },
@@ -925,15 +958,19 @@ pub async fn build(config: Config) -> Result<Runtime> {
                                 .context("connecting the observation journal to Laser")?,
                         );
                         Some(Box::new(TypedJournal {
-                            inner: Arc::new(aiwatcher_projector::Journal::new(
-                                Arc::clone(&own),
-                                own,
-                                store,
-                                name,
-                                days,
-                                // The broker resumes the journal's group from its
-                                // own committed offset.
-                                aiwatcher_bus::StartFrom::Now,
+                            inner: Arc::new(observed_journal(
+                                aiwatcher_projector::Journal::new(
+                                    Arc::clone(&own),
+                                    own,
+                                    store,
+                                    name,
+                                    days,
+                                    // The broker resumes the journal's group from its
+                                    // own committed offset.
+                                    aiwatcher_bus::StartFrom::Now,
+                                ),
+                                &config,
+                                Some(Arc::clone(&metrics)),
                             )),
                         }) as Box<dyn JournalTask>)
                     }

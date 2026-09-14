@@ -818,12 +818,25 @@ observationJournal:
   # They keep reading while every pod that accepts or drains work is down —
   # on a bad release, a database outage or an unreachable provider — which is
   # when a broker's retention would otherwise evict what nobody read. Needs
-  # `server.bus: laser`, an object store and `days`.
+  # `server.bus: laser`, an object store and `days`. Two or more render a
+  # PodDisruptionBudget, so a drain or a rollout never stops them all.
   replicas: 0
+
+  # How long the broker keeps an event, in seconds, as its topic is configured
+  # (AIWATCHER_LOG_RETENTION_SECONDS): what every journal counts its margin to
+  # a gap against, as the `aiwatcher.journal.retention_margin` metric and a
+  # warning under a quarter of it. 0 counts no margin.
+  logRetentionSeconds: 0
 
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { memory: 256Mi }
+
+# How many days the index of what witnesses saw asked keeps a page
+# (AIWATCHER_ASKED_INDEX_DAYS): how far back a scoring run can hold its answers
+# to a case asked in another run. 0 keeps every page.
+askedIndex:
+  days: 30
 
 promptStore:
   # install | external | none.
