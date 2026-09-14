@@ -29,11 +29,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import weakref
 from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 # Re-exported so `from aiwatcher_sdk import PromptRegistry` works and
 # `AiwatcherClient.prompts` has something to hand back.
@@ -72,14 +73,23 @@ GATEWAY_FIELD = "aiwatcher"
 #: application reads which candidate a judge's reply names.
 PLACED_HEADER = "Aiwatcher-Placed"
 
+#: The header a tool's reply carries to name the sha256 of the code that
+#: answered it (``aiwatcher_sdk.gateway.tool_code``): a tool the gateway relays
+#: to a URL publishes it as the gateway publishes its own functions', which a
+#: variant's generation config may pin (``tool_code``) — the word of the service
+#: the deployment named, as the rest of its reply is.
+TOOL_CODE_HEADER = "Aiwatcher-Tool-Code"
+
 __all__ = [
     "CALLER_RUN_HEADER",
     "GATEWAY_FIELD",
     "PLACED_HEADER",
     "PROMPT_HEADER",
     "SCHEMA_VERSION",
+    "TOOL_CODE_HEADER",
     "AgentContext",
     "AiwatcherClient",
+    "CountHolder",
     "EvaluationContext",
     "HttpTransport",
     "NodeContext",
@@ -113,6 +123,21 @@ class Transport(Protocol):
     def close(self) -> None: ...
 
 
+@runtime_checkable
+class CountHolder(Protocol):
+    """A transport that can keep a client's count on a disk before it is due.
+
+    What lets a client killed without closing still say how many runs it
+    opened: the count is held as each run starts, and a transport started later
+    on the same disk sends it.
+    """
+
+    @property
+    def holds_counts(self) -> bool: ...
+
+    def hold(self, event: dict[str, Any]) -> None: ...
+
+
 class NullTransport:
     """Drops everything. The default, so importing this never breaks a test."""
 
@@ -143,6 +168,21 @@ class Tick:
 _TICK = Tick()
 
 
+def _read_count(path: Path) -> dict[str, Any] | None:
+    """The count a spool file holds, or ``None`` where it holds none."""
+    try:
+        kept = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return kept if isinstance(kept, dict) else None
+
+
+def _runs(event: dict[str, Any] | None) -> int:
+    """How many runs a count says, and -1 for no count at all."""
+    runs = ((event or {}).get("data") or {}).get("runs")
+    return runs if isinstance(runs, int) else -1
+
+
 class HttpTransport:
     """Posts batches to ``POST /api/v1/events``.
 
@@ -162,11 +202,14 @@ class HttpTransport:
         timeout: float = 5.0,
         spool_dir: str | os.PathLike[str] | None = None,
     ) -> None:
-        """``spool_dir`` keeps each ``client.counted`` this transport could not
-        deliver in a file there, and one started later with the same directory
-        sends what it finds first: a client whose transport stayed down until it
-        closed still gets its count of the runs it lost to the log. Off unless
-        named — a telemetry client writes to no disk it was not asked to.
+        """``spool_dir`` keeps each ``client.counted`` in a file there until one
+        saying as much is delivered — written as each run starts, before its
+        start is sent, and again when a count could not be delivered — and a
+        transport started later with the same directory sends what it finds
+        first: a client whose transport stayed down until it closed, or that was
+        killed before it could close, still gets its count of the runs it lost
+        to the log. Off unless named — a telemetry client writes to no disk it
+        was not asked to, and with it every run's start costs a file write.
         """
         self._url = base_url.rstrip("/") + "/api/v1/events"
         # Sent as ``Authorization: Bearer``. Needed only against an instance
@@ -190,6 +233,10 @@ class HttpTransport:
         self._dropped = 0
         self._next_drop_warning = 1
         self._spool = Path(spool_dir) if spool_dir is not None else None
+        # Held counts are written by the client's thread and forgotten by this
+        # transport's: one at a time, so a count written as another is forgotten
+        # is not the one removed.
+        self._spool_lock = threading.Lock()
         for kept in self._spooled():
             with contextlib.suppress(queue.Full):
                 self._queue.put_nowait(kept)
@@ -200,6 +247,15 @@ class HttpTransport:
     def dropped(self) -> int:
         """Events discarded because the queue was full."""
         return self._dropped
+
+    @property
+    def holds_counts(self) -> bool:
+        """Whether a count handed to :meth:`hold` is kept: with a ``spool_dir``."""
+        return self._spool is not None
+
+    def hold(self, event: dict[str, Any]) -> None:
+        """Keep a client's count in the spool without sending it."""
+        self._keep(event)
 
     def send(self, batch: list[dict[str, Any]]) -> None:
         for event in batch:
@@ -324,25 +380,32 @@ class HttpTransport:
         return self._spool / f"counted-{hashlib.sha256(named.encode()).hexdigest()[:32]}.json"
 
     def _keep(self, event: dict[str, Any]) -> None:
-        """Write a count this transport could not deliver into the spool."""
+        """Write a count into the spool, unless it already holds a larger one."""
         path = self._spool_file(event)
         if path is None:
             return
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            written = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
-            written.write_text(json.dumps(event))
-            written.replace(path)
-        except OSError as error:
-            print(f"[aiwatcher] could not keep a count in {self._spool}: {error}", file=sys.stderr)
+        with self._spool_lock:
+            if _runs(event) <= _runs(_read_count(path)):
+                return
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                written = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+                written.write_text(json.dumps(event))
+                written.replace(path)
+            except OSError as error:
+                print(
+                    f"[aiwatcher] could not keep a count in {self._spool}: {error}",
+                    file=sys.stderr,
+                )
 
     def _release(self, event: dict[str, Any]) -> None:
-        """Forget a kept count once it, and not a later one, was delivered."""
+        """Forget a kept count once one saying as much was delivered."""
         path = self._spool_file(event)
         if path is None:
             return
-        with contextlib.suppress(OSError, ValueError):
-            if json.loads(path.read_text()).get("event_id") == event.get("event_id"):
+        with self._spool_lock, contextlib.suppress(OSError):
+            kept = _read_count(path)
+            if kept is not None and _runs(kept) <= _runs(event):
                 path.unlink()
 
     def _spooled(self) -> list[dict[str, Any]]:
@@ -387,10 +450,55 @@ MOST_RUNS_NUMBERED = 100_000
 #: How many variants a client keeps a count of runs for; the one numbered first
 #: is forgotten past it, and counts again from nought.
 MOST_VARIANTS_NUMBERED = 1_024
-#: How often, at most, a long-lived client says how many runs it has opened —
-#: and only when it has opened another since it last said.
+#: How often a long-lived client says how many runs it has opened, by its own
+#: clock — and only when it has opened another since it last said.
 COUNTS_EVERY = 300.0
 _RUN_ENDS = frozenset({"run.completed", "run.failed"})
+
+
+class CountClock:
+    """Says each client's counts that moved every :data:`COUNTS_EVERY` seconds.
+
+    One thread for every client in the process, holding them weakly: started
+    with a client's first count — again in a process forked from one that had
+    it — and ended when no client is left to watch, so a client that opens
+    runs and then goes quiet still says what it opened without another event.
+    """
+
+    def __init__(self) -> None:
+        self._clients: weakref.WeakSet[AiwatcherClient] = weakref.WeakSet()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._pid = 0
+
+    def watch(self, client: AiwatcherClient) -> None:
+        with self._lock:
+            self._clients.add(client)
+            if self._thread is None or self._pid != os.getpid() or not self._thread.is_alive():
+                self._pid = os.getpid()
+                self._thread = threading.Thread(
+                    target=self._tick, name="aiwatcher-counts", daemon=True
+                )
+                self._thread.start()
+
+    def forget(self, client: AiwatcherClient) -> None:
+        with self._lock:
+            self._clients.discard(client)
+
+    def _tick(self) -> None:
+        while True:
+            time.sleep(min(COUNTS_EVERY, 1.0))
+            with self._lock:
+                clients = list(self._clients)
+                if not clients:
+                    self._thread = None
+                    return
+            for client in clients:
+                with contextlib.suppress(Exception):
+                    client.publish_counts_due()
+
+
+_COUNT_CLOCK = CountClock()
 
 
 class RunCountKey(NamedTuple):
@@ -523,9 +631,15 @@ class AiwatcherClient:
                 envelope["run_sequence"], envelope["run_counted_from"] = self._next_run_sequence(
                     key, envelope["occurred_at"]
                 )
+                # Held before the start is sent, so a client killed now still
+                # leaves a count that passes over this run.
+                if isinstance(self._transport, CountHolder) and self._transport.holds_counts:
+                    self._transport.hold(
+                        self._counted(
+                            key, envelope["run_sequence"] + 1, envelope["run_counted_from"]
+                        )
+                    )
             self._transport.send([envelope])
-            if time.monotonic() - self._counts_published_at >= COUNTS_EVERY:
-                self._send_counts()
         return event_id
 
     def publish_counts(self) -> None:
@@ -535,15 +649,22 @@ class AiwatcherClient:
         generating it — whose count grew since the last one said: what shows a
         run whose every event was lost where no later start of this client
         arrives to pass over its number. Sent on :meth:`close` and, in a long
-        process, with the next event once :data:`COUNTS_EVERY` seconds have
-        passed; a task generating a measurement's answers sends it as the
-        attempt ends. A count that has not moved is not said again, so a quiet
-        client says nothing. It rides the same transport as the runs, so a
-        transport that stays down loses it too — unless ``HttpTransport`` keeps
-        what it could not deliver in a ``spool_dir``.
+        process, every :data:`COUNTS_EVERY` seconds by a clock of its own; a
+        task generating a measurement's answers sends it as the attempt ends. A
+        count that has not moved is not said again, so a quiet client says
+        nothing. It rides the same transport as the runs, so a transport that
+        stays down loses it too — unless ``HttpTransport`` keeps it in a
+        ``spool_dir``, where it is held as each run starts, which a client
+        killed without closing leaves behind for the next transport there.
         """
         with self._sequence_lock:
             self._send_counts()
+
+    def publish_counts_due(self) -> None:
+        """Say the counts that moved, once :data:`COUNTS_EVERY` has passed since the last."""
+        with self._sequence_lock:
+            if time.monotonic() - self._counts_published_at >= COUNTS_EVERY:
+                self._send_counts()
 
     def _send_counts(self) -> None:
         """Hand the transport a count per key that moved. Called holding the lock."""
@@ -554,29 +675,29 @@ class AiwatcherClient:
             if self._published_counts.get(key) != count[0]
         ]
         for key, (runs, began) in moved:
-            data: dict[str, Any] = {"runs": runs}
-            if key.evaluation_id:
-                data["evaluation_id"] = key.evaluation_id
-            if key.attempt is not None:
-                data["generation_attempt"] = key.attempt
-            self._transport.send(
-                [
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "kind": "Event",
-                        "event_id": _new_id(),
-                        "event_type": "client.counted",
-                        "occurred_at": _now(),
-                        # A count names the client that kept it, not a run.
-                        "run_id": f"client-{self._source['client']}",
-                        "variant_id": key.variant_id,
-                        "run_counted_from": began,
-                        "source": self._source,
-                        "data": data,
-                    }
-                ]
-            )
+            self._transport.send([self._counted(key, runs, began)])
             self._published_counts[key] = runs
+
+    def _counted(self, key: RunCountKey, runs: int, began: str) -> dict[str, Any]:
+        """A ``client.counted`` saying ``runs`` for one count."""
+        data: dict[str, Any] = {"runs": runs}
+        if key.evaluation_id:
+            data["evaluation_id"] = key.evaluation_id
+        if key.attempt is not None:
+            data["generation_attempt"] = key.attempt
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "Event",
+            "event_id": _new_id(),
+            "event_type": "client.counted",
+            "occurred_at": _now(),
+            # A count names the client that kept it, not a run.
+            "run_id": f"client-{self._source['client']}",
+            "variant_id": key.variant_id,
+            "run_counted_from": began,
+            "source": self._source,
+            "data": data,
+        }
 
     def _next_sequence(self, run_id: str, event_type: str) -> int:
         """This client's count of the events it has sent into one run, from nought.
@@ -612,6 +733,7 @@ class AiwatcherClient:
             self._run_sequences.pop(forgotten)
             self._published_counts.pop(forgotten, None)
         self._run_sequences[key] = (sequence + 1, began)
+        _COUNT_CLOCK.watch(self)
         return sequence, began
 
     @contextlib.contextmanager
@@ -933,6 +1055,7 @@ class AiwatcherClient:
 
     def close(self) -> None:
         """Say how many runs this client opened, then close its transport."""
+        _COUNT_CLOCK.forget(self)
         self.publish_counts()
         self._transport.close()
 

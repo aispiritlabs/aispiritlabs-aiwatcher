@@ -20,6 +20,7 @@ from aiwatcher_sdk import (
     GATEWAY_FIELD,
     PLACED_HEADER,
     PROMPT_HEADER,
+    TOOL_CODE_HEADER,
     AiwatcherClient,
 )
 from aiwatcher_sdk.api import ApiError
@@ -579,6 +580,7 @@ class Search(BaseHTTPRequestHandler):
         payload = b'{"capital": "Lima", "population": 10}'
         self.send_response(200)
         self.send_header("content-type", "application/json")
+        self.send_header(TOOL_CODE_HEADER, "d" * 64)
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -627,6 +629,7 @@ def test_a_tool_is_relayed_to_the_url_the_deployment_named_and_witnessed_by_dige
         event["data"] for event in recording.events if event["event_type"] == "tool.completed"
     ]
     assert done["tool_name"] == "search"
+    assert done["code_sha256"] == "d" * 64, "a URL's code is what the service it names says"
     assert done["arguments_digests"] == [
         witness_digest(KEY, "replied", "Peru"),
         witness_digest(KEY, "replied", "3"),
@@ -801,13 +804,17 @@ def test_a_tool_s_host_with_the_gateway_s_key_and_a_tool_the_gateway_answers_dig
         server.shutdown()
     with witness.call("atlas", {"query": "Peru"}, caller="app-run") as hosting:
         hosting.answered(answered[1])
+    with witness.call(
+        "atlas", {"query": "Peru"}, caller="app-run", code=tool_code(atlas)
+    ) as hosting:
+        hosting.answered(answered[1])
 
     assert (answered[0], json.loads(answered[1])) == (200, {"capital": "Lima"})
     assert failed[0] == 500
     done, refused = [
         event["data"] for event in relayed.events if event["event_type"] == "tool.completed"
     ]
-    [elsewhere] = [
+    elsewhere, named = [
         event["data"] for event in hosted.events if event["event_type"] == "tool.completed"
     ]
     assert done["returned_digests"] == elsewhere["returned_digests"] != []
@@ -820,6 +827,7 @@ def test_a_tool_s_host_with_the_gateway_s_key_and_a_tool_the_gateway_answers_dig
         == hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     ), "a function the gateway answers with is named by its module's bytes"
     assert "code_sha256" not in elsewhere, "a host names its code only where it says so"
+    assert named["code_sha256"] == done["code_sha256"], "and a host saying so names it alike"
 
 
 def test_the_witness_key_is_printed_for_a_tool_s_host_to_digest_under(
@@ -864,6 +872,9 @@ def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_prov
         for name, value in headers.items():
             request.add_header(name, value)
         with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            # Read to the close, which comes after the gateway reported the call:
+            # a report still on its way would land among the calls counted below.
+            response.read()
             placements.append(response.headers.get(PLACED_HEADER))
     assert placements == ['{"first": "second", "second": "first"}', None], (
         "the reply says which of the caller's values each placeholder now holds"

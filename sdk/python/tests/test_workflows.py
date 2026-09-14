@@ -8,6 +8,9 @@ would pass while sending a shape nothing can draw.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -420,11 +423,15 @@ def test_a_measurement_s_runs_are_counted_per_attempt_and_every_count_is_said_wh
         event["run_counted_from"] for event in counted if not event["data"].get("evaluation_id")
     } == {starts["served"]["occurred_at"]}
 
-    monkeypatch.setattr("aiwatcher_sdk.COUNTS_EVERY", 0.0)
+    monkeypatch.setattr("aiwatcher_sdk.COUNTS_EVERY", 0.05)
     with client.run("served-again"):
         pass
+    deadline = time.monotonic() + 5
+    while len(transport.of_type("client.counted")) < 4 and time.monotonic() < deadline:
+        time.sleep(0.02)
     assert [event["data"]["runs"] for event in transport.of_type("client.counted")[3:]] == [2], (
-        "past the interval, a count that moved is said with the next event"
+        "past the interval, a count that moved is said by the client's own clock, with no "
+        "event after it"
     )
     client.close()
     assert len(transport.of_type("client.counted")) == 4, "closing says only what moved"
@@ -469,6 +476,96 @@ def test_a_count_a_transport_could_not_deliver_is_sent_by_the_next_one_on_its_sp
     ]
     assert received[0]["run_id"].startswith("client-"), "sent as the client that counted it"
     assert not list(spool.glob("counted-*.json")), "a delivered count is forgotten"
+
+
+def test_a_client_killed_without_closing_leaves_its_count_for_the_next_transport_on_its_spool(
+    tmp_path: Path,
+) -> None:
+    received: list[dict[str, Any]] = []
+
+    class Ingest(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers["content-length"]))
+            received.extend(json.loads(body)["events"])
+            self.send_response(202)
+            self.end_headers()
+
+        def log_message(self, *_: object) -> None:
+            return None
+
+    spool = tmp_path / "spool"
+    ready = tmp_path / "opened"
+    # A client that opens three runs its transport cannot deliver, and is killed.
+    killed = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import pathlib, time
+                from aiwatcher_sdk import AiwatcherClient, HttpTransport
+                client = AiwatcherClient(
+                    service="worker",
+                    transport=HttpTransport(
+                        "http://127.0.0.1:9",
+                        timeout=0.5,
+                        flush_interval=60,
+                        spool_dir={str(spool)!r},
+                    ),
+                    variant_id="v1",
+                )
+                for at in range(3):
+                    with client.run(f"lost-{{at}}"):
+                        pass
+                pathlib.Path({str(ready)!r}).write_text("opened")
+                time.sleep(60)
+                """
+            ),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert ready.exists(), "the client opened its runs"
+    finally:
+        killed.kill()
+        killed.wait(timeout=10)
+    [kept] = list(spool.glob("counted-*.json"))
+    assert json.loads(kept.read_text())["data"]["runs"] == 3, "held as each run started"
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Ingest)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        after = HttpTransport(f"http://127.0.0.1:{server.server_address[1]}", spool_dir=spool)
+        after.close()
+    finally:
+        server.shutdown()
+    assert [(event["event_type"], event["data"]["runs"]) for event in received] == [
+        ("client.counted", 3)
+    ]
+    assert not list(spool.glob("counted-*.json")), "a delivered count is forgotten"
+
+
+def test_a_held_count_is_forgotten_only_by_a_delivery_saying_as_much(tmp_path: Path) -> None:
+    transport = HttpTransport("http://127.0.0.1:9", timeout=0.2, spool_dir=tmp_path)
+    try:
+        client = AiwatcherClient(service="worker", transport=transport, variant_id="v1")
+        with client.run("one"):
+            pass
+        [kept] = list(tmp_path.glob("counted-*.json"))
+        held = json.loads(kept.read_text())
+        with client.run("two"):
+            pass
+        transport._release(held)
+        assert json.loads(kept.read_text())["data"]["runs"] == 2, (
+            "a delivery saying one run does not forget a count of two"
+        )
+        transport._keep(held)
+        assert json.loads(kept.read_text())["data"]["runs"] == 2, "nor does it overwrite it"
+    finally:
+        transport._spool = None
+        transport.close()
 
 
 def test_events_from_many_threads_reach_the_transport_in_the_order_they_were_numbered() -> None:

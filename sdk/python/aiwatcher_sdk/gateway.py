@@ -68,6 +68,7 @@ from aiwatcher_sdk import (
     GATEWAY_FIELD,
     PLACED_HEADER,
     PROMPT_HEADER,
+    TOOL_CODE_HEADER,
     AiwatcherClient,
 )
 
@@ -102,6 +103,8 @@ MOST_DIGESTS = 64
 MOST_MAPPED = 256
 #: A reply longer than this is relayed and not digested.
 MOST_REPLY_CHARS = 1024 * 1024
+#: A sha256 as ``tool_code`` spells it.
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 #: The characters Rust's ``str::trim`` removes: Unicode's White_Space, which is
 #: not quite what ``str.strip()`` removes.
 _WHITE_SPACE = (
@@ -714,7 +717,9 @@ class ToolWitness:
     sends back, and nothing said in either::
 
         witness = ToolWitness(telemetry, credential=GATEWAY_TOKEN)
-        with witness.call("atlas", arguments, caller=headers.get(CALLER_RUN_HEADER)) as call:
+        with witness.call(
+            "atlas", arguments, caller=headers.get(CALLER_RUN_HEADER), code=tool_code(look_up)
+        ) as call:
             call.answered(json.dumps(look_up(arguments)))
 
     Only digests under one key can say that a value a call the gateway relayed
@@ -725,6 +730,9 @@ class ToolWitness:
     ``credential``, the token ``telemetry`` publishes with, derives it instead,
     for a host holding the gateway's own token. A host holding either is
     trusted as the gateway is; one holding the application's is no witness.
+    ``code`` names the sha256 of the code that answered (:func:`tool_code`),
+    which a variant's generation config may pin — a host's word, trusted as its
+    digests are.
     """
 
     def __init__(
@@ -739,7 +747,7 @@ class ToolWitness:
 
     @contextlib.contextmanager
     def call(
-        self, name: str, arguments: Any, *, caller: str | None
+        self, name: str, arguments: Any, *, caller: str | None, code: str | None = None
     ) -> Generator[ToolCall, None, None]:
         """One call of the tool ``name`` with ``arguments``, reported once it is answered.
 
@@ -757,6 +765,7 @@ class ToolWitness:
                 returned=b"",
                 status=int(HTTPStatus.INTERNAL_SERVER_ERROR),
                 started=started,
+                code=code,
             )
             raise
         self.report(
@@ -766,6 +775,7 @@ class ToolWitness:
             returned=answer.returned,
             status=answer.status,
             started=started,
+            code=code,
         )
 
     def report(
@@ -797,7 +807,7 @@ class ToolWitness:
                 "status_code": status,
                 "outcome": "succeeded" if status < 400 else "failed",
             }
-            if code is not None:
+            if code is not None and _SHA256.fullmatch(code):
                 outcome["code_sha256"] = code
             if self.key is not None:
                 outcome["arguments_digests"] = _digested(self.key, "replied", _leaves(arguments))
@@ -840,7 +850,10 @@ class Gateway:
         call is published with the sha256 of the source file it is defined in
         (:func:`tool_code`), which a variant's generation config pins as
         ``{"tool_code": {name: sha256}}``: the code that answered is then held
-        to the pin, as what a task generated with is.
+        to the pin, as what a task generated with is. A URL's call is published
+        with the sha256 its reply names in
+        :data:`~aiwatcher_sdk.TOOL_CODE_HEADER`, where it names one: the word
+        of the service the deployment named.
         """
         self.tools = dict(tools or {})
         self.tool_tokens = dict(tool_tokens or {})
@@ -1266,11 +1279,13 @@ class Gateway:
         with contextlib.suppress(Exception):
             self.telemetry.flush()
 
-    def forward_tool(self, name: str, body: bytes) -> tuple[int, str, bytes]:
+    def forward_tool(self, name: str, body: bytes) -> tuple[int, str, bytes, str | None]:
         """Post a tool call to the URL the deployment named for it — or answer it
-        with the function it named — and hand back the reply whole."""
+        with the function it named — and hand back the reply whole, with the
+        sha256 of the code that answered where it is known."""
         tool = self.tools[name]
         if callable(tool):
+            code = tool_code(tool)
             try:
                 returned = tool(json.loads(body or b"{}"))
             except Exception:  # noqa: BLE001 — the tool's failure is the caller's answer
@@ -1278,12 +1293,13 @@ class Gateway:
                     int(HTTPStatus.INTERNAL_SERVER_ERROR),
                     "application/json",
                     b'{"error":"the tool failed"}',
+                    code,
                 )
             if isinstance(returned, bytes):
-                return int(HTTPStatus.OK), "application/octet-stream", returned
+                return int(HTTPStatus.OK), "application/octet-stream", returned, code
             if isinstance(returned, str):
-                return int(HTTPStatus.OK), "text/plain; charset=utf-8", returned.encode()
-            return int(HTTPStatus.OK), "application/json", json.dumps(returned).encode()
+                return int(HTTPStatus.OK), "text/plain; charset=utf-8", returned.encode(), code
+            return int(HTTPStatus.OK), "application/json", json.dumps(returned).encode(), code
         request = urllib.request.Request(  # noqa: S310 — the deployment's own tool
             tool, data=body, method="POST"
         )
@@ -1293,12 +1309,18 @@ class Gateway:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
                 content_type = response.headers.get("content-type", "application/json")
-                return response.status, content_type, response.read(MAX_BODY_BYTES + 1)
+                return (
+                    response.status,
+                    content_type,
+                    response.read(MAX_BODY_BYTES + 1),
+                    response.headers.get(TOOL_CODE_HEADER),
+                )
         except urllib.error.HTTPError as error:
             return (
                 error.code,
                 error.headers.get("content-type", "application/json"),
                 error.read(MAX_BODY_BYTES + 1),
+                error.headers.get(TOOL_CODE_HEADER),
             )
 
     def report_tool(
@@ -1310,6 +1332,7 @@ class Gateway:
         returned: bytes,
         status: int,
         started: float,
+        code: str | None = None,
     ) -> None:
         """One tool call, as the gateway relayed it — see :meth:`ToolWitness.report`."""
         tool = self.tools.get(name)
@@ -1320,7 +1343,7 @@ class Gateway:
             returned=returned,
             status=status,
             started=started,
-            code=tool_code(tool) if callable(tool) else None,
+            code=tool_code(tool) if callable(tool) else code,
         )
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
@@ -1360,7 +1383,7 @@ class Gateway:
                     return
                 started = time.monotonic()
                 try:
-                    status, content_type, returned = gateway.forward_tool(name, raw or b"{}")
+                    status, content_type, returned, code = gateway.forward_tool(name, raw or b"{}")
                 except (urllib.error.URLError, TimeoutError) as error:
                     self.send_json(HTTPStatus.BAD_GATEWAY, {"error": f"the tool: {error}"})
                     return
@@ -1371,6 +1394,7 @@ class Gateway:
                     returned=returned,
                     status=status,
                     started=started,
+                    code=code,
                 )
                 self.send_response(status)
                 self.send_header("content-type", content_type)

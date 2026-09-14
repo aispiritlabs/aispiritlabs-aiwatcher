@@ -19,7 +19,9 @@
  *
  * A tool an application would compute in its own process is accountable here,
  * on a host with the key, or behind the gateway, whose `tools` may answer with a
- * function a variant pins by its source's sha256 (`tool_code`).
+ * function a variant pins by its source's sha256 (`tool_code`). A host names
+ * that sha256 itself with `code` — `toolCode(import.meta.url)` from
+ * `@aiwatcher/sdk/node` — trusted as its digests are.
  */
 import type { AiwatcherClient } from './index.js';
 
@@ -192,6 +194,8 @@ export interface ToolReport {
   status: number;
   /** When the call started, from `performance.now()`. */
   startedMs: number;
+  /** The sha256 of the code that answered, which a variant may pin (`tool_code`). */
+  code?: string | undefined;
 }
 
 export class ToolWitness {
@@ -223,7 +227,7 @@ export class ToolWitness {
   async call<T>(
     name: string,
     args: unknown,
-    options: { caller?: string | undefined },
+    options: { caller?: string | undefined; code?: string | undefined },
     body: (call: ToolCall) => Promise<T>,
   ): Promise<T> {
     const startedMs = performance.now();
@@ -239,6 +243,7 @@ export class ToolWitness {
         returned: new Uint8Array(),
         status: 500,
         startedMs,
+        code: options.code,
       });
       throw error;
     }
@@ -249,6 +254,7 @@ export class ToolWitness {
       returned: answer.returned,
       status: answer.status,
       startedMs,
+      code: options.code,
     });
     return result;
   }
@@ -263,6 +269,9 @@ export class ToolWitness {
       const outcome: Record<string, unknown> = {
         status_code: report.status,
         outcome: report.status < 400 ? 'succeeded' : 'failed',
+        ...(report.code !== undefined && /^[0-9a-f]{64}$/.test(report.code)
+          ? { code_sha256: report.code }
+          : {}),
       };
       if (this.#key) {
         outcome.arguments_digests = await digested(this.#key, 'replied', leaves(report.arguments));

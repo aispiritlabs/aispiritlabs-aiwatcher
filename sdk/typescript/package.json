@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./evaluation": "./src/evaluation.ts",
     "./evaluation-registry": "./src/evaluation-registry.ts",
-    "./tool-witness": "./src/tool-witness.ts"
+    "./tool-witness": "./src/tool-witness.ts",
+    "./node": "./src/node.ts"
   },
   "files": [
     "src"

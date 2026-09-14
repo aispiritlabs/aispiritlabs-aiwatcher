@@ -68,6 +68,23 @@ export interface EventEnvelope {
 export interface Transport {
   send(events: EventEnvelope[]): void;
   close(): Promise<void>;
+  /** Whether a count handed to `hold` is kept on a disk until one saying as much is delivered. */
+  readonly holdsCounts?: boolean;
+  /** Keep a client's `client.counted` without sending it. */
+  hold?(event: EventEnvelope): void;
+}
+
+/**
+ * Where a transport keeps each `client.counted` until one saying as much is
+ * delivered — `fileSpool` in `@aiwatcher/sdk/node` on a Node host.
+ */
+export interface CountSpool {
+  /** Keep a count, unless a larger one of the same count is kept already. */
+  keep(event: EventEnvelope): void;
+  /** Forget a kept count once one saying as much was delivered. */
+  release(event: EventEnvelope): void;
+  /** The counts a transport before this one kept, oldest first. */
+  kept(): EventEnvelope[];
 }
 
 /** Drops everything. The default, so importing this never breaks a test. */
@@ -95,6 +112,15 @@ export interface HttpTransportOptions {
    * memory. A full queue drops events and reports it, which beats an OOM.
    */
   queueSize?: number;
+  /**
+   * Keeps each `client.counted` until one saying as much is delivered — held
+   * as each run starts, before its start is sent, and again when a count could
+   * not be delivered — and sends what an earlier transport kept first: a client
+   * whose transport stayed down, or that was killed before it could close,
+   * still gets its count of the runs it lost to the log. Off unless given; with
+   * it every run's start costs a write.
+   */
+  spool?: CountSpool;
 }
 
 /**
@@ -113,6 +139,7 @@ export class HttpTransport implements Transport {
   #pending: EventEnvelope[] = [];
   #timer: ReturnType<typeof setTimeout> | undefined;
   #dropped = 0;
+  readonly #spool: CountSpool | undefined;
 
   constructor(options: HttpTransportOptions) {
     this.#url = `${options.baseUrl.replace(/\/$/, '')}/api/v1/events`;
@@ -126,6 +153,9 @@ export class HttpTransport implements Transport {
     this.#batchSize = options.batchSize ?? 64;
     this.#flushIntervalMs = options.flushIntervalMs ?? 1000;
     this.#queueSize = options.queueSize ?? 10_000;
+    this.#spool = options.spool;
+    const kept = this.#spool?.kept() ?? [];
+    if (kept.length > 0) this.send(kept);
   }
 
   /** Events discarded because the queue was full. */
@@ -133,10 +163,19 @@ export class HttpTransport implements Transport {
     return this.#dropped;
   }
 
+  get holdsCounts(): boolean {
+    return this.#spool !== undefined;
+  }
+
+  hold(event: EventEnvelope): void {
+    this.#spool?.keep(event);
+  }
+
   send(events: EventEnvelope[]): void {
     for (const event of events) {
       if (this.#pending.length >= this.#queueSize) {
         this.#dropped += 1;
+        this.#spool?.keep(event);
         continue;
       }
       this.#pending.push(event);
@@ -162,7 +201,7 @@ export class HttpTransport implements Transport {
     this.#pending = [];
 
     try {
-      await fetch(this.#url, {
+      const response = await fetch(this.#url, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -171,7 +210,10 @@ export class HttpTransport implements Transport {
         body: JSON.stringify({ events: batch }),
         keepalive: true,
       });
+      if (!response.ok) throw new Error(`the server answered ${response.status}`);
+      for (const event of batch) this.#spool?.release(event);
     } catch (error) {
+      for (const event of batch) this.#spool?.keep(event);
       // Telemetry must never take the agent down with it. A 401 is not thrown
       // by `fetch` and lands nowhere: it means the instance has single sign-on
       // on and this producer has no token, which is a variable to set rather
@@ -212,8 +254,8 @@ export const MOST_RUNS_NUMBERED = 100_000;
  */
 export const MOST_VARIANTS_NUMBERED = 1_024;
 /**
- * How often, at most, a long-lived client says how many runs it has opened —
- * and only when it has opened another since it last said.
+ * How often a long-lived client says how many runs it has opened, by its own
+ * clock — and only when it has opened another since it last said.
  */
 export const COUNTS_EVERY_MS = 300_000;
 const RUN_ENDS = new Set(['run.completed', 'run.failed']);
@@ -243,6 +285,8 @@ export interface ClientOptions {
    * that variant was observed doing.
    */
   variantId?: string;
+  /** How often this client says its counts that moved; `COUNTS_EVERY_MS` unless given. */
+  countsEveryMs?: number;
 }
 
 export class AiwatcherClient {
@@ -251,7 +295,8 @@ export class AiwatcherClient {
   readonly #variantId: string | undefined;
   readonly #sequences = new Map<string, number>();
   readonly #runSequences = new Map<string, RunCount>();
-  #countsSaidAt = Date.now();
+  readonly #countsEveryMs: number;
+  #clock: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -263,6 +308,7 @@ export class AiwatcherClient {
           })
         : new NullTransport());
     this.#variantId = options.variantId;
+    this.#countsEveryMs = options.countsEveryMs ?? COUNTS_EVERY_MS;
     this.#source = {
       service: options.service,
       sdk: 'typescript',
@@ -321,7 +367,16 @@ export class AiwatcherClient {
       const oldest = this.#runSequences.keys().next();
       if (!oldest.done) this.#runSequences.delete(oldest.value);
     }
-    this.#runSequences.set(key, { ...count, next: count.next + 1 });
+    const counted = { ...count, next: count.next + 1 };
+    this.#runSequences.set(key, counted);
+    if (this.#clock === undefined) {
+      this.#clock = setInterval(() => this.publishCounts(), this.#countsEveryMs);
+      // A clock is no reason for a process to stay up.
+      (this.#clock as { unref?: () => void }).unref?.();
+    }
+    // Held before the start is sent, so a client killed now still leaves a
+    // count that passes over this run.
+    if (this.#transport.holdsCounts) this.#transport.hold?.(this.#counted(counted, counted.next));
     return { run_sequence: count.next, run_counted_from: count.since };
   }
 
@@ -331,35 +386,39 @@ export class AiwatcherClient {
    * One `client.counted` per variant — and per measurement and attempt at
    * generating it — whose count grew since the last one said: what shows a run
    * whose every event was lost where no later start of this client arrives to
-   * pass over its number. Sent on `close()` and, in a long process, with the
-   * next event once `COUNTS_EVERY_MS` has passed. It rides the same transport
-   * as the runs, so a transport that stays down loses it too.
+   * pass over its number. Sent on `close()` and, in a long process, every
+   * `COUNTS_EVERY_MS` by a clock of its own. It rides the same transport as the
+   * runs, so a transport that stays down loses it too — unless the transport
+   * keeps it in a `spool`, where it is held as each run starts, which a client
+   * killed without closing leaves behind for the next transport there.
    */
   publishCounts(): void {
-    this.#countsSaidAt = Date.now();
     for (const count of this.#runSequences.values()) {
       if (count.said === count.next) continue;
       count.said = count.next;
-      this.#transport.send([
-        {
-          schema_version: SCHEMA_VERSION,
-          kind: 'Event',
-          event_id: newId(),
-          event_type: 'client.counted',
-          occurred_at: now(),
-          // A count names the client that kept it, not a run.
-          run_id: `client-${this.#source.client}`,
-          variant_id: count.variantId,
-          run_counted_from: count.since,
-          source: this.#source,
-          data: {
-            runs: count.next,
-            ...(count.evaluationId === undefined ? {} : { evaluation_id: count.evaluationId }),
-            ...(count.attempt === undefined ? {} : { generation_attempt: count.attempt }),
-          },
-        },
-      ]);
+      this.#transport.send([this.#counted(count, count.next)]);
     }
+  }
+
+  /** A `client.counted` saying `runs` for one count. */
+  #counted(count: RunCount, runs: number): EventEnvelope {
+    return {
+      schema_version: SCHEMA_VERSION,
+      kind: 'Event',
+      event_id: newId(),
+      event_type: 'client.counted',
+      occurred_at: now(),
+      // A count names the client that kept it, not a run.
+      run_id: `client-${this.#source.client}`,
+      variant_id: count.variantId,
+      run_counted_from: count.since,
+      source: this.#source,
+      data: {
+        runs,
+        ...(count.evaluationId === undefined ? {} : { evaluation_id: count.evaluationId }),
+        ...(count.attempt === undefined ? {} : { generation_attempt: count.attempt }),
+      },
+    };
   }
 
   /**
@@ -402,7 +461,6 @@ export class AiwatcherClient {
         ...(context.causationId ? { causation_id: context.causationId } : {}),
       },
     ]);
-    if (Date.now() - this.#countsSaidAt >= COUNTS_EVERY_MS) this.publishCounts();
     return eventId;
   }
 
@@ -604,6 +662,8 @@ export class AiwatcherClient {
 
   /** Say how many runs this client opened, then close its transport. */
   async close(): Promise<void> {
+    clearInterval(this.#clock);
+    this.#clock = undefined;
     this.publishCounts();
     await this.#transport.close();
   }

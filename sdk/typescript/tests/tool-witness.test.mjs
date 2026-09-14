@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AiwatcherClient } from '../src/index.ts';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { toolCode } from '../src/node.ts';
 import { ToolWitness, canonical, normalized, witnessDigest, witnessKey } from '../src/tool-witness.ts';
 
 class Recording {
@@ -93,4 +97,20 @@ test('a question normalises to the bytes the deployment and the Python gateway c
   ]) {
     assert.equal(normalized(text), normal, text);
   }
+});
+
+test("a tool's host names the code that answered where it says so", async () => {
+  const sent = new Recording();
+  const witness = new ToolWitness(new AiwatcherClient({ service: 'atlas', transport: sent }));
+  const code = toolCode(import.meta.url);
+  assert.equal(code, createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex'));
+
+  await witness.call('atlas', {}, { caller: 'app-run', code }, async (call) => call.answered('Lima'));
+  await witness.call('atlas', {}, { caller: 'app-run' }, async (call) => call.answered('Lima'));
+  await witness.call('atlas', {}, { caller: 'app-run', code: 'not a digest' }, async (call) => call.answered('Lima'));
+
+  assert.deepEqual(
+    sent.events.filter((event) => event.event_type === 'tool.completed').map((event) => event.data.code_sha256),
+    [code, undefined, undefined],
+  );
 });
