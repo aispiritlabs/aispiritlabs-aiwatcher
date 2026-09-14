@@ -328,7 +328,7 @@ Beyond what ADR_0031 decides:
   - Done. ADR_0031's amendment records what building it changed, the launcher's
     listing among it. `CLAUDE.md` was committed from the index, since it holds
     another session's uncommitted work.
-- [ ] 7.22 **Verified.**
+- [x] 7.22 **Verified.**
   - `cargo fmt --check`.
   - `cargo clippy --workspace --all-targets --all-features -- -Dwarnings`.
   - `cargo test --workspace --all-targets`.
@@ -354,6 +354,15 @@ Beyond what ADR_0031 decides:
       machine has 13 GiB free for a second target directory, and `kind` is not
       installed. CI runs all four once `main` is pushed.
     - `04-tests.md` is `/spec-tests`' to write; the results above are for it.
+  - Then done in CI, on `main` at `1405292`. CI run 34827139532 is green in
+    every job: Rust, the OpenAPI contract (so the contract built from this
+    change's hunks alone is exactly what the routes generate), and the pod gates
+    — both host backends with the credential and deadline phases and the
+    `local` pass. The dispatched `pods-cluster.yml` run 34827159115 is green on
+    kind: seven calls granted and six refused, no Job carrying the credential,
+    the lifted credential refused everywhere but its own attempt and ingest, the
+    deadline in the cluster's own word (`DeadlineExceeded`), `OOMKilled`, and
+    every log kept.
 
 ## Risks
 
@@ -373,3 +382,4 @@ Beyond what ADR_0031 decides:
 - 2026-09-13 — 7.1 and 7.2 built: `--add-host=host.docker.internal:host-gateway` on every container and on the gate's probe; the gates load their image into kind and, on Linux, reach the runner by the `kind` network's gateway. `e2e-docker` (six phases, OOMKilled included) and `e2e-processes` pass on OrbStack. 7.3 written — a `pods` job in `ci.yml` and a nightly `pods-cluster.yml` on kind, both uploading the server log on failure — and waits on a push
 - 2026-09-13 — 7.3 done: `main` pushed at the owner's word; the first push broke both workflows' parsing (`runner.temp` in a job `env`), fixed in `21e83c9` and pushed; CI green in all 17 jobs including `pods`, and `pods-cluster.yml` dispatched and green on kind. Part A+B complete; C starts at 7.4
 - 2026-09-14 — part C built in five commits: the credential in `aiwatcher-auth` (`e91febe`); the layer's two doors, the worker routes' key check and the contract from this change's hunks alone (`44a7409`); minting, the Secret, the grant, the chart and the deadline (`9942814`); the shared key and the split refusal (`1f87eac`, from the index); the gates with auth on (`020fb87`). `e2e-processes` with a `local` pass, `e2e-docker` and `e2e-pod-death` on both host backends green on OrbStack; workspace-wide checks and the kind gate wait on CI
+- 2026-09-14 — `main` pushed to `1405292` at the owner's word; CI green in every job and the kind gate dispatched and green. AW-7's job is complete; `04-tests.md` is next

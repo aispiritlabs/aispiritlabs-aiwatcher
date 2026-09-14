@@ -45,3 +45,4 @@ Three parts, cheapest first:
 - 2026-09-13 — Part A+B built (7.1, 7.2) and CI written (7.3); both host gates green on OrbStack; the CI half waits on a push
 - 2026-09-13 — Part A+B done: pod gates green in CI on Linux (process, docker) and on kind (nightly workflow, dispatched once)
 - 2026-09-14 — part C built and committed (7.4–7.21; 7.22 local half): a pod holds its attempt's credential alone, on all three backends and every auth mode, and the watch holds each Job's deadline; ADR_0031 accepted; not pushed
+- 2026-09-14 — pushed; CI and the kind gate green on `1405292`. Every task of the job done
