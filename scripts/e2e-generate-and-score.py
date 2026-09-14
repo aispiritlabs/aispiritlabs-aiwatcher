@@ -131,7 +131,34 @@ What it checks:
     it, keeping no word said in a run;
 34. a run whose every event its transport dropped is counted as lost;
 35. so is the first run of a client new after the restart, whose count began
-    while the fold was reading, once its second run arrives.
+    while the fold was reading, once its second run arrives;
+36. an answer a judge picked among candidates the gateway placed in the
+    witnessed order the variant pins is an exchange — the application reading
+    where they went from the gateway's reply;
+37. candidates the application placed against that order are no exchange, and a
+    gate names why;
+38. a judge asked both ways, the second time reversed, is an exchange where both
+    name the answer, and none where they name different replies;
+39. a case asked before the measurement started — by its question alone, a part
+    of the case's input — is asked elsewhere where the run reads from before its
+    start (`settings.asked_since_seconds`), and not where it reads from its start;
+40. so is a case asked in another case and spacing;
+41. a case asked on another prompt is counted apart and denies no exchange,
+    unless a gate's policy says it does;
+42. a country an atlas computed in the application's own process is no
+    exchange, and the trace and a gate name the atlas as where it may have come
+    from;
+43. an atlas the gateway answers with the code the variant pins is an exchange,
+    and answered with other code the answers are refused naming both digests;
+44. an answer whose run its client lost in transport is said to be lost, one
+    naming a run nobody opened unknown, and a retried attempt leaves no gap;
+45. cases asked long before a restart, whose calls the read model no longer
+    holds, are asked elsewhere all the same, from the index of what witnesses
+    saw asked;
+46. a client whose transport lost its only run says so when it closes, and the
+    run is counted lost; one that never closes says nothing;
+47. a count a transport could not deliver is kept on its spool and sent by the
+    next transport started on it, and the run lost with it is counted.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -169,12 +196,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"
 
 from aiwatcher_sdk import (  # noqa: E402
     CALLER_RUN_HEADER,
+    PLACED_HEADER,
     PROMPT_HEADER,
     AiwatcherClient,
     HttpTransport,
 )
-from aiwatcher_sdk.gateway import Gateway, ToolWitness, extracted, witness_key  # noqa: E402
+from aiwatcher_sdk.gateway import (  # noqa: E402
+    Gateway,
+    ToolWitness,
+    extracted,
+    tool_code,
+    witness_digest,
+    witness_key,
+)
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
+from aiwatcher_sdk.task_errors import TaskError  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
     Declined,
@@ -251,7 +287,22 @@ PROMPTS = {
     "chosen": "Answer this question in one word: {{ question }}",
     "chosen-loose": "Answer this question in one word: {{ question }}",
     "judged": "Answer this question in one word: {{ question }}",
+    "judged-witnessed": "Answer this question in one word: {{ question }}",
+    "judged-both": "Answer this question in one word: {{ question }}",
+    "cut-in-app": "Name the capital of {{ country }} in one word.",
+    "cut-pinned": "Name the capital of {{ country }} in one word.",
+    "cut-mispinned": "Name the capital of {{ country }} in one word.",
+    "counted": "Answer this question in one word: {{ question }}",
+    # Each its own text, so only the calls a check makes ask on it.
+    "asked-before": "Answer in one word, if you would: {{ question }}",
+    "asked-unread": "Answer in one word, if you please: {{ question }}",
+    "asked-normal": "Answer in one word, plainly: {{ question }}",
+    "asked-unpinned": "Answer in one word, on the record: {{ question }}",
+    "asked-restart": "Answer in one word, once more: {{ question }}",
 }
+#: Another prompt, asked the same questions.
+CHAT_PROMPT = "e2e.chat"
+CHAT = "Chat about this: {{ question }}"
 #: The prompt a judging call is asked on, and how its answer is taken out.
 JUDGE_PROMPT = "e2e.judge"
 JUDGE = "Which answers {{ question }} rightly, {{ first }} or {{ second }}? Reply in JSON."
@@ -293,7 +344,8 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         system, question = (message["content"] for message in body["messages"][:2])
-        country = question.removeprefix("What is the capital of ").removesuffix("?")
+        # Whichever country the question names, however it is spelled.
+        country = next(name for name, _ in CAPITALS if name.lower() in question.lower())
         said = application(system, country, dict(CAPITALS)[country])
         if body.get("user") == "label":
             said = next(label for label, capital in LABELS.items() if capital == said) + "."
@@ -302,6 +354,11 @@ class Provider(BaseHTTPRequestHandler):
         if body.get("user") == "judge":
             # The judge names the first candidate it was shown.
             said = json.dumps({"best": "first"})
+        if body.get("user") == "judge-right":
+            # The judge names the candidate that is the capital, wherever it stands.
+            shown = system.split("rightly, ", 1)[1].rsplit("? Reply", 1)[0]
+            first, _ = shown.split(" or ", 1)
+            said = json.dumps({"best": "first" if first == dict(CAPITALS)[country] else "second"})
         if body.get("user") == "other":
             # Another capital than the one asked about: a reply to choose against.
             at = [name for name, _ in CAPITALS].index(country)
@@ -385,6 +442,7 @@ def through_gateway(
     system: str,
     question: str,
     body: dict[str, Any] | None = None,
+    replied_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One call to the provider, through a gateway — or, for `around`, straight to it."""
     request = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
@@ -406,7 +464,35 @@ def through_gateway(
         request.add_header(name, value)
     with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
         reply: dict[str, Any] = json.loads(response.read())
+        if replied_headers is not None:
+            replied_headers.update(response.headers.items())
     return reply
+
+
+#: The key a gateway holding the witness's token digests under — which this e2e,
+#: as the deployment, holds, and the application never does.
+WITNESS_KEY = witness_key(SERVING_SECRET)
+#: What the atlas the gateway answers itself is: this file.
+ATLAS_CODE = tool_code(atlas_here)
+#: The telemetry of an attempt whose transport loses one case's run.
+LOSSY: dict[str, AiwatcherClient] = {}
+
+
+class DroppingPrefix:
+    """A transport that loses every event of the runs whose ID starts so."""
+
+    def __init__(self, inner: HttpTransport, prefix: str) -> None:
+        self.inner = inner
+        self.prefix = prefix
+
+    def send(self, batch: list[dict[str, Any]]) -> None:
+        self.inner.send([event for event in batch if not event["run_id"].startswith(self.prefix)])
+
+    def flush(self) -> None:
+        self.inner.flush()
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 class Dropping:
@@ -448,10 +534,20 @@ def generation_of(which: str) -> bytes:
         config["answer_joined"] = {"separator": ", "}
     if which == "chosen":
         config["answer_chosen"] = {"most_of": 3}
-    if which == "judged":
-        config["answer_chosen"] = {
-            "judged": {"prompt": {"name": JUDGE_PROMPT, "version": JUDGE_VERSION}, "pick": PICK}
+    if which.startswith("judged"):
+        judged: dict[str, Any] = {
+            "prompt": {"name": JUDGE_PROMPT, "version": JUDGE_VERSION},
+            "pick": PICK,
         }
+        if which == "judged-witnessed":
+            judged["order"] = "witnessed"
+        if which == "judged-both":
+            judged["order"] = "both_ways"
+        config["answer_chosen"] = {"judged": judged}
+    if which == "cut-pinned":
+        config["tool_code"] = {"atlas-here": ATLAS_CODE}
+    if which == "cut-mispinned":
+        config["tool_code"] = {"atlas-here": hashlib.sha256(b"# another atlas\n").hexdigest()}
     return json.dumps(config).encode()
 
 
@@ -533,7 +629,12 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     looked_up = next(
                         (
                             way
-                            for way in ("atlas", "witnessed_atlas", "hosted_atlas", "gateway_atlas")
+                            for way in (
+                                "atlas",
+                                "witnessed_atlas",
+                                "hosted_atlas",
+                                "gateway_atlas",
+                            )
                             if run.params.get(way)
                         ),
                         None,
@@ -558,12 +659,17 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                             atlas.add_header(name, value)
                         with urllib.request.urlopen(atlas, timeout=15) as response:  # noqa: S310
                             found = response.read().decode()
+                    if run.params.get("atlas_in_app"):
+                        # The atlas computed here, in the application's own
+                        # process: its telemetry says so, and nothing witnesses it.
+                        with agent.tool("atlas"):
+                            found = json.dumps(atlas_here({"question": question}))
                     named = extracted(found, {"json_pointer": "/country"}) if found else country
                     system = (
                         "Answer in one word."
                         if run.params.get("drift")
                         else version.render(country=named)
-                        if run.params.get("cut") or looked_up
+                        if run.params.get("cut") or looked_up or run.params.get("atlas_in_app")
                         else version.render(question=question)
                     )
                     if run.params.get("around"):
@@ -586,12 +692,17 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     told: dict[str, Any] = (
                         {}
                         if run.params.get("drift")
+                        else llm.caller_body(question=question, country=named)
+                        if run.params.get("atlas_in_app")
                         else llm.caller_body(
                             question=question,
                             country=named,
                             found=found,
                             derived={
-                                "country": {"from": "found", "take": {"json_pointer": "/country"}}
+                                "country": {
+                                    "from": "found",
+                                    "take": {"json_pointer": "/country"},
+                                }
                             },
                         )
                         if looked_up
@@ -655,62 +766,122 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         replies = [said]
                         for otherwise in (False, True):
                             with agent.llm(
-                                model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                                model=str(model["name"]),
+                                prompt=(str(prompt["name"]), rendered),
                             ) as again:
                                 asked_again = again.caller_body(question=question)
                                 if otherwise:
                                     asked_again["user"] = "other"
                                 answered = through_gateway(
-                                    "witness", again.caller_headers(), system, question, asked_again
+                                    "witness",
+                                    again.caller_headers(),
+                                    system,
+                                    question,
+                                    asked_again,
                                 )
                                 again.usage(model_version=answered["model"])
                             replies.append(str(answered["choices"][0]["message"]["content"]))
                         said = max(replies, key=replies.count)
-                    if run.params.get("judged") or run.params.get("judged_against"):
+                    if (
+                        run.params.get("judged")
+                        or run.params.get("judged_against")
+                        or run.params.get("judge_order")
+                    ):
                         # Another reply, about somewhere else, and a judging call
-                        # on the prompt the variant pins shown both.
+                        # on the prompt the variant pins shown both — placed as
+                        # the application likes, by the witness's digests in the
+                        # order it cannot compute, or asked both ways.
                         with agent.llm(
-                            model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                            model=str(model["name"]),
+                            prompt=(str(prompt["name"]), rendered),
                         ) as again:
                             other_asked = again.caller_body(question=question)
                             other_asked["user"] = "other"
                             other_reply = through_gateway(
-                                "witness", again.caller_headers(), system, question, other_asked
+                                "witness",
+                                again.caller_headers(),
+                                system,
+                                question,
+                                other_asked,
                             )
                             again.usage(model_version=other_reply["model"])
                         other = str(other_reply["choices"][0]["message"]["content"])
-                        with (
-                            PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts,
-                            agent.llm(
-                                model=str(model["name"]), prompt=(JUDGE_PROMPT, JUDGE_VERSION)
-                            ) as judge,
-                        ):
-                            judging = prompts.get_version(JUDGE_PROMPT, JUDGE_VERSION).render(
-                                question=question, first=said, second=other
+                        order = run.params.get("judge_order")
+                        mode = str(run.params.get("judge_mode") or "judge")
+
+                        def judged_best(
+                            first: str, second: str, *, placed_by_gateway: bool, mode: str = mode
+                        ) -> str:
+                            with (
+                                PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts,
+                                agent.llm(
+                                    model=str(model["name"]),
+                                    prompt=(JUDGE_PROMPT, JUDGE_VERSION),
+                                ) as judge,
+                            ):
+                                judging = prompts.get_version(JUDGE_PROMPT, JUDGE_VERSION).render(
+                                    question=question, first=first, second=second
+                                )
+                                asked_judge = judge.caller_body(
+                                    question=question,
+                                    first=first,
+                                    second=second,
+                                    answer_from=PICK,
+                                    ordered=("first", "second") if placed_by_gateway else (),
+                                )
+                                asked_judge["user"] = mode
+                                replied: dict[str, str] = {}
+                                verdict = through_gateway(
+                                    "witness",
+                                    judge.caller_headers(),
+                                    judging,
+                                    question,
+                                    asked_judge,
+                                    replied,
+                                )
+                                judge.usage(model_version=verdict["model"])
+                            named_best = extracted(
+                                str(verdict["choices"][0]["message"]["content"]), PICK
                             )
-                            asked_judge = judge.caller_body(
-                                question=question, first=said, second=other, answer_from=PICK
+                            # Where the gateway placed each, as its reply says.
+                            placed = json.loads(replied.get(PLACED_HEADER) or "{}")
+                            values = {"first": first, "second": second}
+                            return values[placed.get(named_best, named_best or "first")]
+
+                        if order == "both":
+                            best = judged_best(said, other, placed_by_gateway=False)
+                            judged_best(other, said, placed_by_gateway=False)
+                        elif order == "descending":
+                            # The candidates by their digests, highest first: the
+                            # order a witnessed judge must not be shown.
+                            high, low = sorted(
+                                (said, other),
+                                key=lambda value: witness_digest(WITNESS_KEY, "replied", value),
+                                reverse=True,
                             )
-                            asked_judge["user"] = "judge"
-                            verdict = through_gateway(
-                                "witness", judge.caller_headers(), judging, question, asked_judge
-                            )
-                            judge.usage(model_version=verdict["model"])
-                        named_best = extracted(
-                            str(verdict["choices"][0]["message"]["content"]), PICK
+                            best = judged_best(high, low, placed_by_gateway=False)
+                        else:
+                            best = judged_best(said, other, placed_by_gateway=order == "gateway")
+                        said = (
+                            (other if best == said else said)
+                            if run.params.get("judged_against")
+                            else best
                         )
-                        best, rest = (said, other) if named_best == "first" else (other, said)
-                        said = rest if run.params.get("judged_against") else best
                     if run.params.get("composed") or run.params.get("joined"):
                         # A second witnessed call in the same stage, for the
                         # country, and an answer made of both replies.
                         with agent.llm(
-                            model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                            model=str(model["name"]),
+                            prompt=(str(prompt["name"]), rendered),
                         ) as country_call:
                             second = country_call.caller_body(question=question)
                             second["user"] = "country"
                             answered = through_gateway(
-                                "witness", country_call.caller_headers(), system, question, second
+                                "witness",
+                                country_call.caller_headers(),
+                                system,
+                                question,
+                                second,
                             )
                             country_call.usage(model_version=answered["model"])
                         named_back = str(answered["choices"][0]["message"]["content"])
@@ -722,8 +893,24 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
         if composed is not None:
             return Generated(composed, run_id=flow.correlation.run_id)
         return Generated(said, run_id=flow.correlation.run_id)
+    if run.params.get("fail_first") and run.attempt == 1 and country == "Japan":
+        # The provider goes away mid-attempt, after one case's run was opened.
+        raise TaskError("the provider went away", classification="transient")
+    telemetry = TELEMETRY[0]
+    if run.params.get("lose_run"):
+        # One client for the attempt, whose transport loses France's run whole.
+        telemetry = LOSSY.setdefault(
+            run.evaluation_id,
+            AiwatcherClient(
+                service="e2e-capitals",
+                transport=DroppingPrefix(
+                    HttpTransport(BASE, token=APPLICATION_SECRET),
+                    f"generate-{run.evaluation_id}-capital-france-",
+                ),
+            ),
+        )
     with (
-        run.traced(TELEMETRY[0], case) as traced,
+        run.traced(telemetry, case) as traced,
         traced.agent("capitals") as agent,
         agent.llm(model="capitals-stand-in", prompt=(str(prompt["name"]), rendered)) as llm,
     ):
@@ -732,7 +919,9 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     # What a model would have counted: the question in, the words out.
     return Generated(
         said,
-        run_id=traced.correlation.run_id,
+        run_id="invented-run"
+        if run.params.get("invent") and country == "France"
+        else traced.correlation.run_id,
         input_tokens=len(question.split()),
         output_tokens=len(said.split()),
     )
@@ -776,17 +965,20 @@ def prices(home: Path) -> Path:
     return table
 
 
-def serve(home: Path) -> subprocess.Popen[bytes]:
-    """Start an aiwatcher of our own and wait for it."""
+def serve(
+    home: Path, port: int | None = None, extra: dict[str, str] | None = None
+) -> subprocess.Popen[bytes]:
+    """Start an aiwatcher of our own and wait for it — on `port` again, after a restart."""
     global BASE
     if not BINARY.exists():
         raise SystemExit(
             f"no server binary at {BINARY}: `cargo build --bin aiwatcher`, "
             "or name one with AIWATCHER_BINARY"
         )
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
+    if port is None:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
     home.mkdir(parents=True, exist_ok=True)
     env = {name: value for name, value in os.environ.items() if not name.startswith("AIWATCHER_")}
     env |= {
@@ -818,6 +1010,7 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
                 f"worker[{QUEUE}]={WORKER_SECRET}",
             ]
         ),
+        **(extra or {}),
     }
     log = (home / "server.log").open("wb")
     process = subprocess.Popen(  # noqa: S603 — the binary this repository builds
@@ -844,7 +1037,8 @@ def call(
         BASE + path, data=data, method=method, headers=PERSON
     )
     request.add_header(
-        "Content-Type", "application/octet-stream" if raw is not None else "application/json"
+        "Content-Type",
+        "application/octet-stream" if raw is not None else "application/json",
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 — our own server
@@ -947,6 +1141,7 @@ def declare(
     code: bytes | None = None,
     served: bool = False,
     suffix: str = "",
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Declare one variant's run, admit its pair, and return the view.
 
@@ -956,7 +1151,7 @@ def declare(
     with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
         version = prompts.publish(PROMPT, PROMPTS[which], author="e2e").version_id
         if (
-            which == "judged"
+            which.startswith("judged")
             and prompts.publish(JUDGE_PROMPT, JUDGE, author="e2e").version_id != JUDGE_VERSION
         ):
             raise SystemExit("the judging prompt's version is not the digest of its text")
@@ -985,7 +1180,7 @@ def declare(
                 **({"params": params} if params else {}),
             }
         },
-        "settings": {"timeout_seconds": 300},
+        "settings": {"timeout_seconds": 300, **(settings or {})},
     }
     staged = [("application.py", code), ("generation.json", generation)]
     if which == "composed":
@@ -1006,9 +1201,16 @@ def declare(
     approval = view["approval_id"]
     # The operator's act: the manifest and the files the variant pins. The
     # cohort's three are derived again from the dataset version, never staged.
-    for name, content in (("manifest.json", json.dumps(view["manifest"]).encode()), *staged):
+    for name, content in (
+        ("manifest.json", json.dumps(view["manifest"]).encode()),
+        *staged,
+    ):
         ok(
-            *call("PUT", f"/api/v1/evaluation-approvals/{approval}/bundle/{name}", raw=content)[:2],
+            *call(
+                "PUT",
+                f"/api/v1/evaluation-approvals/{approval}/bundle/{name}",
+                raw=content,
+            )[:2],
             f"staging {name}",
         )
     ok(
@@ -1226,7 +1428,8 @@ def main() -> int:
 
         again = ok(
             *call(
-                "POST", f"/api/v1/evaluation-runs/{views['candidate']['declaration']['id']}/start"
+                "POST",
+                f"/api/v1/evaluation-runs/{views['candidate']['declaration']['id']}/start",
             )[:2],
             "starting the candidate again",
         )
@@ -1312,7 +1515,8 @@ def main() -> int:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             watched = ok(
-                *call("GET", f"/api/v1/experiments/{context_id}")[:2], "reading what was observed"
+                *call("GET", f"/api/v1/experiments/{context_id}")[:2],
+                "reading what was observed",
             )
             observed = {row["variant_id"]: row for row in watched["observed"]}
             if (observed.get(variant_id) or {}).get("runs") == served:
@@ -1367,9 +1571,10 @@ def main() -> int:
         )
         misrendered = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{rendering['declaration']['id']}/start")[
-                    :2
-                ],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{rendering['declaration']['id']}/start",
+                )[:2],
                 "starting the run that renders another prompt",
             )["execution"]["execution_id"]
         )
@@ -1407,7 +1612,10 @@ def main() -> int:
         flowing = declare("candidate", dataset, cohort, card, served=True, suffix="-served")
         flowed = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{flowing['declaration']['id']}/start")[:2],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{flowing['declaration']['id']}/start",
+                )[:2],
                 "starting the run on a served model and a pinned workflow",
             )["execution"]["execution_id"]
         )
@@ -1462,7 +1670,10 @@ def main() -> int:
         )
         strayed = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{straying['declaration']['id']}/start")[:2],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{straying['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose application steps off the pinned workflow",
             )["execution"]["execution_id"]
         )
@@ -1479,9 +1690,10 @@ def main() -> int:
         )
         reordered = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{reordering['declaration']['id']}/start")[
-                    :2
-                ],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{reordering['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose application answers before it retrieves",
             )["execution"]["execution_id"]
         )
@@ -1497,7 +1709,10 @@ def main() -> int:
         )
         doubled = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{doubling['declaration']['id']}/start")[:2],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{doubling['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose application answers twice for one retrieval",
             )["execution"]["execution_id"]
         )
@@ -1543,7 +1758,8 @@ def main() -> int:
                 "reading what was observed over a window",
             )
             windowed = next(
-                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+                (row for row in watched["observed"] if row["variant_id"] == variant_id),
+                {},
             )
             if windowed.get("runs_from_periods") == served:
                 break
@@ -1591,7 +1807,10 @@ def main() -> int:
         )
         shared_run = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{sharing['declaration']['id']}/start")[:2],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{sharing['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose gateway holds the application's token",
             )["execution"]["execution_id"]
         )
@@ -1633,9 +1852,10 @@ def main() -> int:
         )
         bypassed = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{bypassing['declaration']['id']}/start")[
-                    :2
-                ],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{bypassing['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose application answers around the gateway",
             )["execution"]["execution_id"]
         )
@@ -1649,7 +1869,10 @@ def main() -> int:
                 f"/api/v1/evaluation-results/{bypassing_id}/gate",
                 {
                     "baseline": evaluation,
-                    "policy": {"require_witness": True, "require_witnessed_answer": True},
+                    "policy": {
+                        "require_witness": True,
+                        "require_witnessed_answer": True,
+                    },
                 },
             )[1]
             or {}
@@ -1689,9 +1912,10 @@ def main() -> int:
             )
             ran = followed(
                 ok(
-                    *call("POST", f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start")[
-                        :2
-                    ],
+                    *call(
+                        "POST",
+                        f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start",
+                    )[:2],
                     f"starting the run whose application does {which}",
                 )["execution"]["execution_id"]
             )
@@ -1706,7 +1930,10 @@ def main() -> int:
                     call(
                         "POST",
                         f"/api/v1/evaluation-results/{result_id}/gate",
-                        {"baseline": evaluation, "policy": {"require_witnessed_answer": True}},
+                        {
+                            "baseline": evaluation,
+                            "policy": {"require_witnessed_answer": True},
+                        },
                     )[1]
                     or {}
                 ),
@@ -1772,7 +1999,10 @@ def main() -> int:
         )
         drifted = followed(
             ok(
-                *call("POST", f"/api/v1/evaluation-runs/{drifting['declaration']['id']}/start")[:2],
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{drifting['declaration']['id']}/start",
+                )[:2],
                 "starting the run whose requests do not hold the pinned prompt",
             )["execution"]["execution_id"]
         )
@@ -1821,9 +2051,10 @@ def main() -> int:
             )
             ran = followed(
                 ok(
-                    *call("POST", f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start")[
-                        :2
-                    ],
+                    *call(
+                        "POST",
+                        f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start",
+                    )[:2],
                     f"starting the {which} run with {sorted(params)}",
                 )["execution"]["execution_id"]
             )
@@ -1838,7 +2069,10 @@ def main() -> int:
                     call(
                         "POST",
                         f"/api/v1/evaluation-results/{result_id}/gate",
-                        {"baseline": evaluation, "policy": {"require_witnessed_answer": True}},
+                        {
+                            "baseline": evaluation,
+                            "policy": {"require_witnessed_answer": True},
+                        },
                     )[1]
                     or {}
                 ),
@@ -1941,7 +2175,10 @@ def main() -> int:
             and against["state"] == "completed"
             and exchanged("judged:judged_against") == 0
             and against["traces"].get("chosen") == len(CAPITALS),
-            {"named": accounted["judged:judged"]["traces"], "against": against["traces"]},
+            {
+                "named": accounted["judged:judged"]["traces"],
+                "against": against["traces"],
+            },
         )
         peeked = accounted["candidate:peek"]
         check(
@@ -1977,9 +2214,318 @@ def main() -> int:
             accounted["cut:gateway_atlas"]["traces"],
         )
 
+        def measure(
+            which: str,
+            params: dict[str, Any],
+            measurement: str,
+            *,
+            served: bool = True,
+            settings: dict[str, Any] | None = None,
+            before: Any = None,
+            policy: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """Declare, do `before` with the declaration, run, and read the result and a gate."""
+            declared = declare(
+                which,
+                dataset,
+                cohort,
+                card,
+                repetition=measurement,
+                params=params,
+                served=served,
+                suffix="-served" if served else "",
+                settings=settings,
+            )
+            if before is not None:
+                before(declared)
+            ran = followed(
+                ok(
+                    *call(
+                        "POST",
+                        f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start",
+                    )[:2],
+                    f"starting the {which} run with {sorted(params)}",
+                )["execution"]["execution_id"]
+            )
+            result_id = declared["declaration"]["run"]["evaluation_id"]
+            status, result, _ = call("GET", f"/api/v1/evaluation-results/{result_id}")
+            return {
+                "state": ran["execution"]["state"]["state_type"],
+                "execution": ran["execution"],
+                "published": status,
+                "traces": (result or {}).get("traces") or {},
+                "gate": (
+                    call(
+                        "POST",
+                        f"/api/v1/evaluation-results/{result_id}/gate",
+                        {
+                            "baseline": evaluation,
+                            "policy": policy or {"require_witnessed_answer": True},
+                        },
+                    )[1]
+                    or {}
+                )
+                if status == 200
+                else {},
+            }
+
+        def peek(
+            declared: dict[str, Any],
+            *,
+            prompt: tuple[str, str] | None = None,
+            spelled: Any = None,
+            caller: str | None = None,
+        ) -> None:
+            """Ask every case's question through the witness, as no measurement's run —
+            on the pinned prompt unless another is named, spelled as given."""
+            name, version = prompt or (
+                PROMPT,
+                declared["declaration"]["run"]["variant"]["prompt"]["version"],
+            )
+            with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
+                text = prompts.get_version(name, version)
+            for country, _ in CAPITALS:
+                question = f"What is the capital of {country}?"
+                asked = spelled(question) if spelled else question
+                through_gateway(
+                    "witness",
+                    {
+                        PROMPT_HEADER: f"{name}@{version}",
+                        **({CALLER_RUN_HEADER: f"{caller}-{country}"} if caller else {}),
+                    },
+                    text.render(question=asked),
+                    asked,
+                )
+
+        # Asked before a restart the read model will not hold: declared and
+        # peeked at now, run once many runs later and the server restarted.
+        restarting = declare(
+            "asked-restart",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-40",
+            served=True,
+            suffix="-served",
+            settings={"asked_since_seconds": 3600},
+        )
+        peek(restarting, caller="peek")
+
+        # A judge shown the candidates in an order the application does not choose.
+        judged_runs = {
+            "gateway": measure(
+                "judged-witnessed",
+                {"judge_order": "gateway", "judge_mode": "judge-right"},
+                "measurement-27",
+            ),
+            "descending": measure(
+                "judged-witnessed",
+                {"judge_order": "descending", "judge_mode": "judge-right"},
+                "measurement-28",
+            ),
+            "both": measure(
+                "judged-both",
+                {"judge_order": "both", "judge_mode": "judge-right"},
+                "measurement-29",
+            ),
+            "both-apart": measure(
+                "judged-both",
+                {"judge_order": "both", "judge_mode": "judge"},
+                "measurement-30",
+            ),
+        }
+        placed = judged_runs["gateway"]
+        misplaced = judged_runs["descending"]
+        check(
+            36,
+            "an answer a judge picked among candidates the gateway placed in the witnessed order "
+            "is an exchange on every answer, the application reading where they went from the "
+            "gateway's reply",
+            placed["state"] == "completed"
+            and placed["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and not placed["traces"].get("judged_unordered"),
+            placed["traces"],
+        )
+        check(
+            37,
+            "candidates the application placed against the witnessed order are no exchange, and "
+            "the gate names why",
+            misplaced["state"] == "completed"
+            and misplaced["traces"].get("witnessed_exchange") == 0
+            and misplaced["traces"].get("chosen") == len(CAPITALS)
+            and any(
+                "not the witnessed order" in reason
+                for reason in misplaced["gate"].get("reasons", [])
+            ),
+            {"traces": misplaced["traces"], "gate": misplaced["gate"].get("reasons")},
+        )
+        check(
+            38,
+            "a judge asked both ways, the second time reversed, is an exchange where both name "
+            "the answer, and none where they name different replies",
+            judged_runs["both"]["state"] == "completed"
+            and judged_runs["both"]["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and judged_runs["both-apart"]["state"] == "completed"
+            and judged_runs["both-apart"]["traces"].get("witnessed_exchange") == 0
+            and any(
+                "named different replies when asked both ways" in reason
+                for reason in judged_runs["both-apart"]["gate"].get("reasons", [])
+            ),
+            {
+                "both": judged_runs["both"]["traces"],
+                "apart": judged_runs["both-apart"]["traces"],
+                "gate": judged_runs["both-apart"]["gate"].get("reasons"),
+            },
+        )
+
+        # Questions asked before the measurement, in other words, and on another prompt.
+        before_start = measure(
+            "asked-before",
+            {},
+            "measurement-31",
+            settings={"asked_since_seconds": 600},
+            before=peek,
+        )
+        unread = measure("asked-unread", {}, "measurement-32", before=peek)
+        check(
+            39,
+            "a case asked before the measurement started, by its question alone — a part of the "
+            "case's input — is asked elsewhere where the run reads from before its start, and "
+            "not where it reads from its start",
+            before_start["state"] == "completed"
+            and before_start["traces"].get("witnessed_exchange") == 0
+            and before_start["traces"].get("asked_elsewhere") == len(CAPITALS)
+            and unread["state"] == "completed"
+            and unread["traces"].get("witnessed_exchange") == len(CAPITALS),
+            {"from_before": before_start["traces"], "from_start": unread["traces"]},
+        )
+        normal = measure(
+            "asked-normal",
+            {},
+            "measurement-33",
+            settings={"asked_since_seconds": 600},
+            before=lambda declared: peek(
+                declared,
+                spelled=lambda question: "  " + question.upper().replace(" ", "   "),
+            ),
+        )
+        check(
+            40,
+            "a case asked in another case and spacing is asked elsewhere all the same",
+            normal["state"] == "completed"
+            and normal["traces"].get("witnessed_exchange") == 0
+            and normal["traces"].get("asked_elsewhere") == len(CAPITALS),
+            normal["traces"],
+        )
+        with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
+            chat = prompts.publish(CHAT_PROMPT, CHAT, author="e2e").version_id
+        unpinned = measure(
+            "asked-unpinned",
+            {},
+            "measurement-34",
+            settings={"asked_since_seconds": 600},
+            before=lambda declared: peek(declared, prompt=(CHAT_PROMPT, chat)),
+        )
+        strict = (
+            call(
+                "POST",
+                "/api/v1/evaluation-results/capitals-asked-unpinned-measurement-34-served/gate",
+                {
+                    "baseline": evaluation,
+                    "policy": {
+                        "require_witnessed_answer": True,
+                        "asked_elsewhere_unpinned_denies": True,
+                    },
+                },
+            )[1]
+            or {}
+        )
+        check(
+            41,
+            "a case asked on another prompt is counted apart and denies no exchange — unless a "
+            "gate's policy says it does",
+            unpinned["state"] == "completed"
+            and unpinned["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and unpinned["traces"].get("asked_elsewhere_unpinned") == len(CAPITALS)
+            and not unpinned["traces"].get("asked_elsewhere")
+            and not any(
+                "another prompt" in reason for reason in unpinned["gate"].get("reasons", [])
+            )
+            and strict.get("verdict") == "incomplete"
+            and any("another prompt or model" in reason for reason in strict.get("reasons", [])),
+            {"traces": unpinned["traces"], "strict": strict.get("reasons")},
+        )
+
+        # A tool in the application's process, and one the gateway answers by pinned code.
+        in_app = measure("cut-in-app", {"atlas_in_app": True}, "measurement-35")
+        pinned_tool = measure("cut-pinned", {"gateway_atlas": True}, "measurement-36")
+        mispinned = measure("cut-mispinned", {"gateway_atlas": True}, "measurement-37")
+        told = json.dumps(mispinned["execution"])
+        check(
+            42,
+            "a country an atlas computed in the application's own process is no exchange, and "
+            "the trace and the gate name the atlas as where it may have come from",
+            in_app["state"] == "completed"
+            and in_app["traces"].get("witnessed_exchange") == 0
+            and in_app["traces"].get("unaccounted_tools") == ["atlas"]
+            and any(
+                "called atlas with no witness" in reason
+                for reason in in_app["gate"].get("reasons", [])
+            ),
+            {"traces": in_app["traces"], "gate": in_app["gate"].get("reasons")},
+        )
+        check(
+            43,
+            "an atlas the gateway answers with the code the variant pins is an exchange on every "
+            "answer, and answered with other code the answers are refused naming both digests",
+            pinned_tool["state"] == "completed"
+            and pinned_tool["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and mispinned["state"] == "failed"
+            and "the tool atlas-here with code" in told
+            and ATLAS_CODE in told
+            and hashlib.sha256(b"# another atlas\n").hexdigest() in told
+            and mispinned["published"] == 404,
+            {"pinned": pinned_tool["traces"], "mispinned": mispinned["state"]},
+        )
+
+        # A measurement's runs, counted: one lost in transport, one made up, and a retry.
+        lost = measure("counted", {"lose_run": True}, "measurement-38", served=False)
+        invented = measure("counted", {"invent": True}, "measurement-39", served=False)
+        retried = measure("counted", {"fail_first": True}, "measurement-41", served=False)
+        attempts = [
+            step.get("attempt")
+            for step in retried["execution"]["steps"]
+            if step["step_id"] == "generate"
+        ]
+        check(
+            44,
+            "an answer whose run its client lost in transport is said to be lost, one naming a "
+            "run nobody opened is said to be unknown, and a retried attempt leaves no gap",
+            lost["state"] == "completed"
+            and lost["traces"].get("seen") == len(CAPITALS) - 1
+            and lost["traces"].get("lost_in_transport") == 1
+            and not lost["traces"].get("unknown_runs")
+            and invented["state"] == "completed"
+            and invented["traces"].get("unknown_runs") == 1
+            and not invented["traces"].get("lost_in_transport")
+            and retried["state"] == "completed"
+            and retried["traces"].get("seen") == len(CAPITALS)
+            and not retried["traces"].get("lost_in_transport")
+            and not retried["traces"].get("unknown_runs"),
+            {
+                "lost": lost["traces"],
+                "invented": invented["traces"],
+                "retried": retried["traces"],
+                "attempts": attempts,
+            },
+        )
+
         # A restart with a period open: the fold's saved state carries it.
         before = AiwatcherClient(
-            service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
+            service="e2e-capitals",
+            base_url=BASE,
+            token=APPLICATION_SECRET,
+            variant_id=variant_id,
         )
         for request in range(3):
             with (
@@ -1993,7 +2539,14 @@ def main() -> int:
         serving.join(timeout=5)
         server.terminate()
         server.wait(timeout=30)
-        server = serve(home / "server")
+        # On the same port, so the gateways keep reaching it — and with a read
+        # model holding the last forty runs, none of them the calls asked
+        # before it went down.
+        server = serve(
+            home / "server",
+            port=int(BASE.rsplit(":", 1)[1]),
+            extra={"AIWATCHER_MAX_RUNS": "40"},
+        )
         dropping = Dropping(HttpTransport(BASE, token=APPLICATION_SECRET), "after-restart-lost")
         after = AiwatcherClient(service="e2e-capitals", transport=dropping, variant_id=variant_id)
         # Past the period the three ended in, so these close it — with a run
@@ -2015,7 +2568,8 @@ def main() -> int:
                 "reading what was observed after the restart",
             )
             restarted = next(
-                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+                (row for row in watched["observed"] if row["variant_id"] == variant_id),
+                {},
             )
             if (
                 restarted.get("runs_from_periods") == served + 3
@@ -2079,7 +2633,8 @@ def main() -> int:
                 "reading what was observed of a client new since the restart",
             )
             renewed = next(
-                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+                (row for row in watched["observed"] if row["variant_id"] == variant_id),
+                {},
             )
             if renewed.get("lost_runs") == 2 and renewed.get("runs") == served + 6:
                 break
@@ -2090,6 +2645,127 @@ def main() -> int:
             "whole, is counted as lost once the client's second run arrives",
             renewed.get("lost_runs") == 2 and renewed.get("runs") == served + 6,
             {key: renewed.get(key) for key in ("runs", "lost_runs")},
+        )
+
+        # After the restart: the questions asked long before it, from the index.
+        worker = Worker(
+            BASE,
+            WORKER_SECRET,
+            queues=[QUEUE],
+            tasks=[answer],
+            name="e2e-generate-worker-again",
+            poll_interval=0.1,
+            telemetry=AiwatcherClient(service="e2e-generate", base_url=BASE, token=WORKER_SECRET),
+        )
+        serving = threading.Thread(target=worker.run, name="e2e-generate-worker", daemon=True)
+        serving.start()
+        held_runs = call("GET", "/api/v1/runs?limit=500")[1] or {}
+        peeks_held = [
+            run
+            for run in held_runs.get("runs", [])
+            if str(run.get("caller_run_id") or "").startswith("peek-")
+        ]
+        restarted_run = followed(
+            ok(
+                *call(
+                    "POST",
+                    f"/api/v1/evaluation-runs/{restarting['declaration']['id']}/start",
+                )[:2],
+                "starting the run asked about before the restart",
+            )["execution"]["execution_id"]
+        )
+        restarted_traces = (
+            call(
+                "GET",
+                f"/api/v1/evaluation-results/{restarting['declaration']['run']['evaluation_id']}",
+            )[1]
+            or {}
+        ).get("traces") or {}
+        check(
+            45,
+            "cases asked before a restart, whose calls the read model no longer holds, are asked "
+            "elsewhere all the same: the index of what witnesses saw asked kept them",
+            restarted_run["execution"]["state"]["state_type"] == "completed"
+            and not peeks_held
+            and restarted_traces.get("witnessed_exchange") == 0
+            and restarted_traces.get("asked_elsewhere") == len(CAPITALS),
+            {"traces": restarted_traces, "peeks_in_read_model": len(peeks_held)},
+        )
+
+        def lost_runs() -> int:
+            watched = ok(
+                *call("GET", f"/api/v1/experiments/{context_id}?window_seconds=3600")[:2],
+                "reading how many runs were lost",
+            )
+            row = next(
+                (row for row in watched["observed"] if row["variant_id"] == variant_id),
+                {},
+            )
+            return int(row.get("lost_runs") or 0)
+
+        def settled_on(expected: int) -> int:
+            deadline = time.monotonic() + 30
+            counted = lost_runs()
+            while counted != expected and time.monotonic() < deadline:
+                time.sleep(1)
+                counted = lost_runs()
+            return counted
+
+        # A client whose only run the transport loses, closed, and one not closed.
+        lonely = AiwatcherClient(
+            service="e2e-capitals",
+            transport=Dropping(HttpTransport(BASE, token=APPLICATION_SECRET), "lonely-lost"),
+            variant_id=variant_id,
+        )
+        with lonely.run("lonely-lost") as traced, traced.agent("capitals"):
+            pass
+        lonely.close()
+        after_close = settled_on(3)
+        killed = AiwatcherClient(
+            service="e2e-capitals",
+            transport=Dropping(HttpTransport(BASE, token=APPLICATION_SECRET), "killed-lost"),
+            variant_id=variant_id,
+        )
+        with killed.run("killed-lost") as traced, traced.agent("capitals"):
+            pass
+        killed.flush()
+        time.sleep(3)
+        unclosed = lost_runs()
+        check(
+            46,
+            "a client whose transport lost its only run says so when it closes, and the window "
+            "counts the run lost; one that never closes says nothing, which is where it stops",
+            after_close == 3 and unclosed == 3,
+            {"after_close": after_close, "unclosed": unclosed},
+        )
+
+        # A client whose transport was down all along, and the next on its spool.
+        spool = home / "spool"
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            nowhere = probe.getsockname()[1]
+        down = AiwatcherClient(
+            service="e2e-capitals",
+            transport=HttpTransport(
+                f"http://127.0.0.1:{nowhere}",
+                token=APPLICATION_SECRET,
+                timeout=0.5,
+                spool_dir=spool,
+            ),
+            variant_id=variant_id,
+        )
+        with down.run("spooled-lost") as traced, traced.agent("capitals"):
+            pass
+        down.close()
+        kept = sorted(path.name for path in spool.glob("counted-*.json"))
+        HttpTransport(BASE, token=APPLICATION_SECRET, spool_dir=spool).close()
+        spooled = settled_on(4)
+        check(
+            47,
+            "a count a transport could not deliver is kept on its spool, and the next transport "
+            "started on it sends it: the run lost with it is counted",
+            len(kept) == 1 and spooled == 4 and not list(spool.glob("counted-*.json")),
+            {"kept": kept, "lost_runs": spooled},
         )
     finally:
         for relay in gateways:

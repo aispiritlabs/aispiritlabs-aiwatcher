@@ -560,6 +560,11 @@ e2e-optimise:
 # traversals; results and observations are priced from a table with a history; a
 # window is the period fold's, journaled, across a restart; and a run whose every
 # event was dropped — a new client's first run among them — is counted as lost.
+# A judge shown its candidates in the witnessed order or asked both ways, a case
+# asked before the run, in other words or on another prompt, a tool computed in
+# the application or answered by pinned code, a measurement's run lost in
+# transport or made up, a client's last lost run said on close or from a spool,
+# and questions asked before a restart, found in the index of what was asked.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 
