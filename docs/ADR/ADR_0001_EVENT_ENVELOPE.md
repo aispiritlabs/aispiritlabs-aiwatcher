@@ -382,3 +382,35 @@ the caller said how it takes its answer out, and that way took nothing out of
 any reply. A tool's host may publish the same `tool.*` a gateway's relay does
 (`aiwatcher_sdk.gateway.ToolWitness`), under the gateway's own credential so its
 digests are made under the same key. None of it is a word said in the call.
+
+## Amendment 2026-09-14: when a count of runs began, where a value was placed, and a witness's key held by another host
+
+A run's start carrying `run_sequence` also carries `run_counted_from`: when that
+count began, the moment the client opened the first run it counted for the
+variant. A reader first hearing of a count past nought could not tell a count it
+came to late from one whose beginning was lost; one that was already reading
+when the count began, and has forgotten no count since then, can — the runs
+before were started where it was reading, and never reached it. The period fold
+counts them, allowing a client's clock a minute ahead of the log's (ADR_0030,
+amended). Absent from every start written before it, which counts as before.
+
+What a gateway publishes about a call grows by one, recorded as it arrives and
+kept only where digest-shaped: `placed_digests` (`aiwatcher.witness.placed`) —
+for each value the named template was found rendered with, the keyed digest of
+the placeholder's name and of the value, as `name:value`, each made as a reply's
+is, so a judging call's reply naming a placeholder reads back as the value it
+held. And a request the gateway found to hold a template only by its literal
+parts, because the caller said nothing of what it rendered, has what stands
+between those parts digested among what it asked.
+
+A witness's digests are made under the key of the credential it publishes with,
+unless the deployment names the credential whose key it digests under
+(`AIWATCHER_WITNESS_DIGESTS=atlas=gateway`): a tool's host then publishes under
+a token of its own and holds the gateway's witness key rather than its token
+(`aiwatcher-gateway --witness-key`), so what it returned is comparable with what
+the gateway relayed and each is still published, and refused, under its own
+name. The server refuses a pair naming a credential it did not issue. A
+TypeScript host witnesses a tool the same way (`@aiwatcher/sdk/tool-witness`),
+byte for byte, and the Python gateway can answer a tool itself, from a function
+it is handed, so a tool an application would compute in its own process runs
+where the witness is. None of it is a word said in the call.

@@ -21,7 +21,9 @@
   result, a label the variant pins, an answer made of parts, numbers scored as
   written, a gap refilled, and a count every client keeps; and replies joined
   in pinned words, a choice among replies, a tool witnessed where it runs, an
-  answer as written, and runs lost whole
+  answer as written, and runs lost whole; amended 2026-09-14 with a choice a
+  judging call made, a question asked elsewhere, a tool's host with a token of
+  its own, a tool the gateway answers, and the first run of a new client
 - **Date**: 2026-09-11
 
 ## Context
@@ -1577,3 +1579,66 @@ case, so no shard written before it moves.
 variant (ADR_0001, amended); the period fold counts a number passed over as a
 run whose start never reached it, in the period the next start of that count
 reached, which says it is incomplete, and a window returns `lost_runs`.
+
+## Amendment (2026-09-14): a choice a judging call made, a question asked elsewhere, a tool's host with a token of its own, and a new client's first run
+
+Limits of the amendment above.
+
+**A judging call's choice counts where the variant pins it.** The generation
+config may pin `answer_chosen: {"judged": {"prompt": {"name": …, "version": …},
+"pick": rule}}`. The answer chosen among replies is an exchange when the one
+reply that went into nothing else besides the answer's is a witnessed call on
+that prompt version, found to be nothing but its template rendered with values
+each accounted for — the candidates among them — whose way of taking its answer
+out is `pick`, and whose reply, taken that way, names exactly one placeholder;
+the value the gateway saw placed there (`placed_digests`, ADR_0001 amended) is
+the answer's reply. A judge asked twice, on another prompt, read another way or
+naming a placeholder holding another reply leaves the choice the application's.
+The candidates and the judge are all model replies to requests the application
+added nothing to, so what the application decides is which placeholder the
+judge's word points at, and that is read back rather than taken on its word.
+
+**A reply handed to a tool whose result went into nothing went into nothing.**
+A tool's arguments went on only where what it returned did — into a call, or
+into another tool that did — so a reply cannot be set aside by passing it to a
+tool whose answer nobody used.
+
+**A question asked elsewhere while the measurement ran is a choice the traces
+can see.** The traces step reads every call a witness relayed from when the
+measurement's execution started, in the log's fold, until it looks. A call in a
+run other than the answer's — or than one answering a case that asks the same —
+on the pinned prompt, or the judging prompt the variant pins, of the pinned
+model where one is pinned, whose request held the case's whole input, is a
+reply the application could have seen before it answered, or beside it, and
+chosen the run it answered in by. The answer is then no exchange:
+`asked_elsewhere` on the row counts those calls, the trace counts the answers,
+and a gate says it. Where the execution's start is not in the fold, no answer
+is an exchange (`elsewhere_unread`). A request that says nothing of what it
+rendered is still read: the gateway digests what stands between the template's
+literal parts among what it asked. The rule is conservative on purpose and says
+so: a user asking a case's question on the same prompt and model while the
+measurement runs, a baseline pinning the same prompt and model measured beside
+it, and a generation attempt retried after it asked are all asked elsewhere.
+
+**A tool's host holds the gateway's key, not its token.** The deployment names
+the credential whose witness key a witness digests under
+(`AIWATCHER_WITNESS_DIGESTS`), so a tool's host publishes under a token of its
+own — named a witness, and refused by name — with digests comparable with the
+gateway's. `ToolWitness` takes the key (`aiwatcher-gateway --witness-key`), and
+TypeScript has the same witness, byte for byte. A tool an application would
+compute in its own process can be answered by the gateway itself from a
+function it is handed; one computed in the application's process is still the
+application's word.
+
+**A new client's lost first run is counted.** A start carries when its count
+began (`run_counted_from`, ADR_0001 amended). The period fold keeps the log's
+clock at the first event it folded and when the latest count it forgot to make
+room was last heard from; a client first heard of at a number past nought whose
+count began more than a minute after the first and after the second has its
+earlier runs counted lost. A count that began before the fold was reading, or
+before a forgotten one was last heard from, counts nothing before it, as
+before.
+
+**The journal runs on its own, and a shared bound is one loop's.** Both are
+amended where they are decided: ADR_0002 and ADR_0012.
+

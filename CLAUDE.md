@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen or made around it — scored, compared, observed, priced, journaled, restarted and a run lost whole
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen, judged, asked elsewhere or made around it — scored, compared, observed, priced, journaled, restarted and runs lost whole, a new client's first among them
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -107,7 +107,9 @@ The last two are the split of section 27, and they need three shared backends �
 `postgres`, `laser` and `s3` — because that is what stops being per-process when
 the binary is two processes. The start-up refuses each by name. One process
 holding both roles is the default and needs none of them, which is what `just
-run` and `just dev` are.
+run` and `just dev` are. `aiwatcher journal` is neither half: the observation
+journal alone, on `laser` and `s3`, a reader of the log that needs nothing the
+other roles need.
 
 ```bash
 just iggy-up       # Apache Iggy in Docker, with the three flags it needs
@@ -751,7 +753,10 @@ steps (`derived`), which the gateway takes out again. It relays the deployment's
 tools the same way, at `/tools/<name>` to the URL the deployment named and never
 one a caller names, digesting each part of the arguments and what came back — and
 a tool the application calls directly is witnessed on its own host by
-`ToolWitness`, under the gateway's credential so its digests share the key. It
+`ToolWitness`, in Python or TypeScript, digesting under the gateway's witness
+key — held by a host publishing under a token of its own where the deployment
+says so (`AIWATCHER_WITNESS_DIGESTS`) — while a tool the application would
+compute itself can be a function the gateway answers. It
 is the telemetry
 client's half — the standard library and nothing else — and it publishes neither
 the request nor the reply: only keyed digests of each message, of the values it
@@ -2112,8 +2117,8 @@ the review.
   input; one call doing both for a request that was nothing but the pinned
   prompt, the answer not in it, rendered with values each accounted for — the
   case's input or a part of it, the reply of another call so made, what a tool
-  the gateway relayed or a tool's host witnessed under its credential returned
-  to arguments so accounted for, or a value taken out of one of those in steps
+  the gateway relayed or answered, or a tool's host witnessed under its key,
+  returned to arguments so accounted for, or a value taken out of one of those in steps
   the gateway repeated — is an exchange, which an application answering around
   the gateway, telling the model what to say or handing it a value it made
   cannot show, and `require_witnessed_answer` requires one per answer. A label's
@@ -2122,17 +2127,19 @@ the review.
   pinned response schema names is one, replies joined into one text only in
   the words it pins as `answer_joined`, and a reply chosen among others that
   went into nothing a witness saw only where the way it pins as `answer_chosen`
-  — the first relayed, or the most of exactly `n` — picks it; an answer is
-  compared from the JSON the generation wrote, so an integer digit for
-  digit. A run's
+  — the first relayed, the most of exactly `n`, or the one placed where a call
+  on the judging prompt it pins names — picks it, and a case asked on the
+  pinned prompt in another run while the measurement ran is no exchange; an
+  answer is compared from the JSON the generation wrote, so an integer digit
+  for digit. A run's
   steps are held to the order the pinned declaration leads and to how often: a
   node starts once per completion leading into it, a failed start gives its turn
   back, a declared loop goes round as often as it completes, a node declared
   `repeats` runs once per item, one declared `at_most` starts no more than
   that, and an edge declared `at_most` is followed no more than that — the
   rounds of a cycle through it, a retry not counted — as are edges sharing one
-  of the declaration's `bounds`, between them, which must be one cycle's ways
-  back or the pinned declaration is refused naming the bound. Not over the conversation
+  of the declaration's `bounds`, between them, which must lead back into one
+  loop's head or the pinned declaration is refused naming the bound. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2237,7 +2244,8 @@ the review.
   anew takes over at the next hour, so two widths never cover one span. On a
   log that numbers every event, a position the log no longer holds when the
   fold comes to it is first looked for in the journal — a consumer of its own,
-  on a connection of its own and in every role, keeping each stretch it read,
+  on a connection of its own, in every role and in one of its own, keeping
+  each stretch it read,
   with only what the fold reads of each event, for as many days as the
   deployment says — and what
   no page covers is written down with the span of time it may have lain in, the
@@ -2247,7 +2255,9 @@ the review.
   with what arrived, its period says it is incomplete, and a window counts the
   lost events — never a silence. A number it skipped in its count of the runs it
   opened for a variant is a run whose start never arrived, a run lost whole
-  among them, counted where the next start did.
+  among them, counted where the next start did — and so are the runs before a
+  client's first start the fold reads, where that count began while the fold
+  was reading.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start

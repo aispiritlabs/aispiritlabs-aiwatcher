@@ -6,7 +6,8 @@
   The decision stands — a declaration is still the source that is right on
   every path. Amended 2026-09-11 (below): how the panel lays the graph out;
   amended 2026-09-13: a node that repeats, and where a run enters a shape;
-  and edges that share one bound, which must be one cycle's ways back.
+  and edges that share one bound, which must be one cycle's ways back;
+  amended 2026-09-14: one loop's ways back are the ways back into its head.
 - **Date**: 2026-08-29
 
 ## Context
@@ -307,7 +308,7 @@ the edge with the most left, so an edge is counted only for a start nothing else
 led to. Also part of the digest only where declared.
 
 Several edges may share one bound, declared beside the nodes and the edges:
-`"bounds": [{"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}]`.
+`"bounds": [{"edges": [["review", "write"], ["fix", "write"]], "at_most": 3}]`.
 A run may follow any of them that many times between them — the rounds of a
 cycle with more than one way back, whichever way each round took. A shared bound
 naming an edge the declaration lacks bounds nothing on that edge; one naming a
@@ -329,8 +330,24 @@ out.
 ### What would make this wrong
 
 A bound counts starts that a completion led to, so it bounds rounds only of the
-cycles its edges are on. A shared bound over two ways back that round one part
-of the shape but different cycles in it — two loops through a common node — is
-admitted and counts both together, which is what its author wrote and may not be
-what they meant. The fold keeps 256 steps a run; a run that took more is counted
-as unseen on the workflow rather than checked in part.
+cycles its edges are on. The fold keeps 256 steps a run; a run that took more is
+counted as unseen on the workflow rather than checked in part.
+
+## Amendment 2026-09-14: one loop's ways back lead into its head
+
+One strongly connected part of a shape can hold several loops, and the rule
+above admitted a bound over any ways back inside it: `write ⇄ review` and
+`review ⇄ fix` through the node they share, bounded together, counted the rounds
+of both as one number — which is what the declaration said and the rounds of
+neither. A round of a loop is a return to its head, so a shared bound is one
+loop's when every edge under it leads back into one node. `Topology::misbounded`
+now names a bound whose edges lead into two nodes — separate cycles, or two
+loops through a node they share — as the heads of different loops, whose rounds
+are counted apart; the traces step refuses a pinned declaration holding one and
+the Python SDK refuses to declare one, as before.
+
+Two bodies returning into one head are one loop: `review → write` and
+`fix → write` under one bound count returns to `write`, whichever body a round
+went through, and a body's own rounds are its edge's own `at_most`. A count of
+returns from one node, whichever head they reach, is that node's `at_most`,
+which says what it counts.

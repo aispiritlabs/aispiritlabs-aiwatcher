@@ -198,3 +198,20 @@ to a position past the one after its last — the log evicted what no journal
 read — it says so, naming the positions. What stays a gap is a stretch nothing
 read before it was evicted: every process down for longer than retention, or a
 producer writing to the broker directly while none is up.
+
+## Amendment 2026-09-14: the journal on its own
+
+A journal in every role still reads nothing while every role is down, and what
+takes every role down together is rarely the log: a release that does not
+start, a database or an identity provider the start-up waits for. The journal
+now runs on its own too (`AIWATCHER_ROLE=journal`, `aiwatcher journal`): the
+log and the object store its pages go to, and no listener, no read model, no
+workflow store and no identity provider, under the same `-journal` group as the
+journals beside the other roles, so the broker gives the log to whichever of
+them is up. It needs `AIWATCHER_BUS=laser` — the write-ahead log is one
+process's directory — an object store and `AIWATCHER_OBSERVATION_JOURNAL_DAYS`,
+and is refused at start without any of them. The chart runs it as
+`observationJournal.replicas` pods beside the rest, needing nothing the others
+need. What stays a gap is a stretch no journal read before the log evicted it:
+every journal down for longer than retention, as every process was before.
+
