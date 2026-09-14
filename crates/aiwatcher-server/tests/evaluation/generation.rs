@@ -422,6 +422,24 @@ async fn folded_run(
     }
 }
 
+/// The measurement's execution on the log, as its engine declares it, a
+/// minute before the application's runs: where calls asked elsewhere during it
+/// are looked for from.
+async fn measurement_started(read_model: &aiwatcher_projector::ReadModel) {
+    use aiwatcher_core::{EventEnvelope, EventType, Sdk, Source as Producer};
+    let at = time::OffsetDateTime::now_utc() - time::Duration::minutes(1);
+    let mut envelope = EventEnvelope::new(
+        EventType::WorkflowDeclared,
+        "exec-generated-run",
+        at,
+        Producer::new("aiwatcher", Sdk::Rust),
+    )
+    .with_data(json!({"nodes": ["cases", "generate", "traces", "score"]}));
+    envelope.workflow_id = Some("scoring".to_owned());
+    envelope.workflow_run_id = Some("exec-generated-run".to_owned());
+    read_model.apply(&envelope.record(1, 1, at, None)).await;
+}
+
 /// A bundle that holds one workflow declaration and nothing else.
 #[derive(Debug)]
 struct Declaration(Vec<u8>);
@@ -751,6 +769,8 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
     )
     .await;
 
+    measurement_started(&read_model).await;
+
     let spec = aiwatcher_execution::plan::ScoreEvaluationSpec {
         declaration: declared.id.clone(),
     };
@@ -787,6 +807,43 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
                "self_witnessed": 1, "witnesses": ["serving"],
                "served": [{"model": "support-model-q4", "answers": 2}]}),
         "the serving run the worker's own credential published is no witness"
+    );
+
+    // The same question on the pinned prompt, relayed by the witness for no run
+    // of this measurement: a reply the application could have seen first.
+    let peeked = json!({"call_id": "peek-1", "model": "support-model", "model_version": "v7",
+        "prompt_name": "support-bot", "prompt_version": PROMPT,
+        "prompt_verified": true, "prompt_exact": true,
+        "asked_digests": [digest(&key, Said::Asked, "question 0")]});
+    folded_run(
+        &read_model,
+        "peek-1",
+        "serving",
+        None,
+        vec![
+            (EventType::RunStarted, json!({})),
+            (EventType::LlmStarted, peeked.clone()),
+            (EventType::LlmCompleted, peeked),
+            (EventType::RunCompleted, json!({})),
+        ],
+    )
+    .await;
+    let again = TracesExecutor::new(
+        Arc::clone(&registry),
+        artifacts.clone(),
+        Arc::clone(&read_model),
+        std::time::Duration::ZERO,
+    )
+    .reading_bundles_from(Arc::new(Declaration(declaration.to_vec())))
+    .witnessed_by(aiwatcher_evaluation::Witnesses::default().keyed([("serving".to_owned(), key)]))
+    .execute(&command, &context)
+    .await
+    .expect("nothing contradicts the pins");
+    let traces = &again.result.as_ref().unwrap()["traces"];
+    assert_eq!(
+        (&traces["witnessed_exchange"], &traces["asked_elsewhere"]),
+        (&json!(0), &json!(1)),
+        "a case asked elsewhere while the measurement ran is no exchange: {traces}"
     );
 
     // A run that stepped through a node the pinned declaration does not have.

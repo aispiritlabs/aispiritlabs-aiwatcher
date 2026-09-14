@@ -3839,11 +3839,22 @@ export type GenerationServed = {
 export type GenerationTrace = {
     answers: number;
     /**
+     * Answers that would be an exchange but whose cases' inputs witnessed
+     * calls on the pinned prompt asked in other runs while the measurement ran
+     * ([`TracedAnswer::asked_elsewhere`]).
+     */
+    asked_elsewhere?: number;
+    /**
      * Answers that would be an exchange but were chosen among replies their
      * run's witnessed calls gave that went into nothing else, which no way of
      * choosing the variant pins picks ([`TracedAnswer::chosen`]).
      */
     chosen?: number;
+    /**
+     * Answers that would be an exchange but for which calls asked elsewhere
+     * were not looked for, the measurement's start not being in the fold.
+     */
+    elsewhere_unread?: number;
     /**
      * Answers naming the run they were made in.
      */

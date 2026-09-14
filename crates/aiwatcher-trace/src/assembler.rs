@@ -740,6 +740,13 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             if !pairs.is_empty() {
                 out.push((own::witness::DERIVED.to_owned(), AttrValue::StrList(pairs)));
             }
+            let placed = digests_of(event, "placed_digests", |pair| {
+                pair.split_once(':')
+                    .is_some_and(|(name, value)| is_digest(name) && is_digest(value))
+            });
+            if !placed.is_empty() {
+                out.push((own::witness::PLACED.to_owned(), AttrValue::StrList(placed)));
+            }
             let taken = digests_of(event, "taken_digests", is_digest);
             if !taken.is_empty() {
                 out.push((own::witness::TAKEN.to_owned(), AttrValue::StrList(taken)));

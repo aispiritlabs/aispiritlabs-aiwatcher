@@ -706,3 +706,96 @@ def test_a_reply_the_caller_s_way_of_taking_its_answer_reads_nothing_out_of_is_s
     assert not relay.took_nothing(readable, rule)
     assert not relay.took_nothing(unreadable, None), "no way of taking, nothing to say"
     assert not relay.took_nothing(blank, rule), "no reply to read"
+
+
+def test_where_each_value_was_placed_and_what_stands_between_the_template_s_words_are_digested(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    headers = {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"}
+    ask(
+        base,
+        {
+            "model": "capitals",
+            "messages": messages("Answer the question about Peru in one word."),
+            GATEWAY_FIELD: {"variables": {"country": "Peru"}},
+        },
+        headers,
+    )
+    ask(
+        base,
+        {"model": "capitals", "messages": messages("Answer the question about Peru in one word.")},
+        headers,
+    )
+
+    told, untold = completed(recording)
+    assert told["placed_digests"] == [
+        witness_digest(KEY, "replied", "country") + ":" + witness_digest(KEY, "replied", "Peru")
+    ], "a judging call's reply naming a placeholder reads back as the value placed there"
+    assert "placed_digests" not in untold, "nothing said what was rendered, so nowhere is placed"
+    assert untold["prompt_verified"] is True
+    assert witness_digest(KEY, "asked", "Peru") in untold["asked_digests"], (
+        "what stands where the placeholder does is asked, said or not"
+    )
+
+
+def test_a_tool_s_host_with_the_gateway_s_key_and_a_tool_the_gateway_answers_digest_alike() -> None:
+    hosted = Recording()
+    witness = ToolWitness(AiwatcherClient(service="atlas", transport=hosted), key=KEY)
+    relayed = Recording()
+
+    def atlas(arguments: Any) -> Any:
+        if arguments.get("query") == "Atlantis":
+            raise LookupError("no such country")
+        return {"capital": "Lima"}
+
+    relay = Gateway(
+        "http://127.0.0.1:9",
+        AiwatcherClient(service="gateway", transport=relayed),
+        credential="gateway-secret",
+        tools={"atlas": atlas},
+    )
+    server = relay.server(port=0)
+    base = running(server)
+
+    def call(arguments: dict[str, Any]) -> tuple[int, bytes]:
+        request = urllib.request.Request(  # noqa: S310 — the test's own gateway
+            f"{base}/tools/atlas", data=json.dumps(arguments).encode(), method="POST"
+        )
+        request.add_header(CALLER_RUN_HEADER, "app-run")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+
+    try:
+        answered = call({"query": "Peru"})
+        failed = call({"query": "Atlantis"})
+    finally:
+        server.shutdown()
+    with witness.call("atlas", {"query": "Peru"}, caller="app-run") as hosting:
+        hosting.answered(answered[1])
+
+    assert (answered[0], json.loads(answered[1])) == (200, {"capital": "Lima"})
+    assert failed[0] == 500
+    done, refused = [
+        event["data"] for event in relayed.events if event["event_type"] == "tool.completed"
+    ]
+    [elsewhere] = [
+        event["data"] for event in hosted.events if event["event_type"] == "tool.completed"
+    ]
+    assert done["returned_digests"] == elsewhere["returned_digests"] != []
+    assert done["arguments_digests"] == elsewhere["arguments_digests"]
+    assert (refused["outcome"], refused["returned_digests"]) == ("failed", [])
+    assert "Lima" not in json.dumps(relayed.events) + json.dumps(hosted.events)
+
+
+def test_the_witness_key_is_printed_for_a_tool_s_host_to_digest_under(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from aiwatcher_sdk.gateway import main
+
+    monkeypatch.setenv("AIWATCHER_TOKEN", "gateway-secret")
+    assert main(["--witness-key"]) == 0
+    assert capsys.readouterr().out.strip() == KEY.hex()

@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./evaluation": "./src/evaluation.ts",
-    "./evaluation-registry": "./src/evaluation-registry.ts"
+    "./evaluation-registry": "./src/evaluation-registry.ts",
+    "./tool-witness": "./src/tool-witness.ts"
   },
   "files": [
     "src"

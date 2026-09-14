@@ -56,6 +56,10 @@ pub struct TracedCall {
     /// The same witness's digests of each value the named template was found
     /// rendered with, made as a reply's are.
     pub rendered: Vec<String>,
+    /// Where each of those values was placed: the digest of the placeholder's
+    /// name and of the value, made as a reply's are — what a judging call's
+    /// reply naming a placeholder is read back through.
+    pub placed: Vec<(String, String)>,
     /// Values the caller took out of another of its values in steps the
     /// witness repeated: each value's digest and the digest of the one it came
     /// out of.
@@ -107,6 +111,21 @@ pub struct Witnesses {
     /// How the variant's generation config pins choosing an answer among its
     /// run's replies (`answer_chosen`).
     chosen: Option<Choosing>,
+    /// Calls witnesses relayed while the measurement ran, in whatever run
+    /// named them — what an application could have asked a case's question
+    /// in before, or beside, the run it answers in.
+    elsewhere: Vec<CallElsewhere>,
+    /// The measurement's start was not in the log's fold, so no such call was
+    /// looked for.
+    elsewhere_unread: bool,
+}
+
+/// A call a witness relayed while a measurement ran, and the run it named as
+/// its caller, if any.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CallElsewhere {
+    pub caller_run_id: Option<String>,
+    pub call: TracedCall,
 }
 
 /// How a variant pins joining several replies into one text answer: the words
@@ -244,6 +263,14 @@ enum Choosing {
     /// `{"most_of": n}`: exactly `n` such replies, and the answer's more often
     /// than any other.
     MostOf(usize),
+    /// `{"judged": {"prompt": {"name": …, "version": …}, "pick": rule}}`: the
+    /// candidates rendered into one call on this prompt version, whose reply,
+    /// taken out by this rule, names the placeholder the answer was placed in.
+    Judged {
+        prompt: String,
+        version: String,
+        pick: serde_json::Value,
+    },
 }
 
 impl Choosing {
@@ -251,11 +278,35 @@ impl Choosing {
         if pin.as_str() == Some("first") {
             return Some(Self::First);
         }
+        if let Some(judged) = pin.get("judged") {
+            let prompt = judged.get("prompt")?;
+            let text = |value: Option<&serde_json::Value>| {
+                value
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned)
+            };
+            return Some(Self::Judged {
+                prompt: text(prompt.get("name"))?,
+                version: text(prompt.get("version"))?,
+                pick: judged.get("pick").filter(|rule| rule.is_object())?.clone(),
+            });
+        }
         pin.get("most_of")
             .and_then(serde_json::Value::as_u64)
             .filter(|n| *n > 0)
             .and_then(|n| usize::try_from(n).ok())
             .map(Self::MostOf)
+    }
+
+    /// The prompt version a judging call is made on, where one is pinned.
+    fn judge_prompt(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Judged {
+                prompt, version, ..
+            } => Some((prompt.as_str(), version.as_str())),
+            Self::First | Self::MostOf(_) => None,
+        }
     }
 }
 
@@ -305,6 +356,26 @@ impl Witnesses {
         self
     }
 
+    /// The calls witnesses relayed from when the measurement started until the
+    /// traces step looked, in any run: a case's input asked on the pinned
+    /// prompt in a run other than its answer's is a question the application
+    /// could have chosen its answer's run by.
+    #[must_use]
+    pub fn asked_elsewhere(mut self, calls: Vec<CallElsewhere>) -> Self {
+        self.elsewhere = calls;
+        self.elsewhere_unread = false;
+        self
+    }
+
+    /// When the measurement started is not known, so calls asked elsewhere
+    /// during it could not be looked for: no answer is an exchange.
+    #[must_use]
+    pub fn elsewhere_unread(mut self) -> Self {
+        self.elsewhere = Vec::new();
+        self.elsewhere_unread = true;
+        self
+    }
+
     /// What the variant's generation config pins about making an answer out
     /// of replies, and the response schema it pins: how an answer is taken
     /// out of a reply (`answer_from`) — a way that knows more than the reply
@@ -337,13 +408,7 @@ impl Witnesses {
         call: &'a TracedCall,
         key: &[u8; 32],
     ) -> impl Iterator<Item = &'a String> {
-        use aiwatcher_core::witness::{Said, canonical, digest};
-        let pinned = self.taking.as_ref().is_some_and(|rule| {
-            call.taking.as_deref() == Some(digest(key, Said::Taking, &canonical(rule)).as_str())
-        });
-        call.replied
-            .iter()
-            .chain(call.taken.iter().filter(move |_| pinned))
+        taken_by(call, key, self.taking.as_ref())
     }
 
     /// The texts an answer is compared with a witness's digests as: from its
@@ -365,6 +430,22 @@ impl Witnesses {
     fn admits(&self, witness: &str) -> bool {
         self.named.is_empty() || self.named.iter().any(|named| named == witness)
     }
+}
+
+/// What a call replied, as a witness under `key` says: its replies, and what a
+/// way of taking that knows more than them took, where that way is `rule`.
+fn taken_by<'a>(
+    call: &'a TracedCall,
+    key: &[u8; 32],
+    rule: Option<&serde_json::Value>,
+) -> impl Iterator<Item = &'a String> {
+    use aiwatcher_core::witness::{Said, canonical, digest};
+    let pinned = rule.is_some_and(|rule| {
+        call.taking.as_deref() == Some(digest(key, Said::Taking, &canonical(rule)).as_str())
+    });
+    call.replied
+        .iter()
+        .chain(call.taken.iter().filter(move |_| pinned))
 }
 
 /// A run an answer names, as the log folded it once it had ended and every
@@ -470,6 +551,17 @@ pub struct TracedAnswer {
     /// and the variant pins no way of choosing that picks this one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
+    /// It would be such an exchange, but witnessed calls on the pinned prompt
+    /// asked its case's input this many times in runs other than its own while
+    /// the measurement ran — replies the application could have chosen the run
+    /// it answered in by, before it answered or beside it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asked_elsewhere: usize,
+    /// It would be such an exchange, but when the measurement started was not
+    /// in the log's fold, so calls asked elsewhere during it were not looked
+    /// for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub elsewhere_unread: bool,
     /// The credentials whose runs witnessed it, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnessed_by: Vec<String>,
@@ -567,6 +659,15 @@ pub struct GenerationTrace {
     /// choosing the variant pins picks ([`TracedAnswer::chosen`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub chosen: usize,
+    /// Answers that would be an exchange but whose cases' inputs witnessed
+    /// calls on the pinned prompt asked in other runs while the measurement ran
+    /// ([`TracedAnswer::asked_elsewhere`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asked_elsewhere: usize,
+    /// Answers that would be an exchange but for which calls asked elsewhere
+    /// were not looked for, the measurement's start not being in the fold.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub elsewhere_unread: usize,
     /// Answers whose serving runs were published under their own run's
     /// credential, which witnesses nothing: one token on two hosts.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -611,6 +712,8 @@ impl GenerationTrace {
             witnessed_input: counted(|row| row.witnessed_input),
             witnessed_exchange: counted(|row| row.witnessed_exchange),
             chosen: rows.iter().filter(|row| row.chosen).count(),
+            asked_elsewhere: rows.iter().filter(|row| row.asked_elsewhere > 0).count(),
+            elsewhere_unread: rows.iter().filter(|row| row.elsewhere_unread).count(),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
             witnesses: {
                 let mut witnesses: Vec<String> = rows
@@ -733,8 +836,9 @@ impl GenerationTrace {
                 self.answers
             ));
         }
+        let denied = self.chosen + self.asked_elsewhere + self.elsewhere_unread;
         if let Some(on) = self.witnessed_exchange
-            && on + self.chosen < self.answers
+            && on + denied < self.answers
         {
             said.push(format!(
                 "{} of {} answers had no witnessed call relaying them — or each part the pinned \
@@ -744,7 +848,7 @@ impl GenerationTrace {
                  relayed for a call so made, or a value taken out of one of those in steps the \
                  witness repeated — words beside those, a label's word the variant does not pin, \
                  or a value the application made, such as an answer to repeat, witness nothing",
-                self.answers - on - self.chosen,
+                self.answers - on - denied,
                 self.answers
             ));
         }
@@ -754,6 +858,21 @@ impl GenerationTrace {
                  went into nothing else — a choice the application made, which counts only where \
                  the generation config pins answer_chosen and that way picks the answer",
                 self.chosen, self.answers
+            ));
+        }
+        if self.asked_elsewhere > 0 {
+            said.push(format!(
+                "{} of {} answers' cases were asked on the pinned prompt in other runs while this \
+                 measurement ran — replies the application could have seen before it answered, \
+                 and chosen the run it answered in by",
+                self.asked_elsewhere, self.answers
+            ));
+        }
+        if self.elsewhere_unread > 0 {
+            said.push(format!(
+                "{} of {} answers could not be held to calls asked in other runs, because when \
+                 this measurement started is not in the log's fold",
+                self.elsewhere_unread, self.answers
             ));
         }
         said
@@ -1021,7 +1140,8 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
 }
 
 /// Which of the calls a run's witnesses served for it were made of nothing the
-/// application added: on the pinned prompt, found to be nothing but its
+/// application added: on the pinned prompt — or the one a pinned way of
+/// choosing asks a judging call on — found to be nothing but its
 /// template rendered, with every value it was rendered with accounted for — a
 /// part of the case's input, a reply of another such call, what a tool a
 /// witness relayed returned to arguments so accounted for, or a value taken out
@@ -1054,8 +1174,17 @@ fn grounded_calls(
     let call_keys: Vec<Option<&[u8; 32]>> = calls
         .iter()
         .map(|call| {
-            let made_of_the_prompt = call.prompt_name.as_deref() == Some(pin.name.as_str())
-                && call.prompt_version.as_deref() == Some(pin.version.as_str())
+            let judging = witnesses
+                .chosen
+                .as_ref()
+                .and_then(Choosing::judge_prompt)
+                .is_some_and(|(name, version)| {
+                    call.prompt_name.as_deref() == Some(name)
+                        && call.prompt_version.as_deref() == Some(version)
+                });
+            let made_of_the_prompt = (judging
+                || (call.prompt_name.as_deref() == Some(pin.name.as_str())
+                    && call.prompt_version.as_deref() == Some(pin.version.as_str())))
                 && call.prompt_verified == Some(true)
                 && call.prompt_exact == Some(true)
                 && !call.rendered.is_empty();
@@ -1169,14 +1298,18 @@ fn parts_by_schema(
 ///
 /// The replies that count are those the run's witnessed calls gave that went
 /// into nothing else a witness saw — no call it relayed was rendered with one
-/// or took a value out of one, and no tool it relayed was handed one — except
-/// a call whose way of taking its answer, the same as the answer's, took
-/// nothing out of it, which the application could not have read. Where every
-/// one of them is the answer's, nothing was chosen. Otherwise the variant's
-/// `answer_chosen` decides, over those replies all made of nothing the
-/// application added and for an answer that is one reply: `first` wants the
-/// answer's to be the one the witness relayed first, alone, and `most_of: n`
-/// wants exactly `n` of them, the answer's given more often than any other.
+/// or took a value out of one, and no tool it relayed was handed one whose
+/// result went on in turn — except a call whose way of taking its answer, the
+/// same as the answer's, took nothing out of it, which the application could
+/// not have read. Where every one of them is the answer's, nothing was chosen.
+/// Otherwise the variant's `answer_chosen` decides, over those replies all
+/// made of nothing the application added and for an answer that is one reply:
+/// `first` wants the answer's to be the one the witness relayed first, alone,
+/// `most_of: n` wants exactly `n` of them, the answer's given more often than
+/// any other, and `judged` wants the one besides the answer's to be a call on
+/// the judging prompt it pins, taking its answer out the way it pins, whose
+/// reply names exactly one placeholder — and the value placed there to be the
+/// answer's reply.
 fn chosen_as_pinned(
     run: &TracedRun,
     witnesses: &Witnesses,
@@ -1210,9 +1343,31 @@ fn chosen_as_pinned(
         went_on.extend(call.rendered.iter().map(String::as_str));
         went_on.extend(call.derived.iter().map(|(_, source)| source.as_str()));
     }
-    for tool in &run.tools_served_for_it {
-        if key_of(tool.published_by.as_deref()).is_some() {
-            went_on.extend(tool.arguments.iter().map(String::as_str));
+    // A tool's arguments went on only where what it returned did, into a call
+    // or into another tool that did: handed to a tool whose result went into
+    // nothing, a reply went into nothing either.
+    let tools: Vec<&TracedTool> = run
+        .tools_served_for_it
+        .iter()
+        .filter(|tool| key_of(tool.published_by.as_deref()).is_some())
+        .collect();
+    let mut onward = vec![false; tools.len()];
+    loop {
+        let mut added = false;
+        for (at, tool) in tools.iter().enumerate() {
+            if !onward[at]
+                && tool
+                    .returned
+                    .iter()
+                    .any(|returned| went_on.contains(returned.as_str()))
+            {
+                onward[at] = true;
+                added = true;
+                went_on.extend(tool.arguments.iter().map(String::as_str));
+            }
+        }
+        if !added {
+            break;
         }
     }
     let takings: std::collections::BTreeSet<&str> = answered_by
@@ -1243,6 +1398,48 @@ fn chosen_as_pinned(
     }
     match &witnesses.chosen {
         None => false,
+        Some(Choosing::Judged {
+            prompt,
+            version,
+            pick,
+        }) => {
+            // One call judged, and nothing else went unused: the candidates
+            // went into it, and its reply names where the answer was placed.
+            let unanswered: Vec<usize> = finals
+                .iter()
+                .copied()
+                .filter(|at| !answered_by.contains(at))
+                .collect();
+            let [judge] = unanswered[..] else {
+                return false;
+            };
+            let call = &calls[judge];
+            let Some(key) = key_of(call.published_by.as_deref()) else {
+                return false;
+            };
+            use aiwatcher_core::witness::{Said, canonical, digest};
+            if call.prompt_name.as_deref() != Some(prompt.as_str())
+                || call.prompt_version.as_deref() != Some(version.as_str())
+                || call.taking.as_deref()
+                    != Some(digest(key, Said::Taking, &canonical(pick)).as_str())
+            {
+                return false;
+            }
+            let said: std::collections::BTreeSet<&String> =
+                taken_by(call, key, Some(pick)).collect();
+            let named: std::collections::BTreeSet<&str> = call
+                .placed
+                .iter()
+                .filter(|(name, _)| said.contains(name))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            let [picked] = named.into_iter().collect::<Vec<_>>()[..] else {
+                return false;
+            };
+            answered_by
+                .iter()
+                .all(|at| replies[*at].iter().any(|reply| reply.as_str() == picked))
+        }
         Some(Choosing::First) => {
             let mut timed: Vec<(i64, usize)> = Vec::with_capacity(finals.len());
             for at in &finals {
@@ -1304,6 +1501,71 @@ fn chosen_as_pinned(
     }
 }
 
+/// How many calls witnesses relayed while the measurement ran, in runs other
+/// than `run_id` and than `alike` — the runs of cases asking the same — asked
+/// the case's whole input on the pinned prompt, or the judging prompt a pinned
+/// way of choosing names, of the pinned model where one is pinned: its text, or
+/// every text in it.
+fn asked_elsewhere(
+    variant: &VariantManifest,
+    witnesses: &Witnesses,
+    input: Option<&serde_json::Value>,
+    run_id: &str,
+    run: &TracedRun,
+    alike: &std::collections::BTreeSet<&str>,
+) -> usize {
+    use aiwatcher_core::witness::{Said, asked_as, digest};
+    let (Some(pin), Some(input)) = (&variant.prompt, input) else {
+        return 0;
+    };
+    let judging = witnesses.chosen.as_ref().and_then(Choosing::judge_prompt);
+    witnesses
+        .elsewhere
+        .iter()
+        .filter(|elsewhere| {
+            elsewhere
+                .caller_run_id
+                .as_deref()
+                .is_none_or(|caller| caller != run_id && !alike.contains(caller))
+        })
+        .filter(|elsewhere| {
+            let call = &elsewhere.call;
+            let Some(witness) = call.published_by.as_deref() else {
+                return false;
+            };
+            let admitted = run
+                .published_by
+                .as_deref()
+                .is_some_and(|publisher| publisher != witness)
+                && witnesses.admits(witness);
+            let Some(key) = witnesses.keys.get(witness).filter(|_| admitted) else {
+                return false;
+            };
+            let on = |name: &str, version: &str| {
+                call.prompt_name.as_deref() == Some(name)
+                    && call.prompt_version.as_deref() == Some(version)
+            };
+            if call.prompt_verified != Some(true)
+                || !(on(&pin.name, &pin.version)
+                    || judging.is_some_and(|(name, version)| on(name, version)))
+                || variant
+                    .model
+                    .as_ref()
+                    .is_some_and(|model| call.model.as_deref() != Some(model.name.as_str()))
+            {
+                return false;
+            }
+            let holds = |text: &String| call.asked.contains(&digest(key, Said::Asked, text));
+            match asked_as(input).split_first() {
+                None => false,
+                Some((whole, parts)) => {
+                    holds(whole) || (!parts.is_empty() && parts.iter().all(holds))
+                }
+            }
+        })
+        .count()
+}
+
 /// Hold each generated answer to the run it names.
 ///
 /// `runs` holds the runs the log had, ended and complete; a run an answer names
@@ -1344,6 +1606,8 @@ pub fn trace_answers(
             witnessed_input: (variant.model.is_some() || variant.prompt.is_some()).then_some(false),
             witnessed_exchange: variant.prompt.as_ref().map(|_| false),
             chosen: false,
+            asked_elsewhere: 0,
+            elsewhere_unread: false,
             witnessed_by: Vec::new(),
             self_witnessed: false,
             served_models: Vec::new(),
@@ -1579,6 +1843,30 @@ pub fn trace_answers(
                 row.witnessed_exchange = Some(false);
                 row.chosen = true;
             }
+            // The same question asked in another run while the measurement ran:
+            // the application could have chosen this run by what came back.
+            if row.witnessed_exchange == Some(true) {
+                if witnesses.elsewhere_unread {
+                    row.witnessed_exchange = Some(false);
+                    row.elsewhere_unread = true;
+                } else {
+                    let input = witnesses.inputs.get(&answer.case_id);
+                    let alike: std::collections::BTreeSet<&str> = answers
+                        .iter()
+                        .filter(|other| {
+                            other.case_id != answer.case_id
+                                && input.is_some()
+                                && witnesses.inputs.get(&other.case_id) == input
+                        })
+                        .filter_map(|other| other.run_id.as_deref())
+                        .collect();
+                    let asked = asked_elsewhere(variant, witnesses, input, run_id, run, &alike);
+                    if asked > 0 {
+                        row.witnessed_exchange = Some(false);
+                        row.asked_elsewhere = asked;
+                    }
+                }
+            }
             if let Some(pinned) = &variant.workflow
                 && run.workflow.as_deref() == Some(pinned.name.as_str())
             {
@@ -1740,6 +2028,7 @@ mod tests {
             asked: Vec::new(),
             replied: Vec::new(),
             rendered: Vec::new(),
+            placed: Vec::new(),
             derived: Vec::new(),
             taken: Vec::new(),
             taking: None,
@@ -1810,6 +2099,8 @@ mod tests {
                 witnessed_input: Some(0),
                 witnessed_exchange: Some(0),
                 chosen: 0,
+                asked_elsewhere: 0,
+                elsewhere_unread: 0,
                 self_witnessed: 0,
                 witnesses: Vec::new(),
                 served: Vec::new(),
@@ -3241,6 +3532,246 @@ mod tests {
                     .iter()
                     .any(|line| line.contains("no witnessed call relaying")),
             "a choice is said as a choice, and not as an answer no call relayed: {said:?}"
+        );
+    }
+
+    #[test]
+    fn an_answer_a_pinned_judge_named_is_an_exchange_and_one_asked_elsewhere_or_left_in_a_tool_is_not()
+     {
+        use aiwatcher_core::witness::{Said, canonical, digest, key_for};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let said = |text: &str| digest(&key, Said::Replied, text);
+        let question = "What is the capital of France?";
+        let judge_version = "j".repeat(64);
+        let pick = serde_json::json!({"json_pointer": "/best"});
+        let call = |replied: &str, at: i64| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            prompt_exact: Some(true),
+            published_by: Some("gateway".to_owned()),
+            rendered: vec![said(question)],
+            asked: vec![digest(&key, Said::Asked, question)],
+            replied: vec![said(replied)],
+            started_ms: Some(at),
+            ..TracedCall::default()
+        };
+        let judge = |named: &str, version: &str, rule: &serde_json::Value| TracedCall {
+            prompt_name: Some("pick-best".to_owned()),
+            prompt_version: Some(version.to_owned()),
+            rendered: vec![said("Paris"), said("Lyon")],
+            asked: Vec::new(),
+            placed: vec![
+                (said("first"), said("Paris")),
+                (said("second"), said("Lyon")),
+            ],
+            taking: Some(digest(&key, Said::Taking, &canonical(rule))),
+            replied: vec![said(&format!("{{\"best\":\"{named}\"}}")), said(named)],
+            ..call("", 9)
+        };
+        let traced = |config: serde_json::Value,
+                      elsewhere: Option<Vec<CallElsewhere>>,
+                      cases: Vec<(&str, Vec<TracedCall>, Vec<TracedTool>)>| {
+            let runs: BTreeMap<String, TracedRun> = cases
+                .iter()
+                .map(|(case, calls, tools)| {
+                    (
+                        (*case).to_owned(),
+                        TracedRun {
+                            served_for_it: calls.clone(),
+                            tools_served_for_it: tools.clone(),
+                            ..run(vec![on_the_pins()])
+                        },
+                    )
+                })
+                .collect();
+            let witnesses = Witnesses::named(vec!["gateway".to_owned()])
+                .keyed([("gateway".to_owned(), key)])
+                .asked(
+                    cases
+                        .iter()
+                        .map(|(case, _, _)| {
+                            (
+                                (*case).to_owned(),
+                                serde_json::json!({"question": question}),
+                            )
+                        })
+                        .collect(),
+                )
+                .pinned(Some(&config), None);
+            let witnesses = match elsewhere {
+                Some(calls) => witnesses.asked_elsewhere(calls),
+                None => witnesses.elsewhere_unread(),
+            };
+            let answers: Vec<RecordedAnswer> = cases
+                .iter()
+                .map(|(case, _, _)| RecordedAnswer {
+                    answer: serde_json::json!("Paris"),
+                    ..answer(case, Some(case))
+                })
+                .collect();
+            trace_answers(
+                &pins, "variant", "answers", &answers, &runs, None, &witnesses,
+            )
+            .expect("nothing contradicts the pins")
+        };
+        fn brief(rows: &[TracedAnswer]) -> Vec<(&str, Option<bool>, bool)> {
+            rows.iter()
+                .map(|row| (row.case_id.as_str(), row.witnessed_exchange, row.chosen))
+                .collect()
+        }
+        let judged = serde_json::json!({"answer_chosen": {"judged": {
+            "prompt": {"name": "pick-best", "version": judge_version},
+            "pick": pick
+        }}});
+        let candidates = || vec![call("Paris", 1), call("Lyon", 2)];
+        let with = |mut calls: Vec<TracedCall>, more: Vec<TracedCall>| {
+            calls.extend(more);
+            calls
+        };
+
+        let rows = traced(
+            judged.clone(),
+            Some(Vec::new()),
+            vec![
+                (
+                    "judged",
+                    with(candidates(), vec![judge("first", &judge_version, &pick)]),
+                    Vec::new(),
+                ),
+                (
+                    "judged-the-other",
+                    with(candidates(), vec![judge("second", &judge_version, &pick)]),
+                    Vec::new(),
+                ),
+                (
+                    "judged-twice",
+                    with(
+                        candidates(),
+                        vec![
+                            judge("first", &judge_version, &pick),
+                            judge("first", &judge_version, &pick),
+                        ],
+                    ),
+                    Vec::new(),
+                ),
+                (
+                    "judged-on-another-prompt",
+                    with(candidates(), vec![judge("first", &"k".repeat(64), &pick)]),
+                    Vec::new(),
+                ),
+                (
+                    "judged-taken-otherwise",
+                    with(
+                        candidates(),
+                        vec![judge(
+                            "first",
+                            &judge_version,
+                            &serde_json::json!({"line": -1}),
+                        )],
+                    ),
+                    Vec::new(),
+                ),
+            ],
+        );
+        assert_eq!(
+            brief(&rows),
+            [
+                ("judged", Some(true), false),
+                ("judged-the-other", Some(false), true),
+                ("judged-twice", Some(false), true),
+                ("judged-on-another-prompt", Some(false), true),
+                ("judged-taken-otherwise", Some(false), true),
+            ],
+            "the reply placed where one call on the pinned judging prompt, taken the pinned \
+             way, says is an exchange; another placeholder, a judge asked twice, on another \
+             prompt or read another way is the application's choice"
+        );
+
+        let to_a_tool = |returned: &str| TracedTool {
+            name: Some("atlas".to_owned()),
+            published_by: Some("gateway".to_owned()),
+            arguments: vec![said("Lyon")],
+            returned: vec![said(returned)],
+        };
+        let rendering = |value: &str| TracedCall {
+            rendered: vec![said(value)],
+            asked: Vec::new(),
+            ..call("Paris", 3)
+        };
+        let rows = traced(
+            serde_json::json!({}),
+            Some(Vec::new()),
+            vec![
+                ("left-in-a-tool", candidates(), vec![to_a_tool("noted")]),
+                (
+                    "carried-on-by-a-tool",
+                    with(candidates(), vec![rendering("Europe")]),
+                    vec![to_a_tool("Europe")],
+                ),
+            ],
+        );
+        assert_eq!(
+            brief(&rows),
+            [
+                ("left-in-a-tool", Some(false), true),
+                ("carried-on-by-a-tool", Some(true), false),
+            ],
+            "a reply handed to a tool whose result went into nothing went into nothing; one \
+             whose result a call was rendered with went on"
+        );
+
+        let elsewhere = |caller: Option<&str>, asked: &str, version: &str| CallElsewhere {
+            caller_run_id: caller.map(ToOwned::to_owned),
+            call: TracedCall {
+                asked: vec![digest(&key, Said::Asked, asked)],
+                prompt_version: Some(version.to_owned()),
+                ..call("Lyon", 0)
+            },
+        };
+        let pinned = "p".repeat(64);
+        let alone = |case: &'static str| (case, vec![call("Paris", 1)], Vec::new());
+        let rows = traced(
+            serde_json::json!({}),
+            Some(vec![
+                elsewhere(Some("peeked"), question, &pinned),
+                elsewhere(Some("asked-again"), question, &pinned),
+                elsewhere(None, question, &pinned),
+                elsewhere(Some("somewhere"), "What is the capital of Peru?", &pinned),
+                elsewhere(Some("somewhere"), question, &"q".repeat(64)),
+            ]),
+            vec![alone("peeked"), alone("asked-again")],
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.case_id.as_str(),
+                    row.witnessed_exchange,
+                    row.asked_elsewhere
+                ))
+                .collect::<Vec<_>>(),
+            [("peeked", Some(false), 1), ("asked-again", Some(false), 1)],
+            "the case's question on the pinned prompt in a run that is neither its answer's nor \
+             that of a case asking the same — here only the call naming no run — is asked \
+             elsewhere; another question or another prompt is not"
+        );
+        let unread = traced(serde_json::json!({}), None, vec![alone("unread")]);
+        assert!(unread[0].elsewhere_unread && unread[0].witnessed_exchange == Some(false));
+        let trace = GenerationTrace::of(&[rows, unread].concat());
+        let said = trace.unwitnessed_answers();
+        assert!(
+            said.iter().any(|line| line.starts_with(
+                "2 of 3 answers' cases were asked on the pinned prompt in other runs"
+            )) && said
+                .iter()
+                .any(|line| line.starts_with("1 of 3 answers could not be held"))
+                && !said
+                    .iter()
+                    .any(|line| line.contains("no witnessed call relaying")),
+            "{said:?}"
         );
     }
 

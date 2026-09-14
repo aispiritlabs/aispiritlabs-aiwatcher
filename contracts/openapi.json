@@ -19473,9 +19473,19 @@
             "type": "integer",
             "minimum": 0
           },
+          "asked_elsewhere": {
+            "type": "integer",
+            "description": "Answers that would be an exchange but whose cases' inputs witnessed\ncalls on the pinned prompt asked in other runs while the measurement ran\n([`TracedAnswer::asked_elsewhere`]).",
+            "minimum": 0
+          },
           "chosen": {
             "type": "integer",
             "description": "Answers that would be an exchange but were chosen among replies their\nrun's witnessed calls gave that went into nothing else, which no way of\nchoosing the variant pins picks ([`TracedAnswer::chosen`]).",
+            "minimum": 0
+          },
+          "elsewhere_unread": {
+            "type": "integer",
+            "description": "Answers that would be an exchange but for which calls asked elsewhere\nwere not looked for, the measurement's start not being in the fold.",
             "minimum": 0
           },
           "named": {

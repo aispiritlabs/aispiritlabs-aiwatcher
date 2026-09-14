@@ -1014,14 +1014,24 @@ pub async fn build(config: Config) -> Result<Runtime> {
         observations,
         model_prices: build_model_prices(&config)?,
         // A witness's digests of a call's words are keyed by the credential it
-        // published with, which this deployment issued: every ingest token's
-        // key, and only the named ones admitted where any are named.
+        // published with, which this deployment issued — or by the credential
+        // the deployment says it digests under: every ingest token's key, and
+        // only the named ones admitted where any are named.
         witnesses: aiwatcher_evaluation::Witnesses::named(config.witnesses.clone()).keyed(
-            config.auth.ingest_tokens.iter().map(|token| {
-                (
+            config.auth.ingest_tokens.iter().filter_map(|token| {
+                let owner = config
+                    .witness_digests
+                    .get(&token.label)
+                    .map_or(token.label.as_str(), String::as_str);
+                let secret = config
+                    .auth
+                    .ingest_tokens
+                    .iter()
+                    .find(|issued| issued.label == owner)?;
+                Some((
                     token.label.clone(),
-                    aiwatcher_core::witness::key_for(&token.secret),
-                )
+                    aiwatcher_core::witness::key_for(&secret.secret),
+                ))
             }),
         ),
         runner: build_workflow_runner(&config)?,

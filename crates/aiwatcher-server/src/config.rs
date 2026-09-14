@@ -498,6 +498,12 @@ pub struct Config {
     /// prompt — a model server's or a gateway's token names. Empty, any
     /// credential other than the answer's own does.
     pub witnesses: Vec<String>,
+    /// Witnesses whose digests are made under another credential's key, by
+    /// the witness's token name: a tool's host holding the key a gateway's
+    /// digests are made under, and not the gateway's token, so what the tool
+    /// returned and what the gateway relayed are comparable and each is still
+    /// published under its own name.
+    pub witness_digests: std::collections::BTreeMap<String, String>,
     /// How wide a period of what variants were observed doing is when the
     /// projector writes it down as the log passes it — and so how far before a
     /// window's start its counting may begin. Five minutes unless a deployment
@@ -730,6 +736,7 @@ impl Default for Config {
             dataset_sources: None,
             model_prices: None,
             witnesses: Vec::new(),
+            witness_digests: std::collections::BTreeMap::new(),
             observation_period: Duration::from_secs(300),
             observation_journal_days: None,
             pod_templates: None,
@@ -1005,6 +1012,23 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_WITNESSES") {
             config.witnesses = list(&raw);
         }
+        if let Some(raw) = var("AIWATCHER_WITNESS_DIGESTS") {
+            for pair in list(&raw) {
+                let Some((witness, owner)) = pair
+                    .split_once('=')
+                    .filter(|(witness, owner)| !witness.is_empty() && !owner.is_empty())
+                else {
+                    return Err(ConfigError::Invalid {
+                        name: "AIWATCHER_WITNESS_DIGESTS",
+                        value: raw,
+                        expected: "list of witness=credential pairs, each an ingest token's name",
+                    });
+                };
+                config
+                    .witness_digests
+                    .insert(witness.to_owned(), owner.to_owned());
+            }
+        }
         if let Some(raw) = var("AIWATCHER_OBSERVATION_PERIOD_SECONDS") {
             let seconds = raw
                 .parse::<u64>()
@@ -1237,6 +1261,26 @@ impl Config {
     /// [`ConfigError`] naming the variable that is missing or unusable, and
     /// what made it required.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // A witness digesting under a key names two credentials this deployment
+        // issued: one it could not derive a key for is a witness whose every
+        // digest would read as nothing.
+        let issued = |label: &str| {
+            self.auth
+                .ingest_tokens
+                .iter()
+                .any(|token| token.label == label)
+        };
+        if let Some((witness, owner)) = self
+            .witness_digests
+            .iter()
+            .find(|(witness, owner)| !issued(witness) || !issued(owner))
+        {
+            return Err(ConfigError::Invalid {
+                name: "AIWATCHER_WITNESS_DIGESTS",
+                value: format!("{witness}={owner}"),
+                expected: "pair of names from AIWATCHER_AUTH_INGEST_TOKENS",
+            });
+        }
         // One without the other is a judge nobody can ask, or a profile with
         // nothing to speak it to — and the second would be pinned in results.
         match (&self.judge_url, &self.judge_provider) {
@@ -1794,6 +1838,34 @@ mod tests {
             ProcessRole::Journal
         );
         assert!(!ProcessRole::Journal.serves() && !ProcessRole::Journal.works());
+    }
+
+    #[test]
+    fn a_witness_digesting_under_another_key_names_two_credentials_this_deployment_issued() {
+        let issued = |pairs: &[(&str, &str)]| {
+            let mut config = Config::default();
+            config.auth.ingest_tokens = [
+                "gateway=gateway-secret-of-some-length",
+                "atlas-host=atlas-secret-of-some-length",
+            ]
+            .iter()
+            .map(|token| token.parse().expect("a token"))
+            .collect();
+            config.witness_digests = pairs
+                .iter()
+                .map(|(witness, owner)| ((*witness).to_owned(), (*owner).to_owned()))
+                .collect();
+            config.validate()
+        };
+        assert!(issued(&[("atlas-host", "gateway")]).is_ok());
+        let refused = issued(&[("atlas-host", "stranger")])
+            .expect_err("a credential nobody issued")
+            .to_string();
+        assert!(
+            refused.contains("AIWATCHER_WITNESS_DIGESTS")
+                && refused.contains("atlas-host=stranger"),
+            "{refused}"
+        );
     }
 
     #[test]

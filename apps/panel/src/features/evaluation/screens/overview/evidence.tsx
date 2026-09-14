@@ -517,6 +517,21 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.witnessed_exchange} of ${traces.answers} were a witnessed call's reply — or, part by part in the pinned response schema's shape, several calls' — to a request that was nothing but the pinned prompt, rendered with their case's input, a reply or a tool's result relayed for a call so made, or a value taken out of one of those in steps the witness repeated.`}
         </p>
       ) : null}
+      {traces.chosen ? (
+        <p className="text-danger">
+          {`${traces.chosen} of ${traces.answers} were chosen among replies their run's witnessed calls gave that went into nothing else — the application's choice, unless the generation config pins answer_chosen and that way picks the answer.`}
+        </p>
+      ) : null}
+      {traces.asked_elsewhere ? (
+        <p className="text-danger">
+          {`${traces.asked_elsewhere} of ${traces.answers} had their case asked on the pinned prompt in other runs while the measurement ran — replies the application could have seen before it answered.`}
+        </p>
+      ) : null}
+      {traces.elsewhere_unread ? (
+        <p className="text-danger">
+          {`${traces.elsewhere_unread} of ${traces.answers} could not be held to calls asked in other runs: when the measurement started is not in the log's fold.`}
+        </p>
+      ) : null}
       {traces.witnessed_input != null ? (
         <p>
           {`${traces.witnessed_input} of ${traces.answers} had a witnessed request holding their case's input.`}

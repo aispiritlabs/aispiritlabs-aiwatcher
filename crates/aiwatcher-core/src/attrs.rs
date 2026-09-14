@@ -119,6 +119,11 @@ pub mod aiwatcher {
         /// the witness repeated, as `value:source` — so a value cut out of the
         /// case's input is accounted as that input.
         pub const DERIVED: &str = "aiwatcher.witness.derived";
+        /// Where each of those values was placed, as `name:value` — the
+        /// digest of the placeholder's name and of the value, each made as a
+        /// reply is — so a judging call's reply naming a placeholder reads back
+        /// as the value it holds.
+        pub const PLACED: &str = "aiwatcher.witness.placed";
         /// What a way of taking an answer that knows more than the reply — a
         /// label's word — took out of each reply, digested as a reply is.
         pub const TAKEN: &str = "aiwatcher.witness.taken";

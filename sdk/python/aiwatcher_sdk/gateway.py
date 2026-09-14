@@ -31,9 +31,11 @@ It relays the deployment's tools the same way (``--tool search=https://…``):
 deployment named — never one a caller names — and the gateway publishes keyed
 digests of the arguments and of what the tool returned, so a value a later
 request renders that is a tool's result, relayed here, is the tool's word
-rather than the application's. A tool the application calls directly is
-witnessed where it runs instead, by :class:`ToolWitness` under the gateway's
-own credential — the same key, so the same digests.
+rather than the application's. A tool the application would compute itself
+can be answered here instead, by a function the gateway is handed, so it runs
+where the witness is. A tool the application calls directly is witnessed where
+it runs, by :class:`ToolWitness` under the gateway's witness key — the same key,
+so the same digests — held by a host publishing under a token of its own.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -69,6 +71,7 @@ __all__ = [
     "canonical",
     "canonical_number",
     "extracted",
+    "filled",
     "holds_template",
     "knows_more_than_the_reply",
     "main",
@@ -435,6 +438,34 @@ def holds_template(template: str, messages: Sequence[Any]) -> bool:
     return any(pattern.search(text) for text in [*texts, "\n".join(texts)])
 
 
+def filled(template: str, messages: Sequence[Any]) -> list[str]:
+    """What stands where each placeholder does, in the first text holding
+    ``template``'s literal parts in order — each one stripped, the blank left
+    out. Read the way :func:`holds_template` matches, so a value holding the
+    next literal part is cut short at it."""
+    parts = _PLACEHOLDER.split(template)
+    literals = parts[::2]
+    if not any(literal.strip() for literal in literals) or len(literals) < 2:
+        return []
+    last = len(literals) - 2
+    pattern = re.compile(
+        "(?s)"
+        + re.escape(literals[0])
+        + "".join(
+            ("(.*)" if at == last and not literal else "(.*?)") + re.escape(literal)
+            for at, literal in enumerate(literals[1:])
+        )
+    )
+    texts = [_text_of(message) for message in messages]
+    for text in [*texts, "\n".join(texts)]:
+        found = pattern.search(text)
+        if found:
+            return [
+                value for value in (group.strip(_WHITE_SPACE) for group in found.groups()) if value
+            ]
+    return []
+
+
 def _texts_asked(body: Mapping[str, Any]) -> list[str]:
     """Each text a request holds: every message's, or a completion's prompt."""
     messages = body.get("messages")
@@ -624,16 +655,25 @@ class ToolWitness:
         with witness.call("atlas", arguments, caller=headers.get(CALLER_RUN_HEADER)) as call:
             call.answered(json.dumps(look_up(arguments)))
 
-    ``credential`` is the token ``telemetry`` publishes with, and it must be the
-    gateway's own: a digest is made under the key derived from it, and only
-    digests under one key can say that a value a call the gateway relayed was
-    rendered with is what this tool returned. A host holding that token is
+    Only digests under one key can say that a value a call the gateway relayed
+    was rendered with is what this tool returned. ``key`` is that key — the
+    gateway's witness key (``aiwatcher-gateway --witness-key``) — held by a host
+    publishing under a token of its own, which the deployment names a witness
+    digesting under the gateway's key (``AIWATCHER_WITNESS_DIGESTS``);
+    ``credential``, the token ``telemetry`` publishes with, derives it instead,
+    for a host holding the gateway's own token. A host holding either is
     trusted as the gateway is; one holding the application's is no witness.
     """
 
-    def __init__(self, telemetry: AiwatcherClient, *, credential: str | None) -> None:
+    def __init__(
+        self,
+        telemetry: AiwatcherClient,
+        *,
+        credential: str | None = None,
+        key: bytes | None = None,
+    ) -> None:
         self.telemetry = telemetry
-        self.key = witness_key(credential) if credential else None
+        self.key = key if key is not None else witness_key(credential) if credential else None
 
     @contextlib.contextmanager
     def call(
@@ -720,14 +760,16 @@ class Gateway:
         token: str | None = None,
         credential: str | None = None,
         timeout: float = 120.0,
-        tools: Mapping[str, str] | None = None,
+        tools: Mapping[str, str | Callable[[Any], Any]] | None = None,
         tool_tokens: Mapping[str, str] | None = None,
     ) -> None:
         """``credential`` is the token ``telemetry`` publishes with: the witness
         key its digests are made under is derived from it, and without one the
-        gateway publishes no digests. ``tools`` names the URL each tool the
-        deployment relays is posted to, and ``tool_tokens`` the bearer token any
-        of them needs, so the application holds none.
+        gateway publishes no digests. ``tools`` names, for each tool the
+        deployment relays, the URL it is posted to — or the function that
+        answers it in this process, so a tool an application would have
+        computed itself runs where the witness is — and ``tool_tokens`` the
+        bearer token any URL needs, so the application holds none.
         """
         self.tools = dict(tools or {})
         self.tool_tokens = dict(tool_tokens or {})
@@ -772,6 +814,14 @@ class Gateway:
             self._templates[key] = text
         return text
 
+    def known_template(self, prompt: PromptFound | None) -> str | None:
+        """The text of a prompt a request was found to hold by its literal
+        parts alone, as already read — ``None`` for one rendered, or not found."""
+        if prompt is None or not prompt.verified or prompt.rendered:
+            return None
+        with self._lock:
+            return self._templates.get((prompt.name, prompt.version))
+
     def verified(
         self,
         named: str | None,
@@ -808,10 +858,16 @@ class Gateway:
         )
 
     def digests_asked(
-        self, body: Mapping[str, Any], variables: Mapping[str, Any] | None, rendered: bool
+        self,
+        body: Mapping[str, Any],
+        variables: Mapping[str, Any] | None,
+        rendered: bool,
+        template: str | None = None,
     ) -> list[str]:
         """Keyed digests of each text the request held — and of the values the
-        template was found rendered with, only where it was."""
+        template was found rendered with, where it was, or else of what stands
+        between the template's literal parts where only those were found: what a
+        caller asked is looked for whether it said what it rendered or not."""
         if self.key is None:
             return []
         texts = _texts_asked(body)
@@ -820,6 +876,8 @@ class Gateway:
                 value if isinstance(value, str) else canonical(value)
                 for value in variables.values()
             )
+        elif template is not None and isinstance(body.get("messages"), list):
+            texts.extend(filled(template, body["messages"]))
         return _digested(self.key, "asked", texts)
 
     def digests_rendered(self, variables: Mapping[str, Any] | None) -> list[str]:
@@ -829,6 +887,28 @@ class Gateway:
         if self.key is None or not variables:
             return []
         return _digested(self.key, "replied", _values(variables))
+
+    def digests_placed(self, variables: Mapping[str, Any] | None) -> list[str]:
+        """For each value the template was found rendered with, the digest of
+        the placeholder's name and of the value, as ``name:value``, each made as
+        a reply is — so a judging call's reply naming a placeholder reads back as
+        the value it held."""
+        if self.key is None or not variables:
+            return []
+        pairs: list[str] = []
+        for name, value in variables.items():
+            text = _as_text(value)
+            if not text.strip(_WHITE_SPACE):
+                continue
+            pair = (
+                f"{witness_digest(self.key, 'replied', str(name))}:"
+                f"{witness_digest(self.key, 'replied', text)}"
+            )
+            if pair not in pairs:
+                pairs.append(pair)
+            if len(pairs) == MOST_DIGESTS:
+                break
+        return pairs
 
     def digests_derived(
         self, variables: Mapping[str, Any] | None, derived: Mapping[str, Any] | None
@@ -982,6 +1062,7 @@ class Gateway:
         answer_from: Mapping[str, Any] | None = None,
         rendered: Sequence[str] = (),
         derived: Sequence[str] = (),
+        placed: Sequence[str] = (),
     ) -> None:
         """One call, as the gateway saw it — with nothing that was said in it."""
         request: dict[str, Any] = {"provider": "aiwatcher-gateway"}
@@ -1009,6 +1090,8 @@ class Gateway:
                 outcome["rendered_digests"] = list(rendered)
             if derived:
                 outcome["derived_digests"] = list(derived)
+            if placed:
+                outcome["placed_digests"] = list(placed)
             replied = self.digests_replied(relayed, answer_from)
             if replied:
                 outcome["replied_digests"] = replied
@@ -1031,9 +1114,25 @@ class Gateway:
             self.telemetry.flush()
 
     def forward_tool(self, name: str, body: bytes) -> tuple[int, str, bytes]:
-        """Post a tool call to the URL the deployment named for it; the reply whole."""
+        """Post a tool call to the URL the deployment named for it — or answer it
+        with the function it named — and hand back the reply whole."""
+        tool = self.tools[name]
+        if callable(tool):
+            try:
+                returned = tool(json.loads(body or b"{}"))
+            except Exception:  # noqa: BLE001 — the tool's failure is the caller's answer
+                return (
+                    int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                    "application/json",
+                    b'{"error":"the tool failed"}',
+                )
+            if isinstance(returned, bytes):
+                return int(HTTPStatus.OK), "application/octet-stream", returned
+            if isinstance(returned, str):
+                return int(HTTPStatus.OK), "text/plain; charset=utf-8", returned.encode()
+            return int(HTTPStatus.OK), "application/json", json.dumps(returned).encode()
         request = urllib.request.Request(  # noqa: S310 — the deployment's own tool
-            self.tools[name], data=body, method="POST"
+            tool, data=body, method="POST"
         )
         request.add_header("content-type", "application/json")
         if token := self.tool_tokens.get(name):
@@ -1157,7 +1256,10 @@ class Gateway:
                     raw = json.dumps(body, separators=(",", ":")).encode()
                 prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, told.variables)
                 asked = gateway.digests_asked(
-                    body, told.variables, prompt is not None and prompt.rendered
+                    body,
+                    told.variables,
+                    prompt is not None and prompt.rendered,
+                    gateway.known_template(prompt),
                 )
                 relayed = Relayed()
                 try:
@@ -1196,6 +1298,9 @@ class Gateway:
                     if prompt is not None and prompt.rendered
                     else (),
                     derived=gateway.digests_derived(told.variables, told.derived)
+                    if prompt is not None and prompt.rendered
+                    else (),
+                    placed=gateway.digests_placed(told.variables)
                     if prompt is not None and prompt.rendered
                     else (),
                 )
@@ -1242,7 +1347,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     from aiwatcher_sdk.prompts import PromptRegistry
 
     parser = argparse.ArgumentParser(prog="aiwatcher-gateway", description=__doc__)
-    parser.add_argument("--upstream", required=True, help="the provider's base URL")
+    parser.add_argument(
+        "--witness-key",
+        action="store_true",
+        help="print the witness key AIWATCHER_TOKEN's digests are made under, for a tool's host "
+        "publishing under a token of its own (AIWATCHER_WITNESS_DIGESTS), and exit",
+    )
+    parser.add_argument("--upstream", help="the provider's base URL")
     parser.add_argument("--listen", default="127.0.0.1:8085", help="host:port to serve on")
     parser.add_argument(
         "--upstream-token-env",
@@ -1263,7 +1374,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "in AIWATCHER_GATEWAY_TOOL_TOKEN_<NAME>",
     )
     args = parser.parse_args(argv)
-    tools: dict[str, str] = {}
+    if args.witness_key:
+        secret = os.environ.get("AIWATCHER_TOKEN")
+        if not secret:
+            parser.error("AIWATCHER_TOKEN holds no credential to derive a witness key from")
+        print(witness_key(secret).hex())
+        return 0
+    if not args.upstream:
+        parser.error("--upstream is required")
+    tools: dict[str, str | Callable[[Any], Any]] = {}
     for named in args.tool:
         name, _, url = named.partition("=")
         if not name or not url.startswith(("http://", "https://")):

@@ -377,6 +377,7 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
                 "replied_digests": [digest],
                 "rendered_digests": [digest, 7],
                 "derived_digests": [format!("{digest}:{digest}"), digest, "Peru:France"],
+                "placed_digests": [format!("{digest}:{digest}"), "capital:Lima"],
                 "taken_digests": [digest, "Lima"],
                 "taking_digest": digest,
                 "took_nothing": true,
@@ -425,6 +426,11 @@ fn a_witness_s_digests_land_on_its_call_and_words_in_their_place_do_not() {
         list("aiwatcher.witness.derived"),
         Some(AttrValue::StrList(vec![format!("{digest}:{digest}")])),
         "a pair of digests, and nothing else"
+    );
+    assert_eq!(
+        list("aiwatcher.witness.placed"),
+        Some(AttrValue::StrList(vec![format!("{digest}:{digest}")])),
+        "a placeholder's name and its value as digests, and nothing said"
     );
     assert_eq!(
         list("aiwatcher.witness.taken"),

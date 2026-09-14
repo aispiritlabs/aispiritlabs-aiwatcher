@@ -996,6 +996,11 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             asked: list(span, own::witness::ASKED),
             replied: list(span, own::witness::REPLIED),
             rendered: list(span, own::witness::RENDERED),
+            placed: list(span, own::witness::PLACED)
+                .iter()
+                .filter_map(|pair| pair.split_once(':'))
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
             derived: list(span, own::witness::DERIVED)
                 .iter()
                 .filter_map(|pair| pair.split_once(':'))
@@ -1131,7 +1136,33 @@ impl ActivityExecutor for TracesExecutor {
                 Some(schema) => self.pinned_json(&approval, schema).await?,
                 None => None,
             };
-            witnesses.pinned(config.as_ref(), shaped)
+            let witnesses = witnesses.pinned(config.as_ref(), shaped);
+            // Every call a witness relayed since the measurement started, in any
+            // run: a case asked elsewhere is a question the application could
+            // have chosen the run it answered in by.
+            match self
+                .read_model
+                .workflow_execution(&command.key.execution_id.to_string())
+                .await
+            {
+                Some(execution) => witnesses.asked_elsewhere(
+                    self.read_model
+                        .asked_since(execution.summary.started_at)
+                        .await
+                        .iter()
+                        .flat_map(|detail| {
+                            let caller = detail.summary.caller_run_id.clone();
+                            traced_calls(detail).into_iter().map(move |call| {
+                                aiwatcher_evaluation::CallElsewhere {
+                                    caller_run_id: caller.clone(),
+                                    call,
+                                }
+                            })
+                        })
+                        .collect(),
+                ),
+                None => witnesses.elsewhere_unread(),
+            }
         } else {
             witnesses
         };

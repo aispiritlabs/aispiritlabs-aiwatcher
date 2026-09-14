@@ -599,6 +599,33 @@ impl ReadModel {
         found
     }
 
+    /// The runs a witness relayed a model call in — a span carrying its
+    /// digests of what the request asked — that started at or after `from`,
+    /// whichever run each names as its caller, if any. One pass over what is
+    /// held.
+    pub async fn asked_since(&self, from: OffsetDateTime) -> Vec<RunDetail> {
+        let state = self.state.read().await;
+        state
+            .runs
+            .values()
+            .filter(|summary| summary.started_at >= from)
+            .filter_map(|summary| {
+                let spans = state.spans.get(&summary.run_id)?;
+                spans
+                    .iter()
+                    .any(|span| {
+                        span.attributes.iter().any(|(name, _)| {
+                            name == aiwatcher_core::attrs::aiwatcher::witness::ASKED
+                        })
+                    })
+                    .then(|| RunDetail {
+                        summary: summary.clone(),
+                        spans: spans.clone(),
+                    })
+            })
+            .collect()
+    }
+
     pub async fn list(&self, filter: &RunFilter) -> RunPage {
         self.list_at(filter, OffsetDateTime::now_utc()).await
     }
