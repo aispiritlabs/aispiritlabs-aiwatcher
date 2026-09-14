@@ -494,6 +494,103 @@ async fn every_event_reaches_the_live_channel_before_storage() {
     harness.stop().await;
 }
 
+/// A live channel that looks at the read model at the moment each frame goes
+/// out, the way the panel does half a second later.
+#[derive(Debug)]
+struct ReadingLive {
+    read_model: Arc<ReadModel>,
+    seen: Mutex<Vec<(EventType, Option<RunStatus>, usize)>>,
+}
+
+#[async_trait::async_trait]
+impl aiwatcher_core::ports::LivePublisher for ReadingLive {
+    async fn publish(&self, event: aiwatcher_core::ports::LiveEvent) -> PortResult<()> {
+        let detail = self.read_model.run(&event.run_id).await;
+        self.seen.lock().await.push((
+            event.event_type,
+            detail.as_ref().map(|detail| detail.summary.status),
+            detail.map_or(0, |detail| detail.spans.len()),
+        ));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_live_frame_goes_out_only_once_the_read_model_holds_what_it_announces() {
+    // The panel refreshes its lists when a frame arrives and not again until
+    // the next one. A frame announcing what the lists cannot show yet leaves
+    // them a step behind for as long as the log stays quiet — the explorer
+    // showing the previous run only once the next one starts.
+    let bus = Arc::new(InMemoryBus::new());
+    let read_model = Arc::new(ReadModel::default());
+    let live = Arc::new(ReadingLive {
+        read_model: Arc::clone(&read_model),
+        seen: Mutex::new(Vec::new()),
+    });
+    let traces = Arc::new(RecordingTraceStore::default());
+    let projector = Arc::new(Projector::new(
+        Arc::clone(&bus),
+        Arc::clone(&bus),
+        Outputs {
+            live: Arc::clone(&live) as _,
+            traces: Arc::clone(&traces) as _,
+            metrics: Arc::new(RecordingMetricSink::default()) as _,
+            dead_letters: Arc::new(InMemoryDeadLetters::new()) as _,
+            read_model: Arc::clone(&read_model),
+            periods: None,
+            asked: None,
+        },
+        ProjectorConfig {
+            // Long enough that no timer flush can land between a span being
+            // assembled and its frame going out.
+            flush_interval: Duration::from_secs(60),
+            flush_batch_size: 1_000,
+            cold_start: StartFrom::Beginning,
+            ..ProjectorConfig::default()
+        },
+    ));
+    let shutdown = CancellationToken::new();
+    let handle = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move { projector.run(shutdown).await.expect("projector runs") }
+    });
+
+    bus.append(complete_run("run-1")).await.expect("appends");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while live.seen.lock().await.len() < 6 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for six frames"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let seen = live.seen.lock().await.clone();
+    assert_eq!(
+        seen[0],
+        (EventType::RunStarted, Some(RunStatus::Running), 0),
+        "the run is listed before its first frame goes out"
+    );
+    assert_eq!(
+        seen[3],
+        (EventType::LlmCompleted, Some(RunStatus::Running), 1),
+        "the call's span is in the read model before the frame that closed it"
+    );
+    assert_eq!(
+        seen[5],
+        (EventType::RunCompleted, Some(RunStatus::Succeeded), 3),
+        "a finished run is shown finished, with every span, before its last frame"
+    );
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+    assert_eq!(
+        traces.written().await.len(),
+        3,
+        "the trace store still gets every span, on its own schedule"
+    );
+}
+
 #[tokio::test]
 async fn an_abandoned_run_is_swept_and_shows_as_failed_spans() {
     let harness = Harness::start().await;
@@ -528,6 +625,15 @@ async fn an_abandoned_run_is_swept_and_shows_as_failed_spans() {
             span.name
         );
     }
+    assert_eq!(
+        harness
+            .read_model
+            .run("run-abandoned")
+            .await
+            .map(|detail| detail.spans.len()),
+        Some(2),
+        "a swept span is listed, not only stored"
+    );
 
     harness.stop().await;
 }

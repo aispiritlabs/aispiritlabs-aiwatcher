@@ -6,14 +6,18 @@
 //!
 //! 1. **Deduplicate.** A redelivery is dropped before it can double-count
 //!    tokens. It still advances the checkpoint — it was already processed.
-//! 2. **Publish live.** First, because the panel's job is to be fast and a slow
+//! 2. **Fold into the read model, and assemble.** In-memory, cheap. The spans
+//!    an event finishes go into the read model here, not at the flush.
+//! 3. **Publish live.** After everything in memory and before anything on
+//!    disk. After, because a frame is what tells the panel to read its lists
+//!    again, and it reads them once: a frame that outruns the fold leaves the
+//!    lists a step behind until the next one arrives, which on a quiet log is
+//!    whenever somebody runs something else. Before storage, because a slow
 //!    trace store must not delay it. A lost live event is recoverable: the
 //!    client reconnects with its checkpoint.
-//! 3. **Fold into the read model.** In-memory, cheap.
-//! 4. **Assemble.** Produces zero or more finished spans and metric samples.
-//! 5. **Flush.** Spans first, then metrics. Retries transient failures; a
+//! 4. **Flush.** Spans first, then metrics. Retries transient failures; a
 //!    rejection is parked in the dead letter queue rather than retried forever.
-//! 6. **Commit the checkpoint** — only now. Committing earlier converts a crash
+//! 5. **Commit the checkpoint** — only now. Committing earlier converts a crash
 //!    into silent loss; committing later converts it into a redelivery, which
 //!    step 1 and the derived span ids absorb.
 //!
@@ -22,7 +26,8 @@
 //! Spans and metrics accumulate and flush on whichever comes first: the batch
 //! size, the flush interval, or a [`SourceMessage::CaughtUp`] — the source
 //! telling us the backlog is drained, which is exactly when a partial batch
-//! should go out rather than wait.
+//! should go out rather than wait. Only the trace store and the metric sink
+//! wait for it; the read model already holds the spans.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +44,7 @@ use aiwatcher_core::ports::{
     MetricSink, TraceStore, attr,
 };
 use aiwatcher_core::{Checkpoint, RecordedEvent};
-use aiwatcher_trace::{AssemblerConfig, SpanAssembler};
+use aiwatcher_trace::{Assembled, AssemblerConfig, SpanAssembler};
 
 use crate::dedup::Deduplicator;
 use crate::readmodel::ReadModel;
@@ -251,8 +256,7 @@ where
                 () = shutdown.cancelled() => {
                     tracing::info!("projector shutting down; draining open spans");
                     let drained = self.assembler.lock().await.drain(OffsetDateTime::now_utc());
-                    pending.spans.extend(drained.spans);
-                    pending.metrics.extend(drained.metrics);
+                    self.buffer(drained, &mut pending).await;
                     self.flush(&mut pending).await;
                     if let Some(periods) = &self.outputs.periods {
                         periods.flush(true).await;
@@ -301,8 +305,7 @@ where
                             spans = swept.spans.len(),
                             "closing spans whose end event never arrived"
                         );
-                        pending.spans.extend(swept.spans);
-                        pending.metrics.extend(swept.metrics);
+                        self.buffer(swept, &mut pending).await;
                     }
                     pending.metrics.push(MetricSample {
                         name: own::metrics::OPEN_SPANS.to_owned(),
@@ -340,11 +343,6 @@ where
             return;
         }
 
-        // Live first: the panel should not wait on storage.
-        if let Err(error) = self.outputs.live.publish(LiveEvent::from(event)).await {
-            tracing::warn!(%error, "live publish failed; the client will resync on reconnect");
-        }
-
         self.outputs.read_model.apply(event).await;
         if let Some(periods) = &self.outputs.periods {
             periods.apply(event).await;
@@ -352,10 +350,14 @@ where
         if let Some(asked) = &self.outputs.asked {
             asked.apply(event).await;
         }
-
         let assembled = self.assembler.lock().await.ingest(event);
-        pending.spans.extend(assembled.spans);
-        pending.metrics.extend(assembled.metrics);
+        self.buffer(assembled, pending).await;
+
+        // Live after memory and before storage — see the module docs.
+        if let Err(error) = self.outputs.live.publish(LiveEvent::from(event)).await {
+            tracing::warn!(%error, "live publish failed; the client will resync on reconnect");
+        }
+
         pending.metrics.push(MetricSample {
             name: own::metrics::EVENTS_INGESTED.to_owned(),
             kind: MetricKind::Counter,
@@ -366,6 +368,17 @@ where
         });
     }
 
+    /// Hand finished spans to the read model now and to storage at the flush.
+    ///
+    /// Every path that finishes a span comes through here — an end event, the
+    /// sweeper, a shutdown — so none of them can leave a span on its way to
+    /// the trace store that the panel cannot list.
+    async fn buffer(&self, assembled: Assembled, pending: &mut Pending) {
+        self.outputs.read_model.record_spans(&assembled.spans).await;
+        pending.spans.extend(assembled.spans);
+        pending.metrics.extend(assembled.metrics);
+    }
+
     /// Write what is buffered, then commit.
     async fn flush(&self, pending: &mut Pending) {
         let spans = std::mem::take(&mut pending.spans);
@@ -374,7 +387,6 @@ where
 
         let mut span_write_failed = false;
         if !spans.is_empty() {
-            self.outputs.read_model.record_spans(&spans).await;
             let seed = checkpoint
                 .as_ref()
                 .and_then(Checkpoint::global_position)

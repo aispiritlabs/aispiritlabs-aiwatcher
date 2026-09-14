@@ -1,6 +1,6 @@
 # ADR_0004: The live channel is the projector's own fan-out, and a reconnect closes its own gap
 
-- **Status**: accepted; the trace viewer it names is Perses since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana); amended 2026-09-11 (below) for the Live view's selection and Pause
+- **Status**: accepted; the trace viewer it names is Perses since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana); amended 2026-09-11 (below) for the Live view's selection and Pause; amended 2026-09-14 (below): the frame goes out after the read model, still before storage
 - **Date**: 2026-08-27
 
 ## Context
@@ -20,7 +20,8 @@ becomes untrustworthy in the worst way: nothing looks wrong.
 ## Decision
 
 The projector fans out to an in-process `LiveHub` as the **first** thing it does
-with an event, before the read model and before storage. The panel's job is to
+with an event, before the read model and before storage. *(Superseded in part
+2026-09-14: after the read model, still before storage — see below.)* The panel's job is to
 be fast, and a slow trace store must not delay it.
 
 Transport is SSE for the run view, WebSocket for anything the panel needs to
@@ -123,3 +124,47 @@ draw: Pause saves the browser's rendering and nothing on the wire. If paused
 tabs became a measurable share of what the hub fans out, the answer would be a
 Pause that resumes from its own checkpoint and accepts the replay, capped at
 `MAX_RESYNC_EVENTS` — never one that resumes live and loses the interval.
+
+## Amendment, 2026-09-14: the frame goes out after the read model, still before storage
+
+### What prompted it
+
+The explorer showed a run a step late. A run finished, the lists did not show
+it, and it appeared when the next run started — on a quiet deployment, minutes
+later or never. The panel refreshes its lists on a frame (the Observability
+layout invalidates every read-model query half a second after one arrives) and
+not again until the next frame. The Decision above published the frame
+**before the read model**, and the read model took a run's spans only at the
+flush, up to `flush_interval` (500 ms) later. Measured against a local server:
+the `llm.completed` frame at 4.545 s, the span and the `model` row it makes at
+4.898 s. A refresh that lands inside that gap reads the lists without the
+thing the frame announced, and nothing asks again. The `session` and `trace`
+rows had the same race in microseconds, because the frame also went out
+before `ReadModel::apply`.
+
+### What changes
+
+For each event the projector now folds it into every in-memory projection —
+`ReadModel::apply`, the period fold, the asked index — assembles it, and hands
+the spans it finished to the read model, **then** publishes the frame. The
+trace store and the metric sink still wait for the flush. Spans that the
+sweeper or a shutdown close go into the read model the same way, so no path
+leaves a span on its way to storage that the panel cannot list.
+
+The reason the Decision gives is kept whole: a slow trace store must not delay
+the frame, and it does not — nothing between the event and its frame touches
+disk or network. What is dropped is only "first". A frame now means *the lists
+already show this*, which is what a consumer that refreshes on a frame needs.
+
+**Refreshing again a moment later, in the panel,** lost: a second timer
+narrows the race without closing it, and every other consumer that reads after
+a frame would need its own.
+
+Resume is unaffected. A client that fetched a run after `apply` and opened the
+stream at that response's `last_checkpoint` can now receive that same frame
+from the broadcast, and the handler already drops a frame at or below its
+cursor.
+
+**What it costs.** The frame waits for the in-memory folds and one write lock
+on the read model per finished span batch — microseconds, against the half
+second the panel waits anyway.

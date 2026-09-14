@@ -4,9 +4,9 @@
 //! MessageSource
 //!     │
 //!     ├─ deduplicate        by message id, bounded
-//!     ├─ publish live       LiveHub → SSE / WebSocket
 //!     ├─ update read model  what the panel lists
-//!     ├─ assemble           SpanAssembler
+//!     ├─ assemble           SpanAssembler; finished spans into the read model
+//!     ├─ publish live       LiveHub → SSE / WebSocket, once the lists show it
 //!     ├─ flush              TraceStore + MetricSink, with retry
 //!     └─ commit checkpoint  only after the flush succeeded
 //! ```
