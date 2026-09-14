@@ -66,9 +66,16 @@ PROMPT_HEADER = "Aiwatcher-Prompt"
 #: see :meth:`LlmCall.caller_body`.
 GATEWAY_FIELD = "aiwatcher"
 
+#: The header a gateway's reply carries when it moved a judge's candidates into
+#: the witnessed order (``caller_body(ordered=…)``): a JSON object naming, for
+#: each placeholder, the caller's name whose value now stands there — how an
+#: application reads which candidate a judge's reply names.
+PLACED_HEADER = "Aiwatcher-Placed"
+
 __all__ = [
     "CALLER_RUN_HEADER",
     "GATEWAY_FIELD",
+    "PLACED_HEADER",
     "PROMPT_HEADER",
     "SCHEMA_VERSION",
     "AgentContext",
@@ -1681,7 +1688,8 @@ class LlmCall(Scope):
         the variant pins the judge to the witnessed order
         (``answer_chosen.judged.order``): the gateway moves their values into
         that order — which the application, holding no key, cannot compute —
-        before it relays the request.
+        before it relays the request, and says where each went in the reply's
+        :data:`PLACED_HEADER`.
         """
         told: dict[str, Any] = {"variables": dict(variables)}
         if ordered:

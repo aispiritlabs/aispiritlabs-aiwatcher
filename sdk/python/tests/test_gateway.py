@@ -14,7 +14,13 @@ from typing import Any, ClassVar
 
 import pytest
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
+from aiwatcher_sdk import (
+    CALLER_RUN_HEADER,
+    GATEWAY_FIELD,
+    PLACED_HEADER,
+    PROMPT_HEADER,
+    AiwatcherClient,
+)
 from aiwatcher_sdk.api import ApiError
 from aiwatcher_sdk.gateway import (
     Gateway,
@@ -818,6 +824,38 @@ def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_prov
     base, recording = gateway
     low, high = sorted(("Lima", "Cusco"), key=lambda value: witness_digest(KEY, "replied", value))
     headers = {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "pick-best@v1"}
+    placements = []
+    for ordered in (["first", "second"], []):
+        request = urllib.request.Request(  # noqa: S310 — the test's own gateway
+            base + "/v1/chat/completions",
+            data=json.dumps(
+                {
+                    "model": "judge",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Which is the capital of Peru, {high} or {low}? "
+                            "Say first or second.",
+                        }
+                    ],
+                    GATEWAY_FIELD: {
+                        "variables": {"first": high, "second": low},
+                        "ordered": ordered,
+                    },
+                }
+            ).encode(),
+            method="POST",
+        )
+        request.add_header("content-type", "application/json")
+        for name, value in headers.items():
+            request.add_header(name, value)
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            placements.append(response.headers.get(PLACED_HEADER))
+    assert placements == ['{"first": "second", "second": "first"}', None], (
+        "the reply says which of the caller's values each placeholder now holds"
+    )
+    Provider.seen = []
+    recording.events.clear()
     for ordered in (["first", "second"], []):
         ask(
             base,

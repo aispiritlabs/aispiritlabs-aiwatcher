@@ -63,7 +63,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Protocol
 
-from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
+from aiwatcher_sdk import (
+    CALLER_RUN_HEADER,
+    GATEWAY_FIELD,
+    PLACED_HEADER,
+    PROMPT_HEADER,
+    AiwatcherClient,
+)
 
 __all__ = [
     "Gateway",
@@ -924,7 +930,7 @@ class Gateway:
 
     def placed_in_witnessed_order(
         self, named: str | None, body: Mapping[str, Any], told: Told
-    ) -> tuple[dict[str, Any], Told] | None:
+    ) -> tuple[dict[str, Any], Told, dict[str, str]] | None:
         """The request with the values of ``told.ordered`` moved into the witnessed order.
 
         A judge shown candidates in the order the application chose may favour
@@ -933,7 +939,9 @@ class Gateway:
         key, ascending, placeholder by placeholder as the prompt version places
         them. The gateway re-renders the version with the values so placed,
         puts that text where the caller's rendering stood and relays that, so
-        what it publishes of the call is the placement it made. ``None`` where
+        what it publishes of the call is the placement it made — and answers,
+        for each placeholder, the caller's name whose value now stands there,
+        which the reply carries as :data:`~aiwatcher_sdk.PLACED_HEADER`. ``None`` where
         it cannot — no key, no version, a rendering it does not find in a
         single message — and the request goes as it came, which the traces
         step then reads as the application's order.
@@ -963,8 +971,15 @@ class Gateway:
         if before is None or after is None:
             return None
         moved = replace(told, variables=placed)
+        # Which of the caller's names each placeholder now holds the value of.
+        unused = list(places)
+        placement: dict[str, str] = {}
+        for place in places:
+            source = next(name for name in unused if variables[name] == placed[place])
+            unused.remove(source)
+            placement[place] = source
         if before == after:
-            return dict(body), moved
+            return dict(body), moved, placement
         messages = body.get("messages")
         if not isinstance(messages, list):
             return None
@@ -975,13 +990,13 @@ class Gateway:
             content = message.get("content")
             if isinstance(content, str) and before in content:
                 message["content"] = content.replace(before, after, 1)
-                return relayed, moved
+                return relayed, moved, placement
             if isinstance(content, list):
                 for part in content:
                     text = part.get("text") if isinstance(part, dict) else None
                     if isinstance(text, str) and before in text:
                         part["text"] = text.replace(before, after, 1)
-                        return relayed, moved
+                        return relayed, moved, placement
         return None
 
     def digests_asked(
@@ -1391,13 +1406,14 @@ class Gateway:
                 # What the application says about the call is for the gateway,
                 # never for the provider.
                 told = Told()
+                placement: dict[str, str] = {}
                 if GATEWAY_FIELD in body:
                     told = Told.read(body.pop(GATEWAY_FIELD))
                     placed = gateway.placed_in_witnessed_order(
                         self.headers.get(PROMPT_HEADER), body, told
                     )
                     if placed is not None:
-                        body, told = placed
+                        body, told, placement = placed
                     raw = json.dumps(body, separators=(",", ":")).encode()
                 prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, told.variables)
                 asked = gateway.digests_asked(
@@ -1422,6 +1438,8 @@ class Gateway:
                 else:
                     self.send_response(status)
                     self.send_header("content-type", content_type)
+                    if placement:
+                        self.send_header(PLACED_HEADER, json.dumps(placement, sort_keys=True))
                     self.end_headers()
                     streaming = content_type.startswith("text/event-stream")
                     held = bytearray()
