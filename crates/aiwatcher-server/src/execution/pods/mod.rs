@@ -1,5 +1,6 @@
-//! The pod launcher: one Job per `container_job` attempt, and nothing more
-//! (ADR_0029, whose amendments carry the reasoning this summarises).
+//! The pod launcher: one Job per `container_job` attempt, a credential for that
+//! attempt alone, and nothing more (ADR_0029 and ADR_0031, whose amendments
+//! carry the reasoning this summarises).
 //!
 //! It reads the attempts somebody may take, asks the cluster for a pod for
 //! each, and claims none of them. The pod is the worker: it claims its attempt
@@ -10,16 +11,14 @@
 //! thing it decides is whether a pod may be started at all, because templates
 //! are configuration and may have changed since a definition was saved.
 //!
-//! The other half of the pass is the **watch**, which adds nothing to
-//! correctness and three things to speed and explanation: a pod that ended
-//! while its attempt was unfinished ends it now as `Infrastructure`, carrying
-//! the cluster's own word for it; a Job no pod claimed within its template's
-//! start allowance is ended and deleted; and a run that is no longer running
-//! has its pods stopped as `Policy`, which is what asking a pod to stop means.
-//! Then the Job's log is kept and the Job is deleted — the log is never in the
-//! stream and never an output ([`log`]), so the attempt ends first. All of it
-//! is in every build and tested against a stand-in [`Cluster`]; only the client
-//! that reaches a real one is behind the `kube` feature.
+//! The other half of the pass is the **watch**, which adds speed and
+//! explanation to correctness: a pod that ended holding its attempt ends it as
+//! `Infrastructure` with the cluster's own word; a Job no pod claimed within its
+//! start allowance, or one past its whole deadline, is ended and deleted on
+//! every backend; and a run no longer running has its pods stopped as `Policy`.
+//! Then the log is kept and the Job deleted — never in the stream, never an
+//! output ([`log`]), so the attempt ends first. All of it is tested against a
+//! stand-in [`Cluster`]; only the client that reaches a real one needs `kube`.
 
 pub mod cluster;
 pub mod docker;
@@ -38,6 +37,7 @@ use std::time::Duration;
 
 use time::OffsetDateTime;
 
+use aiwatcher_auth::{AttemptCredentials, AttemptScope};
 use aiwatcher_core::MessageId;
 use aiwatcher_execution::pods::{DEFAULT_START_ALLOWANCE_SECONDS, PodTemplates};
 use aiwatcher_execution::{
@@ -61,11 +61,16 @@ pub const READ_PER_PASS: usize = 1_000;
 /// seconds of lateness is not the number anybody is waiting on.
 pub const TICK: Duration = Duration::from_secs(2);
 
-/// Where launched pods report.
+/// Where launched pods report, and what they report with.
 #[derive(Clone, Debug)]
 pub struct Settings {
     /// What each pod is told in `AIWATCHER_URL` (`AIWATCHER_POD_API_URL`).
     pub api_url: String,
+    /// What each pod's credential is minted under, when the server
+    /// authenticates — the same instance the authenticator opens them with.
+    /// `None` under `AIWATCHER_AUTH_MODE=none`, where nothing is minted because
+    /// nothing would check it.
+    pub credentials: Option<AttemptCredentials>,
 }
 
 /// What one pass did, counted.
@@ -114,14 +119,15 @@ pub struct Launcher<S> {
     keeper: Option<Keeper>,
     /// Plans by execution. A run's plan is pinned, so its stream is read once.
     plans: HashMap<ExecutionId, Arc<ExecutionPlan>>,
-    /// Attempts whose Job exists, so that a pass does not ask the cluster
-    /// again for every attempt still waiting for its pod to claim it.
-    /// Forgotten once an attempt stops being claimable, which keeps both maps
-    /// bounded by the claim table.
+    /// Attempts this process has had a Job created for, or been told one
+    /// exists, so that a pass does not ask the cluster again for every attempt
+    /// still waiting for its pod to claim it. Forgotten once an attempt stops
+    /// being claimable, which keeps both maps bounded by the claim table.
     ///
-    /// The cluster's own listing is the record and this is what a pass adds to
-    /// it: a listing that could not be read leaves the launch half working
-    /// from what this process asked for.
+    /// Only what this process asked, and never the cluster's listing: a create
+    /// that meets a Job already there is also what gives that Job whatever it
+    /// still lacks — its Secret, after a pass that ended between the two — so
+    /// a launcher that restarted asks once for each attempt it finds waiting.
     launched: HashSet<AttemptKey>,
 }
 
@@ -181,9 +187,6 @@ impl<S: WorkflowStore> Launcher<S> {
         let mut stopping = Stopping::new();
         let mut ended: HashSet<AttemptKey> = HashSet::new();
         if let Some(observed) = observed {
-            for job in &observed {
-                self.launched.insert(job.key.clone());
-            }
             for job in &observed {
                 if self
                     .watch(job, &rows, &mut stopping, now, &mut pass)
@@ -279,6 +282,27 @@ impl<S: WorkflowStore> Launcher<S> {
                     let unfinished = self.unfinished(key, claimable).await?;
                     if let Some(row) = unfinished {
                         self.stop(&row, now).await?;
+                        pass.ended += 1;
+                    }
+                    true
+                } else if job.past_deadline(self.allowance_of(job.template.as_deref()), now) {
+                    // A cluster stops this pod itself, and says the same
+                    // word; the other two backends never would, and a runaway
+                    // step whose credential expired would keep its memory.
+                    let unfinished = self.unfinished(key, claimable).await?;
+                    if let Some(row) = unfinished {
+                        self.report(
+                            &row,
+                            FailureClass::Infrastructure,
+                            format!(
+                                "the pod ran past its deadline, the {}s its template allows for \
+                                 starting plus the step's {}s: DeadlineExceeded",
+                                self.allowance_of(job.template.as_deref()),
+                                job.timeout_seconds.unwrap_or_default()
+                            ),
+                            now,
+                        )
+                        .await?;
                         pass.ended += 1;
                     }
                     true
@@ -483,6 +507,25 @@ impl<S: WorkflowStore> Launcher<S> {
             return Ok(Launch::Waiting);
         };
 
+        let token = match &self.settings.credentials {
+            None => None,
+            Some(credentials) => {
+                let scope = AttemptScope {
+                    execution: key.execution_id.as_str().to_owned(),
+                    step: key.step_id.clone(),
+                    attempt: key.attempt,
+                    queue: spec.queue.clone(),
+                };
+                match credentials.mint(&scope, credential_lifetime(template, step.timeout_seconds))
+                {
+                    Ok(token) => Some(token),
+                    Err(error) => {
+                        tracing::warn!(attempt = %key, %error, "no credential could be minted; the next pass asks again");
+                        return Ok(Launch::Waiting);
+                    }
+                }
+            }
+        };
         let job = manifest::job(&manifest::JobRequest {
             key,
             template_name: &spec.pod.template,
@@ -490,6 +533,7 @@ impl<S: WorkflowStore> Launcher<S> {
             pod: &spec.pod,
             timeout_seconds: step.timeout_seconds,
             api_url: &self.settings.api_url,
+            token: token.as_deref(),
         });
         match self.cluster.create_job(&job).await {
             Ok(created) => {
@@ -597,6 +641,23 @@ impl<S: WorkflowStore> Launcher<S> {
         self.plans.insert(execution.clone(), Arc::clone(&plan));
         Ok(Some(plan))
     }
+}
+
+/// How long a pod's credential is believed: the Job's own deadline — its start
+/// allowance plus the step's timeout — and one lease more, for the report that
+/// follows it (ADR_0031).
+fn credential_lifetime(
+    template: &aiwatcher_execution::pods::PodTemplate,
+    timeout_seconds: u64,
+) -> time::Duration {
+    let deadline = template
+        .start_allowance_seconds
+        .saturating_add(timeout_seconds);
+    time::Duration::seconds(
+        i64::try_from(deadline)
+            .unwrap_or(i64::MAX)
+            .saturating_add(aiwatcher_jobs::LEASE_SECONDS),
+    )
 }
 
 /// Start the launcher against a real cluster.
@@ -834,6 +895,7 @@ mod tests {
                 key: key.clone(),
                 template: Some("planner-import".to_owned()),
                 created_at,
+                timeout_seconds: Some(600),
                 pod,
             });
         }
@@ -1027,6 +1089,7 @@ mod tests {
             Arc::clone(cluster) as Arc<dyn Cluster>,
             Settings {
                 api_url: "http://aiwatcher-server.aiwatcher.svc:8080".to_owned(),
+                credentials: None,
             },
             keeper,
         )
@@ -1103,6 +1166,208 @@ mod tests {
         // And it does not ask again for an attempt it already has a Job for.
         assert_eq!(launcher.pass(at(3)).await.expect("a pass"), Pass::default());
         assert_eq!(cluster.asked().len(), 1);
+    }
+
+    fn environment_of(manifest: &Value) -> BTreeMap<String, Value> {
+        manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .expect("env")
+            .iter()
+            .map(|entry| {
+                (
+                    entry["name"].as_str().expect("a name").to_owned(),
+                    entry.get("value").cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn under_authentication_a_pod_is_given_a_credential_for_its_attempt_alone() {
+        let (store, key) = started().await;
+        let cluster = StandIn::answering(Answer::New);
+        let credentials = AttemptCredentials::new(Some("a secret both roles hold")).expect("a key");
+        let mut launcher = Launcher::new(
+            ExecutionHandler::new(Arc::clone(&store)),
+            templates(&["ghcr.io/planner/import"]),
+            Arc::clone(&cluster) as Arc<dyn Cluster>,
+            Settings {
+                api_url: "http://aiwatcher-server.aiwatcher.svc:8080".to_owned(),
+                credentials: Some(credentials.clone()),
+            },
+            None,
+        );
+        let minted_around = OffsetDateTime::now_utc().unix_timestamp();
+        launcher.pass(at(1)).await.expect("a pass");
+
+        let environment = environment_of(&cluster.asked()[0]);
+        let token = environment[manifest::TOKEN_ENV]
+            .as_str()
+            .expect("a plain value, which a cluster moves into a Secret");
+        let identity = credentials
+            .open(token)
+            .expect("the authenticator opens what the launcher minted");
+        assert_eq!(
+            identity.attempt,
+            Some(AttemptScope {
+                execution: key.execution_id.as_str().to_owned(),
+                step: key.step_id.clone(),
+                attempt: key.attempt,
+                queue: "planner-import".to_owned(),
+            })
+        );
+        // The Job's deadline and one lease more: the allowance's 300, the
+        // step's 600 and the lease's 300.
+        let lifetime = identity.expires_at.expect("an expiry") - minted_around;
+        assert!((1_200..=1_202).contains(&lifetime), "{lifetime}");
+
+        // Under `none` nothing is minted, because nothing would check it.
+        let (store, _) = started().await;
+        let cluster = StandIn::answering(Answer::New);
+        launcher_for_none(&store, &cluster).await;
+        assert!(!environment_of(&cluster.asked()[0]).contains_key(manifest::TOKEN_ENV));
+    }
+
+    async fn launcher_for_none(store: &Arc<MemoryWorkflowStore>, cluster: &Arc<StandIn>) {
+        launcher(store, templates(&["ghcr.io/planner/import"]), cluster, None)
+            .pass(at(1))
+            .await
+            .expect("a pass");
+    }
+
+    #[tokio::test]
+    async fn a_launcher_that_restarted_asks_once_for_an_attempt_whose_job_already_exists() {
+        // The ask is what gives a Job whatever it still lacks — its Secret, on
+        // a cluster, after a pass that ended between the two — so it is made
+        // once per attempt per launcher rather than skipped for a listed Job.
+        let (store, key) = started().await;
+        let cluster = StandIn::answering(Answer::AlreadyExisted);
+        cluster.holds(&key, at(1), Phase::Live { reason: None });
+        let mut launcher = launcher(
+            &store,
+            templates(&["ghcr.io/planner/import"]),
+            &cluster,
+            None,
+        );
+        assert_eq!(
+            launcher.pass(at(2)).await.expect("a pass"),
+            Pass {
+                already: 1,
+                ..Pass::default()
+            }
+        );
+        assert_eq!(launcher.pass(at(4)).await.expect("a pass"), Pass::default());
+        assert_eq!(cluster.asked().len(), 1, "and only once");
+    }
+
+    #[tokio::test]
+    async fn a_pod_past_its_deadline_is_stopped_and_its_attempt_ends_as_infrastructure() {
+        let (store, key) = started().await;
+        let cluster = StandIn::answering(Answer::New);
+        let mut launcher = launcher(
+            &store,
+            templates(&["ghcr.io/planner/import"]),
+            &cluster,
+            None,
+        );
+        launcher.pass(at(1)).await.expect("a pass");
+        claimed_by_its_pod(&store, &key, "aiwatcher-abc-x7", at(2)).await;
+        // Running, and holding its attempt: nothing a start allowance decides.
+        cluster.holds(&key, at(1), Phase::Live { reason: None });
+        // And beating, as a worker does, so the lease is not what ends it.
+        for beat in [250, 500, 750] {
+            assert!(
+                store
+                    .heartbeat(&key, "aiwatcher-abc-x7", at(beat))
+                    .await
+                    .expect("a heartbeat"),
+                "renewed at {beat}"
+            );
+        }
+
+        assert_eq!(
+            launcher.pass(at(900)).await.expect("a pass"),
+            Pass::default(),
+            "inside 300s to start and the step's 600s there is nothing to say"
+        );
+        let pass = launcher.pass(at(901)).await.expect("a pass");
+        assert_eq!(
+            pass,
+            Pass {
+                ended: 1,
+                deleted: 1,
+                ..Pass::default()
+            }
+        );
+        let failure = failure_of(&store, &key).await;
+        assert_eq!(failure.class, FailureClass::Infrastructure);
+        assert!(
+            failure.message.contains("DeadlineExceeded"),
+            "the cluster's own word for it: {}",
+            failure.message
+        );
+        assert_eq!(
+            cluster.deleted(),
+            vec![aiwatcher_execution::pods::job_name(&key)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pod_past_its_deadline_whose_attempt_was_reported_is_stopped_and_nothing_more_is_said()
+     {
+        let (store, key) = started().await;
+        let cluster = StandIn::answering(Answer::New);
+        let mut launcher = launcher(
+            &store,
+            templates(&["ghcr.io/planner/import"]),
+            &cluster,
+            None,
+        );
+        launcher.pass(at(1)).await.expect("a pass");
+        claimed_by_its_pod(&store, &key, "aiwatcher-abc-x7", at(2)).await;
+        ExecutionHandler::new(Arc::clone(&store))
+            .handle(
+                &key.execution_id,
+                WorkflowMessage::Event(WorkflowEvent::StepCompleted {
+                    step_id: key.step_id.clone(),
+                    attempt: key.attempt,
+                    outputs: Vec::new(),
+                    result: None,
+                }),
+                MessageMetadata::caused_by(
+                    &key.execution_id,
+                    &MessageId::new("report"),
+                    MessageId::new("report"),
+                    at(20),
+                )
+                .about_step(&key.step_id, key.attempt),
+                Now::at(at(20)),
+            )
+            .await
+            .expect("the report was accepted");
+        // The step reported and its process never exited.
+        cluster.holds(&key, at(1), Phase::Live { reason: None });
+
+        let pass = launcher.pass(at(1_000)).await.expect("a pass");
+        assert_eq!(
+            pass,
+            Pass {
+                deleted: 1,
+                ..Pass::default()
+            }
+        );
+        let failures = store
+            .load(&key.execution_id)
+            .await
+            .expect("the stream")
+            .events()
+            .filter(|event| matches!(event, WorkflowEvent::StepFailed { .. }))
+            .count();
+        assert_eq!(
+            failures, 0,
+            "a completed attempt is not ended a second time"
+        );
+        assert_eq!(run_state(&store, &key).await, StateType::Completed);
     }
 
     #[tokio::test]

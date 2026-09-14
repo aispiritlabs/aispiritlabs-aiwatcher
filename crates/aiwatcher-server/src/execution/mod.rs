@@ -382,7 +382,27 @@ fn launcher(
     let templates = state.pod_templates.as_ref()?;
     // `Config::validate` refused templates in this role without it.
     let api_url = config.pod_api_url.clone()?;
-    let settings = pods::Settings { api_url };
+    // The instance the authenticator was built with, so what this mints is what
+    // it opens (ADR_0031).
+    let credentials = config
+        .auth
+        .attempts
+        .clone()
+        .filter(|_| config.auth.mode != aiwatcher_auth::AuthMode::None);
+    if credentials
+        .as_ref()
+        .is_some_and(aiwatcher_auth::AttemptCredentials::is_ephemeral)
+    {
+        tracing::warn!(
+            "AIWATCHER_POD_CREDENTIAL_SECRET is unset; each pod's credential is signed with a \
+             key generated at start-up, so a restart refuses every running pod's reports and \
+             each of those attempts ends at its lease"
+        );
+    }
+    let settings = pods::Settings {
+        api_url,
+        credentials,
+    };
     match config.pod_runtime {
         PodRuntime::Process => Some(pods::spawn_processes(
             Arc::clone(store),

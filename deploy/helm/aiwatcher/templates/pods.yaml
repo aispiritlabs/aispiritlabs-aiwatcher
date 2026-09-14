@@ -4,14 +4,18 @@
 {{- /*
 ADR_0029. The templates file both roles read, and the one cluster credential
 this chart hands out: the pod holding the reactors — `worker` when the roles
-are split, `server` otherwise — may create and delete Jobs and read pods and
-their logs, in one namespace. Nothing else in the release mounts a token.
+are split, `server` otherwise — may create and delete Jobs, read pods and
+their logs, and create the Secret each Job's credential is held in (ADR_0031),
+in one namespace. Nothing else in the release mounts a token.
 
 aiwatcher enforces a template's image list, the cluster does not: a work role
 that was compromised could create a Job with any image here. An admission
 policy is the second wall, and an operator who wants one writes it from the
 same values.
 */ -}}
+{{- if and .Values.execution.splitRoles (ne .Values.auth.mode "none") (not .Values.execution.pods.credentialSecret.name) -}}
+{{- fail "execution.pods.templates is set on a split release with auth on, and execution.pods.credentialSecret.name is empty. The worker mints each pod's credential and the server checks it, and a key each generates at start-up is one only that process has: every pod would be refused. Create a Secret holding `openssl rand -hex 32` and name it here (ADR_0031)." -}}
+{{- end -}}
 {{- if ne .Values.execution.store "postgres" -}}
 {{- fail "execution.pods.templates is set but execution.store is not \"postgres\". A launched pod is a second process claiming its attempt against the same store, and `file` holds one process: the server would refuse the run when it starts." -}}
 {{- end -}}
@@ -54,6 +58,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # Each pod's credential, in a Secret its Job owns (ADR_0031). Created, and
+  # never read: nothing here gets, lists or watches a Secret, so this grant
+  # reads none of the namespace's.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -97,8 +97,9 @@ impl Cluster for DockerCluster {
                 "the manifest does not say which attempt it is for".to_owned(),
             ));
         }
-        let arguments = run_arguments(manifest, name).map_err(ClusterError::Refused)?;
-        match engine(&arguments.iter().map(String::as_str).collect::<Vec<_>>()).await {
+        let run = run_arguments(manifest, name).map_err(ClusterError::Refused)?;
+        let arguments: Vec<&str> = run.arguments.iter().map(String::as_str).collect();
+        match engine_with(&arguments, &run.environment).await {
             Ok(_) => Ok(Created::New),
             Err(ClusterError::Refused(why)) if why.contains("is already in use") => {
                 // The name is derived from the attempt, so somebody asked
@@ -186,6 +187,7 @@ fn observed(container: &Value) -> Option<Observed> {
         key: manifest::attempt_of(&labels)?,
         template: labels.get(manifest::TEMPLATE_LABEL).cloned(),
         created_at: created_at(container),
+        timeout_seconds: manifest::timeout_of(&labels),
         pod: phase_of(container.get("State")),
     })
 }
@@ -256,6 +258,36 @@ fn ended_reason(state: &Value, code: i64) -> String {
 }
 
 /// Everything `docker run` is told for one attempt.
+pub struct Run {
+    /// The command line.
+    pub arguments: Vec<String>,
+    /// What the client's own environment holds, for the variables the command
+    /// line names without a value.
+    ///
+    /// The pod's credential goes here and never into `arguments`: a command
+    /// line is readable through `ps` by every user on the host for as long as
+    /// `docker run` is running, and `--env NAME` takes the value from the
+    /// client's environment instead.
+    pub environment: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for Run {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Run")
+            .field("arguments", &self.arguments)
+            .field(
+                "environment",
+                &self
+                    .environment
+                    .iter()
+                    .map(|(variable, _)| variable)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+/// Everything `docker run` is told for one attempt.
 ///
 /// A pure function of the manifest, so what a container is started with is a
 /// question about this file and is asked in every build — the shape
@@ -265,7 +297,7 @@ fn ended_reason(state: &Value, code: i64) -> String {
 ///
 /// Why this manifest cannot be run in a container here, in the words the
 /// attempt ends with.
-pub fn run_arguments(manifest: &Value, name: &str) -> Result<Vec<String>, String> {
+pub fn run_arguments(manifest: &Value, name: &str) -> Result<Run, String> {
     let program = manifest::program(manifest, name)?;
     let container = manifest
         .pointer("/spec/template/spec/containers/0")
@@ -299,9 +331,17 @@ pub fn run_arguments(manifest: &Value, name: &str) -> Result<Vec<String>, String
             arguments.push(format!("{label}={value}"));
         }
     }
+    let mut environment = Vec::new();
     for (variable, value) in program.environment {
         arguments.push("--env".to_owned());
-        arguments.push(format!("{variable}={value}"));
+        // The one secret aiwatcher put there. The rest are the template's
+        // literals and aiwatcher's own addresses, none of them a credential.
+        if variable == manifest::TOKEN_ENV {
+            arguments.push(variable.clone());
+            environment.push((variable, value));
+        } else {
+            arguments.push(format!("{variable}={value}"));
+        }
     }
     if let Some(directory) = program.directory {
         arguments.push("--workdir".to_owned());
@@ -310,7 +350,10 @@ pub fn run_arguments(manifest: &Value, name: &str) -> Result<Vec<String>, String
     arguments.extend(limits(container)?);
     arguments.push(image.to_owned());
     arguments.extend(program.command);
-    Ok(arguments)
+    Ok(Run {
+        arguments,
+        environment,
+    })
 }
 
 /// The container's limits, as the engine counts them.
@@ -369,8 +412,22 @@ fn missing(why: &str) -> bool {
 
 /// One call to the engine's client, or why it did not happen.
 async fn engine(arguments: &[&str]) -> Result<String, ClusterError> {
+    engine_with(arguments, &[]).await
+}
+
+/// One call, with variables in the client's own environment that its command
+/// line names without a value.
+async fn engine_with(
+    arguments: &[&str],
+    environment: &[(String, String)],
+) -> Result<String, ClusterError> {
     let mut command = Command::new(ENGINE);
     command.args(arguments);
+    command.envs(
+        environment
+            .iter()
+            .map(|(variable, value)| (variable, value)),
+    );
     output(command, ENGINE).await
 }
 
@@ -421,6 +478,10 @@ mod tests {
     use super::super::manifest::JobRequest;
 
     fn manifest_for(memory: Option<&str>, pod: Value) -> Value {
+        manifest_holding(memory, pod, None)
+    }
+
+    fn manifest_holding(memory: Option<&str>, pod: Value, token: Option<&str>) -> Value {
         let templates = PodTemplates::parse(
             json!({
                 "e2e": {
@@ -452,11 +513,14 @@ mod tests {
             },
             timeout_seconds: 60,
             api_url: "http://host.docker.internal:8080",
+            token,
         })
     }
 
     fn arguments(manifest: &Value) -> Vec<String> {
-        run_arguments(manifest, "aiwatcher-abc").expect("an image this engine can run")
+        run_arguments(manifest, "aiwatcher-abc")
+            .expect("an image this engine can run")
+            .arguments
     }
 
     fn value_after(arguments: &[String], flag: &str) -> Option<String> {
@@ -497,6 +561,44 @@ mod tests {
                 // the name the claim is held under.
                 && environment.contains(&&"AIWATCHER_WORKER_NAME=aiwatcher-abc".to_owned()),
             "{environment:?}"
+        );
+    }
+
+    #[test]
+    fn a_container_is_given_its_credential_by_name_and_never_on_the_command_line() {
+        let token = "aw-attempt.sealed.signed";
+        let run = run_arguments(
+            &manifest_holding(None, json!({}), Some(token)),
+            "aiwatcher-abc",
+        )
+        .expect("an image this engine can run");
+        assert!(
+            run.arguments
+                .iter()
+                .all(|argument| !argument.contains("sealed")),
+            "a command line is readable by every user on the host: {:?}",
+            run.arguments
+        );
+        let named = run
+            .arguments
+            .iter()
+            .position(|argument| argument == manifest::TOKEN_ENV)
+            .expect("the variable is named");
+        assert_eq!(run.arguments[named - 1], "--env");
+        assert_eq!(
+            run.environment,
+            [(manifest::TOKEN_ENV.to_owned(), token.to_owned())]
+        );
+        assert!(!format!("{run:?}").contains("sealed"), "{run:?}");
+
+        // Under `none` nothing is minted, and nothing is named.
+        let unauthenticated = run_arguments(&manifest_for(None, json!({})), "aiwatcher-abc")
+            .expect("an image this engine can run");
+        assert!(unauthenticated.environment.is_empty());
+        assert!(
+            !unauthenticated
+                .arguments
+                .contains(&manifest::TOKEN_ENV.to_owned())
         );
     }
 
@@ -675,6 +777,7 @@ mod tests {
                 "aiwatcher.dev/execution": "run-1",
                 "aiwatcher.dev/step": "analyze",
                 "aiwatcher.dev/attempt": "2",
+                "aiwatcher.dev/timeout": "60",
                 "aiwatcher.dev/template": "e2e",
             }},
             "State": {"Status": "running"},
@@ -686,6 +789,11 @@ mod tests {
             AttemptKey::new(ExecutionId::new("run-1"), "analyze", 2)
         );
         assert_eq!(container.template.as_deref(), Some("e2e"));
+        assert_eq!(
+            container.timeout_seconds,
+            Some(60),
+            "the deadline's other half"
+        );
         assert_eq!(container.created_at.year(), 2026);
 
         // Something else the selector reached is skipped rather than guessed

@@ -378,6 +378,9 @@ later as "holds no object".
 # says which variable is unset rather than showing an empty list.
 - { name: AIWATCHER_PROMPT_STORE, value: "none" }
 {{- end }}
+{{- if gt (int .Values.observationJournal.days) 0 }}
+- { name: AIWATCHER_OBSERVATION_JOURNAL_DAYS, value: {{ .Values.observationJournal.days | int64 | quote }} }
+{{- end }}
 {{- if .Values.evaluationEvidence.enabled }}
 - { name: AIWATCHER_EVALUATION_SOURCE_DIR, value: {{ .Values.evaluationEvidence.sourceDir | quote }} }
 # `int64` before `quote`, or a byte limit this size renders as 1.048576e+08 and
@@ -519,6 +522,16 @@ later as "holds no object".
 # What a launched pod is told in AIWATCHER_URL. Fully qualified, so a pod in
 # another namespace reaches it too.
 - { name: AIWATCHER_POD_API_URL, value: {{ printf "http://%s-server.%s.svc:8080" (include "aiwatcher.fullname" .) .Release.Namespace | quote }} }
+{{- if and (ne .Values.auth.mode "none") .Values.execution.pods.credentialSecret.name }}
+# What each pod's credential is minted and checked under (ADR_0031): the role
+# that launches mints with it and the role serving the worker routes opens with
+# it, so both have to be given the same one.
+- name: AIWATCHER_POD_CREDENTIAL_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.execution.pods.credentialSecret.name }}
+      key: {{ .Values.execution.pods.credentialSecret.key }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if eq .Values.server.bus "laser" }}

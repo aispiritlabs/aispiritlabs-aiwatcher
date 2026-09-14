@@ -1,13 +1,17 @@
 //! The launcher's cluster, through kube-rs — the one file in `pods` that needs
 //! the `kube` feature. What to ask for, and what an answer means for the
 //! attempt, is decided in [`super`].
+//!
+//! The one thing this backend does to a manifest before sending it is move a
+//! pod's credential into a Secret the Job owns ([`manifest::credential_secret`],
+//! ADR_0031): a namespace's `view` role reads a pod spec, and never a Secret.
 
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use futures::AsyncReadExt;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -28,6 +32,7 @@ const JOB_NAME_LABELS: [&str; 2] = ["batch.kubernetes.io/job-name", "job-name"];
 pub struct KubeCluster {
     jobs: Api<Job>,
     pods: Api<Pod>,
+    secrets: Api<Secret>,
     namespace: String,
 }
 
@@ -59,7 +64,8 @@ impl KubeCluster {
             namespace.map_or_else(|| client.default_namespace().to_owned(), str::to_owned);
         Ok(Self {
             jobs: Api::namespaced(client.clone(), &namespace),
-            pods: Api::namespaced(client, &namespace),
+            pods: Api::namespaced(client.clone(), &namespace),
+            secrets: Api::namespaced(client, &namespace),
             namespace,
         })
     }
@@ -100,26 +106,35 @@ fn provider() {
 #[async_trait]
 impl Cluster for KubeCluster {
     async fn create_job(&self, manifest: &Value) -> Result<Created, ClusterError> {
+        // Taken out before anything is read or sent, so no error below — serde's
+        // or the API server's — has the value in front of it.
+        let (manifest, secret) =
+            manifest::credential_secret(manifest).map_err(ClusterError::Refused)?;
         // Read back into the typed Job first, so a template whose fragment is
         // not a pod spec is refused here, with serde's words, rather than
         // sent and refused in the API server's.
-        let job: Job = serde_json::from_value(manifest.clone()).map_err(|error| {
+        let job: Job = serde_json::from_value(manifest).map_err(|error| {
             ClusterError::Refused(format!("the manifest is not a Job: {error}"))
         })?;
-        match self.jobs.create(&PostParams::default(), &job).await {
-            Ok(_) => Ok(Created::New),
+        let name = job.metadata.name.clone().unwrap_or_default();
+        let (created, uid) = match self.jobs.create(&PostParams::default(), &job).await {
+            Ok(created) => (Created::New, created.metadata.uid),
             // The name is derived from the attempt, so this is another
             // launcher — or this one, before a restart — having asked first.
-            Err(kube::Error::Api(status)) if status.code == 409 => Ok(Created::AlreadyExisted),
+            Err(kube::Error::Api(status)) if status.code == 409 => (Created::AlreadyExisted, None),
             // The cluster read the manifest and will not have it. Every pass
             // would get the same answer until somebody edits the template.
             Err(kube::Error::Api(status)) if matches!(status.code, 400 | 422) => {
-                Err(ClusterError::Refused(status.message.clone()))
+                return Err(ClusterError::Refused(status.message.clone()));
             }
             // A missing grant, a quota, a 5xx, a connection: any of them may
             // answer differently on the next pass.
-            Err(error) => Err(ClusterError::Unavailable(error.to_string())),
+            Err(error) => return Err(ClusterError::Unavailable(error.to_string())),
+        };
+        if let Some(secret) = secret {
+            self.give_credential(&name, uid, secret).await?;
         }
+        Ok(created)
     }
 
     async fn jobs(&self) -> Result<Vec<Observed>, ClusterError> {
@@ -211,6 +226,48 @@ impl Cluster for KubeCluster {
             Ok(_) => Ok(()),
             // Somebody got there first, which is the same outcome.
             Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
+            Err(error) => Err(ClusterError::Unavailable(error.to_string())),
+        }
+    }
+}
+
+impl KubeCluster {
+    /// Create one Job's Secret, owned by it, once the Job exists.
+    ///
+    /// A Job that already existed is given its Secret anyway: a pass that ended
+    /// between the two left one waiting for it. A Secret that already exists is
+    /// another launcher's, holding a credential for the same attempt that is
+    /// just as valid, and it stands.
+    async fn give_credential(
+        &self,
+        job: &str,
+        uid: Option<String>,
+        secret: Value,
+    ) -> Result<(), ClusterError> {
+        let uid = match uid {
+            Some(uid) => uid,
+            None => self
+                .jobs
+                .get(job)
+                .await
+                .map_err(|error| ClusterError::Unavailable(error.to_string()))?
+                .metadata
+                .uid
+                .ok_or_else(|| {
+                    ClusterError::Unavailable(format!("the Job {job} has no uid yet"))
+                })?,
+        };
+        // serde's words are not repeated: they could quote what they read.
+        let secret: Secret = serde_json::from_value(manifest::owned_by(secret, job, &uid))
+            .map_err(|_| {
+                ClusterError::Refused("the pod's credential is not a Secret".to_owned())
+            })?;
+        match self.secrets.create(&PostParams::default(), &secret).await {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(status)) if status.code == 409 => Ok(()),
+            Err(kube::Error::Api(status)) if matches!(status.code, 400 | 422) => {
+                Err(ClusterError::Refused(status.message.clone()))
+            }
             Err(error) => Err(ClusterError::Unavailable(error.to_string())),
         }
     }

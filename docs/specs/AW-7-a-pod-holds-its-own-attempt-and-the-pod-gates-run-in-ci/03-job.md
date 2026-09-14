@@ -220,16 +220,27 @@ Beyond what ADR_0031 decides:
   - Under `none` nothing is minted, with a test.
   - Wiring builds one `AttemptCredentials` and gives it to both the
     authenticator and the launcher.
-- [ ] 7.13 **Held without being printed.**
+  - The launcher half is done: `Settings.credentials`, taken from
+    `config.auth.attempts` — the instance the authenticator is built from —
+    and the ephemeral key warned about once, where the launcher starts. The
+    owned variable is refused in a template. Reading the secret into that
+    instance is 7.11's, in `config.rs`.
+- [x] 7.13 **Held without being printed.**
   - `docker` passes the token by name, with its value in the client's
     environment.
   - `process` hands it to the child. A test shows it arrives while the server's
     own `AIWATCHER_TOKEN` still does not.
   - A test holds that no `ClusterError`, launch log line or `Debug` of a request
     carries the value.
+  - Done. `run_arguments` returns the command line and, apart, the client's
+    environment. `process` builds its command from a host environment handed in,
+    so a test puts the server's own `AIWATCHER_TOKEN` there and sees the
+    attempt's arrive instead, and nothing under `none`. `JobRequest` and `Run`
+    print that a credential is held and never what; `KubeCluster` takes it out
+    of the manifest before serde or the API server reads anything.
 
 ### Part C4 — the cluster backend
-- [ ] 7.14 **The Secret.**
+- [x] 7.14 **The Secret.**
   - A pure `credential_secret(manifest, job)` returns the rewritten manifest and
     the Secret. It is unit-tested: `secretKeyRef` in the container, no value
     anywhere in the Job, and an owner reference with the Job's uid filled in
@@ -237,27 +248,42 @@ Beyond what ADR_0031 decides:
   - `KubeCluster::create_job` creates the Job, then the Secret.
   - On `AlreadyExisted` it reads the Job's uid and creates the Secret, taking
     `AlreadyExists` as done.
-- [ ] 7.15 **The grant.**
+  - Done, with one more change in the launcher: it no longer counts a Job the
+    listing shows as launched. A pass that met a Job whose Secret failed, or a
+    launcher that restarted, would otherwise never ask again, and the pod would
+    wait out its start allowance. It now asks once per attempt per launcher.
+- [x] 7.15 **The grant.**
   - `pods.yaml`'s Role gains `secrets: [create]`.
   - The gate's `can-i` asserts `create secrets` is allowed, and `get`, `list`
     and `watch` on secrets are not.
   - `just chart-check`.
-- [ ] 7.16 **The chart.**
+  - Done in the chart and in the gate's lists; the `can-i` answers come from the
+    cluster gate's run.
+- [x] 7.16 **The chart.**
   - `execution.pods.credentialSecret: {name, key}` is rendered into the server
     and the worker whenever templates are set and auth is on.
   - The chart `fail`s for a split release with auth, templates and no secret.
   - The `values.yaml` example drops its token and says why.
+  - Done: rendered in `aiwatcher.serverEnv`, which both pods include. Four
+    renders checked by hand — split with auth and no secret fails naming the
+    value; with one, the server and the worker both carry it; combined and
+    `none` render nothing new.
 
 ### Part C5 — the deadline
-- [ ] 7.17 **The timeout annotation.**
+- [x] 7.17 **The timeout annotation.**
   - The manifest carries `aiwatcher.dev/timeout`.
   - `Observed` gains the timeout, read back by all three backends.
   - `manifest::attempt_of`'s neighbours are tested.
-- [ ] 7.18 **The watch stops it.**
+  - Done: `timeout_of` beside `attempt_of`, a Job with no annotation holding no
+    deadline of its own, and docker reading it off the labels the annotations
+    become.
+- [x] 7.18 **The watch stops it.**
   - A `Live` pod past its creation plus start allowance plus timeout is deleted.
   - Its unfinished attempt ends as `Infrastructure`, reason `DeadlineExceeded`.
   - A stand-in cluster test covers it, and so does the case where the attempt
     had already been reported, where nothing is reported twice.
+  - Done: `Observed::past_deadline`, checked before the start allowance. The
+    test pod heartbeats, so the lease is not what ends it.
 
 ### Part C6 — gates and documents
 - [ ] 7.19 **The gates speak auth.**

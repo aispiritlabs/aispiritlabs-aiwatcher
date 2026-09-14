@@ -509,13 +509,16 @@ execution:
     # container runs, and a pod-spec fragment written in full: volumes, env
     # from secrets, a service account, node selectors, tolerations. The server
     # refuses at start a template that sets what aiwatcher fills in — the
-    # container's image, resources, command, args and three AIWATCHER_*
+    # container's image, resources, command, args and four AIWATCHER_*
     # variables, and the pod's restartPolicy and deadline — and one whose
     # quantities are not strings, so quote `"1"`.
     #
-    # Give each template a queue of its own and a token scoped to it
-    # (`name[queue]=secret` in auth.ingestTokenSecret), and hand the pod that
-    # token as AIWATCHER_TOKEN. Every pod of one template shares it.
+    # A template carries no aiwatcher token, and AIWATCHER_TOKEN in one is
+    # refused. With auth on, the launcher mints each pod a credential for its
+    # own attempt, held in a Secret the Job owns (ADR_0031): it opens that
+    # attempt's worker routes and ingest and nothing else, where a token the
+    # template handed every pod could settle a neighbour's attempt and read
+    # every run. What a stage needs for the application stays the template's.
     #
     # templates:
     #   planner-import:
@@ -531,10 +534,20 @@ execution:
     #       containers:
     #         - name: stage
     #           env:
-    #             - name: AIWATCHER_TOKEN
+    #             - name: PLANNER_DATABASE_URL
     #               valueFrom:
-    #                 secretKeyRef: { name: planner-import-token, key: token }
+    #                 secretKeyRef: { name: planner-import-db, key: url }
     templates: {}
+    # The key pods' credentials are minted and checked under. Required on a
+    # split release with auth on, because the worker mints and the server
+    # checks; otherwise the one process generates a key at start-up, and a
+    # restart ends every running pod's attempt at its lease.
+    #
+    #   kubectl create secret generic aiwatcher-pod-credential \
+    #     --from-literal=secret="$(openssl rand -hex 32)"
+    credentialSecret:
+      name: ""
+      key: secret
     # Where launched pods run. Empty is the release's namespace. Another one
     # gets the launcher's Role and RoleBinding written into it.
     namespace: ""
@@ -791,6 +804,25 @@ evaluationEvidence:
     # How long published evidence is kept. A source's own retention can shorten
     # this and never lengthens it.
     retentionDays: 30
+
+observationJournal:
+  # How many days the journal of what the period fold reads keeps its pages
+  # (AIWATCHER_OBSERVATION_JOURNAL_DAYS). 0 keeps no journal, which is the
+  # default. Set, every role reads the log into one, under one consumer group,
+  # so whichever of them is up keeps reading.
+  days: 0
+
+  # Pods running the journal and nothing else (AIWATCHER_ROLE=journal): the
+  # log and the object store, no listener, no database, no identity provider.
+  # They keep reading while every pod that accepts or drains work is down —
+  # on a bad release, a database outage or an unreachable provider — which is
+  # when a broker's retention would otherwise evict what nobody read. Needs
+  # `server.bus: laser`, an object store and `days`.
+  replicas: 0
+
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 256Mi }
 
 promptStore:
   # install | external | none.

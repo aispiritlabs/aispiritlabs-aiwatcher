@@ -25,13 +25,18 @@ use crate::claim::AttemptKey;
 use crate::plan::{ExecutionPlan, RuntimeBinding};
 
 /// The variables aiwatcher sets on a launched pod's container: the attempt it
-/// is for, where the API is, and the name it claims under. A template that sets
-/// one is refused, because the pod would then claim somebody else's attempt or
-/// report to somebody else's API.
-pub const OWNED_ENV: [&str; 3] = [
+/// is for, where the API is, the name it claims under, and the credential it
+/// claims with. A template that sets one is refused, because the pod would then
+/// claim somebody else's attempt, report to somebody else's API, or hold a
+/// secret the template was never supposed to carry (ADR_0031).
+///
+/// The launcher sets the fourth only when the server authenticates, and a
+/// template may not set it either way.
+pub const OWNED_ENV: [&str; 4] = [
     "AIWATCHER_ATTEMPT",
     "AIWATCHER_URL",
     "AIWATCHER_WORKER_NAME",
+    "AIWATCHER_TOKEN",
 ];
 
 /// Five minutes from the Job's creation to the pod's claim, unless the
@@ -567,7 +572,7 @@ fn pod_problems(name: &str, pod: &Map<String, Value>) -> Vec<String> {
     for variable in owned {
         problems.push(format!(
             "{name}: pod.containers[0].env sets {variable}, which aiwatcher sets — it says which \
-             attempt the pod claims and where it reports"
+             attempt the pod claims, where it reports and what it claims with"
         ));
     }
     problems
@@ -1029,7 +1034,10 @@ mod tests {
                         "containers": [{
                             "image": "ghcr.io/planner/import:1.4",
                             "command": ["sh"],
-                            "env": [{"name": "AIWATCHER_ATTEMPT", "value": "x/y/1"}]
+                            "env": [
+                                {"name": "AIWATCHER_ATTEMPT", "value": "x/y/1"},
+                                {"name": "AIWATCHER_TOKEN", "value": "a template's own token"}
+                            ]
                         }]
                     }
                 }
@@ -1047,6 +1055,7 @@ mod tests {
             "pod.containers[0].image",
             "pod.containers[0].command",
             "AIWATCHER_ATTEMPT",
+            "sets AIWATCHER_TOKEN",
             "resources.max.memory is required",
             "resources.requests.cpu is above resources.max.cpu",
         ] {

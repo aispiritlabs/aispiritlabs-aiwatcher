@@ -56,7 +56,9 @@ pub const DEFAULT_LIMIT: usize = 4;
 /// run outside an image has no `PATH`, `HOME` or interpreter path of its own —
 /// but this server's own configuration would reach its children and a worker
 /// reading `AIWATCHER_WORKFLOW_STORE` or `AIWATCHER_POD_TEMPLATES` is a worker
-/// configured as a server. The three the manifest sets are applied after this.
+/// configured as a server — and one reading `AIWATCHER_TOKEN` holds the
+/// server's credential. What the manifest sets, the attempt's own credential
+/// among it, is applied after this.
 const NOT_INHERITED: &str = "AIWATCHER_";
 
 /// This host, as a cluster of one.
@@ -75,6 +77,7 @@ struct Started {
     /// the start allowance runs on, so one queued behind the limit is overdue
     /// on the same terms as a pod nothing would schedule.
     created_at: OffsetDateTime,
+    timeout_seconds: Option<u64>,
     stage: Stage,
 }
 
@@ -171,8 +174,13 @@ async fn sweep(started: &mut BTreeMap<String, Started>, limit: usize) {
     }
 }
 
-/// Start one program, and watch it from a task of its own.
-fn start(name: &str, program: &Program) -> Result<Stage, ClusterError> {
+/// What one program runs as, with the host's environment handed in rather than
+/// read here, so what reaches a step is a question a test can ask without
+/// changing this process's own.
+fn command_for(
+    program: &Program,
+    host: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Result<Command, ClusterError> {
     let Some((head, rest)) = program.command.split_first() else {
         return Err(ClusterError::Refused(
             "the container names no command to run".to_owned(),
@@ -180,17 +188,25 @@ fn start(name: &str, program: &Program) -> Result<Stage, ClusterError> {
     };
     let mut command = Command::new(head);
     command.args(rest);
-    for inherited in std::env::vars().map(|(name, _)| name) {
-        if inherited.starts_with(NOT_INHERITED) {
-            command.env_remove(inherited);
-        }
-    }
+    command.env_clear();
+    command.envs(host.into_iter().filter(|(variable, _)| {
+        !variable
+            .to_str()
+            .is_some_and(|variable| variable.starts_with(NOT_INHERITED))
+    }));
     for (variable, value) in &program.environment {
         command.env(variable, value);
     }
     if let Some(directory) = &program.directory {
         command.current_dir(directory);
     }
+    Ok(command)
+}
+
+/// Start one program, and watch it from a task of its own.
+fn start(name: &str, program: &Program) -> Result<Stage, ClusterError> {
+    let mut command = command_for(program, std::env::vars_os())?;
+    let head = program.command.first().map_or("", String::as_str);
     let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -342,6 +358,7 @@ impl Cluster for ProcessCluster {
                     .get(manifest::TEMPLATE_LABEL)
                     .cloned(),
                 created_at: OffsetDateTime::now_utc(),
+                timeout_seconds: manifest::timeout_of(&manifest::annotations_of(manifest)),
                 stage,
             },
         );
@@ -358,6 +375,7 @@ impl Cluster for ProcessCluster {
                 key: job.key.clone(),
                 template: job.template.clone(),
                 created_at: job.created_at,
+                timeout_seconds: job.timeout_seconds,
                 pod: match &job.stage {
                     // A cluster says `Unschedulable` for this; the launcher
                     // reads the word and the start allowance decides.
@@ -426,6 +444,10 @@ mod tests {
     /// backends read one manifest, and a test that wrote its own would stop
     /// saying so the day the builder changed.
     fn manifest_for(step: &str, command: &[&str], pod: Value) -> Value {
+        manifest_holding(step, command, pod, None)
+    }
+
+    fn manifest_holding(step: &str, command: &[&str], pod: Value, token: Option<&str>) -> Value {
         let templates = PodTemplates::parse(
             json!({
                 "e2e": {
@@ -456,6 +478,7 @@ mod tests {
             },
             timeout_seconds: 60,
             api_url: "http://127.0.0.1:8080",
+            token,
         })
     }
 
@@ -557,6 +580,74 @@ mod tests {
             printed(&cluster, &name).await,
             format!("run-1/analyze/1|http://127.0.0.1:8080|{name}")
         );
+    }
+
+    #[tokio::test]
+    async fn a_process_holds_its_attempt_s_credential_and_never_the_server_s() {
+        let manifest = manifest_holding(
+            "analyze",
+            &["/bin/sh", "-c", "printf '%s' \"$AIWATCHER_TOKEN\""],
+            json!({}),
+            Some("aw-attempt.sealed.signed"),
+        );
+        let cluster = ProcessCluster::new(2);
+        cluster.create_job(&manifest).await.expect("it starts");
+        let name = named(&manifest);
+        assert_eq!(ended(&cluster, &name).await, "Completed");
+        assert_eq!(printed(&cluster, &name).await, "aw-attempt.sealed.signed");
+
+        // The host's environment is handed in, so the server's own credential
+        // can be put there without changing this process's.
+        let host = || {
+            [
+                ("PATH", "/usr/bin:/bin"),
+                ("AIWATCHER_TOKEN", "the server's own"),
+                ("AIWATCHER_POD_TEMPLATES", "/etc/aiwatcher/templates.json"),
+            ]
+            .map(|(variable, value)| (variable.into(), value.into()))
+        };
+        let given = |manifest: &Value| {
+            let program = manifest::program(manifest, "aiwatcher-abc").expect("a program");
+            command_for(&program, host())
+                .expect("a command")
+                .as_std()
+                .get_envs()
+                .map(|(variable, value)| {
+                    (
+                        variable.to_string_lossy().into_owned(),
+                        value.map(|value| value.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let holding = given(&manifest);
+        assert_eq!(
+            holding.get("AIWATCHER_TOKEN"),
+            Some(&Some("aw-attempt.sealed.signed".to_owned()))
+        );
+        assert!(!holding.contains_key("AIWATCHER_POD_TEMPLATES"));
+        assert_eq!(
+            holding.get("PATH"),
+            Some(&Some("/usr/bin:/bin".to_owned())),
+            "everything else of the host's is still inherited"
+        );
+
+        // And under `none`, where nothing was minted, the server's is not
+        // passed on in its place.
+        let unauthenticated = given(&stage(&["/bin/true"]));
+        assert!(
+            !unauthenticated.contains_key("AIWATCHER_TOKEN"),
+            "{unauthenticated:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_process_says_what_its_step_s_timeout_is() {
+        let manifest = stage(&["/bin/sh", "-c", "sleep 0.2"]);
+        let cluster = ProcessCluster::new(2);
+        cluster.create_job(&manifest).await.expect("it starts");
+        let jobs = cluster.jobs().await.expect("this host answers");
+        assert_eq!(jobs[0].timeout_seconds, Some(60));
     }
 
     #[tokio::test]

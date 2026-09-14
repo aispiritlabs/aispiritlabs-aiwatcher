@@ -49,11 +49,20 @@ pub const EXECUTION_ANNOTATION: &str = "aiwatcher.dev/execution";
 pub const STEP_ANNOTATION: &str = "aiwatcher.dev/step";
 pub const ATTEMPT_ANNOTATION: &str = "aiwatcher.dev/attempt";
 
+/// The step's timeout in seconds, beside the attempt — what the watch reads a
+/// deadline from on every backend, since `activeDeadlineSeconds` is only a
+/// cluster's (ADR_0031).
+pub const TIMEOUT_ANNOTATION: &str = "aiwatcher.dev/timeout";
+
+/// The variable a pod's credential is in. What the launcher mints goes here,
+/// and it is the one value in a manifest that a backend must not print.
+pub const TOKEN_ENV: &str = "AIWATCHER_TOKEN";
+
 /// The container's name when the template's pod names none.
 const CONTAINER: &str = "step";
 
 /// Everything one Job is built from.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct JobRequest<'a> {
     pub key: &'a AttemptKey,
     pub template_name: &'a str,
@@ -65,6 +74,24 @@ pub struct JobRequest<'a> {
     pub timeout_seconds: u64,
     /// Where the pod reports: what its worker is told in `AIWATCHER_URL`.
     pub api_url: &'a str,
+    /// The credential minted for this attempt, when the server authenticates.
+    /// `None` under `none`, where nothing would check one.
+    pub token: Option<&'a str>,
+}
+
+impl std::fmt::Debug for JobRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the credential: a request is exactly the thing somebody logs
+        // when a launch goes wrong.
+        f.debug_struct("JobRequest")
+            .field("key", self.key)
+            .field("template_name", &self.template_name)
+            .field("pod", self.pod)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("api_url", &self.api_url)
+            .field("token", &self.token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The `batch/v1` Job for one attempt.
@@ -75,7 +102,7 @@ pub fn job(request: &JobRequest<'_>) -> Value {
         labels.insert(name.to_owned(), value.into());
     }
     labels.insert(TEMPLATE_LABEL.to_owned(), request.template_name.into());
-    let annotations = annotations(request.key);
+    let annotations = annotations(request.key, request.timeout_seconds);
 
     json!({
         "apiVersion": "batch/v1",
@@ -103,13 +130,15 @@ pub fn job(request: &JobRequest<'_>) -> Value {
     })
 }
 
-/// The three annotations one attempt is named by, and the only place that
-/// decides how a Job carries it. [`attempt_of`] is the inverse, beside it.
-fn annotations(key: &AttemptKey) -> Value {
+/// The three annotations one attempt is named by and the one its deadline is
+/// read from, and the only place that decides how a Job carries them.
+/// [`attempt_of`] and [`timeout_of`] are the inverses, beside it.
+fn annotations(key: &AttemptKey, timeout_seconds: u64) -> Value {
     json!({
         EXECUTION_ANNOTATION: key.execution_id.as_str(),
         STEP_ANNOTATION: key.step_id,
         ATTEMPT_ANNOTATION: key.attempt.to_string(),
+        TIMEOUT_ANNOTATION: timeout_seconds.to_string(),
     })
 }
 
@@ -124,6 +153,89 @@ pub fn attempt_of(annotations: &BTreeMap<String, String>) -> Option<AttemptKey> 
         annotations.get(STEP_ANNOTATION)?.clone(),
         annotations.get(ATTEMPT_ANNOTATION)?.parse().ok()?,
     ))
+}
+
+/// The key a pod's credential is held under in its Secret.
+pub const SECRET_KEY: &str = "token";
+
+/// A cluster's half of a pod's credential: the manifest with the value taken
+/// out and a `secretKeyRef` in its place, and the Secret that holds it
+/// (ADR_0031).
+///
+/// A cluster's `view` role reads Jobs and pods and never Secrets, so a value
+/// left in the pod spec is one anybody who may look at the namespace could
+/// settle an attempt with. The Secret has the Job's name — a different kind, so
+/// the names do not collide — and is owned by the Job once [`owned_by`] has its
+/// uid, so it is collected with it. `None` for the Secret when the manifest
+/// holds no credential, which is every manifest under `none`.
+///
+/// # Errors
+///
+/// A manifest holding a credential and no name, which could name no Secret.
+pub fn credential_secret(manifest: &Value) -> Result<(Value, Option<Value>), String> {
+    let mut rewritten = manifest.clone();
+    let Some(entry) = rewritten
+        .pointer_mut("/spec/template/spec/containers/0/env")
+        .and_then(Value::as_array_mut)
+        .and_then(|env| {
+            env.iter_mut()
+                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(TOKEN_ENV))
+        })
+    else {
+        return Ok((rewritten, None));
+    };
+    let Some(token) = entry
+        .get("value")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return Ok((rewritten, None));
+    };
+    let name = manifest
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "the manifest holds a credential and has no name".to_owned())?;
+    *entry = json!({
+        "name": TOKEN_ENV,
+        "valueFrom": { "secretKeyRef": { "name": name, "key": SECRET_KEY } },
+    });
+    let secret = json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": name,
+            "labels": manifest.pointer("/metadata/labels").cloned().unwrap_or_else(|| json!({})),
+        },
+        "type": "Opaque",
+        "stringData": { SECRET_KEY: token },
+    });
+    Ok((rewritten, Some(secret)))
+}
+
+/// A Secret from [`credential_secret`], owned by the Job it was made for.
+///
+/// Created after the Job, because the uid is the Job's own: a crash between
+/// the two leaves a Job waiting for a Secret, which its start allowance ends,
+/// and never a Secret nothing owns. No `blockOwnerDeletion`, which would need
+/// a grant on the Job's finalizers that the launcher does not otherwise need.
+#[must_use]
+pub fn owned_by(mut secret: Value, job: &str, uid: &str) -> Value {
+    if let Some(metadata) = secret.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.insert(
+            "ownerReferences".to_owned(),
+            json!([{ "apiVersion": "batch/v1", "kind": "Job", "name": job, "uid": uid }]),
+        );
+    }
+    secret
+}
+
+/// The step's timeout a Job's annotations carry.
+///
+/// `None` for a Job written before the annotation, which the watch holds to no
+/// deadline of its own rather than to one it guessed.
+#[must_use]
+pub fn timeout_of(annotations: &BTreeMap<String, String>) -> Option<u64> {
+    annotations.get(TIMEOUT_ANNOTATION)?.parse().ok()
 }
 
 /// The one downward-API field a backend outside a cluster can answer: the
@@ -299,7 +411,7 @@ fn pod_spec(request: &JobRequest<'_>) -> Value {
         container.insert("resources".to_owned(), Value::Object(given));
     }
 
-    // Aiwatcher's first, then the operator's — which may not name these three
+    // Aiwatcher's first, then the operator's — which may not name these
     // (the template was refused if it did), and may refer to them.
     let mut env = vec![
         json!({ "name": "AIWATCHER_ATTEMPT", "value": request.key.idempotency_key() }),
@@ -311,6 +423,11 @@ fn pod_spec(request: &JobRequest<'_>) -> Value {
             "valueFrom": { "fieldRef": { "fieldPath": NAME_FIELD } },
         }),
     ];
+    // A plain value in every manifest; where it is then held is the backend's.
+    // A cluster moves it into a Secret the Job owns (ADR_0031).
+    if let Some(token) = request.token {
+        env.push(json!({ "name": TOKEN_ENV, "value": token }));
+    }
     if let Some(Value::Array(theirs)) = container.remove("env") {
         env.extend(theirs);
     }
@@ -389,6 +506,10 @@ mod tests {
     }
 
     fn built(template: &PodTemplate, cpu: Option<&str>) -> Value {
+        built_holding(template, cpu, None)
+    }
+
+    fn built_holding(template: &PodTemplate, cpu: Option<&str>, token: Option<&str>) -> Value {
         let pod = PodRequest {
             template: "planner-import".to_owned(),
             image: "ghcr.io/planner/import:1.4".to_owned(),
@@ -402,6 +523,7 @@ mod tests {
             pod: &pod,
             timeout_seconds: 900,
             api_url: "http://aiwatcher-server:8080",
+            token,
         })
     }
 
@@ -451,7 +573,11 @@ mod tests {
             .iter()
             .filter_map(|entry| entry["name"].as_str())
             .collect();
-        assert_eq!(&names[..3], &OWNED_ENV[..], "aiwatcher's three, first");
+        assert_eq!(&names[..3], &OWNED_ENV[..3], "aiwatcher's three, first");
+        assert!(
+            !names.contains(&TOKEN_ENV),
+            "nothing is minted where nothing checks"
+        );
         assert_eq!(env[0]["value"], "import-7/parse/2");
         assert_eq!(env[1]["value"], "http://aiwatcher-server:8080");
         assert_eq!(
@@ -490,6 +616,98 @@ mod tests {
     }
 
     #[test]
+    fn a_minted_credential_rides_after_aiwatcher_s_three_and_before_the_operator_s() {
+        let template = template(planner_pod());
+        let job = built_holding(&template, None, Some("aw-attempt.sealed.signed"));
+        let env = job["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .expect("env")
+            .clone();
+        let names: Vec<&str> = env
+            .iter()
+            .filter_map(|entry| entry["name"].as_str())
+            .collect();
+        assert_eq!(&names[..4], &OWNED_ENV[..]);
+        assert_eq!(env[3]["value"], "aw-attempt.sealed.signed");
+        assert_eq!(names[4], "PLANNER_MODE");
+
+        // And a request that is logged says it holds one, and never what.
+        let pod = PodRequest {
+            template: "planner-import".to_owned(),
+            image: "ghcr.io/planner/import:1.4".to_owned(),
+            cpu: None,
+            memory: None,
+        };
+        let rendered = format!(
+            "{:?}",
+            JobRequest {
+                key: &key(),
+                template_name: "planner-import",
+                template: &template,
+                pod: &pod,
+                timeout_seconds: 900,
+                api_url: "http://aiwatcher-server:8080",
+                token: Some("aw-attempt.sealed.signed"),
+            }
+        );
+        assert!(!rendered.contains("sealed"), "{rendered}");
+    }
+
+    #[test]
+    fn on_a_cluster_the_credential_is_a_secret_the_job_owns_and_nowhere_in_the_job() {
+        let template = template(planner_pod());
+        let token = "aw-attempt.sealed.signed";
+        let manifest = built_holding(&template, None, Some(token));
+        let (job, secret) = credential_secret(&manifest).expect("a named manifest");
+        let secret = secret.expect("a manifest holding a credential has a Secret");
+
+        let name = job_name(&key());
+        assert!(
+            !job.to_string().contains("sealed"),
+            "a namespace's viewer reads Jobs and pods: {job}"
+        );
+        let env = &job["spec"]["template"]["spec"]["containers"][0]["env"];
+        let reference = env
+            .as_array()
+            .expect("env")
+            .iter()
+            .find(|entry| entry["name"] == TOKEN_ENV)
+            .expect("the variable is still set");
+        assert_eq!(
+            reference["valueFrom"]["secretKeyRef"],
+            json!({ "name": name, "key": SECRET_KEY })
+        );
+        // Everything else in the Job is what the launcher built.
+        let mut without = manifest.clone();
+        let mut rewritten = job.clone();
+        for value in [&mut without, &mut rewritten] {
+            value["spec"]["template"]["spec"]["containers"][0]["env"][3] = Value::Null;
+        }
+        assert_eq!(without, rewritten);
+
+        assert_eq!(secret["kind"], "Secret");
+        assert_eq!(secret["metadata"]["name"], name);
+        assert_eq!(secret["stringData"][SECRET_KEY], token);
+        assert_eq!(
+            secret["metadata"]["labels"]["app.kubernetes.io/managed-by"],
+            "aiwatcher"
+        );
+        assert!(secret["metadata"].get("ownerReferences").is_none());
+
+        let owned = owned_by(secret, &name, "0f0e-uid");
+        assert_eq!(
+            owned["metadata"]["ownerReferences"],
+            json!([{ "apiVersion": "batch/v1", "kind": "Job", "name": name, "uid": "0f0e-uid" }])
+        );
+
+        // Under `none` there is nothing to move and no Secret to make.
+        let (unchanged, none) =
+            credential_secret(&built(&template, None)).expect("a named manifest");
+        assert_eq!(unchanged, built(&template, None));
+        assert!(none.is_none());
+    }
+
+    #[test]
     fn a_template_whose_pod_names_no_container_gets_one() {
         let job = built(&template(json!({})), None);
         let containers = job["spec"]["template"]["spec"]["containers"]
@@ -510,6 +728,7 @@ mod tests {
             assert_eq!(metadata["annotations"][EXECUTION_ANNOTATION], "import-7");
             assert_eq!(metadata["annotations"][STEP_ANNOTATION], "parse");
             assert_eq!(metadata["annotations"][ATTEMPT_ANNOTATION], "2");
+            assert_eq!(metadata["annotations"][TIMEOUT_ANNOTATION], "900");
         }
     }
 
@@ -528,15 +747,23 @@ mod tests {
             })
             .collect();
         assert_eq!(attempt_of(&carried), Some(key()));
+        assert_eq!(timeout_of(&carried), Some(900));
 
         // A step id with a separator in it survives the round trip, which is
         // the reason the key is not one annotation.
         let slashed = AttemptKey::new(ExecutionId::new("import/7"), "parse/rows", 2);
-        let written: BTreeMap<String, String> =
-            serde_json::from_value(annotations(&slashed)).expect("annotations are a map of text");
+        let written: BTreeMap<String, String> = serde_json::from_value(annotations(&slashed, 60))
+            .expect("annotations are a map of text");
         assert_eq!(attempt_of(&written), Some(slashed));
 
-        // And a Job that carries none of this is nobody's attempt.
+        // And a Job that carries none of this is nobody's attempt, and one
+        // written before the timeout rode on it has no deadline read off it.
         assert_eq!(attempt_of(&BTreeMap::new()), None);
+        let mut older = written.clone();
+        older.remove(TIMEOUT_ANNOTATION);
+        assert!(attempt_of(&older).is_some());
+        assert_eq!(timeout_of(&older), None);
+        older.insert(TIMEOUT_ANNOTATION.to_owned(), "soon".to_owned());
+        assert_eq!(timeout_of(&older), None, "a timeout that is not a number");
     }
 }

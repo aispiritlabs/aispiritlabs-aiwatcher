@@ -101,6 +101,10 @@ pub struct Observed {
     pub template: Option<String>,
     /// When the Job was created — the clock the start allowance runs on.
     pub created_at: OffsetDateTime,
+    /// The step's timeout, off its annotation — which is how the watch holds a
+    /// deadline on a backend that never reads `activeDeadlineSeconds`, and
+    /// `None` for a Job written before the annotation.
+    pub timeout_seconds: Option<u64>,
     pub pod: Phase,
 }
 
@@ -145,6 +149,7 @@ impl Observed {
             key: super::manifest::attempt_of(annotations)?,
             template: labels.get(super::manifest::TEMPLATE_LABEL).cloned(),
             created_at,
+            timeout_seconds: super::manifest::timeout_of(annotations),
             pod,
         })
     }
@@ -157,8 +162,25 @@ impl Observed {
     /// otherwise hold its attempt for the length of work it never did.
     #[must_use]
     pub fn overdue(&self, allowance_seconds: u64, now: OffsetDateTime) -> bool {
-        let allowance =
-            time::Duration::seconds(i64::try_from(allowance_seconds).unwrap_or(i64::MAX));
-        now >= self.created_at.saturating_add(allowance)
+        now >= self.created_at.saturating_add(seconds(allowance_seconds))
     }
+
+    /// Whether the Job's whole deadline has passed: its creation, plus the
+    /// start allowance, plus the step's timeout — `activeDeadlineSeconds`, held
+    /// by the watch on every backend because only a cluster reads that field
+    /// (ADR_0031).
+    ///
+    /// `false` for a Job that carries no timeout.
+    #[must_use]
+    pub fn past_deadline(&self, allowance_seconds: u64, now: OffsetDateTime) -> bool {
+        self.timeout_seconds.is_some_and(|timeout| {
+            now >= self
+                .created_at
+                .saturating_add(seconds(allowance_seconds.saturating_add(timeout)))
+        })
+    }
+}
+
+fn seconds(count: u64) -> time::Duration {
+    time::Duration::seconds(i64::try_from(count).unwrap_or(i64::MAX))
 }

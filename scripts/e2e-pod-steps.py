@@ -624,6 +624,8 @@ NEEDS = (
     ("delete", "jobs.batch"),
     ("list", "pods"),
     ("get", "pods/log"),
+    # Each Job's credential goes in a Secret the Job owns (ADR_0031).
+    ("create", "secrets"),
 )
 
 #: And what it must not be able to do. A pod runs a step's code, so a credential
@@ -632,7 +634,10 @@ NEEDS = (
 REFUSED = (
     ("create", "pods", None),
     ("delete", "pods", None),
+    # Created, and never read: the grant reads none of the namespace's Secrets.
     ("get", "secrets", None),
+    ("list", "secrets", None),
+    ("watch", "secrets", None),
     ("create", "jobs.batch", "kube-system"),
 )
 
