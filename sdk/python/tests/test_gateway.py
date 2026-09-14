@@ -26,6 +26,7 @@ from aiwatcher_sdk.gateway import (
 )
 
 TEMPLATE = "Answer the question about {{ country }} in one word."
+JUDGE = "Which is the capital of Peru, {{ first }} or {{ second }}? Say first or second."
 KEY = witness_key("gateway-secret")
 
 
@@ -49,7 +50,7 @@ class Prompts:
     def get_version(self, name: str, version_id: str) -> Version:
         if version_id != "v1":
             raise ApiError("no such version", status=404)
-        return Version(TEMPLATE)
+        return Version(JUDGE if name == "pick-best" else TEMPLATE)
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -799,3 +800,46 @@ def test_the_witness_key_is_printed_for_a_tool_s_host_to_digest_under(
     monkeypatch.setenv("AIWATCHER_TOKEN", "gateway-secret")
     assert main(["--witness-key"]) == 0
     assert capsys.readouterr().out.strip() == KEY.hex()
+
+
+def test_a_judge_s_candidates_are_moved_into_the_witnessed_order_before_the_provider_sees_them(
+    gateway: tuple[str, Recording],
+) -> None:
+    base, recording = gateway
+    low, high = sorted(("Lima", "Cusco"), key=lambda value: witness_digest(KEY, "replied", value))
+    headers = {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "pick-best@v1"}
+    for ordered in (["first", "second"], []):
+        ask(
+            base,
+            {
+                "model": "judge",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Which is the capital of Peru, {high} or {low}? "
+                        "Say first or second.",
+                    }
+                ],
+                GATEWAY_FIELD: {"variables": {"first": high, "second": low}, "ordered": ordered},
+            },
+            headers,
+        )
+
+    moved, left = Provider.seen
+    assert moved["messages"][0]["content"].startswith(
+        f"Which is the capital of Peru, {low} or {high}?"
+    )
+    assert GATEWAY_FIELD not in moved
+    assert left["messages"][0]["content"].startswith(
+        f"Which is the capital of Peru, {high} or {low}?"
+    ), "nothing named, nothing moved"
+    placed, as_sent = completed(recording)
+
+    def pair(name: str, value: str) -> str:
+        return f"{witness_digest(KEY, 'replied', name)}:{witness_digest(KEY, 'replied', value)}"
+
+    assert placed["placed_digests"] == [pair("first", low), pair("second", high)]
+    assert placed["prompt_verified"] is True and placed["prompt_exact"] is True, (
+        "the request relayed is the version rendered with the values where the gateway placed them"
+    )
+    assert as_sent["placed_digests"] == [pair("first", high), pair("second", low)]

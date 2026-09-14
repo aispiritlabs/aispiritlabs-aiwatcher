@@ -539,6 +539,14 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.chosen} of ${traces.answers} were chosen among replies their run's witnessed calls gave that went into nothing else — the application's choice, unless the generation config pins answer_chosen and that way picks the answer.`}
         </p>
       ) : null}
+      {(traces.choices_refused ?? []).map((refused) => (
+        <p key={refused} className="text-danger">{`${refused}.`}</p>
+      ))}
+      {traces.judged_unordered ? (
+        <p>
+          {`${traces.judged_unordered} of ${traces.answers} were picked by the pinned judge shown the candidates in the order the application placed them — pin answer_chosen.judged.order to take that choice away from it.`}
+        </p>
+      ) : null}
       {traces.asked_elsewhere ? (
         <p className="text-danger">
           {`${traces.asked_elsewhere} of ${traces.answers} had their case asked on the pinned prompt in other runs while the measurement ran — replies the application could have seen before it answered.`}

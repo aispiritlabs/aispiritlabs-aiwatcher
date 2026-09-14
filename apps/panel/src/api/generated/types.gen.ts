@@ -3850,6 +3850,11 @@ export type GenerationTrace = {
      */
     asked_elsewhere?: number;
     /**
+     * Of those, why the way of choosing the variant pins picked none of them,
+     * each reason once.
+     */
+    choices_refused?: Array<string>;
+    /**
      * Answers that would be an exchange but were chosen among replies their
      * run's witnessed calls gave that went into nothing else, which no way of
      * choosing the variant pins picks ([`TracedAnswer::chosen`]).
@@ -3867,6 +3872,12 @@ export type GenerationTrace = {
      * and usually meant for another edge.
      */
     idle_bounds?: Array<string>;
+    /**
+     * Exchanges a judge the variant pins picked among their runs' replies,
+     * shown the candidates in the order the application placed them in —
+     * the variant pins no `order` a judge is shown them in.
+     */
+    judged_unordered?: number;
     /**
      * Of the runs not on the log, those its client's count says were opened
      * for this result and never arrived: lost in transport.

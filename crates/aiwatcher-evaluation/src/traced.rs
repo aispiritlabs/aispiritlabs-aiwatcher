@@ -111,6 +111,9 @@ pub struct Witnesses {
     /// How the variant's generation config pins choosing an answer among its
     /// run's replies (`answer_chosen`).
     chosen: Option<Choosing>,
+    /// The placeholders of the judging prompt that way names, in the order its
+    /// text places them — what an order a judge was shown is held to.
+    judge_places: Option<Vec<String>>,
     /// Calls witnesses relayed while the measurement ran, in whatever run
     /// named them — what an application could have asked a case's question
     /// in before, or beside, the run it answers in.
@@ -263,14 +266,29 @@ enum Choosing {
     /// `{"most_of": n}`: exactly `n` such replies, and the answer's more often
     /// than any other.
     MostOf(usize),
-    /// `{"judged": {"prompt": {"name": …, "version": …}, "pick": rule}}`: the
-    /// candidates rendered into one call on this prompt version, whose reply,
-    /// taken out by this rule, names the placeholder the answer was placed in.
+    /// `{"judged": {"prompt": {"name": …, "version": …}, "pick": rule,
+    /// "order": …}}`: the candidates rendered into one call on this prompt
+    /// version, whose reply, taken out by this rule, names the placeholder the
+    /// answer was placed in — in the order `order` pins, where it pins one.
     Judged {
         prompt: String,
         version: String,
         pick: serde_json::Value,
+        order: Option<JudgedOrder>,
     },
+}
+
+/// The order a pinned judge is shown the candidates in, which the application
+/// does not choose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JudgedOrder {
+    /// `"witnessed"`: in the order of their values' digests under the witness's
+    /// key, placeholder by placeholder as the judging prompt places them — an
+    /// order the application, holding no key, cannot arrange in advance.
+    Witnessed,
+    /// `"both_ways"`: asked twice, the second time in the reverse order, both
+    /// naming the answer.
+    BothWays,
 }
 
 impl Choosing {
@@ -286,10 +304,20 @@ impl Choosing {
                     .filter(|text| !text.is_empty())
                     .map(ToOwned::to_owned)
             };
+            // An order this build does not read pins nothing it could keep.
+            let order = match judged.get("order") {
+                None => None,
+                Some(order) => match order.as_str()? {
+                    "witnessed" => Some(JudgedOrder::Witnessed),
+                    "both_ways" => Some(JudgedOrder::BothWays),
+                    _ => return None,
+                },
+            };
             return Some(Self::Judged {
                 prompt: text(prompt.get("name"))?,
                 version: text(prompt.get("version"))?,
                 pick: judged.get("pick").filter(|rule| rule.is_object())?.clone(),
+                order,
             });
         }
         pin.get("most_of")
@@ -419,6 +447,29 @@ impl Witnesses {
             || aiwatcher_core::witness::answered_as(&answer.answer),
             |spelled| aiwatcher_core::witness::answered_as_text(spelled),
         )
+    }
+
+    /// The judging prompt version whose placeholders an order the variant pins
+    /// is held to — `(name, version)`, where it pins one.
+    #[must_use]
+    pub fn judge_ordered_on(&self) -> Option<(&str, &str)> {
+        match &self.chosen {
+            Some(Choosing::Judged {
+                prompt,
+                version,
+                order: Some(_),
+                ..
+            }) => Some((prompt.as_str(), version.as_str())),
+            _ => None,
+        }
+    }
+
+    /// The text of that judging prompt version, whose placeholders' order the
+    /// order a judge was shown is held to.
+    #[must_use]
+    pub fn judged_with(mut self, template: &str) -> Self {
+        self.judge_places = Some(aiwatcher_core::prompts::variables_in_order(template));
+        self
     }
 
     /// The credentials named.
@@ -588,6 +639,14 @@ pub struct TracedAnswer {
     /// in words ([`Topology::idle_bounds`]): named, and never a refusal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_idle_bounds: Vec<String>,
+    /// A judge the variant pins picked it among its run's replies, shown the
+    /// candidates in the order the application placed them in: the variant
+    /// pins no `order`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub judged_unordered: bool,
+    /// Why the way of choosing the variant pins did not pick it, where it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice_refused: Option<String>,
     /// The run it names never reached the log, and its client's count of the
     /// runs it opened for this result passes over one that never arrived
     /// ([`lost_or_unknown`]).
@@ -736,6 +795,15 @@ pub struct GenerationTrace {
     /// choosing the variant pins picks ([`TracedAnswer::chosen`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub chosen: usize,
+    /// Of those, why the way of choosing the variant pins picked none of them,
+    /// each reason once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices_refused: Vec<String>,
+    /// Exchanges a judge the variant pins picked among their runs' replies,
+    /// shown the candidates in the order the application placed them in —
+    /// the variant pins no `order` a judge is shown them in.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub judged_unordered: usize,
     /// Answers that would be an exchange but whose cases' inputs witnessed
     /// calls on the pinned prompt asked in other runs while the measurement ran
     /// ([`TracedAnswer::asked_elsewhere`]).
@@ -800,6 +868,16 @@ impl GenerationTrace {
             witnessed_input: counted(|row| row.witnessed_input),
             witnessed_exchange: counted(|row| row.witnessed_exchange),
             chosen: rows.iter().filter(|row| row.chosen).count(),
+            choices_refused: {
+                let mut refused: Vec<String> = rows
+                    .iter()
+                    .filter_map(|row| row.choice_refused.clone())
+                    .collect();
+                refused.sort();
+                refused.dedup();
+                refused
+            },
+            judged_unordered: rows.iter().filter(|row| row.judged_unordered).count(),
             asked_elsewhere: rows.iter().filter(|row| row.asked_elsewhere > 0).count(),
             elsewhere_unread: rows.iter().filter(|row| row.elsewhere_unread).count(),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
@@ -963,6 +1041,7 @@ impl GenerationTrace {
                 self.chosen, self.answers
             ));
         }
+        said.extend(self.choices_refused.iter().cloned());
         if self.asked_elsewhere > 0 {
             said.push(format!(
                 "{} of {} answers' cases were asked on the pinned prompt in other runs while this \
@@ -1419,17 +1498,9 @@ fn chosen_as_pinned(
     grounded: &[bool],
     answered_by: &std::collections::BTreeSet<usize>,
     in_parts: bool,
-) -> bool {
+) -> Choice {
     let calls = &run.served_for_it;
-    let key_of = |published_by: Option<&str>| {
-        let witness = published_by?;
-        let admitted = run
-            .published_by
-            .as_deref()
-            .is_some_and(|publisher| publisher != witness)
-            && witnesses.admits(witness);
-        witnesses.keys.get(witness).filter(|_| admitted)
-    };
+    let key_of = |published_by: Option<&str>| witness_key(run, witnesses, published_by);
     let replies: Vec<Vec<&String>> = calls
         .iter()
         .map(|call| {
@@ -1494,60 +1565,39 @@ fn chosen_as_pinned(
         })
         .collect();
     if finals.iter().all(|at| answered_by.contains(at)) {
-        return true;
+        return Choice::Picked;
     }
     if in_parts || !finals.iter().all(|at| grounded[*at]) {
-        return false;
+        return Choice::Chosen(None);
     }
-    match &witnesses.chosen {
+    let picked = match &witnesses.chosen {
         None => false,
         Some(Choosing::Judged {
             prompt,
             version,
             pick,
+            order,
         }) => {
-            // One call judged, and nothing else went unused: the candidates
-            // went into it, and its reply names where the answer was placed.
-            let unanswered: Vec<usize> = finals
-                .iter()
-                .copied()
-                .filter(|at| !answered_by.contains(at))
-                .collect();
-            let [judge] = unanswered[..] else {
-                return false;
-            };
-            let call = &calls[judge];
-            let Some(key) = key_of(call.published_by.as_deref()) else {
-                return false;
-            };
-            use aiwatcher_core::witness::{Said, canonical, digest};
-            if call.prompt_name.as_deref() != Some(prompt.as_str())
-                || call.prompt_version.as_deref() != Some(version.as_str())
-                || call.taking.as_deref()
-                    != Some(digest(key, Said::Taking, &canonical(pick)).as_str())
-            {
-                return false;
-            }
-            let said: std::collections::BTreeSet<&String> =
-                taken_by(call, key, Some(pick)).collect();
-            let named: std::collections::BTreeSet<&str> = call
-                .placed
-                .iter()
-                .filter(|(name, _)| said.contains(name))
-                .map(|(_, value)| value.as_str())
-                .collect();
-            let [picked] = named.into_iter().collect::<Vec<_>>()[..] else {
-                return false;
-            };
-            answered_by
-                .iter()
-                .all(|at| replies[*at].iter().any(|reply| reply.as_str() == picked))
+            return judged_as_pinned(
+                &JudgedPin {
+                    prompt,
+                    version,
+                    pick,
+                    order: *order,
+                },
+                calls,
+                &replies,
+                &finals,
+                answered_by,
+                witnesses,
+                run,
+            );
         }
         Some(Choosing::First) => {
             let mut timed: Vec<(i64, usize)> = Vec::with_capacity(finals.len());
             for at in &finals {
                 let Some(started) = calls[*at].started_ms else {
-                    return false;
+                    return Choice::Chosen(None);
                 };
                 timed.push((started, *at));
             }
@@ -1562,7 +1612,7 @@ fn chosen_as_pinned(
         }
         Some(Choosing::MostOf(n)) => {
             if finals.len() != *n {
-                return false;
+                return Choice::Chosen(None);
             }
             // Replies that share a digest are one reply given again.
             let mut group: Vec<usize> = (0..finals.len()).collect();
@@ -1595,11 +1645,217 @@ fn chosen_as_pinned(
                 }
             }
             let [answer] = answers.into_iter().collect::<Vec<_>>()[..] else {
-                return false;
+                return Choice::Chosen(None);
             };
             sizes
                 .iter()
                 .all(|(root, size)| *root == answer || *size < sizes[&answer])
+        }
+    };
+    if picked {
+        Choice::Picked
+    } else {
+        Choice::Chosen(None)
+    }
+}
+
+/// The key a witness's digests in `run` are made under: a credential the
+/// deployment admits, other than the one the run was published under.
+fn witness_key<'w>(
+    run: &TracedRun,
+    witnesses: &'w Witnesses,
+    published_by: Option<&str>,
+) -> Option<&'w [u8; 32]> {
+    let witness = published_by?;
+    let admitted = run
+        .published_by
+        .as_deref()
+        .is_some_and(|publisher| publisher != witness)
+        && witnesses.admits(witness);
+    witnesses.keys.get(witness).filter(|_| admitted)
+}
+
+/// A way of choosing by a judge, as the variant pins it.
+struct JudgedPin<'a> {
+    prompt: &'a str,
+    version: &'a str,
+    pick: &'a serde_json::Value,
+    order: Option<JudgedOrder>,
+}
+
+/// What choosing an answer among replies that went into nothing else came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Choice {
+    /// Nothing was chosen, or the way the variant pins picked the answer.
+    Picked,
+    /// A pinned judge picked it, shown the candidates in the order the
+    /// application placed them in, since the variant pins no `order`.
+    JudgedUnordered,
+    /// No way the variant pins picked it — and why, where the way can say.
+    Chosen(Option<String>),
+}
+
+/// Whether the judge a variant pins picked the answer: the calls besides the
+/// answer's that went into nothing else are that many calls on the judging
+/// prompt, taken out the pinned way, each naming one placeholder whose value
+/// is the answer's reply — one call, or two asked both ways — shown the
+/// candidates in the order `order` pins where it pins one.
+fn judged_as_pinned(
+    pin: &JudgedPin<'_>,
+    calls: &[TracedCall],
+    replies: &[Vec<&String>],
+    finals: &[usize],
+    answered_by: &std::collections::BTreeSet<usize>,
+    witnesses: &Witnesses,
+    run: &TracedRun,
+) -> Choice {
+    use aiwatcher_core::witness::{Said, canonical, digest};
+    let key_of = |published_by: Option<&str>| witness_key(run, witnesses, published_by);
+    let judges: Vec<usize> = finals
+        .iter()
+        .copied()
+        .filter(|at| !answered_by.contains(at))
+        .collect();
+    let asked = match pin.order {
+        Some(JudgedOrder::BothWays) => 2,
+        Some(JudgedOrder::Witnessed) | None => 1,
+    };
+    if judges.len() != asked {
+        let went = match judges.len() {
+            1 => "1 call went".to_owned(),
+            count => format!("{count} calls went"),
+        };
+        return Choice::Chosen(pin.order.map(|order| match order {
+            JudgedOrder::BothWays => format!(
+                "the variant pins asking the judge {} both ways, and {went} into nothing else",
+                pin.prompt
+            ),
+            JudgedOrder::Witnessed => format!(
+                "the variant pins asking the judge {} once, in the witnessed order, and {went} \
+                 into nothing else",
+                pin.prompt
+            ),
+        }));
+    }
+    // The value placed where a judging call's reply says: a call on the pinned
+    // prompt, taking its answer out the pinned way, naming one placeholder.
+    let picked_by = |judge: usize| -> Option<&str> {
+        let call = &calls[judge];
+        let key = key_of(call.published_by.as_deref())?;
+        if call.prompt_name.as_deref() != Some(pin.prompt)
+            || call.prompt_version.as_deref() != Some(pin.version)
+            || call.taking.as_deref()
+                != Some(digest(key, Said::Taking, &canonical(pin.pick)).as_str())
+        {
+            return None;
+        }
+        let said: std::collections::BTreeSet<&String> =
+            taken_by(call, key, Some(pin.pick)).collect();
+        let named: std::collections::BTreeSet<&str> = call
+            .placed
+            .iter()
+            .filter(|(name, _)| said.contains(name))
+            .map(|(_, value)| value.as_str())
+            .collect();
+        let [picked] = named.into_iter().collect::<Vec<_>>()[..] else {
+            return None;
+        };
+        Some(picked)
+    };
+    let mut picks = Vec::with_capacity(judges.len());
+    for judge in &judges {
+        let Some(picked) = picked_by(*judge) else {
+            return Choice::Chosen(None);
+        };
+        picks.push(picked);
+    }
+    if picks.iter().any(|picked| *picked != picks[0]) {
+        return Choice::Chosen(Some(format!(
+            "the judge {} named different replies when asked both ways",
+            pin.prompt
+        )));
+    }
+    if !answered_by
+        .iter()
+        .all(|at| replies[*at].iter().any(|reply| reply.as_str() == picks[0]))
+    {
+        return Choice::Chosen(None);
+    }
+    let Some(order) = pin.order else {
+        return Choice::JudgedUnordered;
+    };
+    // The candidates a judge was shown, in the order the judging prompt's
+    // placeholders place them: the values placed that are replies of the
+    // run's other calls.
+    let candidates: std::collections::BTreeSet<&str> = (0..calls.len())
+        .filter(|at| !judges.contains(at))
+        .flat_map(|at| replies[at].iter().map(|reply| reply.as_str()))
+        .collect();
+    let shown = |judge: usize| -> Result<Vec<&str>, String> {
+        let call = &calls[judge];
+        let Some(key) = key_of(call.published_by.as_deref()) else {
+            return Err(String::new());
+        };
+        let Some(places) = &witnesses.judge_places else {
+            return Err(format!(
+                "the order the judge was shown the candidates in could not be held to {} at {}, \
+                 whose text this step could not read",
+                pin.prompt, pin.version
+            ));
+        };
+        let position: BTreeMap<String, usize> = places
+            .iter()
+            .enumerate()
+            .map(|(at, name)| (digest(key, Said::Replied, name), at))
+            .collect();
+        let mut placed = Vec::new();
+        for (name, value) in call
+            .placed
+            .iter()
+            .filter(|(_, value)| candidates.contains(value.as_str()))
+        {
+            let Some(at) = position.get(name) else {
+                return Err(format!(
+                    "the judge was shown a candidate where {} at {} places nothing",
+                    pin.prompt, pin.version
+                ));
+            };
+            placed.push((*at, value.as_str()));
+        }
+        placed.sort_unstable();
+        Ok(placed.into_iter().map(|(_, value)| value).collect())
+    };
+    let mut orders = Vec::with_capacity(judges.len());
+    for judge in &judges {
+        match shown(*judge) {
+            Ok(order) => orders.push(order),
+            Err(why) => return Choice::Chosen((!why.is_empty()).then_some(why)),
+        }
+    }
+    match order {
+        JudgedOrder::Witnessed => {
+            if orders[0].windows(2).all(|pair| pair[0] <= pair[1]) {
+                Choice::Picked
+            } else {
+                Choice::Chosen(Some(format!(
+                    "the judge {} was shown the candidates in an order the application placed \
+                     them in, not the witnessed order the variant pins",
+                    pin.prompt
+                )))
+            }
+        }
+        JudgedOrder::BothWays => {
+            let mut reversed = orders[1].clone();
+            reversed.reverse();
+            if orders[0] == reversed {
+                Choice::Picked
+            } else {
+                Choice::Chosen(Some(format!(
+                    "the judge {} was not shown the candidates the second time in the reverse of \
+                     the first order",
+                    pin.prompt
+                )))
+            }
         }
     }
 }
@@ -1719,6 +1975,8 @@ pub fn trace_answers(
             workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
             workflow_steps_unread: false,
             workflow_idle_bounds: idle_bounds.clone(),
+            judged_unordered: false,
+            choice_refused: None,
             lost_in_transport: false,
             unknown_run: false,
         };
@@ -1944,11 +2202,16 @@ pub fn trace_answers(
             }
             // Replies that went into nothing else: the application may have
             // chosen the answer among them.
-            if row.witnessed_exchange == Some(true)
-                && !chosen_as_pinned(run, witnesses, &grounded, &answered_by, in_parts)
-            {
-                row.witnessed_exchange = Some(false);
-                row.chosen = true;
+            if row.witnessed_exchange == Some(true) {
+                match chosen_as_pinned(run, witnesses, &grounded, &answered_by, in_parts) {
+                    Choice::Picked => {}
+                    Choice::JudgedUnordered => row.judged_unordered = true,
+                    Choice::Chosen(why) => {
+                        row.witnessed_exchange = Some(false);
+                        row.chosen = true;
+                        row.choice_refused = why;
+                    }
+                }
             }
             // The same question asked in another run while the measurement ran:
             // the application could have chosen this run by what came back.
@@ -2209,6 +2472,8 @@ mod tests {
                 witnessed_input: Some(0),
                 witnessed_exchange: Some(0),
                 chosen: 0,
+                choices_refused: Vec::new(),
+                judged_unordered: 0,
                 asked_elsewhere: 0,
                 elsewhere_unread: 0,
                 self_witnessed: 0,
@@ -3737,6 +4002,264 @@ mod tests {
                     .iter()
                     .any(|line| line.contains("no witnessed call relaying")),
             "a choice is said as a choice, and not as an answer no call relayed: {said:?}"
+        );
+    }
+
+    #[test]
+    fn a_judge_pinned_to_an_order_picks_an_exchange_only_in_the_witnessed_order_or_both_ways() {
+        use aiwatcher_core::witness::{Said, canonical, digest, key_for};
+        let mut pins = variant();
+        pins.model = None;
+        let key = key_for("gateway-secret");
+        let said = |text: &str| digest(&key, Said::Replied, text);
+        let question = "What is the capital of France?";
+        let judge_version = "j".repeat(64);
+        let template = "Which answers {{ question }} better: {{ first }} or {{ second }}?";
+        let pick = serde_json::json!({"json_pointer": "/best"});
+        let call = |replied: &str, at: i64| TracedCall {
+            model: Some("gpt-4o".to_owned()),
+            prompt_name: Some("capitals".to_owned()),
+            prompt_version: Some("p".repeat(64)),
+            prompt_verified: Some(true),
+            prompt_exact: Some(true),
+            published_by: Some("gateway".to_owned()),
+            rendered: vec![said(question)],
+            asked: vec![digest(&key, Said::Asked, question)],
+            replied: vec![said(replied)],
+            started_ms: Some(at),
+            ..TracedCall::default()
+        };
+        // A judge shown `first` and `second` in these places, naming one.
+        let judge = |first: &str, second: &str, named: &str| TracedCall {
+            prompt_name: Some("pick-best".to_owned()),
+            prompt_version: Some(judge_version.clone()),
+            rendered: vec![said(question), said(first), said(second)],
+            asked: Vec::new(),
+            placed: vec![
+                (said("question"), said(question)),
+                (said("first"), said(first)),
+                (said("second"), said(second)),
+            ],
+            taking: Some(digest(&key, Said::Taking, &canonical(&pick))),
+            replied: vec![said(&format!("{{\"best\":\"{named}\"}}")), said(named)],
+            ..call("", 9)
+        };
+        let traced =
+            |order: Option<&str>, template: Option<&str>, cases: Vec<(&str, Vec<TracedCall>)>| {
+                let mut judged = serde_json::json!({
+                    "prompt": {"name": "pick-best", "version": judge_version},
+                    "pick": pick
+                });
+                if let Some(order) = order {
+                    judged["order"] = serde_json::json!(order);
+                }
+                let runs: BTreeMap<String, TracedRun> = cases
+                    .iter()
+                    .map(|(case, calls)| {
+                        (
+                            (*case).to_owned(),
+                            TracedRun {
+                                served_for_it: calls.clone(),
+                                ..run(vec![on_the_pins()])
+                            },
+                        )
+                    })
+                    .collect();
+                let mut witnesses = Witnesses::named(vec!["gateway".to_owned()])
+                    .keyed([("gateway".to_owned(), key)])
+                    .asked(
+                        cases
+                            .iter()
+                            .map(|(case, _)| {
+                                (
+                                    (*case).to_owned(),
+                                    serde_json::json!({"question": question}),
+                                )
+                            })
+                            .collect(),
+                    )
+                    .pinned(
+                        Some(&serde_json::json!({"answer_chosen": {"judged": judged}})),
+                        None,
+                    )
+                    .asked_elsewhere(Vec::new());
+                assert_eq!(
+                    witnesses.judge_ordered_on(),
+                    order.map(|_| ("pick-best", judge_version.as_str()))
+                );
+                if let Some(template) = template {
+                    witnesses = witnesses.judged_with(template);
+                }
+                let answers: Vec<RecordedAnswer> = cases
+                    .iter()
+                    .map(|(case, _)| RecordedAnswer {
+                        answer: serde_json::json!("Paris"),
+                        ..answer(case, Some(case))
+                    })
+                    .collect();
+                trace_answers(
+                    &pins, "variant", "answers", &answers, &runs, None, &witnesses,
+                )
+                .expect("nothing contradicts the pins")
+            };
+        // The witnessed order: the candidates' digests, ascending.
+        let (low, high) = if said("Paris") < said("Lyon") {
+            ("Paris", "Lyon")
+        } else {
+            ("Lyon", "Paris")
+        };
+        let places = |value: &str| if value == low { "first" } else { "second" };
+        let with = |more: Vec<TracedCall>| {
+            let mut calls = vec![call("Paris", 1), call("Lyon", 2)];
+            calls.extend(more);
+            calls
+        };
+
+        let rows = traced(
+            Some("witnessed"),
+            Some(template),
+            vec![
+                ("in-order", with(vec![judge(low, high, places("Paris"))])),
+                (
+                    "out-of-order",
+                    with(vec![judge(
+                        high,
+                        low,
+                        if high == "Paris" { "first" } else { "second" },
+                    )]),
+                ),
+                (
+                    "asked-twice",
+                    with(vec![
+                        judge(low, high, places("Paris")),
+                        judge(low, high, places("Paris")),
+                    ]),
+                ),
+            ],
+        );
+        let trace = GenerationTrace::of(&rows);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.case_id.as_str(), row.witnessed_exchange, row.chosen))
+                .collect::<Vec<_>>(),
+            [
+                ("in-order", Some(true), false),
+                ("out-of-order", Some(false), true),
+                ("asked-twice", Some(false), true),
+            ]
+        );
+        assert!(
+            trace.unwitnessed_answers().iter().any(|line| line.contains(
+                "was shown the candidates in an order the application placed them in, not the \
+                 witnessed order"
+            )),
+            "{:?}",
+            trace.unwitnessed_answers()
+        );
+        assert!(
+            rows[2]
+                .choice_refused
+                .as_deref()
+                .is_some_and(|why| why.contains("once, in the witnessed order, and 2 calls")),
+            "{:?}",
+            rows[2].choice_refused
+        );
+
+        let unread = traced(
+            Some("witnessed"),
+            None,
+            vec![("unread", with(vec![judge(low, high, places("Paris"))]))],
+        );
+        assert_eq!(unread[0].witnessed_exchange, Some(false));
+        assert!(
+            unread[0]
+                .choice_refused
+                .as_deref()
+                .is_some_and(|why| why.contains("whose text this step could not read"))
+        );
+
+        let other = |value: &str| if value == "Paris" { "Lyon" } else { "Paris" };
+        let rows = traced(
+            Some("both_ways"),
+            Some(template),
+            vec![
+                (
+                    "both-ways",
+                    with(vec![
+                        judge("Paris", "Lyon", "first"),
+                        judge("Lyon", "Paris", "second"),
+                    ]),
+                ),
+                (
+                    "same-order-twice",
+                    with(vec![
+                        judge("Paris", "Lyon", "first"),
+                        judge("Paris", "Lyon", "first"),
+                    ]),
+                ),
+                (
+                    "named-apart",
+                    with(vec![
+                        judge("Paris", "Lyon", "first"),
+                        judge("Lyon", "Paris", "first"),
+                    ]),
+                ),
+                (
+                    "asked-once",
+                    with(vec![judge("Paris", other("Paris"), "first")]),
+                ),
+                (
+                    "asked-thrice",
+                    with(vec![
+                        judge("Paris", "Lyon", "first"),
+                        judge("Lyon", "Paris", "second"),
+                        judge("Paris", "Lyon", "first"),
+                    ]),
+                ),
+            ],
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.case_id.as_str(), row.witnessed_exchange, row.chosen))
+                .collect::<Vec<_>>(),
+            [
+                ("both-ways", Some(true), false),
+                ("same-order-twice", Some(false), true),
+                ("named-apart", Some(false), true),
+                ("asked-once", Some(false), true),
+                ("asked-thrice", Some(false), true),
+            ],
+            "asked both ways and naming one reply each time is an exchange; the same order \
+             twice, two replies named, or a judge asked once or three times is the \
+             application's choice"
+        );
+        let refused: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row.choice_refused.as_deref())
+            .collect();
+        assert!(refused[0].contains("not shown the candidates the second time in the reverse"));
+        assert!(refused[1].contains("named different replies when asked both ways"));
+        assert!(refused[2].contains("both ways, and 1 call went"));
+        assert!(refused[3].contains("both ways, and 3 calls"));
+
+        let rows = traced(
+            None,
+            None,
+            vec![(
+                "unordered",
+                with(vec![judge(
+                    high,
+                    low,
+                    if high == "Paris" { "first" } else { "second" },
+                )]),
+            )],
+        );
+        let trace = GenerationTrace::of(&rows);
+        assert_eq!(
+            (rows[0].witnessed_exchange, trace.judged_unordered),
+            (Some(true), 1),
+            "with no order pinned a judge's pick is an exchange, and says the application \
+             placed the candidates"
         );
     }
 

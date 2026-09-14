@@ -803,6 +803,15 @@ pub struct PromptSummary {
 /// and the variable-loss bar does not apply to it.
 #[must_use]
 pub fn variables_of(text: &str) -> Vec<String> {
+    let mut found = variables_in_order(text);
+    found.sort();
+    found
+}
+
+/// The same placeholders in the order the text first places each: where a
+/// value rendered into it stands relative to another.
+#[must_use]
+pub fn variables_in_order(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -832,7 +841,6 @@ pub fn variables_of(text: &str) -> Vec<String> {
             found.push(name.to_owned());
         }
     }
-    found.sort();
     found
 }
 
@@ -932,6 +940,11 @@ mod tests {
         assert!(variables_of("{{ 1 + 2 }}").is_empty());
         assert!(variables_of("{{ }}").is_empty());
         assert!(variables_of("no placeholders here").is_empty());
+        assert_eq!(
+            variables_in_order("Which is better, {{ second }} or {{first}}? Again: {{ second }}"),
+            vec!["second", "first"],
+            "in the order the text first places each"
+        );
     }
 
     #[test]

@@ -19484,6 +19484,13 @@
             "description": "Answers that would be an exchange but whose cases' inputs witnessed\ncalls on the pinned prompt asked in other runs while the measurement ran\n([`TracedAnswer::asked_elsewhere`]).",
             "minimum": 0
           },
+          "choices_refused": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of those, why the way of choosing the variant pins picked none of them,\neach reason once."
+          },
           "chosen": {
             "type": "integer",
             "description": "Answers that would be an exchange but were chosen among replies their\nrun's witnessed calls gave that went into nothing else, which no way of\nchoosing the variant pins picks ([`TracedAnswer::chosen`]).",
@@ -19500,6 +19507,11 @@
               "type": "string"
             },
             "description": "Edge bounds of the pinned workflow that hold nothing a run could do,\nin words: a bound no smaller than the times its source may complete, or\nthan a bound it shares. Measured all the same — such a bound is true —\nand usually meant for another edge."
+          },
+          "judged_unordered": {
+            "type": "integer",
+            "description": "Exchanges a judge the variant pins picked among their runs' replies,\nshown the candidates in the order the application placed them in —\nthe variant pins no `order` a judge is shown them in.",
+            "minimum": 0
           },
           "lost_in_transport": {
             "type": "integer",

@@ -55,7 +55,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
@@ -396,6 +396,9 @@ class Told:
     #: Values the caller took out of another of its values, by name:
     #: ``{"country": {"from": "question", "take": {"between": [...]}}}``.
     derived: Mapping[str, Any] | None = None
+    #: The placeholders whose values the gateway places in the witnessed order
+    #: before it relays the request — see :meth:`Gateway.placed_in_witnessed_order`.
+    ordered: tuple[str, ...] = ()
 
     @classmethod
     def read(cls, field: Any) -> Told:
@@ -404,10 +407,14 @@ class Told:
         variables = field.get("variables")
         answer_from = field.get("answer_from")
         derived = field.get("derived")
+        ordered = field.get("ordered")
         return cls(
             variables=variables if isinstance(variables, Mapping) else None,
             answer_from=answer_from if isinstance(answer_from, Mapping) else None,
             derived=derived if isinstance(derived, Mapping) else None,
+            ordered=tuple(name for name in ordered if isinstance(name, str))
+            if isinstance(ordered, list)
+            else (),
         )
 
 
@@ -857,6 +864,68 @@ class Gateway:
             name, version, verified=rendered or literal, rendered=rendered, exact=exact
         )
 
+    def placed_in_witnessed_order(
+        self, named: str | None, body: Mapping[str, Any], told: Told
+    ) -> tuple[dict[str, Any], Told] | None:
+        """The request with the values of ``told.ordered`` moved into the witnessed order.
+
+        A judge shown candidates in the order the application chose may favour
+        the first, so a variant can pin a judge's candidates to an order the
+        application cannot arrange: their values' digests under this gateway's
+        key, ascending, placeholder by placeholder as the prompt version places
+        them. The gateway re-renders the version with the values so placed,
+        puts that text where the caller's rendering stood and relays that, so
+        what it publishes of the call is the placement it made. ``None`` where
+        it cannot — no key, no version, a rendering it does not find in a
+        single message — and the request goes as it came, which the traces
+        step then reads as the application's order.
+        """
+        variables = told.variables
+        if self.key is None or not told.ordered or variables is None or not named:
+            return None
+        if "@" not in named:
+            return None
+        name, version = named.rsplit("@", 1)
+        try:
+            template = self.template(name, version)
+        except Exception:  # noqa: BLE001 — a version it cannot read it cannot place by
+            return None
+        places = [
+            place
+            for place in dict.fromkeys(_PLACEHOLDER.findall(template))
+            if place in told.ordered and place in variables
+        ]
+        key = self.key
+        values = sorted(
+            (variables[place] for place in places),
+            key=lambda value: witness_digest(key, "replied", _as_text(value)),
+        )
+        placed = {**variables, **dict(zip(places, values, strict=True))}
+        before, after = _rendered(template, variables), _rendered(template, placed)
+        if before is None or after is None:
+            return None
+        moved = replace(told, variables=placed)
+        if before == after:
+            return dict(body), moved
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return None
+        relayed = json.loads(json.dumps(body))
+        for message in relayed["messages"]:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and before in content:
+                message["content"] = content.replace(before, after, 1)
+                return relayed, moved
+            if isinstance(content, list):
+                for part in content:
+                    text = part.get("text") if isinstance(part, dict) else None
+                    if isinstance(text, str) and before in text:
+                        part["text"] = text.replace(before, after, 1)
+                        return relayed, moved
+        return None
+
     def digests_asked(
         self,
         body: Mapping[str, Any],
@@ -1253,6 +1322,11 @@ class Gateway:
                 told = Told()
                 if GATEWAY_FIELD in body:
                     told = Told.read(body.pop(GATEWAY_FIELD))
+                    placed = gateway.placed_in_witnessed_order(
+                        self.headers.get(PROMPT_HEADER), body, told
+                    )
+                    if placed is not None:
+                        body, told = placed
                     raw = json.dumps(body, separators=(",", ":")).encode()
                 prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, told.variables)
                 asked = gateway.digests_asked(

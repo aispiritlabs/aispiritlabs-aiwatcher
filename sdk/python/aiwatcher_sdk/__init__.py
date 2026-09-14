@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1644,6 +1644,7 @@ class LlmCall(Scope):
         *,
         answer_from: Mapping[str, Any] | None = None,
         derived: Mapping[str, Mapping[str, Any]] | None = None,
+        ordered: Sequence[str] = (),
         **variables: object,
     ) -> dict[str, Any]:
         """The body field a gateway reads about this call, beside :meth:`caller_headers`.
@@ -1675,8 +1676,16 @@ class LlmCall(Scope):
         a label to the word it stands for knows more than the reply does, so it
         witnesses an answer only where the variant's generation config pins this
         same ``answer_from``.
+
+        ``ordered`` names the placeholders a judge's candidates stand in, when
+        the variant pins the judge to the witnessed order
+        (``answer_chosen.judged.order``): the gateway moves their values into
+        that order — which the application, holding no key, cannot compute —
+        before it relays the request.
         """
         told: dict[str, Any] = {"variables": dict(variables)}
+        if ordered:
+            told["ordered"] = list(ordered)
         if answer_from is not None:
             told["answer_from"] = dict(answer_from)
         if derived:

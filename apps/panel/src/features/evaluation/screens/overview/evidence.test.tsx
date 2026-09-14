@@ -545,6 +545,10 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
             witnessed_input: 2,
             witnessed_exchange: 1,
             chosen: 1,
+            choices_refused: [
+              'the judge pick-best was not shown the candidates the second time in the reverse of the first order',
+            ],
+            judged_unordered: 1,
             asked_elsewhere: 1,
             witnesses: ['gateway'],
             self_witnessed: 1,
@@ -569,6 +573,10 @@ it('says which answers a serving host witnessed, which ran the pinned workflow, 
   ).toBeTruthy();
   expect(screen.getByText(/1 of 2 were a witnessed call's reply/)).toBeTruthy();
   expect(screen.getByText(/1 of 2 were chosen among replies/)).toBeTruthy();
+  expect(screen.getByText(/not shown the candidates the second time in the reverse/)).toBeTruthy();
+  expect(
+    screen.getByText(/1 of 2 were picked by the pinned judge shown the candidates in the order/),
+  ).toBeTruthy();
   expect(
     screen.getByText(/1 of 2 had their case asked on the pinned prompt in other runs/),
   ).toBeTruthy();

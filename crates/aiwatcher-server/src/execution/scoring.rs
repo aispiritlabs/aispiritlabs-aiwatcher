@@ -74,6 +74,7 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
                 read_model: Arc::clone(&state.read_model),
                 bundles: state.evaluation_bundles.clone(),
                 witnesses: state.witnesses.clone(),
+                prompts: state.prompts.clone(),
                 wait: TELEMETRY_WAIT,
             })),
         None => registry,
@@ -779,6 +780,9 @@ pub struct TracesExecutor {
     /// The credentials whose runs may witness an answer — empty, any other
     /// than the answer's own — and the key each one's digests are made under.
     witnesses: aiwatcher_evaluation::Witnesses,
+    /// Where a pinned judging prompt's text is read: the order of its
+    /// placeholders is what an order a judge was shown is held to.
+    prompts: Option<Arc<aiwatcher_prompts::Registry>>,
     wait: std::time::Duration,
 }
 
@@ -796,7 +800,38 @@ impl TracesExecutor {
             read_model,
             bundles: None,
             witnesses: aiwatcher_evaluation::Witnesses::default(),
+            prompts: None,
             wait,
+        }
+    }
+
+    /// Where a pinned judging prompt's text is read from.
+    #[must_use]
+    pub fn reading_prompts_from(mut self, prompts: Arc<aiwatcher_prompts::Registry>) -> Self {
+        self.prompts = Some(prompts);
+        self
+    }
+
+    /// The text of the judging prompt version a pinned order is held to;
+    /// `None` where this process holds no registry, or it holds no such version.
+    async fn judging_template(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<String>, ActivityError> {
+        let (Some(prompts), Ok(name), Ok(version)) = (
+            &self.prompts,
+            aiwatcher_core::prompts::PromptName::parse(name),
+            aiwatcher_core::prompts::PromptVersionId::parse(version),
+        ) else {
+            return Ok(None);
+        };
+        match prompts.verified_version(&name, &version).await {
+            Ok(found) => Ok(found.map(|found| found.text)),
+            Err(error) if error.is_retryable() => Err(ActivityError::transient(error.to_string())),
+            Err(error) => Err(ActivityError::user_code(format!(
+                "the judging prompt the variant pins could not be read: {error}"
+            ))),
         }
     }
 
@@ -1136,7 +1171,16 @@ impl ActivityExecutor for TracesExecutor {
                 Some(schema) => self.pinned_json(&approval, schema).await?,
                 None => None,
             };
-            let witnesses = witnesses.pinned(config.as_ref(), shaped);
+            let mut witnesses = witnesses.pinned(config.as_ref(), shaped);
+            // A judge pinned to an order is held to where its prompt's text
+            // places each candidate.
+            if let Some((name, version)) = witnesses
+                .judge_ordered_on()
+                .map(|(name, version)| (name.to_owned(), version.to_owned()))
+                && let Some(template) = self.judging_template(&name, &version).await?
+            {
+                witnesses = witnesses.judged_with(&template);
+            }
             // Every call a witness relayed since the measurement started, in any
             // run: a case asked elsewhere is a question the application could
             // have chosen the run it answered in by.
