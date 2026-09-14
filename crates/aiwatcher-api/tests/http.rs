@@ -26,7 +26,9 @@ use aiwatcher_prompts::{Registry, RegistryConfig};
 use aiwatcher_training::Registry as TrainingRegistry;
 
 use aiwatcher_api::state::{AppState, HealthState};
-use aiwatcher_auth::{AuthConfig, AuthMode, Authenticator, IngestToken, RoleMapping};
+use aiwatcher_auth::{
+    AttemptCredentials, AttemptScope, AuthConfig, AuthMode, Authenticator, IngestToken, RoleMapping,
+};
 
 /// What a producer presents. Long enough that the parser accepts it, which is
 /// itself part of what is under test in `aiwatcher_auth`.
@@ -38,6 +40,25 @@ const WORKER_SECRET: &str = "fedcba9876543210fedcba9876543210";
 const OTHER_WORKER_TOKEN: &str = "planner[plans]=0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const OTHER_WORKER_SECRET: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const INGEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
+/// What a launched pod's credentials are minted under, as both roles of a
+/// split deployment would be given it.
+const POD_CREDENTIAL_SECRET: &str = "a pod credential secret for these tests";
+
+/// A launched pod's credential for one attempt of `worker_plan`, on its queue.
+fn pod_credential(execution: &str, step: &str, attempt: u32, ttl: time::Duration) -> String {
+    AttemptCredentials::new(Some(POD_CREDENTIAL_SECRET))
+        .expect("a secret")
+        .mint(
+            &AttemptScope {
+                execution: execution.to_owned(),
+                step: step.to_owned(),
+                attempt,
+                queue: "houses".to_owned(),
+            },
+            ttl,
+        )
+        .expect("mints")
+}
 
 #[tokio::test]
 async fn curation_library_publishes_searches_and_checks_editor_permissions() {
@@ -158,6 +179,7 @@ impl Fixture {
                     .parse::<IngestToken>()
                     .expect("long enough to be accepted"),
             ],
+            attempts: Some(AttemptCredentials::new(Some(POD_CREDENTIAL_SECRET)).expect("a secret")),
             ..AuthConfig::default()
         })
         .await
@@ -2325,6 +2347,124 @@ async fn every_event_is_recorded_as_published_by_the_credential_that_sent_it() {
             ("run-person", Some("alice")),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_pods_credential_publishes_events_under_a_subject_naming_its_attempt() {
+    use aiwatcher_bus::MessageSource;
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let credential = pod_credential("run-1", "analyze", 1, time::Duration::minutes(5));
+    let (status, body) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/events",
+            &credential,
+            Some(json!({
+                "events": [{
+                    "event_type": "run.started",
+                    "occurred_at": "2026-08-27T18:20:11Z",
+                    "run_id": "run-pod",
+                    "source": { "service": "planner", "sdk": "python" },
+                    "data": {}
+                }]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let events = fixture
+        .bus
+        .read(&Checkpoint::beginning(), 10)
+        .await
+        .expect("events");
+    assert_eq!(
+        events[0].metadata.published_by.as_deref(),
+        Some("attempt:run-1/analyze/1"),
+        "a lifted credential's events say whose they were"
+    );
+}
+
+#[tokio::test]
+async fn a_pods_credential_reads_nothing() {
+    // The layer refuses it before any handler: these three check no role, so
+    // a credential let through would read every run whatever its role said.
+    let fixture = Fixture::behind_a_proxy(true).await;
+    fixture.seed_run("run-1").await;
+    let credential = pod_credential("run-1", "analyze", 1, time::Duration::minutes(5));
+    for uri in ["/api/v1/runs", "/api/v1/spans", "/api/v1/events/stream"] {
+        let (status, body) = fixture.send_with_token("GET", uri, &credential, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {body}");
+        assert_eq!(body["code"], "attempt_credential_refused", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .expect("a message")
+                .contains("run-1/analyze/1"),
+            "{body}"
+        );
+    }
+    // Negative control: the same routes answer a producer's token.
+    let (status, _) = fixture
+        .send_with_token("GET", "/api/v1/runs", INGEST_SECRET, None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn every_path_but_its_attempts_worker_routes_and_ingest_refuses_a_pods_credential() {
+    // Walked from the contract, so a route added later is held to it without
+    // anybody adding it here. The public paths are left out: they run before
+    // authentication, so a pod's credential there gets what no credential gets.
+    const PUBLIC: [&str; 7] = [
+        "/livez",
+        "/healthz",
+        "/readyz",
+        "/api/v1/auth/config",
+        "/api/v1/auth/login",
+        "/api/v1/auth/callback",
+        "/api/v1/auth/logout",
+    ];
+    use axum::http::Method;
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let credential = pod_credential("run-1", "analyze", 1, time::Duration::minutes(5));
+    let document = aiwatcher_api::ApiDoc::document();
+    let mut asked = 0;
+    for (path, item) in &document.paths.paths {
+        if PUBLIC.contains(&path.as_str()) {
+            continue;
+        }
+        let concrete: String = path
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "x"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        for (method, operation) in [
+            (Method::GET, &item.get),
+            (Method::POST, &item.post),
+            (Method::PUT, &item.put),
+            (Method::PATCH, &item.patch),
+            (Method::DELETE, &item.delete),
+        ] {
+            if operation.is_none() || aiwatcher_api::auth::admits_attempt(&method, path) {
+                continue;
+            }
+            let (status, body) = fixture
+                .send_with_token(method.as_str(), &concrete, &credential, None)
+                .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+            assert_eq!(
+                body["code"], "attempt_credential_refused",
+                "{method} {path}"
+            );
+            asked += 1;
+        }
+    }
+    assert!(asked > 100, "only {asked} operations were asked");
 }
 
 // ── Annotations ──────────────────────────────────────────────────────────────
@@ -5782,6 +5922,130 @@ async fn a_token_that_does_not_authorise_a_queue_is_refused_by_name() {
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_pods_credential_claims_its_own_attempt_and_nothing_else() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-p1").await;
+    let credential = pod_credential("exec-p1", "stage", 1, time::Duration::minutes(5));
+    let attempt = |step: &str| json!({ "execution_id": "exec-p1", "step_id": step, "attempt": 1 });
+
+    // A claim naming no attempt would take whatever its queue offered, and one
+    // naming another attempt is another pod's.
+    for body in [
+        json!({ "worker": "pod-1", "tasks": ["stage@1", "review@1"] }),
+        json!({ "worker": "pod-1", "tasks": ["stage@1", "review@1"], "attempt": attempt("review") }),
+    ] {
+        let (status, refused) = fixture.claim_as(&credential, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "attempt_not_held");
+    }
+
+    let (status, claimed) = fixture
+        .claim_as(
+            &credential,
+            json!({ "worker": "pod-1", "tasks": ["stage@1"], "attempt": attempt("stage") }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    assert_eq!(claimed["context_id"], "exec-p1/stage/1");
+
+    // And it keeps it with a heartbeat of its own, until it expires.
+    let (status, body) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-p1/stage/1/heartbeat",
+            &credential,
+            Some(json!({ "worker": "pod-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let expired = pod_credential("exec-p1", "stage", 1, time::Duration::seconds(-1));
+    let (status, body) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-p1/stage/1/heartbeat",
+            &expired,
+            Some(json!({ "worker": "pod-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
+
+#[tokio::test]
+async fn a_pods_credential_settles_no_other_attempt_and_leaves_its_row_alone() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-p2").await;
+    let (status, claimed) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    assert_eq!(claimed["step_id"], "stage");
+
+    // A neighbour on the same queue, which knows the worker name the claim is
+    // held under.
+    let neighbour = pod_credential("exec-p2", "review", 1, time::Duration::minutes(5));
+    let base = "/api/v1/worker/claims/exec-p2/stage/1";
+    for (method, uri, body) in [
+        (
+            "POST",
+            format!("{base}/heartbeat"),
+            Some(json!({ "worker": "laptop-1" })),
+        ),
+        (
+            "POST",
+            format!("{base}/result"),
+            Some(
+                json!({ "worker": "laptop-1", "outcome": "failed", "class": "user_code", "message": "forged" }),
+            ),
+        ),
+        ("GET", format!("{base}/inputs/rows?worker=laptop-1"), None),
+        (
+            "POST",
+            format!("{base}/outputs/rows?worker=laptop-1"),
+            Some(json!({ "rows": [] })),
+        ),
+    ] {
+        let (status, refused) = fixture
+            .send_with_token(method, &uri, &neighbour, body)
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {refused}");
+        assert_eq!(refused["code"], "attempt_not_held", "{uri}");
+    }
+
+    // The row stands: its holder still has the lease and settles it as its own.
+    let (status, body) = fixture
+        .send_with_token(
+            "POST",
+            &format!("{base}/heartbeat"),
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, stored) = fixture
+        .send_with_token(
+            "POST",
+            &format!("{base}/outputs/rows?worker=laptop-1"),
+            WORKER_SECRET,
+            Some(json!({ "rows": [{ "id": 1 }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            &format!("{base}/result"),
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1", "outcome": "completed", "outputs": [stored] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["outcome"], "completed", "not the forged failure");
 }
 
 #[tokio::test]

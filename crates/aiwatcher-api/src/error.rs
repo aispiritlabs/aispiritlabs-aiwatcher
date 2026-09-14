@@ -202,6 +202,20 @@ pub enum ApiError {
         held: aiwatcher_auth::Role,
     },
 
+    /// A launched pod's credential, presented where it does not open
+    /// (ADR_0031). Its own 403 rather than [`Self::Forbidden`], which would
+    /// read "needs editor, holds editor": what is wrong is the credential, and
+    /// the fix is to stop using it here rather than to grant a role.
+    #[error(
+        "this is the credential of attempt {attempt}; it opens that attempt's worker routes          and POST /api/v1/events, and nothing else"
+    )]
+    AttemptCredentialRefused { attempt: String },
+
+    /// A launched pod's credential, on a worker route about another attempt —
+    /// or on a claim that names no attempt at all.
+    #[error("this is the credential of attempt {held}; the request is about {asked}")]
+    OtherAttempt { held: String, asked: String },
+
     #[error(transparent)]
     Auth(#[from] aiwatcher_auth::AuthError),
 
@@ -346,6 +360,10 @@ impl ApiError {
             Self::AuthDisabled => (StatusCode::NOT_IMPLEMENTED, "auth_disabled"),
             Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "unauthenticated"),
             Self::Forbidden { .. } => (StatusCode::FORBIDDEN, "forbidden"),
+            Self::AttemptCredentialRefused { .. } => {
+                (StatusCode::FORBIDDEN, "attempt_credential_refused")
+            }
+            Self::OtherAttempt { .. } => (StatusCode::FORBIDDEN, "attempt_not_held"),
             Self::Auth(error) => auth_parts(error),
             Self::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             Self::LogUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "log_unavailable"),

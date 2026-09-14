@@ -19,6 +19,7 @@ use utoipa::OpenApi;
         aiwatcher_auth::Identity,
         aiwatcher_auth::Role,
         aiwatcher_auth::Credential,
+        aiwatcher_auth::AttemptScope,
         aiwatcher_auth::AuthMode,
         aiwatcher_auth::PublicAuthConfig,
         crate::auth::LoggedOut,

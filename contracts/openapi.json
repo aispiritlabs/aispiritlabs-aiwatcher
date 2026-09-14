@@ -13246,6 +13246,36 @@
           }
         }
       },
+      "AttemptScope": {
+        "type": "object",
+        "description": "The one attempt a credential is for.",
+        "required": [
+          "execution",
+          "step",
+          "attempt",
+          "queue"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which attempt of that step. A retry is a new number, and so a new\ncredential for a new pod.",
+            "minimum": 0
+          },
+          "execution": {
+            "type": "string",
+            "description": "The execution the attempt belongs to."
+          },
+          "queue": {
+            "type": "string",
+            "description": "The attempt's queue, which is the only queue this credential may claim\non."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step of that execution's pinned plan."
+          }
+        }
+      },
       "AttributeDef": {
         "type": "object",
         "description": "One typed field on a class.",
@@ -15378,6 +15408,7 @@
           "token",
           "local",
           "proxy",
+          "attempt",
           "anonymous"
         ]
       },
@@ -20135,6 +20166,17 @@
           "credential"
         ],
         "properties": {
+          "attempt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AttemptScope",
+                "description": "The one attempt this caller may act on, for an attempt credential and\nfor nothing else.\n\nA narrowing on top of the queue, never instead of it: a worker route\nchecks both, so a credential for one attempt settles no other on the\nsame queue."
+              }
+            ]
+          },
           "credential": {
             "$ref": "#/components/schemas/Credential"
           },

@@ -25,6 +25,10 @@
 //! attempt's lease. Worker names are not secret, so the lease and the token's
 //! queue scope are checked **together** — either alone lets a token settle
 //! another queue's attempt by guessing the name it was claimed under.
+//!
+//! **A launched pod's credential names one attempt** (ADR_0031), and that is a
+//! third check before the other two: every pod of a template shares a queue,
+//! so without it one pod's credential settles its neighbour's attempt.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -46,6 +50,8 @@ use aiwatcher_execution::plan::{RuntimeBinding, RuntimeKind};
 use aiwatcher_execution::reactor::{Claimed, Reactor, Taken};
 use aiwatcher_execution::state::{ExecutionId, FailureClass, StepError};
 use aiwatcher_execution::{ActivityResult, ExecutionHandler, ExecutorRegistry, WorkflowStore};
+
+use aiwatcher_auth::{AttemptScope, Credential};
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
@@ -354,6 +360,32 @@ fn key_of(execution_id: &str, step_id: &str, attempt: u32) -> AttemptKey {
     AttemptKey::new(ExecutionId::new(execution_id.to_owned()), step_id, attempt)
 }
 
+/// Whether this caller may speak about `key` at all, asked before the lease and
+/// the queue.
+///
+/// Every credential but a launched pod's may, and a pod's may about its own
+/// attempt only. `None` is a claim that names no attempt, which such a
+/// credential may not make: it would take whatever its queue offered.
+fn own_attempt(caller: &Caller, key: Option<&AttemptKey>) -> ApiResult<()> {
+    let identity = caller.identity();
+    if identity.credential != Credential::Attempt {
+        return Ok(());
+    }
+    let scope = identity.attempt.as_ref();
+    if let (Some(scope), Some(key)) = (scope, key)
+        && scope.names(key.execution_id.as_str(), &key.step_id, key.attempt)
+    {
+        return Ok(());
+    }
+    Err(ApiError::OtherAttempt {
+        held: scope.map_or_else(|| identity.subject.clone(), AttemptScope::key),
+        asked: key.map_or_else(
+            || "a claim that names no attempt".to_owned(),
+            |key| format!("attempt {key}"),
+        ),
+    })
+}
+
 /// The claim this caller holds, or a refusal saying which way it failed.
 ///
 /// Two checks, and they are not the same one. Holding the lease says this
@@ -368,6 +400,7 @@ async fn held(
     key: &AttemptKey,
 ) -> ApiResult<(Reactor<Arc<dyn WorkflowStore>>, Claimed)> {
     caller.require(aiwatcher_auth::Role::Editor)?;
+    own_attempt(caller, Some(key))?;
     let reactor = reactor(state, worker)?;
     let now = time::OffsetDateTime::now_utc();
     let claimed = reactor
@@ -414,6 +447,7 @@ async fn claim(
     Json(body): Json<ClaimRequest>,
 ) -> ApiResult<axum::response::Response> {
     caller.require(aiwatcher_auth::Role::Editor)?;
+    own_attempt(&caller, body.attempt.as_ref())?;
     if body.worker.trim().is_empty()
         || body.worker.len() > 256
         || body.worker.chars().any(char::is_control)
@@ -825,6 +859,7 @@ async fn recorded_result(
     report: &WorkReport,
 ) -> ApiResult<Option<Settled>> {
     caller.require(aiwatcher_auth::Role::Editor)?;
+    own_attempt(caller, Some(key))?;
     // A bounded prefix rather than the whole stream. The plan is in
     // `ExecutionRequested`, which `decide` emits as the first output of the
     // first decision — every stream starts with a `StartExecution` and nothing

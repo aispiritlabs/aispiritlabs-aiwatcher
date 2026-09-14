@@ -687,6 +687,30 @@ export type AttemptRecord = {
 };
 
 /**
+ * The one attempt a credential is for.
+ */
+export type AttemptScope = {
+    /**
+     * Which attempt of that step. A retry is a new number, and so a new
+     * credential for a new pod.
+     */
+    attempt: number;
+    /**
+     * The execution the attempt belongs to.
+     */
+    execution: string;
+    /**
+     * The attempt's queue, which is the only queue this credential may claim
+     * on.
+     */
+    queue: string;
+    /**
+     * The step of that execution's pinned plan.
+     */
+    step: string;
+};
+
+/**
  * One typed field on a class.
  */
 export type AttributeDef = {
@@ -1841,6 +1865,7 @@ export const Credential = {
     TOKEN: 'token',
     LOCAL: 'local',
     PROXY: 'proxy',
+    ATTEMPT: 'attempt',
     ANONYMOUS: 'anonymous'
 } as const;
 
@@ -4223,6 +4248,7 @@ export type HumanInputSpec = {
  * An authenticated caller.
  */
 export type Identity = {
+    attempt?: null | AttemptScope;
     credential: Credential;
     email?: string | null;
     /**

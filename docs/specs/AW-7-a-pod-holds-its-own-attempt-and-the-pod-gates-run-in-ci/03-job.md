@@ -168,13 +168,16 @@ Beyond what ADR_0031 decides:
     is the server's, in 7.12, which is where it knows pods launch.
 
 ### Part C2 — `aiwatcher-api`
-- [ ] 7.7 **The two doors.**
+- [x] 7.7 **The two doors.**
   - `auth::admits_attempt(path)` holds for `/api/v1/events` and for
     `/api/v1/worker/claims` and everything under it.
   - The layer refuses an attempt credential anywhere else, with its own 403 and
     error code.
   - Tests: `GET /api/v1/runs`, `/api/v1/spans` and the live stream refuse it.
-- [ ] 7.8 **Its own attempt.**
+  - Done. The door is `POST /api/v1/events` and any method under the claims;
+    the refusal is `attempt_credential_refused`, naming the attempt and both
+    doors.
+- [x] 7.8 **Its own attempt.**
   - `claim` refuses a request whose `attempt` is absent or is not the
     credential's.
   - `held` and `recorded_result` compare the path's key with the credential's
@@ -182,13 +185,24 @@ Beyond what ADR_0031 decides:
   - `http.rs` covers the heartbeat, result, inputs and outputs of another
     attempt, and a claim without `attempt`. Each is a 403, with the row
     unchanged.
-- [ ] 7.9 **Every path, now and later.**
+  - Done. One `own_attempt` check, first in `claim`, `held` and
+    `recorded_result`, answering `attempt_not_held`. A forged failure from a
+    neighbour leaves the holder's heartbeat and result standing, and an expired
+    credential is a 401 on its own heartbeat.
+- [x] 7.9 **Every path, now and later.**
   - One test walks `ApiDoc::document().paths` and presents an attempt credential
     on every operation that is neither public nor a door. Every one refuses.
-- [ ] 7.10 **The contract.**
+  - Done, over every operation the document lists, and it asserts more than a
+    hundred were asked.
+- [x] 7.10 **The contract.**
   - `just openapi`, once the generated files carry nobody else's uncommitted
     work.
   - Commit `contracts/openapi.json` and `apps/panel/src/api/generated` by path.
+  - Done without `just openapi`: another session's evaluation and envelope
+    fields are uncommitted in the tree and would have reached the contract. The
+    document was generated, only this change's three hunks (`AttemptScope`,
+    `Credential`'s `attempt`, `Identity.attempt`) were applied to the committed
+    one, and the panel's client was generated from that.
 
 ### Part C3 — `aiwatcher-server`
 - [ ] 7.11 **Configuration.**

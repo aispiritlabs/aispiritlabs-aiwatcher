@@ -12,6 +12,11 @@
 //! and the sign-in routes themselves, because a login that required a session
 //! could never establish one.
 //!
+//! The one credential the layer does narrow is a launched pod's
+//! ([`admits_attempt`], ADR_0031). That is not a role table: it decides whether
+//! this credential is a caller of this API at all, and it fails closed, so a
+//! route added later refuses it without anybody remembering to.
+//!
 //! See `aiwatcher_auth` for why the session is a cookie and not a header, and
 //! for what `proxy` mode trusts.
 
@@ -19,14 +24,14 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{FromRequestParts, Query, Request, State};
 use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use aiwatcher_auth::{AuthMode, CookieSpec, Identity, PublicAuthConfig, Role};
+use aiwatcher_auth::{AuthMode, CookieSpec, Credential, Identity, PublicAuthConfig, Role};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -77,6 +82,19 @@ fn is_public(path: &str) -> bool {
     )
 }
 
+/// Where a launched pod's credential opens: its attempt's worker routes and
+/// ingest (ADR_0031).
+///
+/// An allowlist of two, so it fails closed. Which of the worker routes is the
+/// attempt's own is the handlers' to check against the key the credential
+/// names, and the ingest route takes it as the producer a step is.
+#[must_use]
+pub fn admits_attempt(method: &Method, path: &str) -> bool {
+    (method == Method::POST && path == "/api/v1/events")
+        || path == "/api/v1/worker/claims"
+        || path.starts_with("/api/v1/worker/claims/")
+}
+
 /// Establish the caller's identity, or refuse the request.
 ///
 /// Runs for every route. With no provider configured it inserts
@@ -108,6 +126,21 @@ pub async fn authenticate(
         .await;
 
     match result {
+        // Here and not in a handler: most read routes check no role, so a pod's
+        // credential the layer let through would read every run whatever its
+        // role said.
+        Ok(identity)
+            if identity.credential == Credential::Attempt
+                && !admits_attempt(request.method(), request.uri().path()) =>
+        {
+            ApiError::AttemptCredentialRefused {
+                attempt: identity.attempt.as_ref().map_or_else(
+                    || identity.subject.clone(),
+                    aiwatcher_auth::AttemptScope::key,
+                ),
+            }
+            .into_response()
+        }
         Ok(identity) => {
             request.extensions_mut().insert(identity);
             next.run(request).await
