@@ -7,6 +7,10 @@ export type ClientOptions = {
 export type AgentBreakdown = {
     agent_id: string;
     cached_tokens: number;
+    /**
+     * What this agent's model calls cost, where their providers said so.
+     */
+    cost_usd?: number | null;
     failures: number;
     input_tokens: number;
     llm_calls: number;
@@ -868,6 +872,11 @@ export type BlockTemplatePage = {
 export type Bucket = {
     at: string;
     cached_tokens: number;
+    /**
+     * What the bucket's runs reported they cost, landing where each run
+     * started, like its tokens.
+     */
+    cost_usd?: number | null;
     failed: number;
     input_tokens: number;
     llm_calls: number;
@@ -1831,6 +1840,10 @@ export type ConversationSummary = {
     agents: Array<string>;
     cached_tokens: number;
     conversation_id: string;
+    /**
+     * What the session's runs reported they cost, in US dollars.
+     */
+    cost_usd?: number | null;
     failed: number;
     input_tokens: number;
     /**
@@ -2246,6 +2259,11 @@ export type DimensionSummary = {
      */
     agents: Array<string>;
     cached_tokens: number;
+    /**
+     * What the row's runs reported they cost, in US dollars. Absent where none
+     * did — see `RunSummary::cost_usd`.
+     */
+    cost_usd?: number | null;
     failed: number;
     input_tokens: number;
     key: string;
@@ -5348,6 +5366,10 @@ export type MissedEvents = {
 export type ModelBreakdown = {
     cached_tokens: number;
     calls: number;
+    /**
+     * What this model's calls cost, where their provider said so.
+     */
+    cost_usd?: number | null;
     failures: number;
     input_tokens: number;
     latency: Percentiles;
@@ -9168,6 +9190,17 @@ export type Totals = {
      */
     cache_hit_ratio: number;
     cached_tokens: number;
+    /**
+     * What the providers said the model calls cost, in US dollars — the sum
+     * of every call's `aiwatcher.usage.cost_usd`. Absent where no call
+     * reported one: an unknown cost is not a free one.
+     */
+    cost_usd?: number | null;
+    /**
+     * Of `llm_calls`, how many reported that cost. Below it, the figure above
+     * is part of the bill rather than the bill.
+     */
+    costed_calls: number;
     failed: number;
     input_tokens: number;
     llm_calls: number;

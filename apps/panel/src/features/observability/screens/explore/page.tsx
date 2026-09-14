@@ -31,6 +31,7 @@ import {
   formatCount,
   formatDuration,
   formatTime,
+  formatUsd,
   isStalled,
   pinchId,
   shortId,
@@ -530,6 +531,9 @@ function TreeNode({
         <span className="shrink-0 text-xs text-muted-foreground">
           {row.row.runs} run{row.row.runs === 1 ? '' : 's'} ·{' '}
           {formatCount(row.row.input_tokens + row.row.output_tokens)} tok
+          {/* A session's bill, the way a trace UI puts it beside the session:
+              only where its providers said so. */}
+          {row.row.cost_usd != null ? ` · ${formatUsd(row.row.cost_usd)}` : ''}
         </span>
         {row.row.failed > 0 ? (
           <Badge tone="danger" className="shrink-0 px-1.5 py-0 text-[10px]">
@@ -573,6 +577,7 @@ function TreeNode({
         <span className="flex-1 truncate">{row.run.run_id}</span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {formatDuration(row.run.duration_ms)}
+          {row.run.cost_usd != null ? ` · ${formatUsd(row.run.cost_usd)}` : ''}
         </span>
       </Row>
     );

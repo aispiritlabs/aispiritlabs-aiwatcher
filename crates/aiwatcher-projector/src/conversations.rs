@@ -54,6 +54,9 @@ pub struct ConversationSummary {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What the session's runs reported they cost, in US dollars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event on any of the session's runs. What the list sorts by,
@@ -121,6 +124,7 @@ impl From<DimensionSummary> for ConversationSummary {
             input_tokens: row.input_tokens,
             output_tokens: row.output_tokens,
             cached_tokens: row.cached_tokens,
+            cost_usd: row.cost_usd,
             started_at: row.started_at,
             last_activity_at: row.last_activity_at,
         }

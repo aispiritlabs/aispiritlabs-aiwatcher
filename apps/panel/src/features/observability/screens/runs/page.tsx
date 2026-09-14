@@ -8,7 +8,14 @@ import type { RunStatus, RunSummary } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
 import { Button, Card, EmptyState, IdChip } from '@/shared/components/ui/primitives';
-import { formatAge, formatCount, formatDuration, formatTime, shortId } from '@/shared/lib/utils';
+import {
+  formatAge,
+  formatCount,
+  formatDuration,
+  formatTime,
+  formatUsd,
+  shortId,
+} from '@/shared/lib/utils';
 
 const routeApi = getRouteApi('/observability/runs');
 
@@ -105,6 +112,33 @@ const columns: ColumnDef<RunSummary>[] = [
         ) : null}
       </span>
     ),
+  },
+  {
+    id: 'cost',
+    header: 'Cost',
+    // What the providers billed, where they said so. A dash rather than $0:
+    // a run whose calls reported nothing has an unknown cost, not a free one.
+    cell: ({ row }) => {
+      const { cost_usd: cost, costed_calls: costed = 0, llm_calls: calls } = row.original;
+      if (cost === undefined || cost === null) {
+        return <span className="text-muted-foreground">—</span>;
+      }
+      return (
+        <span
+          className="tabular-nums"
+          title={
+            costed < calls
+              ? `${costed} of ${calls} calls reported a cost`
+              : 'as the providers billed it'
+          }
+        >
+          {formatUsd(cost)}
+          {costed < calls ? (
+            <span className="ml-1 text-xs text-muted-foreground">partial</span>
+          ) : null}
+        </span>
+      );
+    },
   },
 ];
 

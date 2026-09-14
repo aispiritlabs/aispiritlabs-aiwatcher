@@ -15,7 +15,7 @@ import {
   CardTitle,
   EmptyState,
 } from '@/shared/components/ui/primitives';
-import { formatCount, formatDuration } from '@/shared/lib/utils';
+import { formatCount, formatDuration, formatUsd } from '@/shared/lib/utils';
 
 const routeApi = getRouteApi('/observability/metrics');
 
@@ -105,7 +105,7 @@ export function MetricsPage() {
       ) : null}
 
       {/* Headline numbers. Not charts: a single value reads faster as a value. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         <Tile
           label="Runs"
           value={formatCount(totals.runs)}
@@ -134,6 +134,26 @@ export function MetricsPage() {
             totals.cached_tokens > 0
               ? `${formatCount(totals.cached_tokens)} cached`
               : 'not reported'
+          }
+        />
+        {/*
+         * Money the providers reported, never an estimate. "not reported" rather
+         * than $0 for the same reason the cache tile says it: nothing reported
+         * and nothing spent are different findings.
+         */}
+        <Tile
+          label="Cost"
+          value={
+            totals.cost_usd !== undefined && totals.cost_usd !== null
+              ? formatUsd(totals.cost_usd)
+              : '—'
+          }
+          hint={
+            totals.cost_usd === undefined || totals.cost_usd === null
+              ? 'not reported'
+              : totals.costed_calls < totals.llm_calls
+                ? `${totals.costed_calls} of ${totals.llm_calls} calls reported`
+                : `${totals.costed_calls} calls`
           }
         />
         <Tile
@@ -209,7 +229,7 @@ export function MetricsPage() {
                 key: model.model,
                 label: model.model,
                 value: model.input_tokens + model.output_tokens,
-                detail: `${model.calls} calls · p95 ${formatDuration(model.latency.p95)}`,
+                detail: `${model.calls} calls · p95 ${formatDuration(model.latency.p95)}${model.cost_usd != null ? ` · ${formatUsd(model.cost_usd)}` : ''}`,
                 warn: model.failures > 0,
               }))}
               formatValue={formatCount}
@@ -228,7 +248,7 @@ export function MetricsPage() {
                 key: agent.agent_id,
                 label: agent.agent_id || '(unnamed)',
                 value: agent.input_tokens + agent.output_tokens,
-                detail: `${agent.llm_calls} llm · ${agent.tool_calls} tool${agent.failures > 0 ? ` · ${agent.failures} failed` : ''}`,
+                detail: `${agent.llm_calls} llm · ${agent.tool_calls} tool${agent.cost_usd != null ? ` · ${formatUsd(agent.cost_usd)}` : ''}${agent.failures > 0 ? ` · ${agent.failures} failed` : ''}`,
                 warn: agent.failures > 0,
               }))}
               formatValue={formatCount}

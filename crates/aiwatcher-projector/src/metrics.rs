@@ -52,6 +52,14 @@ pub struct Totals {
     /// Cached as a share of input. The one number that says whether prompt
     /// caching is doing anything.
     pub cache_hit_ratio: f64,
+    /// What the providers said the model calls cost, in US dollars — the sum
+    /// of every call's `aiwatcher.usage.cost_usd`. Absent where no call
+    /// reported one: an unknown cost is not a free one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// Of `llm_calls`, how many reported that cost. Below it, the figure above
+    /// is part of the bill rather than the bill.
+    pub costed_calls: u64,
 }
 
 /// Nearest-rank percentiles, in milliseconds.
@@ -86,6 +94,9 @@ pub struct AgentBreakdown {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What this agent's model calls cost, where their providers said so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     pub failures: u64,
     pub llm_latency: Percentiles,
 }
@@ -100,6 +111,9 @@ pub struct ModelBreakdown {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What this model's calls cost, where their provider said so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     pub latency: Percentiles,
 }
 
@@ -136,6 +150,10 @@ pub struct Bucket {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What the bucket's runs reported they cost, landing where each run
+    /// started, like its tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
@@ -196,6 +214,23 @@ pub(crate) fn string_attr<'a>(span: &'a CompletedSpan, key: &str) -> Option<&'a 
         })
 }
 
+fn double_attr(span: &CompletedSpan, key: &str) -> Option<f64> {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            AttrValue::Double(inner) if name == key && inner.is_finite() => Some(*inner),
+            _ => None,
+        })
+}
+
+/// Adds a reported cost to a running total that stays absent until something
+/// reports one — so a sum of silences is still a silence, not nought.
+fn add_cost(total: &mut Option<f64>, cost: Option<f64>) {
+    if let Some(cost) = cost {
+        *total = Some(total.unwrap_or(0.0) + cost);
+    }
+}
+
 fn int_attr(span: &CompletedSpan, key: &str) -> i64 {
     span.attributes
         .iter()
@@ -229,6 +264,7 @@ struct Accumulator {
     input_tokens: i64,
     output_tokens: i64,
     cached_tokens: i64,
+    cost_usd: Option<f64>,
     failures: u64,
     llm_latencies: Vec<f64>,
 }
@@ -276,6 +312,8 @@ pub fn compute(
         output_tokens: 0,
         cached_tokens: 0,
         cache_hit_ratio: 0.0,
+        cost_usd: None,
+        costed_calls: 0,
     };
 
     let mut run_latencies = Vec::new();
@@ -337,11 +375,16 @@ pub fn compute(
                     let input = int_attr(span, genai::USAGE_INPUT_TOKENS);
                     let output = int_attr(span, genai::USAGE_OUTPUT_TOKENS);
                     let cached = int_attr(span, "gen_ai.usage.cached_tokens");
+                    let cost = double_attr(span, own::usage::COST_USD);
 
                     totals.llm_calls += 1;
                     totals.input_tokens += input;
                     totals.output_tokens += output;
                     totals.cached_tokens += cached;
+                    add_cost(&mut totals.cost_usd, cost);
+                    if cost.is_some() {
+                        totals.costed_calls += 1;
+                    }
                     llm_latencies.push(elapsed);
 
                     // Time to first token: the assembler records it as a span
@@ -364,6 +407,7 @@ pub fn compute(
                     entry.input_tokens += input;
                     entry.output_tokens += output;
                     entry.cached_tokens += cached;
+                    add_cost(&mut entry.cost_usd, cost);
                     entry.llm_latencies.push(elapsed);
                     if failed(span) {
                         entry.failures += 1;
@@ -375,6 +419,7 @@ pub fn compute(
                         entry.input_tokens += input;
                         entry.output_tokens += output;
                         entry.cached_tokens += cached;
+                        add_cost(&mut entry.cost_usd, cost);
                         entry.llm_latencies.push(elapsed);
                     }
                 }
@@ -434,6 +479,7 @@ pub fn compute(
             input_tokens: acc.input_tokens,
             output_tokens: acc.output_tokens,
             cached_tokens: acc.cached_tokens,
+            cost_usd: acc.cost_usd,
             failures: acc.failures,
             llm_latency: percentiles(&mut acc.llm_latencies),
         })
@@ -453,6 +499,7 @@ pub fn compute(
             input_tokens: acc.input_tokens,
             output_tokens: acc.output_tokens,
             cached_tokens: acc.cached_tokens,
+            cost_usd: acc.cost_usd,
             latency: percentiles(&mut acc.llm_latencies),
         })
         .collect();
@@ -545,6 +592,7 @@ fn timeline(
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            cost_usd: None,
         })
         .collect();
 
@@ -561,6 +609,7 @@ fn timeline(
         bucket.input_tokens += run.input_tokens;
         bucket.output_tokens += run.output_tokens;
         bucket.cached_tokens += run.cached_tokens;
+        add_cost(&mut bucket.cost_usd, run.cost_usd);
         bucket.llm_calls += run.llm_calls;
         bucket.tool_calls += run.tool_calls;
         let _ = spans;
@@ -741,6 +790,58 @@ mod tests {
         assert_eq!(summary.by_model[0].model, "claude-opus-5");
         assert_eq!(summary.by_model[0].provider.as_deref(), Some("anthropic"));
         assert_eq!(summary.by_model[0].calls, 2);
+    }
+
+    #[test]
+    fn a_reported_cost_is_summed_where_it_was_reported_and_counted_where_it_was_not() {
+        let mut first = run(
+            "a",
+            RunStatus::Succeeded,
+            datetime!(2026-08-27 18:20:00 UTC),
+        );
+        first.cost_usd = Some(0.000_3);
+        let runs = vec![first];
+        let mut billed = llm_span("a", "gemini-3.7-flash", 900, false);
+        billed
+            .attributes
+            .push(attr(own::usage::COST_USD, 0.000_3_f64));
+        let mut spans = HashMap::new();
+        spans.insert(
+            "a".to_owned(),
+            vec![billed, llm_span("a", "claude-opus-5", 400, false)],
+        );
+        let summary = compute(&runs, &spans, &MetricsFilter::default(), 5000, now());
+
+        assert_eq!(summary.totals.llm_calls, 2);
+        assert_eq!(
+            summary.totals.costed_calls, 1,
+            "one of the two calls said what it cost"
+        );
+        assert!((summary.totals.cost_usd.expect("one call reported") - 0.000_3).abs() < 1e-12);
+
+        let quiet = summary
+            .by_model
+            .iter()
+            .find(|model| model.model == "claude-opus-5")
+            .expect("the quiet model");
+        assert_eq!(
+            quiet.cost_usd, None,
+            "a model whose calls said nothing about money has an unknown cost, not a free one"
+        );
+        let billed = summary
+            .by_model
+            .iter()
+            .find(|model| model.model == "gemini-3.7-flash")
+            .expect("the billed model");
+        assert!(billed.cost_usd.is_some());
+        assert!(summary.by_agent[0].cost_usd.is_some());
+        assert!(
+            summary
+                .timeline
+                .iter()
+                .any(|bucket| bucket.cost_usd.is_some()),
+            "the run's cost lands in the bucket it started in"
+        );
     }
 
     #[test]

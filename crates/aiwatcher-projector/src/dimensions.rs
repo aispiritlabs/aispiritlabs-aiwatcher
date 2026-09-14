@@ -107,6 +107,10 @@ pub struct DimensionSummary {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
+    /// What the row's runs reported they cost, in US dollars. Absent where none
+    /// did — see `RunSummary::cost_usd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event on any of the row's runs. What the list sorts by, so a
@@ -149,6 +153,7 @@ impl DimensionSummary {
             input_tokens: 0,
             output_tokens: 0,
             cached_tokens: 0,
+            cost_usd: None,
             started_at: run.started_at,
             last_activity_at: run.last_event_at,
             running_last_event_at: None,
@@ -167,6 +172,9 @@ impl DimensionSummary {
         self.input_tokens += run.input_tokens;
         self.output_tokens += run.output_tokens;
         self.cached_tokens += run.cached_tokens;
+        if let Some(cost) = run.cost_usd {
+            self.cost_usd = Some(self.cost_usd.unwrap_or(0.0) + cost);
+        }
         self.started_at = self.started_at.min(run.started_at);
         self.last_activity_at = self.last_activity_at.max(run.last_event_at);
         if run.status == RunStatus::Running {

@@ -12043,6 +12043,14 @@
             "type": "integer",
             "format": "int64"
           },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What this agent's model calls cost, where their providers said so."
+          },
           "failures": {
             "type": "integer",
             "format": "int64",
@@ -13626,6 +13634,14 @@
           "cached_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the bucket's runs reported they cost, landing where each run\nstarted, like its tokens."
           },
           "failed": {
             "type": "integer",
@@ -15370,6 +15386,14 @@
           "conversation_id": {
             "type": "string"
           },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the session's runs reported they cost, in US dollars."
+          },
           "failed": {
             "type": "integer",
             "format": "int64",
@@ -16073,6 +16097,14 @@
           "cached_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the row's runs reported they cost, in US dollars. Absent where none\ndid — see `RunSummary::cost_usd`."
           },
           "failed": {
             "type": "integer",
@@ -22151,6 +22183,14 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What this model's calls cost, where their provider said so."
           },
           "failures": {
             "type": "integer",
@@ -28967,7 +29007,8 @@
           "input_tokens",
           "output_tokens",
           "cached_tokens",
-          "cache_hit_ratio"
+          "cache_hit_ratio",
+          "costed_calls"
         ],
         "properties": {
           "cache_hit_ratio": {
@@ -28978,6 +29019,20 @@
           "cached_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the providers said the model calls cost, in US dollars — the sum\nof every call's `aiwatcher.usage.cost_usd`. Absent where no call\nreported one: an unknown cost is not a free one."
+          },
+          "costed_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `llm_calls`, how many reported that cost. Below it, the figure above\nis part of the bill rather than the bill.",
+            "minimum": 0
           },
           "failed": {
             "type": "integer",
