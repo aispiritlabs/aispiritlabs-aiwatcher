@@ -156,9 +156,22 @@ What it checks:
     holds, are asked elsewhere all the same, from the index of what witnesses
     saw asked;
 46. a client whose transport lost its only run says so when it closes, and the
-    run is counted lost; one that never closes says nothing;
+    run is counted lost; one that never closes says nothing before its clock is
+    due;
 47. a count a transport could not deliver is kept on its spool and sent by the
-    next transport started on it, and the run lost with it is counted.
+    next transport started on it, and the run lost with it is counted;
+48. an atlas at the URL the deployment named, naming its code in its reply, and
+    one on a host naming it where it witnesses, are held to the code the variant
+    pins — an exchange on every answer, and refused naming both digests where
+    the pin is another;
+49. a result that read calls asked elsewhere from its start is held incomplete
+    by a gate asking for ten minutes before it, and one that read from ten
+    minutes before is not;
+50. a client killed without closing, whose transport could not deliver its
+    run, leaves on its spool the count it held as that run started, and the
+    next transport there sends it: the run is counted lost;
+51. a client that never closes says its count by its own clock once it is due,
+    with no event after it: the run it lost is counted.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -194,10 +207,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
+import aiwatcher_sdk  # noqa: E402
 from aiwatcher_sdk import (  # noqa: E402
     CALLER_RUN_HEADER,
     PLACED_HEADER,
     PROMPT_HEADER,
+    TOOL_CODE_HEADER,
     AiwatcherClient,
     HttpTransport,
 )
@@ -292,6 +307,9 @@ PROMPTS = {
     "cut-in-app": "Name the capital of {{ country }} in one word.",
     "cut-pinned": "Name the capital of {{ country }} in one word.",
     "cut-mispinned": "Name the capital of {{ country }} in one word.",
+    "cut-url-pinned": "Name the capital of {{ country }} in one word.",
+    "cut-hosted-pinned": "Name the capital of {{ country }} in one word.",
+    "cut-url-mispinned": "Name the capital of {{ country }} in one word.",
     "counted": "Answer this question in one word: {{ question }}",
     # Each its own text, so only the calls a check makes ask on it.
     "asked-before": "Answer in one word, if you would: {{ question }}",
@@ -398,6 +416,8 @@ class Atlas(BaseHTTPRequestHandler):
         payload = json.dumps({"country": country}).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
+        # The code that answered, which the gateway publishes as this service's word.
+        self.send_header(TOOL_CODE_HEADER, tool_code(Atlas.do_POST) or "")
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -414,7 +434,12 @@ class WitnessedAtlas(Atlas):
         country = str(asked["question"]).removeprefix("What is the capital of ").removesuffix("?")
         payload = json.dumps({"country": country}).encode()
         witness: ToolWitness = WITNESSED_ATLAS[self.witnessed_by]
-        with witness.call("atlas", asked, caller=self.headers.get(CALLER_RUN_HEADER)) as call:
+        with witness.call(
+            "atlas",
+            asked,
+            caller=self.headers.get(CALLER_RUN_HEADER),
+            code=tool_code(Atlas.do_POST),
+        ) as call:
             call.answered(payload)
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -548,6 +573,10 @@ def generation_of(which: str) -> bytes:
         config["tool_code"] = {"atlas-here": ATLAS_CODE}
     if which == "cut-mispinned":
         config["tool_code"] = {"atlas-here": hashlib.sha256(b"# another atlas\n").hexdigest()}
+    if which in ("cut-url-pinned", "cut-hosted-pinned"):
+        config["tool_code"] = {"atlas": ATLAS_CODE}
+    if which == "cut-url-mispinned":
+        config["tool_code"] = {"atlas": hashlib.sha256(b"# another atlas\n").hexdigest()}
     return json.dumps(config).encode()
 
 
@@ -1552,6 +1581,8 @@ def main() -> int:
                 "witnessed_answer": 0,
                 "witnessed_input": 0,
                 "witnessed_exchange": 0,
+                # Calls asked elsewhere looked for from the measurement's start.
+                "asked_since_seconds": 0,
             }
             and traces["declining"].get("on_prompt") == len(CAPITALS) - 1,
             traces,
@@ -1648,6 +1679,7 @@ def main() -> int:
                 "witnessed_answer": len(CAPITALS),
                 "witnessed_input": len(CAPITALS),
                 "witnessed_exchange": len(CAPITALS),
+                "asked_since_seconds": 0,
                 "witnesses": ["serving"],
             }
             and publishers == {"application", "serving"},
@@ -2487,6 +2519,55 @@ def main() -> int:
             and mispinned["published"] == 404,
             {"pinned": pinned_tool["traces"], "mispinned": mispinned["state"]},
         )
+        url_pinned = measure("cut-url-pinned", {"atlas": True}, "measurement-42")
+        hosted_pinned = measure("cut-hosted-pinned", {"hosted_atlas": True}, "measurement-43")
+        url_mispinned = measure("cut-url-mispinned", {"atlas": True}, "measurement-44")
+        url_told = json.dumps(url_mispinned["execution"])
+        check(
+            48,
+            "an atlas at the URL the deployment named, naming its code in its reply, and one on a "
+            "host naming it where it witnesses, are held to the code the variant pins",
+            url_pinned["state"] == "completed"
+            and url_pinned["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and hosted_pinned["state"] == "completed"
+            and hosted_pinned["traces"].get("witnessed_exchange") == len(CAPITALS)
+            and url_mispinned["state"] == "failed"
+            and "the tool atlas with code" in url_told
+            and ATLAS_CODE in url_told
+            and url_mispinned["published"] == 404,
+            {
+                "url": url_pinned["traces"],
+                "hosted": hosted_pinned["traces"],
+                "mispinned": url_mispinned["state"],
+            },
+        )
+
+        def gated_on_lookback(result_id: str) -> dict[str, Any]:
+            return (
+                call(
+                    "POST",
+                    f"/api/v1/evaluation-results/{result_id}/gate",
+                    {
+                        "baseline": evaluation,
+                        "policy": {"require_witnessed_answer": True, "asked_since_seconds": 600},
+                    },
+                )[1]
+                or {}
+            )
+
+        short = gated_on_lookback("capitals-asked-unread-measurement-32-served")
+        long_enough = gated_on_lookback("capitals-asked-unpinned-measurement-34-served")
+        check(
+            49,
+            "a result that read calls asked elsewhere from its start is held incomplete by a gate "
+            "asking for ten minutes before it, and one that read from ten minutes before is not",
+            short.get("verdict") == "incomplete"
+            and any("from 0 s before" in reason for reason in short.get("reasons", []))
+            and not any(
+                "asked elsewhere from" in reason for reason in long_enough.get("reasons", [])
+            ),
+            {"short": short.get("reasons"), "long_enough": long_enough.get("reasons")},
+        )
 
         # A measurement's runs, counted: one lost in transport, one made up, and a retry.
         lost = measure("counted", {"lose_run": True}, "measurement-38", served=False)
@@ -2734,7 +2815,7 @@ def main() -> int:
         check(
             46,
             "a client whose transport lost its only run says so when it closes, and the window "
-            "counts the run lost; one that never closes says nothing, which is where it stops",
+            "counts the run lost; one that never closes says nothing before its clock is due",
             after_close == 3 and unclosed == 3,
             {"after_close": after_close, "unclosed": unclosed},
         )
@@ -2766,6 +2847,65 @@ def main() -> int:
             "started on it sends it: the run lost with it is counted",
             len(kept) == 1 and spooled == 4 and not list(spool.glob("counted-*.json")),
             {"kept": kept, "lost_runs": spooled},
+        )
+
+        # A client killed without closing, its transport down, on a spool of its own.
+        killed_spool = home / "killed-spool"
+        opened = home / "killed-opened"
+        dying = subprocess.Popen(  # noqa: S603 — this interpreter, this e2e's own client
+            [
+                sys.executable,
+                "-c",
+                "import pathlib, sys, time\n"
+                "from aiwatcher_sdk import AiwatcherClient, HttpTransport\n"
+                "url, spool, opened, variant = sys.argv[1:]\n"
+                "client = AiwatcherClient(service='e2e-capitals', variant_id=variant,\n"
+                "    transport=HttpTransport(\n"
+                "        url, timeout=0.5, flush_interval=60, spool_dir=spool))\n"
+                "with client.run('killed-spooled-lost'):\n"
+                "    pass\n"
+                "pathlib.Path(opened).write_text('opened')\n"
+                "time.sleep(120)\n",
+                f"http://127.0.0.1:{nowhere}",
+                str(killed_spool),
+                str(opened),
+                variant_id,
+            ],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "sdk" / "python"),
+            },
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not opened.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+        finally:
+            dying.kill()
+            dying.wait(timeout=10)
+        left = [json.loads(path.read_text()) for path in killed_spool.glob("counted-*.json")]
+        HttpTransport(BASE, token=APPLICATION_SECRET, spool_dir=killed_spool).close()
+        after_kill = settled_on(5)
+        check(
+            50,
+            "a client killed without closing, whose transport could not deliver its run, leaves "
+            "on its spool the count it held as that run started, and the next transport there "
+            "sends it: the run is counted lost",
+            [count["data"]["runs"] for count in left] == [1]
+            and after_kill == 5
+            and not list(killed_spool.glob("counted-*.json")),
+            {"left": [count["data"] for count in left], "lost_runs": after_kill},
+        )
+
+        # The client that never closed, told its clock is due.
+        aiwatcher_sdk.COUNTS_EVERY = 1.0
+        by_clock = settled_on(6)
+        check(
+            51,
+            "a client that never closes says its count by its own clock once it is due, with no "
+            "event after it: the run it lost is counted",
+            by_clock == 6,
+            {"lost_runs": by_clock},
         )
     finally:
         for relay in gateways:

@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen, judged, asked elsewhere or made around it — scored, compared, observed, priced, journaled, restarted and runs lost whole, a new client's first and a closed client's last among them — a judge shown its candidates in the witnessed order or both ways, a case asked before the run, in other words or on another prompt, a tool computed in the application or answered by pinned code, and a measurement's run lost in transport told from one made up
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen, judged, asked elsewhere or made around it — scored, compared, observed, priced, journaled, restarted and runs lost whole, a new client's first and a closed client's last among them — a judge shown its candidates in the witnessed order or both ways, a case asked before the run, in other words or on another prompt, a tool computed in the application or answered by pinned code — at the gateway, at a URL or on a host — a measurement's run lost in transport told from one made up, a gate asking for a lookback, and a client killed on its spool or heard by its clock
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -164,7 +164,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention and saying how close it is to a gap; and `periods`, the one module here that writes an object store), what witnesses saw asked (`asked`, an index a traces step reads past the read model and a restart) and what clients counted of a measurement's runs (`measured`), dedup, retry, dead letters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention and saying how close it is to a gap; and `periods`, the one module here that writes an object store), what witnesses saw asked (`asked`, an index a traces step reads past the read model and a restart) and what clients counted of a measurement's runs (`measured`, kept beside that index for the same reason), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
@@ -766,7 +766,9 @@ a tool the application calls directly is witnessed on its own host by
 key — held by a host publishing under a token of its own where the deployment
 says so (`AIWATCHER_WITNESS_DIGESTS`) — while a tool the application would
 compute itself can be a function the gateway answers, published with the sha256
-of its source file (`gateway.tool_code`), which a variant may pin. Named in
+of its source file (`gateway.tool_code`), which a variant may pin — as it may
+the digest a URL's service names in `Aiwatcher-Tool-Code`, or a host hands
+`ToolWitness` as `code`. Named in
 `caller_body(ordered=…)`, a judge's candidates are moved into the order of their
 digests under its key — which the caller cannot compute — before the request is
 relayed, and the reply says where each went (`Aiwatcher-Placed`). It
@@ -2170,10 +2172,11 @@ the review.
   on the judging prompt it pins names, shown the candidates in the witnessed
   order or asked both ways where it pins `order` — picks it, and a case asked on
   the pinned prompt in another run while the measurement ran, or from as long
-  before it as the run's `asked_since_seconds` says, as asked or normalised, is
-  no exchange: read from the projector's index of what witnesses saw asked, which
-  names the date it does not reach back past, and a case asked on another prompt
-  counted apart and denying nothing unless a gate says so. A tool a witness
+  before it as the run's `asked_since_seconds` says — which a gate's policy may
+  require at least — as asked or normalised, is no exchange: read from the
+  projector's index of what witnesses saw asked, which names the date it does
+  not reach back past, and a case asked on another prompt counted apart and
+  denying nothing unless a gate says so. A tool a witness
   answered with code other than the `tool_code` the generation config pins
   refuses the answers, and a value nothing accounted for names the tools the run
   called with no witness as where it may have come from; an answer naming a run
@@ -2266,7 +2269,8 @@ the review.
   worker importing the deployed application does not inherit its variant and
   report a benchmark as traffic. A measurement's runs are numbered all the same,
   per result and attempt at generating it, so a traces step tells a run lost in
-  transport from one nobody opened; no figure of the variant's reads that count.
+  transport from one nobody opened — from counts the asked index keeps, so a
+  restart does not forget them; no figure of the variant's reads that count.
 - **Never read who published an event from the event.** `published_by` is what
   the ingest route authenticated — an ingest token's name, a person's subject —
   and the envelope neither reads nor writes it on the wire, so a producer that
@@ -2311,9 +2315,10 @@ the review.
   among them, counted where the next start did — and so are the runs before a
   client's first start the fold reads, where that count began while the fold
   was reading, and the runs a client's `client.counted` says it opened past the
-  last start that arrived: said when it closes, now and then after it opened
-  another, and from a transport's spool when the transport was down to the end.
-  A client killed without closing leaves its last lost runs unsaid.
+  last start that arrived: said when it closes, every five minutes by its own
+  clock, and — where a transport keeps a spool, which holds the count as each
+  run starts — by the next transport on that spool, however the client ended. A
+  client killed with no spool leaves its last lost runs unsaid.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start

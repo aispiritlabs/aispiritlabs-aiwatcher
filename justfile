@@ -564,7 +564,9 @@ e2e-optimise:
 # asked before the run, in other words or on another prompt, a tool computed in
 # the application or answered by pinned code, a measurement's run lost in
 # transport or made up, a client's last lost run said on close or from a spool,
-# and questions asked before a restart, found in the index of what was asked.
+# and questions asked before a restart, found in the index of what was asked. A
+# tool's code named at its URL and on its host, a gate asking for a lookback, a
+# client killed on its spool, and one heard by its own clock.
 e2e-generate:
     ./scripts/e2e-generate-and-score.py
 

@@ -451,3 +451,23 @@ which of the caller's names each placeholder now holds. A tool call a gateway
 answered with a function of its own carries `code_sha256`
 (`aiwatcher.witness.tool_code`), the sha256 of the source file that function is
 defined in. None of it is a word said in the call.
+
+## Amendment 2026-09-14 (later): a count held as a run starts, and a client's own clock
+
+A client killed without closing said nothing of its runs since its last
+`client.counted`, and a long-lived one said its count only with the next event
+past five minutes. A client now says its counts that moved every five minutes by
+a clock of its own (one thread for every client in a Python process, an
+unreferenced interval in TypeScript), with no event after them. And a transport
+that keeps counts on a disk — Python's `HttpTransport(spool_dir=…)`, TypeScript's
+`HttpTransport({ spool: fileSpool(dir) })` from `@aiwatcher/sdk/node` — is handed
+each count as a run starts, before that start is sent, and forgets it only when a
+count saying as much was delivered; a transport started later on that disk sends
+what it finds. So a client killed with its transport down leaves a count passing
+over the runs it lost, at the cost of a write per run's start, which only a
+spool asks for. A client killed with no spool still leaves its last runs
+unsaid, since its last count.
+
+A tool call carries `code_sha256` beside a function the gateway answers with
+from two more places: the `Aiwatcher-Tool-Code` header of a URL tool's reply, and
+the `code` a host hands `ToolWitness`.

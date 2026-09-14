@@ -51,6 +51,19 @@ The scopes emit start and end events; the backend assembles them into spans.
 Telemetry never raises and never blocks: the transport batches on a background
 thread and drops on a full queue, loudly.
 
+A client numbers the runs it opens and says how many it opened
+(`client.counted`) as it closes and every five minutes by its own clock, which is
+what shows a run whose every event was lost. A process that may be killed before
+it closes keeps that count on a disk:
+
+```python
+HttpTransport("http://aiwatcher:8080", spool_dir="/var/lib/app/aiwatcher-spool")
+```
+
+Each count is written there as a run starts and forgotten once it is delivered;
+a transport started later on the same directory sends what it finds first. It
+costs a file write per run's start, which is why it is off unless named.
+
 ## Tracing a workflow
 
 ```python
@@ -188,6 +201,11 @@ every commit's variant start without anybody — one naming a registered model o
 workflow too, with its weights or declaration sent by `--stage`.
 `examples/ci-gate` is a whole job.
 
+A policy may hold a generated result to how far before the measurement calls
+asked elsewhere were read, `{"require_witnessed_answer": true,
+"asked_since_seconds": 3600}`: a result that read less far back is `incomplete`,
+and the gate declares its own run with at least that much.
+
 ## A tool a witness can vouch for
 
 A generated answer is an exchange only where every value its request held is
@@ -200,15 +218,18 @@ from. Two ways make it accountable:
   gateway posts the call to, or a function it answers in its own process — and
   call `/tools/<name>` on the gateway instead. The gateway digests the arguments
   and what came back under its key. A function is published with the sha256 of
-  the file it is defined in (`aiwatcher_sdk.gateway.tool_code`); pin it in the
-  variant's generation config, `{"tool_code": {"search": "<sha256>"}}`, and an
-  answer from a run where other code answered the tool is refused naming both
-  digests.
+  the file it is defined in (`aiwatcher_sdk.gateway.tool_code`), and a URL with
+  the sha256 its reply names in the `Aiwatcher-Tool-Code` header
+  (`aiwatcher_sdk.TOOL_CODE_HEADER`); pin it in the variant's generation config,
+  `{"tool_code": {"search": "<sha256>"}}`, and an answer from a run where other
+  code answered the tool is refused naming both digests.
 - **On a host with the witness key.** Where the tool must run elsewhere, wrap
   each call in `ToolWitness(telemetry, key=…)` on that host
   (`aiwatcher_sdk.gateway`, or `@aiwatcher/sdk/tool-witness` in TypeScript),
   published under a token of the host's own and with the key the gateway prints
-  (`AIWATCHER_WITNESS_DIGESTS` names it on the server).
+  (`AIWATCHER_WITNESS_DIGESTS` names it on the server). Pass
+  `code=tool_code(search)` — `toolCode(import.meta.url)` from
+  `@aiwatcher/sdk/node` in TypeScript — and the same pin holds it.
 
 A tool the application computes itself stays unaccountable, by design: nothing
 outside that process can say what it returned.

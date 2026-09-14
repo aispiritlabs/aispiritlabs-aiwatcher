@@ -26,7 +26,9 @@
   its own, a tool the gateway answers, and the first run of a new client; and
   a judge's candidates in an order the application does not choose, questions
   asked before a run or in other words kept in an index, a tool's code pinned,
-  and a measurement's lost runs told from made-up ones
+  and a measurement's lost runs told from made-up ones; and a gate's lookback,
+  a tool's code named at its URL and on its host, and a measurement's counts
+  kept past a restart
 - **Date**: 2026-09-11
 
 ## Context
@@ -1713,3 +1715,34 @@ What a client counted of what the variant was observed doing reaches the period
 fold in `client.counted` too, so a client whose only or last run was lost whole
 has it counted where no later start arrives — once it closes, or from a spool.
 
+## Amendment (2026-09-14, later): a gate's lookback, a tool's code at its URL and on its host, and counts past a restart
+
+Limits of the amendment above.
+
+**A gate may ask for a lookback, and a pipeline's runs are declared with it.**
+How long before a measurement calls asked elsewhere are read from was the
+declaration's word alone. A gate's policy may now set `asked_since_seconds`
+beside `require_witnessed_answer`: a result whose traces step read from less
+far back — the result says how far, `traces.asked_since_seconds`, and nothing
+where the variant pins no prompt, so nothing was read — is `incomplete`, naming
+both numbers. A policy that sets it without `require_witnessed_answer` is
+refused, since it would hold nothing. `aiwatcher-gate` declares its run with at
+least the policy's lookback, so a pipeline's own runs meet the gate it asks.
+What the cohort's version was published at is not a lookback: a case asked
+before it existed in a dataset was still a question somebody could ask.
+
+**A tool's code is named where a witness can say it.** A tool the gateway
+relays to a URL is published with the sha256 its reply names in
+`Aiwatcher-Tool-Code` — the word of the service the deployment named, trusted as
+the rest of its reply is — and a host witnessing a tool with `ToolWitness`
+(Python or TypeScript) passes it as `code`, trusted as its digests are. Both are
+held to `tool_code` as a function the gateway answers is. The digest covers the
+module the tool is defined in and not what it imports, as before; a service
+naming no digest leaves its values unaccounted wherever a variant pins one.
+
+**What clients counted of a measurement's runs survives a restart.** The read
+model's counts were gone after a restart that did not replay the log, and every
+answer whose run never arrived then read as a run nobody opened. The asked index
+keeps the counts beside its reach, through the same position, and the traces
+step reads them there; the read model keeps its own copy for a deployment with
+no object store.

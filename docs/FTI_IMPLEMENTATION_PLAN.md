@@ -3775,10 +3775,13 @@ są zatrzymane.
 
 ## 41. Runda świadka po sekcji 40 — co zostaje
 
-Status: zrobione 2026-09-14 (`96a8032`…`43e1687`, bez pusha). Reguły są w ADR
+Status: zrobione 2026-09-14 (`96a8032`…`4849c27`, bez pusha), a tego samego
+dnia domknięte resztki: licznik z zegara klienta i ze spoolu zabitego klienta,
+spool w TypeScript, liczniki pomiaru w indeksie pytań, `asked_since_seconds` w
+polityce bramki i skrót kodu narzędzia pod URL-em i na hoście. Reguły są w ADR
 0001, 0002, 0012 i 0030 (poprawki z 2026-09-14) oraz w `CLAUDE.md`; odbiór w
-opisach commitów: 47 twierdzeń `just e2e-generate` i sprawdzenie dziennika na
-własnym Iggy i RustFS. Tu zostaje tylko to, czego ta runda nie zamknęła.
+opisach commitów: 51 twierdzeń `just e2e-generate` i sprawdzenie dziennika na
+własnym Iggy i RustFS. Tu zostaje tylko to, czego te rundy nie zamknęły.
 
 Z ograniczeń sekcji 40, które nie weszły do tej rundy, bez zmian:
 
@@ -3801,8 +3804,10 @@ Z ograniczeń sekcji 40, które nie weszły do tej rundy, bez zmian:
   - Bez `order` wybór sędziego nadal jest wymianą, tylko nazwaną.
 - **Indeks pytań.**
   - Parafraza nie jest wykrywana, z założenia.
-  - `asked_since` przypina tylko deklaracja: nie polityka bramki ani start wersji
-    kohorty.
+  - `asked_since` przypina deklaracja albo polityka bramki
+    (`asked_since_seconds`, a `aiwatcher-gate` deklaruje run z co najmniej tyle).
+    Start wersji kohorty nie jest punktem odczytu: przypadek mógł być znany
+    wcześniej.
   - Odczyt czyta każdą stronę okna, co przy dużym ruchu i długim oknie kosztuje.
   - Każda replika roli `serve` pisze własne strony, a czytelnik je deduplikuje.
   - Normalizacja jest bajt w bajt tylko dla znaków znanych wersji Unicode każdego
@@ -3810,8 +3815,9 @@ Z ograniczeń sekcji 40, które nie weszły do tej rundy, bez zmian:
   - TypeScript ma samą funkcję `normalized`, bez bramki.
 - **Narzędzia.**
   - Obliczenie w procesie aplikacji zostaje jej słowem, z założenia.
-  - `tool_code` przypina tylko funkcję, którą odpowiada bramka. Narzędzie pod
-    URL-em i host z `ToolWitness` nie publikują skrótu kodu.
+  - Skrót kodu narzędzia pod URL-em to słowo usługi (`Aiwatcher-Tool-Code`), a
+    na hoście z `ToolWitness` słowo hosta (`code`). Usługa, która go nie poda,
+    zostawia wartości bez rozliczenia tam, gdzie wariant przypina kod.
   - Skrót obejmuje plik funkcji, a nie moduły, które ona importuje.
 - **Luka dłuższa niż retencja.**
   - Żaden adapter nie czyta retencji brokera; zapas liczy się od konfiguracji.
@@ -3821,14 +3827,19 @@ Z ograniczeń sekcji 40, które nie weszły do tej rundy, bez zmian:
   - Sprawdzenie na brokerze wstrzymało magazyn zamiast skrócić retencję tematu,
     więc samo usunięcie przez broker nie było odtworzone.
 - **Ostatni zgubiony run klienta.**
-  - Klient zabity bez zamknięcia nie mówi o runach od ostatniego licznika.
-  - Długo działający klient mówi tylko przy następnym zdarzeniu po pięciu
-    minutach, a nie z własnego zegara.
-  - Spool ma tylko `HttpTransport` w Pythonie.
+  - Klient zabity bez zamknięcia i bez spoolu nie mówi o runach od ostatniego
+    licznika (zegar mówi co pięć minut). Ze spoolem licznik jest zapisywany przy
+    starcie każdego runu, kosztem zapisu pliku, a wysyła go dopiero następny
+    transport uruchomiony na tym samym katalogu.
+  - Spool jest w Pythonie (`spool_dir`) i w TypeScript na Node (`fileSpool` z
+    `@aiwatcher/sdk/node`); w przeglądarce go nie ma.
 - **Licznik runów pomiaru.**
   - Podział na „zgubiony” i „nieznany” liczy się z liczników, a nie z
     odpowiedzi. Gdy są oba, które odpowiedzi są którymi, jest przypisaniem.
-  - Liczniki trzyma read model, więc restart w trakcie pomiaru ich nie ma.
+  - Liczniki trzyma indeks pytań obok swojego zasięgu, więc restart ich nie
+    gubi. Wdrożenie bez magazynu obiektów czyta je z read modelu i gubi przy
+    restarcie bez odtworzenia logu. Przetrwanie restartu sprawdza test zapisu i
+    odczytu indeksu, a nie restart na brokerze.
   - Numer próby przekazuje tylko `Generation` w Pythonie. TypeScript liczy próby,
     gdy wywołujący poda `generationAttempt`.
 - **Limit jednej krawędzi.** Liczba ukończeń jest liczona ostrożnie: limit
