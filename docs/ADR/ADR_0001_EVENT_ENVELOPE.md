@@ -414,3 +414,40 @@ TypeScript host witnesses a tool the same way (`@aiwatcher/sdk/tool-witness`),
 byte for byte, and the Python gateway can answer a tool itself, from a function
 it is handed, so a tool an application would compute in its own process runs
 where the witness is. None of it is a word said in the call.
+
+## Amendment 2026-09-14: a client's count of its runs, a measurement's runs counted apart, a question normalised, a judge's candidates placed, and a tool's code
+
+**`client.counted`** joins the catalog, with `Subject::Client` and no span. A
+client says how many runs it has opened for a variant — for a result and an
+attempt at generating it too — in `data.runs`, with `run_counted_from` as on a
+start, `variant_id`, and `data.evaluation_id` and `data.generation_attempt`
+where the count is a measurement's. Its `run_id` names the client
+(`client-<source.client>`), not a run, so no fold lists it as one. It is sent for
+each count that moved: when the client closes, with the next event once five
+minutes have passed, and as a generation attempt ends. It rides the same
+transport as the runs, so a transport that stays down loses it too; the Python
+`HttpTransport` may keep what it could not deliver in a `spool_dir`, and a
+transport started later on that directory sends it first. A client killed
+without closing says nothing of its runs since its last count.
+
+**A measurement's runs are numbered too.** `run_sequence` was only on runs
+answering no measurement; a run carrying `data.evaluation_id` now carries it as
+well, counted apart for that result and the attempt at generating it
+(`data.generation_attempt`, which `Generation.traced` sends), so a retried
+attempt starts a count of its own and is no gap. What a variant was observed
+doing counts none of them, as before.
+
+What a gateway publishes about a call grows by one:
+`asked_normalized_digests` (`aiwatcher.witness.asked_normalized`) — each text it
+digested as asked, digested again after `aiwatcher_core::witness::normalized`:
+NFKC, lower case, every punctuation character gone and white space run into one
+space. The same bytes in Rust, Python (`aiwatcher_sdk.gateway.normalized`) and
+TypeScript (`@aiwatcher/sdk/tool-witness`), for every character each language's
+Unicode version assigns; a change to it is a new digest. A caller may name the
+placeholders a judge's candidates stand in (`caller_body(ordered=…)`): the
+gateway places their values in the order of their digests under its key,
+re-renders the request so, and says in the reply's `Aiwatcher-Placed` header
+which of the caller's names each placeholder now holds. A tool call a gateway
+answered with a function of its own carries `code_sha256`
+(`aiwatcher.witness.tool_code`), the sha256 of the source file that function is
+defined in. None of it is a word said in the call.

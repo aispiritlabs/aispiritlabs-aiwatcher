@@ -64,7 +64,7 @@ just e2e-docker       # the same four as four containers on this host: the image
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-pod-death    # a step's pod killed mid-attempt: ended as infrastructure, run again in a new pod, no Job left
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen, judged, asked elsewhere or made around it — scored, compared, observed, priced, journaled, restarted and runs lost whole, a new client's first among them
+just e2e-generate     # a baseline and a candidate generate answers on a worker, held to their traces and a gateway's word on their model, prompt, question and answer — told, hinted, reasoned, cut out, looked up, labelled, composed, joined, chosen, judged, asked elsewhere or made around it — scored, compared, observed, priced, journaled, restarted and runs lost whole, a new client's first and a closed client's last among them — a judge shown its candidates in the witnessed order or both ways, a case asked before the run, in other words or on another prompt, a tool computed in the application or answered by pinned code, and a measurement's run lost in transport told from one made up
 just e2e-gate         # a line admitted once, then CI jobs exit pass, regression, incomplete and error, a model's variant too — registered or not
 just e2e-review       # a trace proposed, an expected answer approved, a new version of the cases in their splits, a result's first case in its own words
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
@@ -164,7 +164,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention; and `periods`, the one module here that writes an object store), dedup, retry, dead letters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention and saying how close it is to a gap; and `periods`, the one module here that writes an object store), what witnesses saw asked (`asked`, an index a traces step reads past the read model and a restart) and what clients counted of a measurement's runs (`measured`), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
@@ -765,7 +765,11 @@ a tool the application calls directly is witnessed on its own host by
 `ToolWitness`, in Python or TypeScript, digesting under the gateway's witness
 key — held by a host publishing under a token of its own where the deployment
 says so (`AIWATCHER_WITNESS_DIGESTS`) — while a tool the application would
-compute itself can be a function the gateway answers. It
+compute itself can be a function the gateway answers, published with the sha256
+of its source file (`gateway.tool_code`), which a variant may pin. Named in
+`caller_body(ordered=…)`, a judge's candidates are moved into the order of their
+digests under its key — which the caller cannot compute — before the request is
+relayed, and the reply says where each went (`Aiwatcher-Placed`). It
 is the telemetry
 client's half — the standard library and nothing else — and it publishes neither
 the request nor the reply: only keyed digests of each message, of the values it
@@ -774,7 +778,10 @@ already replied reads as that reply — and of each reply, under a key derived
 from its own credential,
 which the deployment can test an answer and a case's input against and a reader
 of the log cannot test a guess against (`aiwatcher_core::witness`, byte for
-byte). It posts the witness before the reply ends, because the caller reads to
+byte) — and what it asked digested a second time normalised
+(`gateway.normalized`: NFKC, lower case, no punctuation, one space, the same in
+Rust and TypeScript), so a question asked again in other case or spacing is
+found. It posts the witness before the reply ends, because the caller reads to
 the connection's close, so a call cannot end on the log before its witness is
 there.
 
@@ -1886,6 +1893,17 @@ the review.
   telemetry aiwatcher already has and the wrong shape here: a null runner would
   answer `202 Accepted` for work no orchestrator was ever asked to do. Absence
   reaches the caller as a 501 naming the variable.
+- **Never list a client's count as a run.** `client.counted` says how many runs
+  a client opened; its `run_id` names the client, and the read model folds it
+  into the measured-runs counts and the period fold into lost runs, never into
+  the runs list, a span or a trace. A row for it would be a run nobody opened.
+- **Never read calls asked elsewhere from the read model alone.** It holds only
+  the runs its caps keep, and after a restart that does not replay, none: a case
+  asked there before was never asked, by its account. The projector's `asked`
+  index keeps every witnessed call that said what it asked in the object store,
+  a page a minute, and a page not yet written holds the projector's resume back,
+  as a closed period does. What it does not reach back to is named with its date
+  and denies the exchange, rather than read as nothing asked.
 - **Never let a `workflow.*` event reach span assembly.** Same guard as the
   evaluation one, `EventType::forms_span`, and a different reason: a topology is
   a shape with no duration, and a waterfall showing one would be showing the
@@ -2149,8 +2167,18 @@ the review.
   the words it pins as `answer_joined`, and a reply chosen among others that
   went into nothing a witness saw only where the way it pins as `answer_chosen`
   — the first relayed, the most of exactly `n`, or the one placed where a call
-  on the judging prompt it pins names — picks it, and a case asked on the
-  pinned prompt in another run while the measurement ran is no exchange; an
+  on the judging prompt it pins names, shown the candidates in the witnessed
+  order or asked both ways where it pins `order` — picks it, and a case asked on
+  the pinned prompt in another run while the measurement ran, or from as long
+  before it as the run's `asked_since_seconds` says, as asked or normalised, is
+  no exchange: read from the projector's index of what witnesses saw asked, which
+  names the date it does not reach back past, and a case asked on another prompt
+  counted apart and denying nothing unless a gate says so. A tool a witness
+  answered with code other than the `tool_code` the generation config pins
+  refuses the answers, and a value nothing accounted for names the tools the run
+  called with no witness as where it may have come from; an answer naming a run
+  the log never received is lost in transport where its client counted a run
+  that never arrived, and unknown where none did; an
   answer is compared from the JSON the generation wrote, so an integer digit
   for digit. A run's
   steps are held to the order the pinned declaration leads and to how often: a
@@ -2160,7 +2188,9 @@ the review.
   that, and an edge declared `at_most` is followed no more than that — the
   rounds of a cycle through it, a retry not counted — as are edges sharing one
   of the declaration's `bounds`, between them, which must lead back into one
-  loop's head or the pinned declaration is refused naming the bound. Not over the conversation
+  loop's head or the pinned declaration is refused naming the bound — and an
+  edge's own bound no smaller than its source can complete is named on the
+  result and measured all the same. Not over the conversation
   archive, whose questions would reach a worker outside its seal. A baseline is a
   second declaration differing in its variant and ID alone, which is what gives
   the two one context.
@@ -2234,7 +2264,9 @@ the review.
   because the measurement's own runs already are its result; and the telemetry
   clients take a variant only as an argument, never from the environment, so a
   worker importing the deployed application does not inherit its variant and
-  report a benchmark as traffic.
+  report a benchmark as traffic. A measurement's runs are numbered all the same,
+  per result and attempt at generating it, so a traces step tells a run lost in
+  transport from one nobody opened; no figure of the variant's reads that count.
 - **Never read who published an event from the event.** `published_by` is what
   the ingest route authenticated — an ingest token's name, a person's subject —
   and the envelope neither reads nor writes it on the wire, so a producer that
@@ -2278,7 +2310,10 @@ the review.
   opened for a variant is a run whose start never arrived, a run lost whole
   among them, counted where the next start did — and so are the runs before a
   client's first start the fold reads, where that count began while the fold
-  was reading.
+  was reading, and the runs a client's `client.counted` says it opened past the
+  last start that arrived: said when it closes, now and then after it opened
+  another, and from a transport's spool when the transport was down to the end.
+  A client killed without closing leaves its last lost runs unsaid.
 - **Never answer a window from two folds.** A window over what a variant was
   observed doing is the period fold's alone — every period it reaches into,
   from the store and from the fold's memory, counting from the window's start

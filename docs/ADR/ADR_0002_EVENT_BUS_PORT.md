@@ -215,3 +215,28 @@ and is refused at start without any of them. The chart runs it as
 need. What stays a gap is a stretch no journal read before the log evicted it:
 every journal down for longer than retention, as every process was before.
 
+## Amendment 2026-09-14: how close a journal is to a gap
+
+A journal that falls behind, or cannot keep its pages, leaves a gap once the
+log's retention passes what it has not kept — and nothing said so before it did.
+Every journal now reports, each minute, how far behind the log it is: the age of
+the oldest event it read and has not kept, or of the last one it read while it
+has not caught up, and how many positions it holds unkept. Told how long the log
+keeps an event (`AIWATCHER_LOG_RETENTION_SECONDS`, the chart's
+`observationJournal.logRetentionSeconds`), it also reports the margin before
+retention removes the oldest of them, and warns in its log once that margin is
+under a quarter of the retention. The three are gauges on the metric sink —
+`aiwatcher.journal.lag`, `aiwatcher.journal.unkept_positions` and
+`aiwatcher.journal.retention_margin` — in every role, the journal's own included
+where it names an OTLP endpoint. No adapter reads a broker's retention: the
+margin is counted against the one the deployment says it configured.
+
+The chart renders a `PodDisruptionBudget` of one for two or more journal
+replicas, so a drained node or a rollout never stops every journal at once; the
+broker hands the group's log to one still up. One replica gets no budget, which
+would only block a drain.
+
+What stays a gap is what it was: a stretch no journal read before the log
+evicted it. A journal that is down reports nothing, so the margin is a warning
+from a journal that is running and cannot keep up, not from one that is gone —
+a deployment's alerting on the metric going quiet is what hears of that.

@@ -7,7 +7,8 @@
   every path. Amended 2026-09-11 (below): how the panel lays the graph out;
   amended 2026-09-13: a node that repeats, and where a run enters a shape;
   and edges that share one bound, which must be one cycle's ways back;
-  amended 2026-09-14: one loop's ways back are the ways back into its head.
+  amended 2026-09-14: one loop's ways back are the ways back into its head,
+  and an edge's own bound that holds nothing is named.
 - **Date**: 2026-08-29
 
 ## Context
@@ -351,3 +352,31 @@ Two bodies returning into one head are one loop: `review → write` and
 went through, and a body's own rounds are its edge's own `at_most`. A count of
 returns from one node, whichever head they reach, is that node's `at_most`,
 which says what it counts.
+
+## Amendment 2026-09-14: an edge's own bound that holds nothing
+
+A bound on one edge was admitted whatever it held. On an edge out of a repeating
+node it bounds how many items go on, and round a cycle it bounds the rounds; on
+an edge a run may follow once, it keeps nothing a run could do, and is usually
+meant for another edge. What an edge may be followed is the completions of its
+source, so `Topology::most_completions` counts them from the declaration: once
+where a run enters, once per completion of a node leading in — never more than
+an edge into it may be followed nor than the node's own `at_most` — and without
+a count on a cycle, at a `repeats` node or past anything uncounted. An edge's
+own `at_most` no smaller than that count, or than a bound it shares with other
+edges, is named by `Topology::idle_bounds` with both numbers.
+
+The Python SDK refuses to declare one, as it refuses a shared bound on anything
+but one loop's ways back. The traces step does not refuse a pinned declaration
+holding one: the bound is true, and a refusal would stop measuring every
+declaration already pinned. It names the bound on the result instead
+(`idle_bounds`), and the panel shows it.
+
+### What would make this wrong
+
+The count is a ceiling reached from the declaration alone, so it names a bound
+only where the shape itself says it cannot bind. A cycle bounded by the edges
+into its head, or by a bound its ways back share, has a count of rounds this does
+not work out; a bound inside one is kept rather than named. A miss is safe, a
+wrong name would refuse a declaration in the SDK — the reason the rule stays on
+this side.

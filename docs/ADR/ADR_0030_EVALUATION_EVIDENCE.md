@@ -23,7 +23,10 @@
   in pinned words, a choice among replies, a tool witnessed where it runs, an
   answer as written, and runs lost whole; amended 2026-09-14 with a choice a
   judging call made, a question asked elsewhere, a tool's host with a token of
-  its own, a tool the gateway answers, and the first run of a new client
+  its own, a tool the gateway answers, and the first run of a new client; and
+  a judge's candidates in an order the application does not choose, questions
+  asked before a run or in other words kept in an index, a tool's code pinned,
+  and a measurement's lost runs told from made-up ones
 - **Date**: 2026-09-11
 
 ## Context
@@ -1641,4 +1644,72 @@ before.
 
 **The journal runs on its own, and a shared bound is one loop's.** Both are
 amended where they are decided: ADR_0002 and ADR_0012.
+
+## Amendment (2026-09-14): a judge's order, questions asked before and in other words, a tool's code, and a measurement's lost runs
+
+Limits of the amendment above.
+
+**A judge is shown its candidates in an order the application does not choose,
+where the variant pins one.** A judge may favour a place — the first candidate,
+say — so the application chose the answer by where it put each reply.
+`answer_chosen.judged.order` may pin `"witnessed"`: the candidates stand in the
+judging prompt's placeholders in the order of their values' digests under the
+witness's key, placeholder by placeholder as the pinned prompt version's text
+places them (read from the prompt registry), which the traces step holds
+`placed_digests` to. The application, holding no key, cannot arrange that order;
+it names the placeholders in `caller_body(ordered=…)`, the gateway moves the
+values into it before relaying the request, and its reply says where each went
+(`Aiwatcher-Placed`). Or `"both_ways"`: the judge asked twice, the second time
+with the candidates reversed, both naming the answer. An order this build does
+not read pins nothing. Each refusal is named on the result
+(`choices_refused`); without an order, a judge's pick stays an exchange and the
+trace counts it as ordered by the application (`judged_unordered`).
+
+**Questions asked are kept in an index of their own.** The read model answered
+calls asked elsewhere only for the runs it still held, and nothing across a
+restart that did not replay them. The projector now keeps each witnessed call
+that said what it asked — when it ended, its run and the run it served, who
+published it, its model and prompt, and the keyed digests of what it asked — in
+the object store, a page a minute, with a reach it reads back to
+(`asked-index/`, `AIWATCHER_ASKED_INDEX_DAYS`, thirty days); a page not yet
+written holds the projector's resume back. The traces step reads it from the
+run's start — or as long before it as `settings.asked_since_seconds` says, up to
+ninety days, so an application that looked at the cohort's cases before the
+measurement began is held to it — and where the index does not reach that far
+back, names the date (`elsewhere_unread_before`) and no answer is an exchange.
+The start is the fold's, to the millisecond, and the declaration's where the
+fold no longer holds it.
+
+**A question in other words is found, and one on another prompt counted.** The
+gateway digests each text it asked a second time normalised (ADR_0001,
+amended), and a call whose normalised digests hold the case's input asked it. A
+paraphrase is not found, by design: that would take the words. A call that
+asked a case's input on another prompt or model, or on none, is counted apart
+(`asked_elsewhere_unpinned`) and denies nothing — production traffic on other
+prompts asks what cases ask all the time — unless a gate's policy sets
+`asked_elsewhere_unpinned_denies`. A request holding every part of the input
+already counted as the whole of it; that stands.
+
+**A tool's code is pinned, and a tool nobody witnessed is named.** A function a
+gateway answers a tool with is published with the sha256 of its source file, and
+the generation config may pin it (`tool_code: {name: sha256}`): an answer from a
+run where a witness answered that tool with other code is refused naming both
+digests — the `generated_with` rule applied to a tool — and one whose code the
+witness did not say accounts for nothing the tool returned. A value computed in
+the application's own process is still the application's word, and nothing here
+promises otherwise; where an answer's reply came from a request holding a value
+nothing accounted for, the trace and the gate name the tools its run called with
+no witness as where it may have come from (`unaccounted_tools`), never as where
+it did.
+
+**A measurement's lost runs are told from made-up ones.** A measurement's runs
+are numbered per result and attempt (ADR_0001, amended), and the read model
+keeps what each client counted of them. Of the answers whose run the log never
+received, as many as the latest attempt's counts pass over are lost in
+transport (`lost_in_transport`), and the rest name runs no client opened for the
+result (`unknown_runs`); a run whose start arrived and did not end is neither.
+Both are said in the gate's words, and `require_traces` counts them as it did.
+What a client counted of what the variant was observed doing reaches the period
+fold in `client.counted` too, so a client whose only or last run was lost whole
+has it counted where no later start arrives — once it closes, or from a spool.
 
