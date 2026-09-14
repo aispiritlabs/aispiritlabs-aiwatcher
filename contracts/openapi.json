@@ -17098,7 +17098,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "Beside `run_sequence`: when that count began — the moment the client\nopened the first run it counted for this variant. A reader that was\nalready reading the log then, and first hears of the count further on,\nnever read the runs before it: they are lost, the first among them."
+            "description": "Beside `run_sequence`, and on a `client.counted`: when that count began —\nthe moment the client opened the first run it counted. A reader that was\nalready reading the log then, and first hears of the count further on,\nnever read the runs before it: they are lost, the first among them."
           },
           "run_id": {
             "type": "string",
@@ -17110,7 +17110,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "On a run's start: the client's count of the runs it opened naming this\nrun's variant and answering no measurement, from nought. A number passed\nover is a run whose start never reached the log's reader — a run lost\nwhole among them, which no count inside a run can show.",
+            "description": "On a run's start: the client's count of the runs it opened naming this\nrun's variant, from nought — apart for the runs answering one\nmeasurement (`data.evaluation_id`) at one attempt of generating it\n(`data.generation_attempt`), which are that result's and in no count of\nwhat the variant was observed doing. A number passed over is a run whose\nstart never reached the log's reader — a run lost whole among them,\nwhich no count inside a run can show. A `client.counted` says how many\nsuch runs the client had opened, in `data.runs`, which shows the last of\nthem lost too.",
             "minimum": 0
           },
           "schema_version": {
@@ -17400,6 +17400,12 @@
             "type": "string",
             "enum": [
               "ExecutionCancelled"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ClientCounted"
             ]
           },
           {
@@ -19495,6 +19501,11 @@
             },
             "description": "Edge bounds of the pinned workflow that hold nothing a run could do,\nin words: a bound no smaller than the times its source may complete, or\nthan a bound it shares. Measured all the same — such a bound is true —\nand usually meant for another edge."
           },
+          "lost_in_transport": {
+            "type": "integer",
+            "description": "Of the runs not on the log, those its client's count says were opened\nfor this result and never arrived: lost in transport.",
+            "minimum": 0
+          },
           "named": {
             "type": "integer",
             "description": "Answers naming the run they were made in.",
@@ -19544,6 +19555,11 @@
           "steps_unread": {
             "type": "integer",
             "description": "Seen runs that took more node steps than the fold keeps, whose order\npast them was therefore not read.",
+            "minimum": 0
+          },
+          "unknown_runs": {
+            "type": "integer",
+            "description": "Of the runs not on the log, those no client's count passes over: runs\nno client opened for this result, such as a run ID made up.",
             "minimum": 0
           },
           "witnessed_answer": {

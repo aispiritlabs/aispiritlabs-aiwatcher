@@ -496,17 +496,26 @@ it('says how many generated answers their traces showed on the pins, as counts',
     withQueries(
       <Evidence
         evidence={evidence('complete', {
-          traces: { answers: 4, named: 3, seen: 3, on_prompt: 3 },
+          traces: {
+            answers: 5,
+            named: 4,
+            seen: 2,
+            on_prompt: 2,
+            lost_in_transport: 1,
+            unknown_runs: 1,
+          },
         })}
       />,
     ),
   );
   expect(
     await screen.findByText(
-      'Generated answers, held to their traces: 3 of 4 seen on the log, 3 on the pinned prompt.',
+      'Generated answers, held to their traces: 2 of 5 seen on the log, 2 on the pinned prompt.',
     ),
   ).toBeTruthy();
   expect(screen.getByText(/1 named no run/)).toBeTruthy();
+  expect(screen.getByText(/1 of the runs not on the log were lost in transport/)).toBeTruthy();
+  expect(screen.getByText(/1 of the runs not on the log are none a client opened/)).toBeTruthy();
 });
 
 it('says which answers a serving host witnessed, which ran the pinned workflow, and what providers said served them', async () => {

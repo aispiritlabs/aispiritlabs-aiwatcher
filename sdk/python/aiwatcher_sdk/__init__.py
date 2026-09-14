@@ -32,7 +32,8 @@ import uuid
 from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 # Re-exported so `from aiwatcher_sdk import PromptRegistry` works and
 # `AiwatcherClient.prompts` has something to hand back.
@@ -78,6 +79,7 @@ __all__ = [
     "NullTransport",
     "PromptRegistry",
     "RunContext",
+    "RunCountKey",
     "Transport",
     "WorkflowContext",
 ]
@@ -151,7 +153,14 @@ class HttpTransport:
         flush_interval: float = 1.0,
         queue_size: int = 50_000,
         timeout: float = 5.0,
+        spool_dir: str | os.PathLike[str] | None = None,
     ) -> None:
+        """``spool_dir`` keeps each ``client.counted`` this transport could not
+        deliver in a file there, and one started later with the same directory
+        sends what it finds first: a client whose transport stayed down until it
+        closed still gets its count of the runs it lost to the log. Off unless
+        named — a telemetry client writes to no disk it was not asked to.
+        """
         self._url = base_url.rstrip("/") + "/api/v1/events"
         # Sent as ``Authorization: Bearer``. Needed only against an instance
         # with single sign-on on, where an agent cannot complete an interactive
@@ -173,6 +182,10 @@ class HttpTransport:
         )
         self._dropped = 0
         self._next_drop_warning = 1
+        self._spool = Path(spool_dir) if spool_dir is not None else None
+        for kept in self._spooled():
+            with contextlib.suppress(queue.Full):
+                self._queue.put_nowait(kept)
         self._worker = threading.Thread(target=self._run, name="aiwatcher", daemon=True)
         self._worker.start()
 
@@ -187,6 +200,7 @@ class HttpTransport:
                 self._queue.put_nowait(event)
             except queue.Full:
                 self._dropped += 1
+                self._keep(event)
                 self._warn_about_drops()
 
     def _warn_about_drops(self) -> None:
@@ -274,7 +288,11 @@ class HttpTransport:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout):  # noqa: S310
                 pass
+            for event in batch:
+                self._release(event)
         except (urllib.error.URLError, OSError) as error:
+            for event in batch:
+                self._keep(event)
             # Telemetry must never take the agent down with it. A 401 arrives
             # here like any other failure and is worth reading twice: it means
             # the instance has single sign-on on and this producer has no
@@ -282,6 +300,56 @@ class HttpTransport:
             # to wait out.
             self._dropped += len(batch)
             print(f"[aiwatcher] dropped {len(batch)} events: {error}", file=sys.stderr)
+
+    def _spool_file(self, event: dict[str, Any]) -> Path | None:
+        """Where a count is kept: one file per count, so a later one replaces it."""
+        if self._spool is None or event.get("event_type") != "client.counted":
+            return None
+        data = event.get("data") or {}
+        named = json.dumps(
+            [
+                (event.get("source") or {}).get("client"),
+                event.get("variant_id"),
+                data.get("evaluation_id"),
+                data.get("generation_attempt"),
+            ]
+        )
+        return self._spool / f"counted-{hashlib.sha256(named.encode()).hexdigest()[:32]}.json"
+
+    def _keep(self, event: dict[str, Any]) -> None:
+        """Write a count this transport could not deliver into the spool."""
+        path = self._spool_file(event)
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            written = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+            written.write_text(json.dumps(event))
+            written.replace(path)
+        except OSError as error:
+            print(f"[aiwatcher] could not keep a count in {self._spool}: {error}", file=sys.stderr)
+
+    def _release(self, event: dict[str, Any]) -> None:
+        """Forget a kept count once it, and not a later one, was delivered."""
+        path = self._spool_file(event)
+        if path is None:
+            return
+        with contextlib.suppress(OSError, ValueError):
+            if json.loads(path.read_text()).get("event_id") == event.get("event_id"):
+                path.unlink()
+
+    def _spooled(self) -> list[dict[str, Any]]:
+        """The counts an earlier transport kept in the spool, oldest first."""
+        if self._spool is None:
+            return []
+        kept: list[tuple[float, dict[str, Any]]] = []
+        with contextlib.suppress(OSError):
+            for path in self._spool.glob("counted-*.json"):
+                with contextlib.suppress(OSError, ValueError):
+                    event = json.loads(path.read_text())
+                    if isinstance(event, dict) and event.get("event_type") == "client.counted":
+                        kept.append((path.stat().st_mtime, event))
+        return [event for _, event in sorted(kept, key=lambda held: held[0])]
 
     def _headers(self) -> dict[str, str]:
         headers = {"content-type": "application/json"}
@@ -312,7 +380,20 @@ MOST_RUNS_NUMBERED = 100_000
 #: How many variants a client keeps a count of runs for; the one numbered first
 #: is forgotten past it, and counts again from nought.
 MOST_VARIANTS_NUMBERED = 1_024
+#: How often, at most, a long-lived client says how many runs it has opened —
+#: and only when it has opened another since it last said.
+COUNTS_EVERY = 300.0
 _RUN_ENDS = frozenset({"run.completed", "run.failed"})
+
+
+class RunCountKey(NamedTuple):
+    """What one count of a client's runs is kept for."""
+
+    variant_id: str
+    #: The result a measurement's runs answer, which keeps them apart.
+    evaluation_id: str | None = None
+    #: The attempt at generating that result's answers.
+    attempt: int | None = None
 
 
 class AiwatcherClient:
@@ -362,7 +443,10 @@ class AiwatcherClient:
             "client": _new_id(),
         }
         self._sequences: dict[str, int] = {}
-        self._run_sequences: dict[str, tuple[int, str]] = {}
+        self._run_sequences: dict[RunCountKey, tuple[int, str]] = {}
+        # What the last `client.counted` said of each count, and when it went.
+        self._published_counts: dict[RunCountKey, int] = {}
+        self._counts_published_at = time.monotonic()
         self._sequence_lock = threading.Lock()
         if instance or os.environ.get("HOSTNAME"):
             self._source["instance"] = instance or os.environ["HOSTNAME"]
@@ -421,16 +505,71 @@ class AiwatcherClient:
         # later number would read as the earlier one lost.
         with self._sequence_lock:
             envelope["sequence"] = self._next_sequence(context.run_id, event_type)
-            if (
-                event_type == "run.started"
-                and context.variant_id
-                and not (data or {}).get("evaluation_id")
-            ):
+            if event_type == "run.started" and context.variant_id:
+                started = data or {}
+                attempt = started.get("generation_attempt")
+                key = RunCountKey(
+                    context.variant_id,
+                    started.get("evaluation_id") or None,
+                    attempt if isinstance(attempt, int) and not isinstance(attempt, bool) else None,
+                )
                 envelope["run_sequence"], envelope["run_counted_from"] = self._next_run_sequence(
-                    context.variant_id, envelope["occurred_at"]
+                    key, envelope["occurred_at"]
                 )
             self._transport.send([envelope])
+            if time.monotonic() - self._counts_published_at >= COUNTS_EVERY:
+                self._send_counts()
         return event_id
+
+    def publish_counts(self) -> None:
+        """Say how many runs this client has opened, for each count that moved.
+
+        One ``client.counted`` per variant — and per measurement and attempt at
+        generating it — whose count grew since the last one said: what shows a
+        run whose every event was lost where no later start of this client
+        arrives to pass over its number. Sent on :meth:`close` and, in a long
+        process, with the next event once :data:`COUNTS_EVERY` seconds have
+        passed; a task generating a measurement's answers sends it as the
+        attempt ends. A count that has not moved is not said again, so a quiet
+        client says nothing. It rides the same transport as the runs, so a
+        transport that stays down loses it too — unless ``HttpTransport`` keeps
+        what it could not deliver in a ``spool_dir``.
+        """
+        with self._sequence_lock:
+            self._send_counts()
+
+    def _send_counts(self) -> None:
+        """Hand the transport a count per key that moved. Called holding the lock."""
+        self._counts_published_at = time.monotonic()
+        moved = [
+            (key, count)
+            for key, count in self._run_sequences.items()
+            if self._published_counts.get(key) != count[0]
+        ]
+        for key, (runs, began) in moved:
+            data: dict[str, Any] = {"runs": runs}
+            if key.evaluation_id:
+                data["evaluation_id"] = key.evaluation_id
+            if key.attempt is not None:
+                data["generation_attempt"] = key.attempt
+            self._transport.send(
+                [
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "kind": "Event",
+                        "event_id": _new_id(),
+                        "event_type": "client.counted",
+                        "occurred_at": _now(),
+                        # A count names the client that kept it, not a run.
+                        "run_id": f"client-{self._source['client']}",
+                        "variant_id": key.variant_id,
+                        "run_counted_from": began,
+                        "source": self._source,
+                        "data": data,
+                    }
+                ]
+            )
+            self._published_counts[key] = runs
 
     def _next_sequence(self, run_id: str, event_type: str) -> int:
         """This client's count of the events it has sent into one run, from nought.
@@ -447,22 +586,25 @@ class AiwatcherClient:
             self._sequences[run_id] = sequence + 1
         return sequence
 
-    def _next_run_sequence(self, variant_id: str, occurred_at: str) -> tuple[int, str]:
+    def _next_run_sequence(self, key: RunCountKey, occurred_at: str) -> tuple[int, str]:
         """This client's count of the runs it has opened naming one variant, from
         nought, and when that count began: the first of those runs' start.
 
         A number the other end never read is a run whose start never reached it
         — lost whole, perhaps, which no count inside a run can show; when the
         count began says whether a reader first hearing of it past nought was
-        already reading when those runs started. A measurement's run is in no
-        count. Called holding the lock the start is sent under.
+        already reading when those runs started. A measurement's runs are
+        counted apart, per result and attempt at generating it, so they are in
+        no count of what the variant was observed doing and a retried attempt
+        starts a count of its own. Called holding the lock the start is sent
+        under.
         """
-        sequence, began = self._run_sequences.get(variant_id, (0, occurred_at))
-        if variant_id not in self._run_sequences and len(self._run_sequences) >= (
-            MOST_VARIANTS_NUMBERED
-        ):
-            self._run_sequences.pop(next(iter(self._run_sequences)))
-        self._run_sequences[variant_id] = (sequence + 1, began)
+        sequence, began = self._run_sequences.get(key, (0, occurred_at))
+        if key not in self._run_sequences and len(self._run_sequences) >= MOST_VARIANTS_NUMBERED:
+            forgotten = next(iter(self._run_sequences))
+            self._run_sequences.pop(forgotten)
+            self._published_counts.pop(forgotten, None)
+        self._run_sequences[key] = (sequence + 1, began)
         return sequence, began
 
     @contextlib.contextmanager
@@ -477,6 +619,7 @@ class AiwatcherClient:
         variant_id: str | None = None,
         evaluation_id: str | None = None,
         caller_run_id: str | None = None,
+        generation_attempt: int | None = None,
     ) -> Generator[RunContext, None, None]:
         """One execution of an agent. Becomes one trace.
 
@@ -494,6 +637,11 @@ class AiwatcherClient:
         what a model server passes when a request carries
         :data:`CALLER_RUN_HEADER`. Published under the server's own credential,
         it is a second witness to which model version answered that call.
+
+        `generation_attempt` is the attempt at generating `evaluation_id`'s
+        answers the run was opened by: the client counts a measurement's runs
+        per result and attempt, so a run lost in transport can be told from a
+        run nobody opened, and a retry is no gap.
         """
         context = Correlation(
             run_id=run_id,
@@ -508,11 +656,13 @@ class AiwatcherClient:
             correlation_id=correlation_id or _new_id(),
         )
         run_context = RunContext(self, context)
-        started = {
+        started: dict[str, Any] = {
             key: value
             for key, value in (("evaluation_id", evaluation_id), ("caller_run_id", caller_run_id))
             if value
         }
+        if evaluation_id and generation_attempt is not None:
+            started["generation_attempt"] = generation_attempt
         self.emit("run.started", context, started or None)
         try:
             yield run_context
@@ -663,6 +813,7 @@ class AiwatcherClient:
         conversation_id: str | None = None,
         variant_id: str | None = None,
         evaluation_id: str | None = None,
+        generation_attempt: int | None = None,
     ) -> Generator[WorkflowContext, None, None]:
         """One execution of an orchestration, and the shape it is executing.
 
@@ -699,8 +850,9 @@ class AiwatcherClient:
         nothing, and was usually meant for another edge. Out of a ``repeats``
         node or round a cycle, a bound holds the rounds and is kept.
 
-        `variant_id` and `evaluation_id` mean what they mean on :meth:`run`: the
-        variant answering, and the measurement a run answers a case for.
+        `variant_id`, `evaluation_id` and `generation_attempt` mean what they mean
+        on :meth:`run`: the variant answering, the measurement a run answers a
+        case for, and the attempt at generating its answers.
         """
         resolved_nodes = _normalize_nodes(nodes)
         resolved_edges = _normalize_edges(edges)
@@ -725,9 +877,10 @@ class AiwatcherClient:
             workflow_run_id=execution_id,
             variant_id=variant_id or self._variant_id,
         )
-        self.emit(
-            "run.started", context, {"evaluation_id": evaluation_id} if evaluation_id else None
-        )
+        started: dict[str, Any] = {"evaluation_id": evaluation_id} if evaluation_id else {}
+        if evaluation_id and generation_attempt is not None:
+            started["generation_attempt"] = generation_attempt
+        self.emit("run.started", context, started or None)
         if resolved_nodes or resolved_edges:
             self.emit(
                 "workflow.declared",
@@ -772,6 +925,8 @@ class AiwatcherClient:
         return self._prompts
 
     def close(self) -> None:
+        """Say how many runs this client opened, then close its transport."""
+        self.publish_counts()
         self._transport.close()
 
     def flush(self) -> None:

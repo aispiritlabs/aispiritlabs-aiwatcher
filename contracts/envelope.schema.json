@@ -79,12 +79,12 @@
     "run_sequence": {
       "type": "integer",
       "minimum": 0,
-      "description": "On run.started only: the client's (source.client) count of the runs it opened naming this variant_id and answering no measurement, from 0. A gap here is a run whose start never reached the log's reader — a run lost whole among them, which no count inside a run can show."
+      "description": "On run.started only: the client's (source.client) count of the runs it opened naming this variant_id, from 0 — apart for the runs answering one measurement (data.evaluation_id) at one attempt of generating it (data.generation_attempt), which are that result's. A gap here is a run whose start never reached the log's reader — a run lost whole among them, which no count inside a run can show. A client.counted event says in data.runs how many such runs the client had opened, which shows the last of them lost too."
     },
     "run_counted_from": {
       "type": "string",
       "format": "date-time",
-      "description": "On run.started beside run_sequence: when that count began — the moment the client opened the first run it counted for this variant_id. A reader already reading the log then that first hears of the count at a number past 0 never read the runs before it: lost whole, the first among them."
+      "description": "On run.started beside run_sequence, and on client.counted: when that count began — the moment the client opened the first run it counted for this variant_id. A reader already reading the log then that first hears of the count at a number past 0 never read the runs before it: lost whole, the first among them."
     },
     "trace_id": {
       "type": "string",

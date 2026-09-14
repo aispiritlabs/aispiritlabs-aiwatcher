@@ -22,6 +22,7 @@ pub mod dimensions;
 pub mod evaluations;
 pub mod journal;
 pub mod live;
+pub mod measured;
 pub mod metrics;
 pub mod observations;
 pub mod period_fold;
@@ -44,6 +45,7 @@ pub use evaluations::{
 };
 pub use journal::Journal;
 pub use live::{LiveHub, ReplayGap};
+pub use measured::MeasuredRuns;
 pub use metrics::{MetricsFilter, MetricsSummary};
 pub use observations::{
     DurationHistogram, DurationSummary, MissedEvents, ObservedPeriod, VariantObservations,

@@ -588,6 +588,65 @@ pub struct TracedAnswer {
     /// in words ([`Topology::idle_bounds`]): named, and never a refusal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_idle_bounds: Vec<String>,
+    /// The run it names never reached the log, and its client's count of the
+    /// runs it opened for this result passes over one that never arrived
+    /// ([`lost_or_unknown`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost_in_transport: bool,
+    /// The run it names never reached the log, and no client's count of the
+    /// runs it opened for this result passes over one it could be.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unknown_run: bool,
+}
+
+/// One client's count of the runs it opened answering a result, at one attempt
+/// of generating the answers, as the log's reader holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunsCounted {
+    pub client: String,
+    pub attempt: Option<u32>,
+    /// Runs it opened: its own count, or one past the highest number read.
+    pub opened: u64,
+    /// Of those, the runs whose start arrived.
+    pub arrived: u64,
+}
+
+/// Say of each answer naming a run the log never received whether it may be a
+/// run lost in transport — a run its client opened for this result and whose
+/// start never arrived, one for each such number — or a run nobody opened.
+///
+/// Only the counts of the latest attempt at generating the answers are read,
+/// since that is the attempt whose answers these are, and an earlier attempt's
+/// lost runs are nobody's answer. A named run whose start arrived (`started`)
+/// was not lost and is neither. With no count at all — a client that numbers
+/// none — nothing is said.
+pub fn lost_or_unknown(
+    rows: &mut [TracedAnswer],
+    counted: &[RunsCounted],
+    started: impl Fn(&str) -> bool,
+) {
+    let Some(latest) = counted.iter().map(|count| count.attempt).max() else {
+        return;
+    };
+    let mut lost: u64 = counted
+        .iter()
+        .filter(|count| count.attempt == latest)
+        .map(|count| count.opened.saturating_sub(count.arrived))
+        .sum();
+    for row in rows.iter_mut().filter(|row| !row.seen) {
+        let Some(run_id) = row.run_id.as_deref() else {
+            continue;
+        };
+        if started(run_id) {
+            continue;
+        }
+        if lost > 0 {
+            lost -= 1;
+            row.lost_in_transport = true;
+        } else {
+            row.unknown_run = true;
+        }
+    }
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -641,6 +700,14 @@ pub struct GenerationTrace {
     /// and usually meant for another edge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub idle_bounds: Vec<String>,
+    /// Of the runs not on the log, those its client's count says were opened
+    /// for this result and never arrived: lost in transport.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lost_in_transport: usize,
+    /// Of the runs not on the log, those no client's count passes over: runs
+    /// no client opened for this result, such as a run ID made up.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unknown_runs: usize,
     /// Seen runs whose call on the pinned model version a run published under
     /// another credential says it served; absent when the variant pins no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -716,6 +783,8 @@ impl GenerationTrace {
             on_workflow: counted(|row| row.on_workflow),
             workflow_undeclared: rows.iter().any(|row| row.workflow_undeclared),
             steps_unread: rows.iter().filter(|row| row.workflow_steps_unread).count(),
+            lost_in_transport: rows.iter().filter(|row| row.lost_in_transport).count(),
+            unknown_runs: rows.iter().filter(|row| row.unknown_run).count(),
             idle_bounds: {
                 let mut idle: Vec<String> = rows
                     .iter()
@@ -787,6 +856,21 @@ impl GenerationTrace {
                 "{} of the {} runs the answers name were not on the log",
                 self.named - self.seen,
                 self.named
+            ));
+        }
+        if self.lost_in_transport > 0 {
+            said.push(format!(
+                "{} of those runs were lost in transport: their client counted as many runs \
+                 opened for this result whose start never arrived",
+                self.lost_in_transport
+            ));
+        }
+        if self.unknown_runs > 0 {
+            said.push(format!(
+                "{} of those runs are none a client opened for this result: no client's count \
+                 passes over a run they could be, so the answers name runs made up or opened \
+                 for something else",
+                self.unknown_runs
             ));
         }
         if self.workflow_undeclared {
@@ -1635,6 +1719,8 @@ pub fn trace_answers(
             workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
             workflow_steps_unread: false,
             workflow_idle_bounds: idle_bounds.clone(),
+            lost_in_transport: false,
+            unknown_run: false,
         };
         if let (Some(run_id), Some(run)) = (&answer.run_id, traced) {
             let mut said = |sentence: String| {
@@ -2115,6 +2201,8 @@ mod tests {
                 workflow_undeclared: false,
                 steps_unread: 0,
                 idle_bounds: Vec::new(),
+                lost_in_transport: 0,
+                unknown_runs: 0,
                 witnessed_model: Some(0),
                 witnessed_prompt: Some(0),
                 witnessed_answer: Some(0),
@@ -2751,6 +2839,72 @@ mod tests {
             traversed(&together, &retried[..retried.len() - 2]).expect("a retry is no round")[0]
                 .on_workflow,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn a_run_not_on_the_log_is_lost_in_transport_where_its_client_counted_one_that_never_arrived() {
+        let runs = BTreeMap::from([("seen".to_owned(), run(Vec::new()))]);
+        let mut rows = trace_answers(
+            &VariantManifest {
+                model: None,
+                prompt: None,
+                ..variant()
+            },
+            "variant",
+            "answers",
+            &[
+                answer("c1", Some("seen")),
+                answer("c2", Some("lost")),
+                answer("c3", Some("made-up")),
+                answer("c4", Some("still-running")),
+                answer("c5", None),
+            ],
+            &runs,
+            None,
+            &Witnesses::default(),
+        )
+        .expect("nothing contradicts the pins");
+        let counted = |attempt: u32, opened: u64, arrived: u64| RunsCounted {
+            client: "worker".to_owned(),
+            attempt: Some(attempt),
+            opened,
+            arrived,
+        };
+        lost_or_unknown(&mut rows, &[counted(1, 9, 2), counted(2, 4, 3)], |run_id| {
+            run_id == "still-running"
+        });
+        let trace = GenerationTrace::of(&rows);
+
+        assert_eq!(
+            (trace.lost_in_transport, trace.unknown_runs),
+            (1, 1),
+            "the second attempt passed over one run, and the first attempt's lost runs are no answer's"
+        );
+        assert!(rows[1].lost_in_transport && rows[2].unknown_run);
+        assert!(!rows[3].lost_in_transport && !rows[3].unknown_run);
+        let said = trace.shortfall();
+        assert!(
+            said.iter()
+                .any(|sentence| sentence.starts_with("1 of those runs were lost in transport")),
+            "{said:?}"
+        );
+        assert!(
+            said.iter()
+                .any(|sentence| sentence.starts_with("1 of those runs are none a client opened")),
+            "{said:?}"
+        );
+
+        let mut uncounted = rows.clone();
+        for row in &mut uncounted {
+            (row.lost_in_transport, row.unknown_run) = (false, false);
+        }
+        lost_or_unknown(&mut uncounted, &[], |_| false);
+        assert!(
+            uncounted
+                .iter()
+                .all(|row| !row.lost_in_transport && !row.unknown_run),
+            "a client that numbers nothing says nothing"
         );
     }
 

@@ -500,6 +500,7 @@ fn span_kind(event: &RecordedEvent) -> SpanKind {
         | Subject::Eval
         | Subject::Workflow
         | Subject::Execution
+        | Subject::Client
         | Subject::Unknown => SpanKind::Internal,
     }
 }
@@ -522,6 +523,7 @@ fn span_target(event: &RecordedEvent) -> Option<&str> {
         | Subject::Eval
         | Subject::Workflow
         | Subject::Execution
+        | Subject::Client
         | Subject::Unknown => None,
     }
 }
@@ -569,6 +571,7 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
         | Subject::Eval
         | Subject::Workflow
         | Subject::Execution
+        | Subject::Client
         | Subject::Unknown => {}
     }
     out
@@ -807,7 +810,11 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
                 out.push(attr(own::step::SCORE, score));
             }
         }
-        Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Unknown => {}
+        Subject::Eval
+        | Subject::Workflow
+        | Subject::Execution
+        | Subject::Client
+        | Subject::Unknown => {}
     }
     out
 }
@@ -892,6 +899,7 @@ fn operation_for(subject: Subject) -> &'static str {
         | Subject::Eval
         | Subject::Workflow
         | Subject::Execution
+        | Subject::Client
         | Subject::Unknown => "run",
     }
 }

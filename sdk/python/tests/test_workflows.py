@@ -7,13 +7,16 @@ would pass while sending a shape nothing can draw.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from aiwatcher_sdk import AiwatcherClient, Correlation
+from aiwatcher_sdk import AiwatcherClient, Correlation, HttpTransport
 
 
 class RecordingTransport:
@@ -361,7 +364,9 @@ def test_each_client_numbers_the_runs_it_opens_for_a_variant_and_no_measurement_
     starts = {
         event["run_id"]: event.get("run_sequence") for event in transport.of_type("run.started")
     }
-    assert starts == {"run-1": 0, "measured": None, "run-2": 1, "elsewhere": 0}
+    assert starts == {"run-1": 0, "measured": 0, "run-2": 1, "elsewhere": 0}, (
+        "a measurement's runs are a count of their own"
+    )
     assert all(
         "run_sequence" not in event and "run_counted_from" not in event
         for event in transport.events
@@ -375,7 +380,95 @@ def test_each_client_numbers_the_runs_it_opens_for_a_variant_and_no_measurement_
         "a count began when its first run started, and says so on every start after"
     )
     assert began["elsewhere"][0] == began["elsewhere"][1]
-    assert began["measured"][0] is None
+    assert began["measured"][0] == began["measured"][1]
+
+
+def test_a_measurement_s_runs_are_counted_per_attempt_and_every_count_is_said_when_it_moves(
+    transport: RecordingTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = AiwatcherClient(service="worker", transport=transport, variant_id="v1")
+    for attempt in (1, 1, 2):
+        with client.run(f"case-{attempt}", evaluation_id="e1", generation_attempt=attempt):
+            pass
+    with client.run("served"):
+        pass
+
+    numbers = [
+        (event["data"].get("generation_attempt"), event["run_sequence"])
+        for event in transport.of_type("run.started")
+    ]
+    assert numbers == [(1, 0), (1, 1), (2, 0), (None, 0)], "a retried attempt is no gap"
+    assert not transport.of_type("client.counted"), "nothing is said before it is due"
+
+    client.publish_counts()
+    client.publish_counts()
+    counted = transport.of_type("client.counted")
+    said = {
+        (
+            event["data"].get("evaluation_id", ""),
+            event["data"].get("generation_attempt", 0),
+            event["data"]["runs"],
+        )
+        for event in counted
+    }
+    assert len(counted) == 3, "a count that did not move is not said again"
+    assert said == {("e1", 1, 2), ("e1", 2, 1), ("", 0, 1)}
+    assert {event["run_id"] for event in counted} == {f"client-{counted[0]['source']['client']}"}
+    assert all("sequence" not in event and event["variant_id"] == "v1" for event in counted)
+    starts = {event["run_id"]: event for event in transport.of_type("run.started")}
+    assert {
+        event["run_counted_from"] for event in counted if not event["data"].get("evaluation_id")
+    } == {starts["served"]["occurred_at"]}
+
+    monkeypatch.setattr("aiwatcher_sdk.COUNTS_EVERY", 0.0)
+    with client.run("served-again"):
+        pass
+    assert [event["data"]["runs"] for event in transport.of_type("client.counted")[3:]] == [2], (
+        "past the interval, a count that moved is said with the next event"
+    )
+    client.close()
+    assert len(transport.of_type("client.counted")) == 4, "closing says only what moved"
+
+
+def test_a_count_a_transport_could_not_deliver_is_sent_by_the_next_one_on_its_spool(
+    tmp_path: Path,
+) -> None:
+    received: list[dict[str, Any]] = []
+
+    class Ingest(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers["content-length"]))
+            received.extend(json.loads(body)["events"])
+            self.send_response(202)
+            self.end_headers()
+
+        def log_message(self, *_: object) -> None:
+            return None
+
+    spool = tmp_path / "spool"
+    down = AiwatcherClient(
+        service="worker",
+        transport=HttpTransport("http://127.0.0.1:9", timeout=0.5, spool_dir=spool),
+        variant_id="v1",
+    )
+    with down.run("lost"):
+        pass
+    down.close()
+    kept = list(spool.glob("counted-*.json"))
+    assert len(kept) == 1, "the count, and nothing a run said"
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Ingest)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        after = HttpTransport(f"http://127.0.0.1:{server.server_address[1]}", spool_dir=spool)
+        after.close()
+    finally:
+        server.shutdown()
+    assert [(event["event_type"], event["data"]["runs"]) for event in received] == [
+        ("client.counted", 1)
+    ]
+    assert received[0]["run_id"].startswith("client-"), "sent as the client that counted it"
+    assert not list(spool.glob("counted-*.json")), "a delivered count is forgotten"
 
 
 def test_events_from_many_threads_reach_the_transport_in_the_order_they_were_numbered() -> None:
@@ -441,6 +534,14 @@ def test_a_shared_bound_on_anything_but_one_loop_s_ways_back_is_refused_naming_i
     assert not transport.of_type("workflow.declared"), "nothing declared a shape it cannot keep"
 
 
+def edge(source: str, target: str, *, at_most: int | None = None) -> dict[str, Any]:
+    """An edge in the object form, bound where ``at_most`` is given."""
+    declared: dict[str, Any] = {"from": source, "to": target}
+    if at_most is not None:
+        declared["at_most"] = at_most
+    return declared
+
+
 def test_an_edge_bound_that_holds_nothing_is_refused_naming_both_numbers(
     client: AiwatcherClient, transport: RecordingTransport
 ) -> None:
@@ -453,22 +554,27 @@ def test_an_edge_bound_that_holds_nothing_is_refused_naming_both_numbers(
         client.workflow(
             "rank",
             nodes=["retrieve", "rank", "answer"],
-            edges=[("retrieve", "rank"), {"from": "rank", "to": "answer", "at_most": 1}],
+            edges=[edge("retrieve", "rank"), edge("rank", "answer", at_most=1)],
         ),
     ):
         pass
-    joined = [("plan", "search"), ("plan", "browse"), ("search", "merge"), ("browse", "merge")]
+    joined = [
+        edge("plan", "search"),
+        edge("plan", "browse"),
+        edge("search", "merge"),
+        edge("browse", "merge"),
+    ]
     with (
         pytest.raises(ValueError, match="since merge completes at most 2 times"),
         client.workflow(
             "join",
             nodes=["plan", "search", "browse", "merge", "answer"],
-            edges=[*joined, {"from": "merge", "to": "answer", "at_most": 2}],
+            edges=[*joined, edge("merge", "answer", at_most=2)],
         ),
     ):
         pass
     loop = ["write", "review", "fix"]
-    ways_back = [("write", "review"), ("review", "fix"), ("fix", "write")]
+    ways_back = [edge("write", "review"), edge("review", "fix"), edge("fix", "write")]
     with (
         pytest.raises(
             ValueError,
@@ -478,7 +584,7 @@ def test_an_edge_bound_that_holds_nothing_is_refused_naming_both_numbers(
         client.workflow(
             "revise",
             nodes=loop,
-            edges=[*ways_back, {"from": "review", "to": "write", "at_most": 3}],
+            edges=[*ways_back, edge("review", "write", at_most=3)],
             bounds=[{"edges": [("review", "write"), ("fix", "write")], "at_most": 2}],
         ),
     ):
@@ -488,19 +594,20 @@ def test_an_edge_bound_that_holds_nothing_is_refused_naming_both_numbers(
     with client.workflow(
         "join",
         nodes=["plan", "search", "browse", "merge", "answer"],
-        edges=[*joined, {"from": "merge", "to": "answer", "at_most": 1}],
+        edges=[*joined, edge("merge", "answer", at_most=1)],
     ):
         pass
+    items: list[dict[str, Any]] = [{"id": "retrieve"}, {"id": "answer", "repeats": True}]
     with client.workflow(
         "items",
-        nodes=["retrieve", {"id": "answer", "repeats": True}, "summarize"],
-        edges=[("retrieve", "answer"), {"from": "answer", "to": "summarize", "at_most": 3}],
+        nodes=[*items, {"id": "summarize"}],
+        edges=[edge("retrieve", "answer"), edge("answer", "summarize", at_most=3)],
     ):
         pass
     with client.workflow(
         "revise",
         nodes=loop,
-        edges=[*ways_back, {"from": "review", "to": "write", "at_most": 2}],
+        edges=[*ways_back, edge("review", "write", at_most=2)],
     ):
         pass
     assert len(transport.of_type("workflow.declared")) == 3, (

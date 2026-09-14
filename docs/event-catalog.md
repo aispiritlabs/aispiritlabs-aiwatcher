@@ -45,6 +45,7 @@ than the backend keeps working.
 | `execution.completed` | end (ok) | closes it |
 | `execution.failed` | end (error) | closes it |
 | `execution.cancelled` | end (error) | closes it, on request |
+| `client.counted` | point | a client's count of the runs it opened for a variant (`data.runs`), apart for a measurement (`data.evaluation_id`) and an attempt at generating it (`data.generation_attempt`); its `run_id` names the client — **no span**, no run |
 
 ## Matching a start to its end
 

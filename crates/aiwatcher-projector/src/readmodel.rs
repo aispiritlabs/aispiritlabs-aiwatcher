@@ -23,6 +23,7 @@ use crate::evaluations::{
     EvaluationConfig, EvaluationDetail, EvaluationFilter, EvaluationPage, EvaluationState,
     SuitePage,
 };
+use crate::measured::{MeasuredRuns, MeasuredState};
 use crate::workflows::{
     ExecutionDetail, ExecutionFilter, ExecutionPage, WorkflowConfig, WorkflowDefinition,
     WorkflowFilter, WorkflowPage, WorkflowState,
@@ -454,6 +455,9 @@ struct State {
     /// Workflow graphs. Folded *alongside* runs rather than apart from them —
     /// see [`ReadModel::apply`].
     workflows: WorkflowState,
+    /// What clients counted of the runs they opened for measurements — see
+    /// [`crate::measured`].
+    measured: MeasuredState,
 }
 
 /// The panel's projection of the log.
@@ -492,6 +496,15 @@ impl ReadModel {
             // execution out of a report.
             state.evaluations.apply(event, &self.config.evaluations);
             return;
+        }
+        if event.event_type.subject() == Subject::Client {
+            // A client's count of its runs: its `run_id` names the client, and
+            // a row for it in the runs list would be a run nobody opened.
+            state.measured.apply(event);
+            return;
+        }
+        if event.event_type == EventType::RunStarted {
+            state.measured.apply(event);
         }
         let run_id = event.metadata.run_id.clone();
         if !state.runs.contains_key(&run_id) {
@@ -624,6 +637,12 @@ impl ReadModel {
                     })
             })
             .collect()
+    }
+
+    /// What each client counted of the runs it opened for one measurement, at
+    /// each attempt of generating its answers.
+    pub async fn measured_runs(&self, evaluation_id: &str) -> Vec<MeasuredRuns> {
+        self.state.read().await.measured.of(evaluation_id)
     }
 
     pub async fn list(&self, filter: &RunFilter) -> RunPage {
@@ -1178,6 +1197,41 @@ mod tests {
         assert!(
             model.run("eval-1").await.is_none(),
             "nor is it an agent run"
+        );
+    }
+
+    /// A client's count of its runs is no run of its own, and the measurement
+    /// it counts for reads it beside the starts that arrived.
+    #[tokio::test]
+    async fn a_client_s_count_lists_no_run_and_is_read_beside_a_measurement_s_starts() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-14 09:00:00 UTC);
+        let mut source = Source::new("worker", Sdk::Python);
+        source.client = Some("worker-1".to_owned());
+        let mut start = EventEnvelope::new(EventType::RunStarted, "generate-1", at, source.clone())
+            .with_data(serde_json::json!({ "evaluation_id": "e1", "generation_attempt": 1 }));
+        start.run_sequence = Some(1);
+        start.variant_id = Some("v1".to_owned());
+        model.apply(&start.record(1, 1, at, None)).await;
+        let mut counted =
+            EventEnvelope::new(EventType::ClientCounted, "client-worker-1", at, source).with_data(
+                serde_json::json!({ "evaluation_id": "e1", "generation_attempt": 1, "runs": 2 }),
+            );
+        counted.variant_id = Some("v1".to_owned());
+        model.apply(&counted.record(2, 2, at, None)).await;
+
+        assert!(model.run("client-worker-1").await.is_none());
+        assert_eq!(model.len().await, 1);
+        assert_eq!(
+            model.measured_runs("e1").await,
+            [crate::MeasuredRuns {
+                client: "worker-1".to_owned(),
+                attempt: Some(1),
+                opened: 2,
+                arrived: 1,
+            }]
         );
     }
 

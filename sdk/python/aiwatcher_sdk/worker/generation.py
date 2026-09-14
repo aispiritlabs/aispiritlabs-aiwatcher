@@ -31,7 +31,7 @@ import hashlib
 import time
 import uuid
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from aiwatcher_sdk.task import Task
@@ -74,6 +74,13 @@ class Generation:
     #: (``client.run(…, variant_id=run.variant_id, evaluation_id=run.evaluation_id)``),
     #: so a trace says which variant made it and that a measurement did.
     variant_id: str = ""
+    #: The attempt at generating these answers. A run the application opens
+    #: names it, so its client counts this attempt's runs apart from a
+    #: retried one's, and a run lost in transport is told from one nobody opened.
+    attempt: int | None = None
+    #: The telemetry clients runs were opened with, which say how many runs
+    #: they opened for this result when the attempt ends.
+    clients: list[AiwatcherClient] = field(default_factory=list, compare=False, repr=False)
 
     @contextlib.contextmanager
     def traced(self, client: AiwatcherClient, case: Case) -> Generator[RunContext, None, None]:
@@ -84,10 +91,12 @@ class Generation:
         (``Generated(…, run_id=traced.correlation.run_id)``) and every model call
         made inside it is what the answer is held to.
         """
+        self._counting(client)
         with client.run(
             f"generate-{self.evaluation_id}-{case.case_id}-{uuid.uuid4().hex[:12]}",
             variant_id=self.variant_id or None,
             evaluation_id=self.evaluation_id,
+            generation_attempt=self.attempt,
         ) as run:
             yield run
 
@@ -123,6 +132,7 @@ class Generation:
         the run on the answer as with
         :meth:`traced` (``run_id=flow.correlation.run_id``).
         """
+        self._counting(client)
         with client.workflow(
             workflow_id,
             nodes=nodes,
@@ -131,8 +141,24 @@ class Generation:
             run_id=f"generate-{self.evaluation_id}-{case.case_id}-{uuid.uuid4().hex[:12]}",
             variant_id=self.variant_id or None,
             evaluation_id=self.evaluation_id,
+            generation_attempt=self.attempt,
         ) as flow:
             yield flow
+
+    def _counting(self, client: AiwatcherClient) -> None:
+        """Remember a client runs are opened with, once."""
+        if not any(client is held for held in self.clients):
+            self.clients.append(client)
+
+    def publish_counts(self) -> None:
+        """Have every client runs were opened with say how many it opened, now.
+
+        What shows the last run of the attempt lost in transport before the
+        traces step reads the log, rather than whenever the client next speaks.
+        """
+        for client in self.clients:
+            client.publish_counts()
+            client.flush()
 
 
 @dataclass(frozen=True)
@@ -272,6 +298,7 @@ def generation_task(
                 variant=variant,
                 params=params,
                 variant_id=variant_id,
+                attempt=context.assignment.attempt,
             )
             held = generated_with(run)
             disagreements = held.disagreements(variant)
@@ -304,6 +331,7 @@ def generation_task(
                     usage["output_tokens"] = answered.output_tokens
                 written["usage"] = usage
                 rows.append(written)
+            run.publish_counts()
             context.write_artifact(ANSWERS, rows)
             context.write_artifact(GENERATED_WITH, [held.row()])
             return {"answered": len(rows)}

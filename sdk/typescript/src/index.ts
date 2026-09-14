@@ -50,10 +50,11 @@ export interface EventEnvelope {
   sequence?: number;
   /**
    * On a run's start: this client's count of the runs it opened naming the
-   * variant and answering no measurement, from 0 — what shows a run lost whole.
+   * variant, from 0 — apart for a measurement's runs, per result and attempt
+   * at generating it — what shows a run lost whole.
    */
   run_sequence?: number;
-  /** On a run's start beside `run_sequence`: when that count began. */
+  /** On a run's start beside `run_sequence`, and on `client.counted`: when that count began. */
   run_counted_from?: string;
   trace_id?: string;
   span_id?: string;
@@ -210,7 +211,23 @@ export const MOST_RUNS_NUMBERED = 100_000;
  * first is forgotten past it, and counts again from nought.
  */
 export const MOST_VARIANTS_NUMBERED = 1_024;
+/**
+ * How often, at most, a long-lived client says how many runs it has opened —
+ * and only when it has opened another since it last said.
+ */
+export const COUNTS_EVERY_MS = 300_000;
 const RUN_ENDS = new Set(['run.completed', 'run.failed']);
+
+/** What one count of a client's runs is kept for. */
+interface RunCount {
+  variantId: string;
+  evaluationId?: string;
+  attempt?: number;
+  next: number;
+  since: string;
+  /** What the last `client.counted` said of it. */
+  said?: number;
+}
 
 export interface ClientOptions {
   service: string;
@@ -233,7 +250,8 @@ export class AiwatcherClient {
   readonly #source: Source;
   readonly #variantId: string | undefined;
   readonly #sequences = new Map<string, number>();
-  readonly #runSequences = new Map<string, { next: number; since: string }>();
+  readonly #runSequences = new Map<string, RunCount>();
+  #countsSaidAt = Date.now();
 
   constructor(options: ClientOptions) {
     this.#transport =
@@ -281,14 +299,67 @@ export class AiwatcherClient {
    * count began says whether a reader first hearing of it past nought was
    * already reading when those runs started.
    */
-  #nextRunSequence(variantId: string, occurredAt: string): { run_sequence: number; run_counted_from: string } {
-    const count = this.#runSequences.get(variantId) ?? { next: 0, since: occurredAt };
-    if (!this.#runSequences.has(variantId) && this.#runSequences.size >= MOST_VARIANTS_NUMBERED) {
+  #nextRunSequence(
+    variantId: string,
+    data: Record<string, unknown>,
+    occurredAt: string,
+  ): { run_sequence: number; run_counted_from: string } {
+    const evaluationId = typeof data.evaluation_id === 'string' ? data.evaluation_id : undefined;
+    const attempt =
+      evaluationId !== undefined && Number.isInteger(data.generation_attempt)
+        ? (data.generation_attempt as number)
+        : undefined;
+    const key = JSON.stringify([variantId, evaluationId ?? null, attempt ?? null]);
+    const count = this.#runSequences.get(key) ?? {
+      variantId,
+      ...(evaluationId === undefined ? {} : { evaluationId }),
+      ...(attempt === undefined ? {} : { attempt }),
+      next: 0,
+      since: occurredAt,
+    };
+    if (!this.#runSequences.has(key) && this.#runSequences.size >= MOST_VARIANTS_NUMBERED) {
       const oldest = this.#runSequences.keys().next();
       if (!oldest.done) this.#runSequences.delete(oldest.value);
     }
-    this.#runSequences.set(variantId, { next: count.next + 1, since: count.since });
+    this.#runSequences.set(key, { ...count, next: count.next + 1 });
     return { run_sequence: count.next, run_counted_from: count.since };
+  }
+
+  /**
+   * Say how many runs this client has opened, for each count that moved.
+   *
+   * One `client.counted` per variant — and per measurement and attempt at
+   * generating it — whose count grew since the last one said: what shows a run
+   * whose every event was lost where no later start of this client arrives to
+   * pass over its number. Sent on `close()` and, in a long process, with the
+   * next event once `COUNTS_EVERY_MS` has passed. It rides the same transport
+   * as the runs, so a transport that stays down loses it too.
+   */
+  publishCounts(): void {
+    this.#countsSaidAt = Date.now();
+    for (const count of this.#runSequences.values()) {
+      if (count.said === count.next) continue;
+      count.said = count.next;
+      this.#transport.send([
+        {
+          schema_version: SCHEMA_VERSION,
+          kind: 'Event',
+          event_id: newId(),
+          event_type: 'client.counted',
+          occurred_at: now(),
+          // A count names the client that kept it, not a run.
+          run_id: `client-${this.#source.client}`,
+          variant_id: count.variantId,
+          run_counted_from: count.since,
+          source: this.#source,
+          data: {
+            runs: count.next,
+            ...(count.evaluationId === undefined ? {} : { evaluation_id: count.evaluationId }),
+            ...(count.attempt === undefined ? {} : { generation_attempt: count.attempt }),
+          },
+        },
+      ]);
+    }
   }
 
   /**
@@ -316,9 +387,9 @@ export class AiwatcherClient {
         occurred_at: at,
         run_id: context.runId,
         sequence: this.#nextSequence(context.runId, eventType),
-        // A measurement's run is in no count: what it answers is a result's.
-        ...(eventType === 'run.started' && context.variantId && data.evaluation_id === undefined
-          ? this.#nextRunSequence(context.variantId, at)
+        // A measurement's runs are a count of their own: what they answer is a result's.
+        ...(eventType === 'run.started' && context.variantId
+          ? this.#nextRunSequence(context.variantId, data, at)
           : {}),
         correlation_id: context.correlationId,
         source: this.#source,
@@ -331,6 +402,7 @@ export class AiwatcherClient {
         ...(context.causationId ? { causation_id: context.causationId } : {}),
       },
     ]);
+    if (Date.now() - this.#countsSaidAt >= COUNTS_EVERY_MS) this.publishCounts();
     return eventId;
   }
 
@@ -365,6 +437,11 @@ export class AiwatcherClient {
           variantId?: string;
           evaluationId?: string;
           callerRunId?: string;
+          /**
+           * The attempt at generating `evaluationId`'s answers this run was
+           * opened by: a measurement's runs are counted per result and attempt.
+           */
+          generationAttempt?: number;
         }
       | undefined,
     body: (run: RunScope) => Promise<T>,
@@ -382,6 +459,9 @@ export class AiwatcherClient {
     };
     this.emit('run.started', context, {
       ...(options?.evaluationId ? { evaluation_id: options.evaluationId } : {}),
+      ...(options?.evaluationId && options.generationAttempt !== undefined
+        ? { generation_attempt: options.generationAttempt }
+        : {}),
       ...(options?.callerRunId ? { caller_run_id: options.callerRunId } : {}),
     });
     try {
@@ -522,7 +602,9 @@ export class AiwatcherClient {
     return context.runId;
   }
 
+  /** Say how many runs this client opened, then close its transport. */
   async close(): Promise<void> {
+    this.publishCounts();
     await this.#transport.close();
   }
 }

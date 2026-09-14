@@ -197,14 +197,19 @@ pub struct EventEnvelope {
     pub sequence: Option<u64>,
 
     /// On a run's start: the client's count of the runs it opened naming this
-    /// run's variant and answering no measurement, from nought. A number passed
-    /// over is a run whose start never reached the log's reader — a run lost
-    /// whole among them, which no count inside a run can show.
+    /// run's variant, from nought — apart for the runs answering one
+    /// measurement (`data.evaluation_id`) at one attempt of generating it
+    /// (`data.generation_attempt`), which are that result's and in no count of
+    /// what the variant was observed doing. A number passed over is a run whose
+    /// start never reached the log's reader — a run lost whole among them,
+    /// which no count inside a run can show. A `client.counted` says how many
+    /// such runs the client had opened, in `data.runs`, which shows the last of
+    /// them lost too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_sequence: Option<u64>,
 
-    /// Beside `run_sequence`: when that count began — the moment the client
-    /// opened the first run it counted for this variant. A reader that was
+    /// Beside `run_sequence`, and on a `client.counted`: when that count began —
+    /// the moment the client opened the first run it counted. A reader that was
     /// already reading the log then, and first hears of the count further on,
     /// never read the runs before it: they are lost, the first among them.
     #[serde(

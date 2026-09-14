@@ -1111,5 +1111,12 @@ def test_a_traced_run_is_named_by_its_answer_and_names_the_variant_and_measureme
     assert len(started) == 1
     assert row["run_id"] == started[0]["run_id"]
     assert started[0]["variant_id"] == "v" * 64
-    assert started[0]["data"] == {"evaluation_id": "candidate-1"}
+    assert started[0]["data"] == {"evaluation_id": "candidate-1", "generation_attempt": 1}
+    assert started[0]["run_sequence"] == 0, "counted for this result's attempt alone"
+    [counted] = [event for event in recorded.events if event["event_type"] == "client.counted"]
+    assert counted["data"] == {
+        "runs": 1,
+        "evaluation_id": "candidate-1",
+        "generation_attempt": 1,
+    }, "the attempt ends by saying how many runs it opened"
     assert {event["variant_id"] for event in recorded.events} == {"v" * 64}

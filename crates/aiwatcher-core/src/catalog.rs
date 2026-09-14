@@ -56,6 +56,14 @@ pub enum Subject {
     /// request. The executions of its *nodes* are [`Self::Step`], and those do
     /// form spans. See ADR_0026.
     Execution,
+    /// What a telemetry client says about itself rather than about a request:
+    /// how many runs it has opened for a variant, so a run whose every event it
+    /// lost is still counted where no later start of that client arrives.
+    ///
+    /// Forms no span: a count is a statement, not something that happened to
+    /// a request, and its `run_id` names the client that counted rather than
+    /// a run.
+    Client,
     Unknown,
 }
 
@@ -71,6 +79,7 @@ impl Subject {
             Self::Eval => "eval",
             Self::Workflow => "workflow",
             Self::Execution => "execution",
+            Self::Client => "client",
             Self::Unknown => "unknown",
         }
     }
@@ -207,6 +216,11 @@ event_catalog! {
     ExecutionCompleted     => "execution.completed",      Subject::Execution, Phase::End { ok: true };
     ExecutionFailed        => "execution.failed",         Subject::Execution, Phase::End { ok: false };
     ExecutionCancelled     => "execution.cancelled",      Subject::Execution, Phase::End { ok: false };
+
+    // A client's count of the runs it opened for a variant — for a result and
+    // one attempt at it too — sent when it closes and now and then after it
+    // opened another: what shows a lost run no later start of that client does.
+    ClientCounted => "client.counted", Subject::Client, Phase::Point;
 }
 
 /// The step kinds this build knows how to name and classify.
@@ -282,13 +296,16 @@ impl EventType {
     /// somebody answers it, and a waterfall bar the width of a lunch break is
     /// noise in every trace it lands in. Its *attempts* are `step.*`.
     ///
+    /// A client's count of its runs is the fourth: a statement a client makes
+    /// about itself, whose `run_id` names the client rather than a run.
+    ///
     /// Distinct from [`Self::is_high_cardinality`], which suppresses a *record*
     /// for an event that still belongs to a span.
     #[must_use]
     pub fn forms_span(&self) -> bool {
         !matches!(
             self.subject(),
-            Subject::Eval | Subject::Workflow | Subject::Execution
+            Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Client
         )
     }
 
@@ -326,6 +343,8 @@ impl EventType {
             // to land where its first delivery did, exactly as an evaluation's
             // does. Never used for a span — see `forms_span`.
             Subject::Execution => "execution".to_owned(),
+            // Never used for a span — see `forms_span`.
+            Subject::Client => "client".to_owned(),
             Subject::Unknown => format!("event:{}", self.as_str()),
         }
     }
@@ -349,9 +368,14 @@ impl EventType {
             // reads the same way `chat gpt-5` does.
             (Subject::Step, Some(target)) => target.to_owned(),
             (Subject::Step, None) => "step".to_owned(),
-            (Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Unknown, _) => {
-                self.as_str().to_owned()
-            }
+            (
+                Subject::Eval
+                | Subject::Workflow
+                | Subject::Execution
+                | Subject::Client
+                | Subject::Unknown,
+                _,
+            ) => self.as_str().to_owned(),
         }
     }
 }
@@ -457,7 +481,7 @@ mod tests {
                 event_type.forms_span(),
                 !matches!(
                     event_type.subject(),
-                    Subject::Eval | Subject::Workflow | Subject::Execution
+                    Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Client
                 ),
                 "{event_type} disagrees with its subject about being traced"
             );

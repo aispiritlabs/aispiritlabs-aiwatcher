@@ -482,6 +482,18 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           ? 'Every answer was seen made on what the variant pins that a trace can show.'
           : `${traces.answers - traces.named} named no run; a run the log never received contradicts nothing, and is counted rather than refused.`}
       </p>
+      {/* Counted where a client said how many runs it opened for this result:
+          a run it lost is not a run nobody opened, and each says what to fix. */}
+      {traces.lost_in_transport ? (
+        <p>
+          {`${traces.lost_in_transport} of the runs not on the log were lost in transport: their client counted as many runs opened for this result whose start never arrived.`}
+        </p>
+      ) : null}
+      {traces.unknown_runs ? (
+        <p>
+          {`${traces.unknown_runs} of the runs not on the log are none a client opened for this result — made up, or opened for something else.`}
+        </p>
+      ) : null}
       {traces.workflow_undeclared ? (
         <p>
           The declaration of the pinned workflow names no node that could be read, so no run could

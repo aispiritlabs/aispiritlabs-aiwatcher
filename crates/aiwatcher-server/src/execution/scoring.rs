@@ -1166,7 +1166,7 @@ impl ActivityExecutor for TracesExecutor {
         } else {
             witnesses
         };
-        let rows = trace_answers(
+        let mut rows = trace_answers(
             &declared.run.variant,
             prepared.variant_id(),
             &declared.run.evaluation_id,
@@ -1182,6 +1182,31 @@ impl ActivityExecutor for TracesExecutor {
                 contradictions.join("; ")
             ))
         })?;
+        // Of the runs not on the log, which a client counted and lost and which
+        // no client opened for this result.
+        let counted: Vec<aiwatcher_evaluation::RunsCounted> = self
+            .read_model
+            .measured_runs(&declared.run.evaluation_id)
+            .await
+            .into_iter()
+            .map(|count| aiwatcher_evaluation::RunsCounted {
+                client: count.client,
+                attempt: count.attempt,
+                opened: count.opened,
+                arrived: count.arrived,
+            })
+            .collect();
+        let mut started = std::collections::BTreeSet::new();
+        for row in rows.iter().filter(|row| !row.seen) {
+            if let Some(run_id) = row.run_id.as_deref()
+                && self.read_model.run(run_id).await.is_some()
+            {
+                started.insert(run_id.to_owned());
+            }
+        }
+        aiwatcher_evaluation::lost_or_unknown(&mut rows, &counted, |run_id| {
+            started.contains(run_id)
+        });
         let trace = GenerationTrace::of(&rows);
         let table: Vec<std::collections::BTreeMap<String, serde_json::Value>> = rows
             .iter()

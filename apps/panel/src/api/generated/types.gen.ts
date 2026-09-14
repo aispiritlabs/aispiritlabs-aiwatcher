@@ -2723,8 +2723,8 @@ export type EventEnvelope = {
     occurred_at: string;
     parent_span_id?: null | SpanId;
     /**
-     * Beside `run_sequence`: when that count began — the moment the client
-     * opened the first run it counted for this variant. A reader that was
+     * Beside `run_sequence`, and on a `client.counted`: when that count began —
+     * the moment the client opened the first run it counted. A reader that was
      * already reading the log then, and first hears of the count further on,
      * never read the runs before it: they are lost, the first among them.
      */
@@ -2735,9 +2735,14 @@ export type EventEnvelope = {
     run_id: string;
     /**
      * On a run's start: the client's count of the runs it opened naming this
-     * run's variant and answering no measurement, from nought. A number passed
-     * over is a run whose start never reached the log's reader — a run lost
-     * whole among them, which no count inside a run can show.
+     * run's variant, from nought — apart for the runs answering one
+     * measurement (`data.evaluation_id`) at one attempt of generating it
+     * (`data.generation_attempt`), which are that result's and in no count of
+     * what the variant was observed doing. A number passed over is a run whose
+     * start never reached the log's reader — a run lost whole among them,
+     * which no count inside a run can show. A `client.counted` says how many
+     * such runs the client had opened, in `data.runs`, which shows the last of
+     * them lost too.
      */
     run_sequence?: number | null;
     /**
@@ -2817,7 +2822,7 @@ export type EventPage = {
  * must not have its events rejected. They are stored and streamed
  * live, they simply take part in no span.
  */
-export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | 'ExecutionRequested' | 'ExecutionStarted' | 'ExecutionPaused' | 'ExecutionAwaitingInput' | 'ExecutionResumed' | 'ExecutionCompleted' | 'ExecutionFailed' | 'ExecutionCancelled' | {
+export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | 'ExecutionRequested' | 'ExecutionStarted' | 'ExecutionPaused' | 'ExecutionAwaitingInput' | 'ExecutionResumed' | 'ExecutionCompleted' | 'ExecutionFailed' | 'ExecutionCancelled' | 'ClientCounted' | {
     Unknown: string;
 };
 
@@ -3863,6 +3868,11 @@ export type GenerationTrace = {
      */
     idle_bounds?: Array<string>;
     /**
+     * Of the runs not on the log, those its client's count says were opened
+     * for this result and never arrived: lost in transport.
+     */
+    lost_in_transport?: number;
+    /**
      * Answers naming the run they were made in.
      */
     named: number;
@@ -3900,6 +3910,11 @@ export type GenerationTrace = {
      * past them was therefore not read.
      */
     steps_unread?: number;
+    /**
+     * Of the runs not on the log, those no client's count passes over: runs
+     * no client opened for this result, such as a run ID made up.
+     */
+    unknown_runs?: number;
     /**
      * Answers that are, word for word, a reply such a run relayed for their
      * run; absent when the variant pins neither a model nor a prompt.
