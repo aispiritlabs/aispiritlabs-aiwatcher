@@ -73,7 +73,8 @@ client.flush()
 ```
 
 `sdk/typescript` mirrors it. With `AIWATCHER_URL` unset both drop everything, so
-importing either never breaks a test. Unknown event types are stored and streamed,
+importing either never breaks a test. `sdk/go` covers runs, agents and their model
+and tool calls, and a client given no transport drops everything the same way. Unknown event types are stored and streamed,
 never rejected. Event types: [docs/event-catalog.md](docs/event-catalog.md).
 
 ## The panel

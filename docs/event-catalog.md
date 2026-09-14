@@ -54,7 +54,7 @@ when both carry the same `agent_id` and the same `data.call_id`, because the
 span id derives from those.
 
 **Two concurrent LLM calls inside one agent with no `call_id` collapse into one
-span.** Both SDKs generate a `call_id` by default; pass your provider's request
+span.** Every SDK generates a `call_id` by default; pass your provider's request
 id where you have one, so the span joins up with the provider's own logs.
 
 ## Steps: everything else with a start and an end
@@ -328,7 +328,7 @@ a missing `finally`, or a network partition.
 2. If it carries fields worth putting on a span, extend `payload_attributes` in
    `crates/aiwatcher-trace/src/assembler.rs`.
 3. Add it to this table and to `contracts/envelope.schema.json`.
-4. Both SDKs pick it up for free — `emit` takes the type as a string.
+4. Every SDK picks it up for free — `emit` takes the type as a string.
 
 Deployment order matters in one direction only: producers may emit a new type
 before the backend knows it (it passes through as `Unknown`), but a backend that

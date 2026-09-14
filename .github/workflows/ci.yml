@@ -444,6 +444,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: sdk/go/go.mod
+          cache-dependency-path: sdk/go/go.sum
       # No `setup-python`: uv installs the interpreter, and `--python 3.13`
       # below runs the suite on the floor `requires-python` claims rather than
       # on whatever the runner ships.
@@ -463,6 +467,15 @@ jobs:
           npm install --no-audit --no-fund
           npx tsc --noEmit
           npm test
+
+      # The contract test reads contracts/envelope.schema.json, so an envelope
+      # field that drifts from the wire format fails here.
+      - name: go sdk
+        working-directory: sdk/go
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test -race ./...
 
       - name: python sdk
         working-directory: sdk/python

@@ -664,6 +664,17 @@ sdk-check:
     uv run mypy .
     uv run pytest -q
 
+# ── Go SDK ───────────────────────────────────────────────────────────────────
+
+# Format-check, vet and test the Go SDK, race detector on.
+sdk-go-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd sdk/go
+    test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+    go vet ./...
+    go test -race ./...
+
 # The workflow engine agents are built on (AW-2): a distribution of its own in
 # sdk/agentic, with no runtime dependencies and a lock of its own.
 sdk_agentic := "sdk/agentic"
