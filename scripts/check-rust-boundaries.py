@@ -61,7 +61,7 @@ class BoundaryTests(unittest.TestCase):
         dependency["kind"] = None
         self.assertEqual(len(violations(self.metadata)), 1)
 
-    def test_evaluation_cannot_reach_transport_or_another_domains_storage(self):
+    def test_evaluation_only_reaches_prompts_as_a_test_fixture(self):
         for target in ("api", "projector", "training", "prompts", "execution"):
             for kind in (None, "build", "dev"):
                 with self.subTest(target=target, kind=kind):
@@ -71,7 +71,8 @@ class BoundaryTests(unittest.TestCase):
                         ]},
                         {"id": target, "name": f"aiwatcher-{target}", "dependencies": []},
                     ]}
-                    self.assertEqual(len(violations(metadata)), 1)
+                    expected = 0 if target == "prompts" and kind == "dev" else 1
+                    self.assertEqual(len(violations(metadata)), expected)
 
     def test_new_crates_require_review_even_without_edges(self):
         self.metadata["packages"][0]["name"] = "aiwatcher-unreviewed-context"
