@@ -486,6 +486,7 @@ function DatasetCatalog({
                 </Badge>
               </div>
               <div className="mt-2 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+                {dataset.latest.sample ? <Badge tone="warning">Sample</Badge> : null}
                 <span>{dataset.latest.row_count} items</span>
                 <span>·</span>
                 <code className="id">{dataset.latest.version.slice(0, 12)}</code>

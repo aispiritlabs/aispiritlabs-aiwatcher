@@ -133,6 +133,11 @@ pub enum Credential {
 /// An authenticated caller.
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Identity {
+    /// The verified OIDC issuer. Absent for older sessions and non-OIDC
+    /// credentials; those cannot be converted into an IAM principal by
+    /// guessing the provider currently configured on the instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
     /// The provider's stable identifier — `sub` on an OIDC token. Never the
     /// email, which people change.
     pub subject: String,
@@ -183,6 +188,7 @@ impl Identity {
     #[must_use]
     pub fn anonymous() -> Self {
         Self {
+            issuer: None,
             subject: "anonymous".to_owned(),
             username: None,
             name: None,

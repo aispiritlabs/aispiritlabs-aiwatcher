@@ -1,5 +1,6 @@
 import {
   Boxes,
+  BookOpen,
   Database,
   FlaskConical,
   type LucideIcon,
@@ -17,10 +18,9 @@ import {
 /**
  * The navigation, as one description rather than as markup in eleven files.
  *
- * Areas sit in three sections — Feature, Training, Inference — one per stage of
- * the lifecycle; CLAUDE.md's Panel section says where the line falls and why.
- * The root layout draws the sections as a header, and the lit section's areas
- * and their views as a sidebar, so both lower levels are visible at once.
+ * Areas are peers grouped by the work people do; CLAUDE.md's Panel section says where the line falls and why.
+ * The root layout supports all-area and classic section navigation over this
+ * same route catalog; switching layouts never changes the selected object.
  */
 
 export interface NavView {
@@ -61,12 +61,12 @@ export interface NavSection {
   areas: NavArea[];
 }
 
-export type SectionId = 'feature' | 'training' | 'inference';
+export type SectionId = 'feature' | 'training' | 'inference' | 'workflows' | 'learning';
 
 export const SECTIONS: NavSection[] = [
   {
     id: 'feature',
-    label: 'Feature',
+    label: 'Data',
     icon: Boxes,
     blurb: 'What a model learns from: curated, drawn, reviewed, and frozen.',
     home: '/datasets',
@@ -75,14 +75,14 @@ export const SECTIONS: NavSection[] = [
         to: '/datasets',
         label: 'Datasets',
         icon: Database,
-        blurb: 'Recipes, versions, and what the hubs say exists.',
+        blurb: 'Browse datasets, versions and their sources.',
         views: [],
       },
       {
         to: '/data-curation/pipeline',
         label: 'Data Curation',
         icon: WandSparkles,
-        blurb: 'Blocks across three engines, ad-hoc or managed by the server.',
+        blurb: 'Prepare data, inspect results and publish dataset versions.',
         carries: 'window',
         views: [
           { to: '/data-curation/pipeline', label: 'Pipeline' },
@@ -93,7 +93,7 @@ export const SECTIONS: NavSection[] = [
         to: '/annotations/label',
         label: 'Annotations',
         icon: Shapes,
-        blurb: 'Vector shapes on images, reviewed, split by subject, exported.',
+        blurb: 'Label images, review annotations and export training data.',
         carries: 'project',
         views: [
           { to: '/annotations/label', label: 'Label' },
@@ -106,7 +106,7 @@ export const SECTIONS: NavSection[] = [
         to: '/conversations/review',
         label: 'Conversations',
         icon: MessagesSquare,
-        blurb: 'Encrypted turns, a human gate, and the corpora that come out.',
+        blurb: 'Review conversations and curate approved examples.',
         views: [
           { to: '/conversations/review', label: 'Review' },
           { to: '/conversations/corpora', label: 'Corpora' },
@@ -116,26 +116,27 @@ export const SECTIONS: NavSection[] = [
   },
   {
     id: 'training',
-    label: 'Training',
+    label: 'Models & quality',
     icon: Sigma,
     blurb: 'Fitting a model or a prompt, and the evidence that it got better.',
-    home: '/training/runs',
+    home: '/training/models',
     areas: [
+      {
+        to: '/training/models', label: 'Models', icon: Boxes,
+        blurb: 'Model versions, evaluation evidence and the data used to train them.', views: [],
+      },
       {
         to: '/training/runs',
         label: 'Training',
         icon: Sigma,
-        blurb: 'The curve while it runs, and the model registry it feeds.',
-        views: [
-          { to: '/training/runs', label: 'Runs' },
-          { to: '/training/models', label: 'Models' },
-        ],
+        blurb: 'Training runs, parameters and learning curves.',
+        views: [],
       },
       {
         to: '/experiments',
         label: 'Experiments',
         icon: Sparkles,
-        blurb: 'Comparing variants on quality, latency and cost — not built yet.',
+        blurb: 'Compare variants on quality, latency and cost.',
         views: [],
       },
       {
@@ -145,27 +146,27 @@ export const SECTIONS: NavSection[] = [
         blurb: 'Reports against a suite and a dataset, compared to a baseline.',
         views: [],
       },
-      {
-        to: '/prompts',
-        label: 'Prompts',
-        icon: ScrollText,
-        blurb: 'Versions by content, and whether an optimisation was one.',
-        views: [],
-      },
     ],
   },
   {
     id: 'inference',
-    label: 'Inference',
+    label: 'Applications',
     icon: Radio,
     blurb: 'What is running right now, and what it did when it ran.',
     home: '/observability/explore',
     areas: [
       {
+        to: '/prompts',
+        label: 'Prompts',
+        icon: ScrollText,
+        blurb: 'Inspect prompt versions, production labels and evaluation results.',
+        views: [],
+      },
+      {
         to: '/observability/explore',
         label: 'Observability',
         icon: Telescope,
-        blurb: 'Every level of a run, its metrics, and questions asked of both.',
+        blurb: 'Explore run history, live events, metrics and queries.',
         carries: 'window',
         views: [
           { to: '/observability/explore', label: 'Explore' },
@@ -175,14 +176,29 @@ export const SECTIONS: NavSection[] = [
           { to: '/observability/runs', label: 'Runs' },
         ],
       },
+    ],
+  },
+  {
+    id: 'workflows',
+    label: 'Workflows',
+    icon: Workflow,
+    blurb: 'Workflow definitions and executions.',
+    home: '/workflows',
+    areas: [
       {
         to: '/workflows',
         label: 'Workflows',
         icon: Workflow,
-        blurb: 'The graph a run is a stage of, and what it has not reached.',
+        blurb: 'Inspect workflow graphs and follow their executions.',
         views: [],
       },
     ],
+  },
+  {
+    id: 'learning', label: 'Learning', icon: BookOpen,
+    blurb: 'Workshops and practical labs.', home: '/learning',
+    areas: [{ to: '/learning', label: 'Workshops & labs', icon: BookOpen,
+      blurb: 'Preview the lab structure; enrollment and timed access are not yet available.', views: [] }],
   },
 ];
 
@@ -197,12 +213,13 @@ export const SECTIONS: NavSection[] = [
  */
 const SECTION_OF: Array<[prefix: string, id: SectionId]> = [
   ['/observability', 'inference'],
-  ['/workflows', 'inference'],
+  ['/workflows', 'workflows'],
+  ['/learning', 'learning'],
   ['/runs', 'inference'],
   ['/training', 'training'],
   ['/experiments', 'training'],
   ['/evaluation', 'training'],
-  ['/prompts', 'training'],
+  ['/prompts', 'inference'],
   ['/datasets', 'feature'],
   ['/data-curation', 'feature'],
   ['/annotations', 'feature'],
@@ -218,6 +235,8 @@ export function sectionOf(pathname: string): NavSection | undefined {
 
 /** The area within a section that a path is inside, for the sidebar's highlight. */
 export function areaOf(section: NavSection, pathname: string): NavArea | undefined {
+  const exact = section.areas.find((area) => pathname === area.to || pathname.startsWith(`${area.to}/`));
+  if (exact) return exact;
   return section.areas.find((area) => {
     const root = `/${area.to.split('/')[1]}`;
     return pathname === root || pathname.startsWith(`${root}/`);

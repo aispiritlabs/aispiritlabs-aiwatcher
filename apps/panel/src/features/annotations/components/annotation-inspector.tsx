@@ -119,7 +119,7 @@ export function ShapeList({
               type="button"
               aria-label={`Delete ${annotation.id}`}
               onClick={() => onDelete(annotation.id)}
-              className="opacity-0 transition-opacity group-hover:opacity-100"
+              className="opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
             >
               <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-danger" />
             </button>

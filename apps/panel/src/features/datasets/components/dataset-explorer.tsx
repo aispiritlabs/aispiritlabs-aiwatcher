@@ -112,6 +112,7 @@ export function DatasetExplorer({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-base font-semibold">{dataset.name}</h2>
+              {version.sample ? <Badge tone="warning">{version.sample.mode === 'preview' ? 'Preview sample' : 'Truncated sample'}</Badge> : null}
               <Badge>{version.row_count} rows</Badge>
               <Badge>{version.columns.length} columns</Badge>
             </div>
@@ -128,7 +129,7 @@ export function DatasetExplorer({
             >
               {dataset.versions.map((candidate) => (
                 <option key={candidate.version} value={candidate.version}>
-                  {candidate.version.slice(0, 12)} ·{' '}
+                  {candidate.sample ? 'Sample · ' : ''}{candidate.version.slice(0, 12)} ·{' '}
                   {new Date(candidate.created_at).toLocaleString()}
                 </option>
               ))}
@@ -161,6 +162,12 @@ export function DatasetExplorer({
         </div>
       </Card>
 
+      {version.sample ? <Card role="note" className="border-warning/40 p-3 text-sm">
+        This version is limited output, not a random or representative sample.
+        {version.sample.truncated_stages.length ? <p className="mt-1 break-words text-xs text-muted-foreground">
+          Truncated stages: {version.sample.truncated_stages.join(', ')}.
+        </p> : null}
+      </Card> : null}
       {view === 'rows' ? (
         <RowsViewer query={rows} columns={version.columns} draft={draft} onDraftChange={setDraft} />
       ) : null}

@@ -1126,6 +1126,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         },
         answer_limits: config.answer_limits,
         auth: build_authenticator(&config).await?,
+        iam: build_iam_store(&config).await?,
         health,
     };
 
@@ -1139,4 +1140,60 @@ pub async fn build(config: Config) -> Result<Runtime> {
         projector,
         journal,
     })
+}
+
+/// Explicit opt-in: never silently use a process-local store for IAM in a server.
+async fn build_iam_store(config: &Config) -> Result<Option<Arc<dyn aiwatcher_iam::IamStore>>> {
+    let Some(url) = config.iam_postgres_url.as_deref() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        config.auth.mode == AuthMode::Oidc,
+        "IAM requires AIWATCHER_AUTH_MODE=oidc"
+    );
+    #[cfg(feature = "postgres")]
+    {
+        // Do not log the URL: it may contain a password.
+        let store = aiwatcher_iam::postgres::PostgresIamStore::connect(url, 5)
+            .await
+            .context("connecting the IAM control plane to PostgreSQL")?;
+        Ok(Some(Arc::new(store)))
+    }
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = url;
+        anyhow::bail!(
+            "AIWATCHER_IAM_POSTGRES_URL needs this binary built with the `postgres` cargo feature"
+        )
+    }
+}
+
+#[cfg(test)]
+mod iam_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn absent_iam_configuration_opens_no_store() {
+        assert!(
+            build_iam_store(&Config::default())
+                .await
+                .expect("disabled")
+                .is_none()
+        );
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    #[tokio::test]
+    async fn configured_iam_never_falls_back_without_postgres_feature() {
+        let config = Config {
+            iam_postgres_url: Some("postgres://localhost/test".into()),
+            auth: aiwatcher_auth::AuthConfig {
+                mode: AuthMode::Oidc,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let error = build_iam_store(&config).await.expect_err("missing feature");
+        assert!(error.to_string().contains("postgres"));
+    }
 }

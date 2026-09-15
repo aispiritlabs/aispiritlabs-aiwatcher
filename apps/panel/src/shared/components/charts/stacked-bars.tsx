@@ -147,12 +147,14 @@ export function StackedBars({
         ) : null}
       </div>
 
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] tabular-nums text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <span className="order-1 shrink-0 text-[10px] tabular-nums text-muted-foreground">
           {formatTime(buckets[0]!.at)}
         </span>
-        <Legend series={series} />
-        <span className="text-[10px] tabular-nums text-muted-foreground">
+        <div className="order-3 w-full sm:order-2 sm:w-auto">
+          <Legend series={series} />
+        </div>
+        <span className="order-2 shrink-0 text-[10px] tabular-nums text-muted-foreground sm:order-3">
           {formatTime(buckets[buckets.length - 1]!.at)}
         </span>
       </div>

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 
 import { getMetrics } from '@/api/generated/sdk.gen';
-import type { MetricsSummary, Percentiles } from '@/api/generated/types.gen';
+import type { Percentiles } from '@/api/generated/types.gen';
 import type { SeriesDef } from '@/shared/components/charts/primitives';
 import { SERIES } from '@/shared/components/charts/primitives';
 import { RankedBars, type RankedRow } from '@/shared/components/charts/ranked-bars';
@@ -21,13 +21,20 @@ const routeApi = getRouteApi('/observability/metrics');
 
 /** Token types, in fixed order. Identity, never cycled. */
 const TOKEN_SERIES: SeriesDef[] = [
-  { key: 'input_tokens', label: 'input', color: SERIES[0] },
+  { key: 'uncached_input_tokens', label: 'input (uncached)', color: SERIES[0] },
   { key: 'output_tokens', label: 'output', color: SERIES[1] },
   { key: 'cached_tokens', label: 'cached', color: SERIES[2] },
 ];
 
 const RUN_SERIES: SeriesDef[] = [
-  { key: 'succeeded', label: 'succeeded', color: SERIES[0] },
+  { key: 'succeeded', label: 'succeeded', color: 'var(--color-status-good)' },
+  { key: 'running', label: 'running', color: SERIES[0] },
+  { key: 'failed', label: 'failed', color: 'var(--color-status-critical)' },
+];
+
+// During rollout, an older API cannot split these statuses. Never infer success.
+const LEGACY_RUN_SERIES: SeriesDef[] = [
+  { key: 'not_failed', label: 'running or succeeded', color: SERIES[0] },
   { key: 'failed', label: 'failed', color: 'var(--color-status-critical)' },
 ];
 
@@ -70,10 +77,14 @@ export function MetricsPage() {
   }
   if (!query.data) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
-  const metrics = query.data as MetricsSummary;
+  const metrics = query.data;
   const { totals, latency, window } = metrics;
-  const billable = totals.input_tokens + totals.output_tokens;
-  const successRate = totals.runs > 0 ? totals.succeeded / totals.runs : 0;
+  const tokens = totals.input_tokens + totals.output_tokens;
+  const hasRunStatuses = metrics.timeline.every(
+    (bucket) => typeof bucket.succeeded === 'number' && typeof bucket.running === 'number',
+  );
+  const completed = totals.succeeded + totals.failed;
+  const successRate = completed > 0 ? totals.succeeded / completed : undefined;
   const truncated = window.runs_retained >= window.retention_limit;
 
   return (
@@ -86,6 +97,16 @@ export function MetricsPage() {
             {search.agent_id ? ` · agent ${search.agent_id}` : ''}
             {search.model ? ` · model ${search.model}` : ''}
           </p>
+          <p className="text-xs text-muted-foreground">
+            Runs are selected and grouped by start time; statuses reflect the current state. Tokens
+            and call latency use retained completed spans.
+          </p>
+          {search.model ? (
+            <p className="text-xs text-muted-foreground">
+              The model filter applies to LLM calls and tokens only. Run, tool and step metrics
+              cover all selected runs.
+            </p>
+          ) : null}
         </div>
         <TimeRange
           value={windowSeconds}
@@ -99,7 +120,7 @@ export function MetricsPage() {
         <Card className="border-warning/40 bg-warning/5">
           <CardContent className="p-3 text-xs text-warning">
             The read model is at its retention limit ({window.retention_limit} runs), so this window
-            is a tail rather than the whole history. Longer horizons live in the OTLP metrics.
+            may be incomplete. Longer horizons live in the OTLP metrics.
           </CardContent>
         </Card>
       ) : null}
@@ -113,13 +134,21 @@ export function MetricsPage() {
         />
         <Tile
           label="Success rate"
-          value={`${Math.round(successRate * 100)}%`}
-          hint={`${totals.failed} failed`}
-          tone={totals.failed === 0 ? 'good' : successRate >= 0.9 ? 'warning' : 'critical'}
+          value={successRate === undefined ? 'No data' : `${Math.round(successRate * 100)}%`}
+          hint={`${completed} completed · ${totals.failed} failed`}
+          tone={
+            successRate === undefined
+              ? undefined
+              : totals.failed === 0
+                ? 'good'
+                : successRate >= 0.9
+                  ? 'warning'
+                  : 'critical'
+          }
         />
         <Tile
           label="Tokens"
-          value={formatCount(billable)}
+          value={totals.llm_calls > 0 ? formatCount(tokens) : 'No data'}
           hint={`${formatCount(totals.input_tokens)} in · ${formatCount(totals.output_tokens)} out`}
         />
         {/*
@@ -158,7 +187,7 @@ export function MetricsPage() {
         />
         <Tile
           label="LLM p95"
-          value={formatDuration(latency.llm.p95)}
+          value={latency.llm.count > 0 ? formatDuration(latency.llm.p95) : 'No data'}
           hint={`${latency.llm.count} calls`}
         />
         <Tile
@@ -186,7 +215,7 @@ export function MetricsPage() {
               buckets={metrics.timeline.map((bucket) => ({
                 at: bucket.at,
                 values: {
-                  input_tokens: bucket.input_tokens,
+                  uncached_input_tokens: Math.max(bucket.input_tokens - bucket.cached_tokens, 0),
                   output_tokens: bucket.output_tokens,
                   cached_tokens: bucket.cached_tokens,
                 },
@@ -207,13 +236,20 @@ export function MetricsPage() {
               buckets={metrics.timeline.map((bucket) => ({
                 at: bucket.at,
                 values: {
-                  succeeded: Math.max(bucket.runs - bucket.failed, 0),
+                  succeeded: bucket.succeeded,
+                  running: bucket.running,
+                  not_failed: Math.max(bucket.runs - bucket.failed, 0),
                   failed: bucket.failed,
                 },
               }))}
-              series={RUN_SERIES}
+              series={hasRunStatuses ? RUN_SERIES : LEGACY_RUN_SERIES}
               emptyMessage="No runs in this window."
             />
+            {!hasRunStatuses ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                This API does not separate running and succeeded runs in the timeline.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </div>

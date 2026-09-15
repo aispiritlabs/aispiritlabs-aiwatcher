@@ -76,6 +76,7 @@ pub fn identity_from<'a>(
     let roles = roles.resolve(subject, &groups)?;
 
     Ok(Identity {
+        issuer: None,
         subject: subject.to_owned(),
         username: username.map(ToOwned::to_owned),
         name: header(&headers.name)

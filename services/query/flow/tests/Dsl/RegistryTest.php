@@ -94,14 +94,11 @@ final class RegistryTest extends TestCase
         self::assertFalse(Registry::has('to_callable'), 'likewise');
     }
 
-    public function test_a_name_declined_for_being_wrong_stays_declined_when_flow_still_offers_it(): void
+    public function test_fixed_nullable_comparisons_are_no_longer_declined(): void
     {
-        // `equals` exists in Flow and works badly here: every column in these
-        // datasets is nullable and it matches null against anything. Deriving
-        // the vocabulary must not quietly re-admit what was refused on purpose.
-        self::assertFalse(Registry::has('equals'));
-        self::assertFalse(Registry::has('notEquals'));
-        self::assertNotNull(Registry::declined('equals'));
+        self::assertTrue(Registry::has('equal'));
+        self::assertNull(Registry::declined('equals'));
+        self::assertNull(Registry::declined('notEquals'));
     }
 
     public function test_window_functions_are_reachable_at_all(): void

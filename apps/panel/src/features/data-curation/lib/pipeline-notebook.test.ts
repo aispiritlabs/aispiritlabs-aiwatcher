@@ -4,7 +4,7 @@ import { runQuery, simulateQuery } from '@/shared/lib/query';
 import { getNotebook, runNotebook } from '@/shared/lib/ml-pipeline';
 import { runPipeline, withPinnedNotebooks } from '@/features/data-curation/lib/pipeline';
 
-vi.mock('@/shared/lib/query', () => ({ runQuery: vi.fn(), simulateQuery: vi.fn() }));
+vi.mock('@/shared/lib/query', () => ({ runQuery: vi.fn(), simulateQuery: vi.fn(), ENGINE_LABEL: { flow: 'Flow' } }));
 vi.mock('@/shared/lib/ml-pipeline', () => ({ getNotebook: vi.fn(), runNotebook: vi.fn() }));
 
 const chain: PipelineBlock[] = [
@@ -92,4 +92,29 @@ it('saves the displayed pinned revision without silently following a changed hea
   const pinned = chain[2]!;
   expect(await withPinnedNotebooks([pinned])).toEqual([pinned]);
   expect(getNotebook).not.toHaveBeenCalled();
+});
+
+
+it.each([
+  ['preview', false, false],
+  ['full', true, false],
+  ['full', false, true],
+] as const)('only permits publishing a complete full result (%s, truncated=%s)', async (mode, truncated, complete) => {
+  const response = { ...result(sourceRows), truncated };
+  vi.mocked(runQuery).mockResolvedValue(response);
+  vi.mocked(simulateQuery).mockResolvedValue(response);
+  const output = await runPipeline({ chain: chain.slice(0, 2), mode });
+  expect(output.mode).toBe(mode);
+  expect(output.complete).toBe(complete);
+  expect(output.sample).toEqual(complete ? undefined : { mode: mode === 'preview' ? 'preview' : 'truncated',
+    truncated_stages: truncated ? ['clean'] : [] });
+});
+
+it('refuses completeness when a downstream notebook truncates a full run', async () => {
+  vi.mocked(runQuery).mockResolvedValue(result(sourceRows));
+  vi.mocked(runNotebook).mockResolvedValue({
+    notebook: 'custom', revision: 'a'.repeat(64), rows: [{ done: true }],
+    columns: ['done'], row_count: 1, took_ms: 1, truncated: true, stdout: '', app_url: '',
+  });
+  expect((await runPipeline({ chain, mode: 'full' })).complete).toBe(false);
 });

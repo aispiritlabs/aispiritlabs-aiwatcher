@@ -6,11 +6,13 @@ namespace Aiwatcher\Flow\FlowAI;
 
 use Aiwatcher\Flow\Statistics\Descriptive;
 use Flow\ETL\FlowContext;
+use Flow\ETL\Pipeline\BoundStep;
 use Flow\ETL\Row;
 use Flow\ETL\Rows;
+use Flow\ETL\Schema;
 use Flow\ETL\Transformer;
 
-/** Explicit fitting boundary: read selected Entry values and return the same Rows.
+/** Explicit fitting boundary: read selected typed values and return the same Rows.
  * Stores only vocabularies, statistics or split IDs. Applying them belongs to
  * Scalar functions. Exact medians and stratification require a bounded collection;
  * they cannot be fitted independently per page without changing the result.
@@ -23,6 +25,11 @@ final readonly class FitPreparation implements Transformer
         private array $options,
         private FittedState $state,
     ) {}
+
+    public function bind(Schema $input): BoundStep
+    {
+        return new BoundStep($this, $input);
+    }
 
     public function transform(Rows $rows, FlowContext $context): Rows
     {
@@ -42,7 +49,7 @@ final readonly class FitPreparation implements Transformer
     {
         return (
             !isset($this->options['fitOn'])
-            || $row->valueOf($this->options['fitOn']) === ($this->options['fitValue'] ?? 'train')
+            || $row->get($this->options['fitOn']) === ($this->options['fitValue'] ?? 'train')
         );
     }
 
@@ -54,7 +61,7 @@ final readonly class FitPreparation implements Transformer
                 continue;
             }
             foreach ($this->columns as $index => $column) {
-                $vocabularies[$index][Category::key($row->valueOf($column))] = true;
+                $vocabularies[$index][Category::key($row->get($column))] = true;
             }
         }
         $categories = \array_map(static function (array $keys): array {
@@ -80,12 +87,12 @@ final readonly class FitPreparation implements Transformer
         $groups = [];
         $ids = [];
         foreach ($rows as $row) {
-            $id = Category::key($row->valueOf($this->columns[0]));
+            $id = Category::key($row->get($this->columns[0]));
             if ($id === 'null' || isset($ids[$id])) {
                 throw new \InvalidArgumentException('Split identifiers must be present and unique.');
             }
             $ids[$id] = true;
-            $label = Category::key($row->valueOf($this->options['target']));
+            $label = Category::key($row->get($this->options['target']));
             $groups[$label][$id] = \hash('sha256', ($this->options['seed'] ?? 42) . ':' . $id);
         }
         $validation = [];
@@ -117,11 +124,11 @@ final readonly class FitPreparation implements Transformer
             if (!$this->training($row)) {
                 continue;
             }
-            $value = $row->valueOf($this->columns[0]);
+            $value = $row->get($this->columns[0]);
             if ($value === null) {
                 continue;
             }
-            $key = \json_encode(\array_map($row->valueOf(...), $groupColumns), \JSON_THROW_ON_ERROR);
+            $key = \json_encode(\array_map($row->get(...), $groupColumns), \JSON_THROW_ON_ERROR);
             $groups[$key][] = $value;
             $all[] = $value;
         }

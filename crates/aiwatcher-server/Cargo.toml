@@ -25,7 +25,7 @@ laser = ["aiwatcher-bus/laser"]
 # in the same shape: a plain build needs no database and no sqlx, and
 # `AIWATCHER_WORKFLOW_STORE=postgres` without it refuses to start naming this
 # feature rather than falling back to the store that holds one process.
-postgres = ["aiwatcher-execution/postgres"]
+postgres = ["aiwatcher-execution/postgres", "aiwatcher-iam/postgres"]
 # The single-machine pair of the two above: DuckDB for the workflow store and
 # the durable read model, Iggy over HTTP for the log. What `aiwatcher up`
 # builds with, and off by default for the same reason as the others.
@@ -62,6 +62,7 @@ rustls = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
 aiwatcher-auth.workspace = true
+aiwatcher-iam.workspace = true
 aiwatcher-api.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

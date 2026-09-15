@@ -183,7 +183,7 @@ export function Refusal({
   const details = error instanceof ApiFailure ? error.details : [];
   const message = error instanceof Error ? error.message : fallback;
   return (
-    <div role="alert" className={cn('flex flex-col gap-1 text-xs text-destructive', className)}>
+    <div role="alert" className={cn('flex flex-col gap-1 text-xs text-danger', className)}>
       <p>{message}</p>
       {details.length > 0 ? (
         <ul className="flex flex-col gap-0.5 pl-3">

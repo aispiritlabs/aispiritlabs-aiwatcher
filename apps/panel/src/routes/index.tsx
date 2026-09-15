@@ -1,11 +1,8 @@
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
+import { WorkspacePage } from '@/app/workspace';
 
-/**
- * The old root. Kept as a redirect rather than deleted: `/` is what is
- * bookmarked, what a proxy health check hits, and what someone types.
- */
 export const Route = createFileRoute('/')({
-  beforeLoad: () => {
-    throw redirect({ to: '/observability/explore' });
-  },
+  validateSearch: (search: Record<string, unknown>): { start?: 'workspace' } =>
+    search.start === 'workspace' ? { start: 'workspace' } : {},
+  component: WorkspacePage,
 });

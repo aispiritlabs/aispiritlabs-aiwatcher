@@ -25,6 +25,7 @@ use function Flow\ETL\Adapter\CSV\to_csv;
 use function Flow\ETL\Adapter\Parquet\from_parquet;
 use function Flow\ETL\DSL\average;
 use function Flow\ETL\DSL\count;
+use function Flow\ETL\DSL\coalesce;
 use function Flow\ETL\DSL\data_frame;
 use function Flow\ETL\DSL\float_schema;
 use function Flow\ETL\DSL\int_schema;
@@ -143,6 +144,9 @@ function q3(string $corpus, string $format, string $out, int $batchSize): array
         ->rename('input_tokens_sum', 'input_tokens')
         ->rename('output_tokens_sum', 'output_tokens')
         ->rename('duration_ms_max', 'max_duration_ms')
+        // Polars sums an all-null group to zero; Flow 0.44 follows SQL and returns null.
+        ->withEntry('input_tokens', coalesce(ref('input_tokens'), lit(0)))
+        ->withEntry('output_tokens', coalesce(ref('output_tokens'), lit(0)))
         ->write(to_csv($target))
         ->run();
 
@@ -181,7 +185,7 @@ $query = (string) ($options['query'] ?? '');
 $corpus = \rtrim((string) ($options['corpus'] ?? ''), '/');
 $format = (string) ($options['format'] ?? 'csv');
 $out = \rtrim((string) ($options['out'] ?? ''), '/');
-// Flow's own default, from `BatchSizeOptimization`; the harness can move it.
+// Keep the same 1000-row batches as the 0.43 baseline.
 $batchSize = (int) ($options['batch-size'] ?? 1000);
 
 if (!\in_array($query, ['q1', 'q2', 'q3', 'q4'], true) || $corpus === '' || $out === '' || !\in_array($format, ['csv', 'parquet'], true)) {

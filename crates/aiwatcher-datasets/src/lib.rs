@@ -20,6 +20,7 @@ mod engine;
 mod library;
 /// A curation assembled out of blocks rather than written as one script.
 mod pipeline;
+pub mod scope;
 mod version;
 
 pub use engine::{QueryEngine, UnknownEngine};
@@ -107,6 +108,24 @@ pub struct RecipePage {
     pub recipes: Vec<CurationRecipe>,
 }
 
+/// Why a published version contains a limited output rather than a full run.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleMode {
+    Preview,
+    Truncated,
+}
+
+/// Explicit sampling metadata, included in the immutable content identity.
+/// Preview is a bounded execution, not a random or representative sample.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DatasetSample {
+    pub mode: SampleMode,
+    /// IDs of stages whose output was truncated. Empty for an untruncated preview.
+    pub truncated_stages: Vec<String>,
+}
+
 /// What one completed query execution contributes to the registry.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct PublishDatasetRequest {
@@ -156,6 +175,9 @@ pub struct PublishDatasetRequest {
     /// that path for managed runs only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_id: Option<String>,
+    /// Absent for ordinary versions, including every version written before samples existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<DatasetSample>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -174,6 +196,9 @@ pub struct DatasetVersionSummary {
     /// without reading every version artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_id: Option<String>,
+    /// Absent for ordinary versions, including every version written before samples existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<DatasetSample>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -244,7 +269,7 @@ pub struct DatasetRowsPage {
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct PublishedDataset {
     pub dataset: DatasetSummary,
-    /// False when this exact pipeline and exact ordered set of rows already existed.
+    /// False when this exact output and sample classification already existed.
     pub created: bool,
 }
 
@@ -253,6 +278,7 @@ pub struct PublishedDataset {
 pub struct Registry {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl Registry {
@@ -267,6 +293,7 @@ impl Registry {
         Self {
             store,
             prefix: prefix.into().trim_matches('/').to_owned(),
+            scope: None,
         }
     }
 
@@ -326,6 +353,21 @@ impl Registry {
             validate_name(recipe, "recipe")?;
         }
         validate_authored(&request.description, &request.pipeline)?;
+        if let Some(sample) = &request.sample {
+            if sample.mode == SampleMode::Truncated && sample.truncated_stages.is_empty() {
+                return Err(RegistryError::Invalid(
+                    "a truncated sample must identify its truncated stages".into(),
+                ));
+            }
+            if sample.truncated_stages.len() > 128
+                || sample
+                    .truncated_stages
+                    .iter()
+                    .any(|stage| stage.trim().is_empty() || stage.len() > MAX_PROVENANCE_BYTES)
+            {
+                return Err(RegistryError::Invalid("sample stage IDs must be non-empty, at most 240 bytes each, and at most 128 stages".into()));
+            }
+        }
         if request.items.len() > MAX_ITEMS {
             return Err(RegistryError::TooLarge {
                 what: "the dataset",
@@ -368,6 +410,7 @@ impl Registry {
                     recipe: request.recipe.clone(),
                     produced_by: request.produced_by.clone(),
                     execution_id: request.execution_id.clone(),
+                    sample: request.sample.clone(),
                 };
                 DatasetVersion {
                     name: request.name.clone(),
@@ -540,6 +583,7 @@ impl Registry {
     }
 
     async fn read_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        self.check_key(key)?;
         let Some(body) = self.store.get(key).await? else {
             return Ok(None);
         };
@@ -552,6 +596,7 @@ impl Registry {
     }
 
     async fn write_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.check_key(key)?;
         let body = serde_json::to_vec(value).map_err(|error| RegistryError::Corrupt {
             key: key.to_owned(),
             message: error.to_string(),
@@ -617,6 +662,8 @@ fn dataset_identity(request: &PublishDatasetRequest) -> Result<Vec<u8>> {
     // The engine joins it only when it is not Flow: the same text is a
     // different execution in another language, and every version published
     // before the field was Flow and must keep the id it was published under.
+    // Sample metadata also joins the identity when present: limited output
+    // must never alias an ordinary version, even when its rows happen to match.
     content_identity(
         &request.pipeline,
         request.engine,
@@ -624,6 +671,7 @@ fn dataset_identity(request: &PublishDatasetRequest) -> Result<Vec<u8>> {
         &request.items,
         &request.source,
         request.window_seconds,
+        request.sample.as_ref(),
     )
 }
 
@@ -634,9 +682,12 @@ fn content_identity(
     items: &[BTreeMap<String, Value>],
     source: &str,
     window_seconds: Option<u64>,
+    sample: Option<&DatasetSample>,
 ) -> Result<Vec<u8>> {
     let executed = (pipeline, columns, items, source, window_seconds);
-    if engine.is_flow() {
+    if let Some(sample) = sample {
+        serde_json::to_vec(&("sample", executed, engine, sample))
+    } else if engine.is_flow() {
         serde_json::to_vec(&executed)
     } else {
         serde_json::to_vec(&(executed, engine))
@@ -711,6 +762,7 @@ mod tests {
             window_seconds: Some(900),
             produced_by: None,
             execution_id: None,
+            sample: None,
         }
     }
 

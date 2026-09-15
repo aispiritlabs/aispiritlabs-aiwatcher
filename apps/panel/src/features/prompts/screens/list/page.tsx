@@ -17,6 +17,7 @@ import {
   Spinner,
 } from '@/shared/components/ui/primitives';
 import { formatTime } from '@/shared/lib/utils';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/prompts/');
 
@@ -25,6 +26,13 @@ export function PromptsPage() {
   const navigate = routeApi.useNavigate();
   const queryClient = useQueryClient();
   const [creating, setCreating] = React.useState(false);
+  const [editorDirty, setEditorDirty] = React.useState(false);
+  const publishedTarget = React.useRef<{ name: string; version: string } | undefined>(undefined);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // The input holds a draft and a debounce commits it to the URL, so a link to
   // a filtered list is shareable without a keystroke per history entry.
@@ -59,9 +67,25 @@ export function PromptsPage() {
       return response.data;
     },
     onSuccess: async (published) => {
+      if (!mounted.current) {
+        void queryClient.invalidateQueries({ queryKey: ['prompts'] });
+        return;
+      }
+      publishedTarget.current = { name: published.version.name, version: published.version.version_id };
       setCreating(false);
       await queryClient.invalidateQueries({ queryKey: ['prompts'] });
-      void navigate({ to: '/prompts/$name', params: { name: published.version.name } });
+      if (mounted.current) void navigate({ to: '/prompts/$name', params: { name: published.version.name },
+        search: { version: published.version.version_id } });
+    },
+  });
+  const confirmDiscard = useUnsavedChanges({
+    dirty: creating && editorDirty,
+    pending: creating && create.isPending,
+    message: 'This new prompt has unsaved changes.',
+    losesDraft: ({ next }) => {
+      if (next.routeId === '/prompts/$name' && next.params.name === publishedTarget.current?.name &&
+        next.search.version === publishedTarget.current?.version) return false;
+      return next.routeId !== '/prompts/';
     },
   });
 
@@ -89,7 +113,11 @@ export function PromptsPage() {
               className="h-9 w-72 rounded-md border border-border bg-transparent pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
             />
           </label>
-          <Button onClick={() => setCreating((open) => !open)} className="gap-1.5">
+          <Button disabled={create.isPending} onClick={() => {
+            if (creating && !confirmDiscard()) return;
+            if (!creating) publishedTarget.current = undefined;
+            setCreating(!creating);
+          }} className="gap-1.5">
             <Plus className="h-3.5 w-3.5" />
             New prompt
           </Button>
@@ -100,7 +128,8 @@ export function PromptsPage() {
         <NewPromptForm
           pending={create.isPending}
           error={create.error}
-          onCancel={() => setCreating(false)}
+          onCancel={() => { if (confirmDiscard()) setCreating(false); }}
+          onDirtyChange={setEditorDirty}
           onSubmit={(input) => create.mutate(input)}
         />
       ) : null}
@@ -229,15 +258,22 @@ function NewPromptForm({
   error,
   onCancel,
   onSubmit,
+  onDirtyChange,
 }: {
   pending: boolean;
   error: unknown;
   onCancel: () => void;
   onSubmit: (input: { name: string; text: string; description?: string }) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [text, setText] = React.useState('');
+  const dirty = name !== '' || description !== '' || text !== '';
+  React.useEffect(() => {
+    onDirtyChange(dirty);
+    return () => onDirtyChange(false);
+  }, [dirty, onDirtyChange]);
 
   return (
     <Card className="p-4">
@@ -248,12 +284,15 @@ function NewPromptForm({
           onSubmit({ name, text, description: description || undefined });
         }}
       >
+        <fieldset disabled={pending} className="flex min-w-0 flex-col gap-3">
+        {dirty ? <p role="status" className="text-xs text-warning">Unsaved prompt changes.</p> : null}
         <div className="grid gap-3 md:grid-cols-2">
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground">
               Name — lowercase, no slashes. Namespace with dots: <code>planner.floor-plan</code>
             </span>
             <input
+              aria-label="Prompt name"
               required
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -276,6 +315,7 @@ function NewPromptForm({
             Prompt text. <code>{'{{ variables }}'}</code> are read from it, not declared.
           </span>
           <textarea
+            aria-label="Prompt text"
             required
             value={text}
             onChange={(event) => setText(event.target.value)}
@@ -293,6 +333,7 @@ function NewPromptForm({
             Cancel
           </Button>
         </div>
+        </fieldset>
       </form>
     </Card>
   );

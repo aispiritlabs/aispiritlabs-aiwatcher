@@ -3,6 +3,9 @@
 
 //! The router, exercised over real HTTP requests.
 
+#[path = "http/iam.rs"]
+mod iam;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -206,6 +209,7 @@ impl Fixture {
         let artifacts = registry_enabled.then(|| Arc::new(MemoryArtifacts::default()));
         let definitions = registry_enabled.then(|| Arc::new(MemoryObjectStore::new()));
         let state = AppState {
+            iam: None,
             evaluations: None,
             evaluation_bundles: None,
             observations: None,
@@ -878,6 +882,53 @@ fn envelope(event_id: &str, event_type: EventType, run_id: &str, data: Value) ->
     envelope.event_id = Some(MessageId::new(event_id));
     envelope.agent_id = Some("researcher".to_owned());
     envelope
+}
+
+#[tokio::test]
+async fn metrics_timeline_reports_current_statuses_including_unfinished_runs() {
+    let fixture = Fixture::new(false);
+    fixture.seed_run("succeeded").await;
+    let events = fixture
+        .bus
+        .append(vec![
+            envelope("running-start", EventType::RunStarted, "running", json!({})),
+            envelope("failed-start", EventType::RunStarted, "failed", json!({})),
+            envelope(
+                "failed-end",
+                EventType::RunFailed,
+                "failed",
+                json!({ "status": "failed" }),
+            ),
+        ])
+        .await
+        .expect("appends");
+    for event in &events.recorded {
+        fixture.read_model.apply(event).await;
+    }
+    let (status, body) = fixture
+        .get("/api/v1/metrics?window_seconds=3600&buckets=6")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let timeline = body["timeline"].as_array().expect("buckets");
+    assert_eq!(timeline.len(), 6);
+    for key in ["succeeded", "failed", "running"] {
+        assert_eq!(body["totals"][key], 1);
+        assert_eq!(
+            timeline
+                .iter()
+                .map(|b| b[key].as_u64().expect("status counter"))
+                .sum::<u64>(),
+            1
+        );
+    }
+    for bucket in timeline {
+        assert_eq!(
+            bucket["runs"].as_u64().unwrap(),
+            bucket["succeeded"].as_u64().unwrap()
+                + bucket["failed"].as_u64().unwrap()
+                + bucket["running"].as_u64().unwrap()
+        );
+    }
 }
 
 #[tokio::test]
@@ -8718,4 +8769,111 @@ async fn durable_publication_requires_editor_and_a_source_authority() {
         .post("/api/v1/evaluation-results", durable_request("disabled"))
         .await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn pipeline_revision_read_restores_history_and_never_falls_back_to_head() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let first = flow_only_pipeline("history/test");
+    let (status, saved) = fixture
+        .post_as(
+            "/api/v1/curation-pipelines",
+            "author",
+            "aiwatcher-editors",
+            first.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let old = saved["pipeline"]["revision"].as_str().expect("revision");
+    let mut changed = first;
+    changed["description"] = json!("New description");
+    changed["blocks"][0]["position"] = json!({"x": 123.0, "y": 456.0});
+    let (status, newer) = fixture
+        .post_as(
+            "/api/v1/curation-pipelines",
+            "author",
+            "aiwatcher-editors",
+            changed,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{newer}");
+    assert_ne!(saved["pipeline"]["revision"], newer["pipeline"]["revision"]);
+    let path = format!("/api/v1/curation-pipelines/history%2Ftest/revisions/{old}");
+    let (status, restored) = fixture.get_as(&path, "reader", "").await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored, saved["pipeline"]);
+    let (status, _) = fixture.get(&path).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = fixture
+        .get_as(
+            &format!(
+                "/api/v1/curation-pipelines/history%2Ftest/revisions/{}",
+                "00".repeat(32)
+            ),
+            "reader",
+            "",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sample_publication_is_explicit_authorized_and_visible_after_reading_again() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let sample = json!({
+        "name": "output/samples", "pipeline": "sample-script", "source": "test-source",
+        "columns": ["answer"], "items": [{"answer": "one"}], "window_seconds": 3600,
+        "sample": {"mode": "preview", "truncated_stages": ["python"]}
+    });
+    let (status, _) = fixture
+        .post_as("/api/v1/dataset-samples", "reader", "", sample.clone())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, published) = fixture
+        .post_as(
+            "/api/v1/dataset-samples",
+            "author",
+            "aiwatcher-editors",
+            sample.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    let version = published["dataset"]["latest"]["version"]
+        .as_str()
+        .expect("version");
+    let (status, rows) = fixture
+        .get_as(
+            &format!("/api/v1/dataset-rows?name=output%2Fsamples&version={version}"),
+            "reader",
+            "",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    assert_eq!(rows["version"]["sample"], sample["sample"]);
+    assert_eq!(rows["version"]["row_count"], 1);
+    assert_eq!(rows["source"], "test-source");
+    let (_, catalog) = fixture.get_as("/api/v1/datasets", "reader", "").await;
+    assert_eq!(catalog["datasets"][0]["latest"]["sample"], sample["sample"]);
+    let mut unlabelled = sample.clone();
+    unlabelled.as_object_mut().unwrap().remove("sample");
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/dataset-samples",
+            "author",
+            "aiwatcher-editors",
+            unlabelled,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut invalid = sample;
+    invalid["sample"] = json!({"mode": "truncated", "truncated_stages": []});
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/dataset-samples",
+            "author",
+            "aiwatcher-editors",
+            invalid,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

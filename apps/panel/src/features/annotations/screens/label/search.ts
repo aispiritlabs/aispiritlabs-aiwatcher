@@ -23,6 +23,7 @@ import { z } from 'zod';
 export const searchSchema = z.object({
   project: z.string().optional(),
   image: z.string().optional(),
+  revision: z.string().optional(),
   review: z.enum(['draft', 'in_review', 'accepted', 'rejected']).optional(),
   split: z.enum(['train', 'validation', 'test']).optional(),
   q: z.string().optional(),

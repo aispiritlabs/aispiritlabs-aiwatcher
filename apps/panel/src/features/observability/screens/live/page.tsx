@@ -78,6 +78,20 @@ export function LivePage() {
   const [events, setEvents] = React.useState<LiveEventFrame[]>([]);
   const [totals, setTotals] = React.useState<Totals>(emptyTotals);
   const [paused, setPaused] = React.useState(false);
+  const buffered = React.useRef<LiveEventFrame[]>([]);
+  const [newEvents, setNewEvents] = React.useState(0);
+  const [overflow, setOverflow] = React.useState(false);
+  function togglePause() {
+    const next = !pausedRef.current;
+    pausedRef.current = next;
+    setPaused(next);
+    if (!next) {
+      const waiting = buffered.current;
+      buffered.current = [];
+      setEvents((previous) => [...previous, ...waiting].slice(-TAIL));
+      setNewEvents(0);
+    }
+  }
   const [resynced, setResynced] = React.useState(false);
 
   // A paused feed still counts. The pause is about what the eye can follow,
@@ -92,6 +106,9 @@ export function LivePage() {
 
   React.useEffect(() => {
     setEvents([]);
+    buffered.current = [];
+    setNewEvents(0);
+    setOverflow(false);
     setTotals(emptyTotals());
     seenRuns.current = new Set();
     setResynced(false);
@@ -116,7 +133,12 @@ export function LivePage() {
           return next;
         });
 
-        if (pausedRef.current) return;
+        if (pausedRef.current) {
+          if (buffered.current.length >= TAIL) setOverflow(true);
+          buffered.current = [...buffered.current, event].slice(-TAIL);
+          setNewEvents((count) => count + 1);
+          return;
+        }
         setEvents((previous) => {
           const next = [...previous, event];
           return next.length > TAIL ? next.slice(next.length - TAIL) : next;
@@ -137,6 +159,7 @@ export function LivePage() {
 
   return (
     <div className="flex flex-col gap-4">
+      {overflow && <p role="status" className="text-sm text-warning">The pause buffer exceeded {TAIL} events. Only the latest {TAIL} are retained here. <Link to="/observability/explore" search={search} className="underline">Open retained history</Link>.</p>}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">Live</h1>
@@ -161,9 +184,9 @@ export function LivePage() {
             this selection
             <StreamBadge phase={phase} />
           </span>
-          <Button variant="outline" onClick={() => setPaused((value) => !value)} className="gap-2">
+          <Button variant="outline" onClick={togglePause} aria-pressed={paused} className="gap-2">
             {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-            {paused ? 'Resume' : 'Pause'}
+            {paused ? `Resume · ${newEvents} new` : 'Pause'}
           </Button>
         </div>
       </div>

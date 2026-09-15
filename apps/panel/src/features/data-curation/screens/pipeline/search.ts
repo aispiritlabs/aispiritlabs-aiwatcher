@@ -24,6 +24,9 @@ import { z } from 'zod';
 
 export const searchSchema = z.object({
   name: z.string().optional(),
+  revision: z.string().optional(),
+  // A local imported/new flow has no registry revision yet.
+  draft: z.string().optional(),
   block: z.string().optional(),
   // What the canvas is tracing from the selected block, if anything. In the
   // URL with the rest of the selection: a link to a traced view is the whole

@@ -7,62 +7,27 @@ import { UserMenu } from '@/shared/components/user-menu';
 import { CommandPanel, useCommandPanel } from '@/app/command-panel';
 import { SECTIONS, areaOf, sectionOf, type NavArea, type NavSection } from '@/app/navigation';
 import { cn } from '@/shared/lib/utils';
+import { NavigationProvider, useNavigationPreferences } from '@/app/navigation-preferences';
+import { NavigationMessage, PinCurrentView, PinnedViews } from '@/app/navigation-controls';
 
-/**
- * Three sections in the header, and the section's own areas down the side.
- *
- * The taxonomy itself is in `app/navigation.ts` and the reasoning for it is
- * there; what this file owns is only how it is drawn. Two rules hold it:
- *
- * **The section comes from the URL, never from a click.** A run detail reached
- * from a link in Slack has to light up Inference the same way one reached by
- * pressing the tab does, so the header reads `sectionOf(pathname)` rather than
- * remembering which tab was last pressed. A path in no section — there are
- * none today, and a new area is one commit away from being one — lights up
- * nothing rather than defaulting to the first, because a wrong highlight is
- * worse than an absent one.
- *
- * **The sidebar collapses and the choice is remembered.** The annotation
- * canvas and the pipeline canvas both want the width, and somebody who
- * collapsed it for one of them did not mean "for this page load". It is the
- * one thing in this panel kept in `localStorage` rather than in the URL: it is
- * a per-viewer convenience and belongs to the reader, not to the link they
- * would send.
- */
-
-const SIDEBAR_KEY = 'aiwatcher.sidebar';
-
-function useCollapsed(): [boolean, () => void] {
-  const [collapsed, setCollapsed] = React.useState(() => {
-    // Every read and write is guarded: a private window, a browser set to
-    // block site data and a thumbnail capture all throw on the accessor
-    // itself, and a navigation that will not render is worse than a sidebar
-    // that forgot.
-    try {
-      return localStorage.getItem(SIDEBAR_KEY) === 'collapsed';
-    } catch {
-      return false;
-    }
-  });
-
-  const toggle = React.useCallback(() => {
-    setCollapsed((value) => {
-      try {
-        localStorage.setItem(SIDEBAR_KEY, value ? 'open' : 'collapsed');
-      } catch {
-        /* The preference is not worth failing a click over. */
-      }
-      return !value;
-    });
-  }, []);
-
-  return [collapsed, toggle];
-}
+/** Global identity and search above peer work areas. Active links follow the URL. */
 
 export function RootLayout() {
+  return <NavigationProvider><ShellLayout /></NavigationProvider>;
+}
+
+function ShellLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const section = sectionOf(pathname);
-  const [collapsed, toggle] = useCollapsed();
+  const matchedSection = sectionOf(pathname);
+  const section = matchedSection ?? SECTIONS[0];
+  React.useEffect(() => {
+    const area = matchedSection && areaOf(matchedSection, pathname);
+    const page = area && (area.views.find((view) => view.to === pathname)?.label ?? area.label);
+    document.title = `${pathname === '/' ? 'Your work' : pathname === '/account' ? 'Profile & account' : page || 'Page'} · aiwatcher`;
+  }, [pathname, matchedSection]);
+  const { preferences, shell, update } = useNavigationPreferences();
+  const collapsed = preferences.collapsed;
+  const toggle = () => update((previous) => ({ ...previous, collapsed: !previous.collapsed }));
   const [commandsOpen, setCommandsOpen] = useCommandPanel();
 
   return (
@@ -71,34 +36,13 @@ export function RootLayout() {
       <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
         <div className="flex items-center gap-4 px-4">
           <Link
-            to="/observability/explore"
+            to="/"
+            search={{ start: 'workspace' }}
             className="flex shrink-0 items-center gap-2 py-3 font-semibold"
           >
             <Activity className="h-4 w-4 text-primary" />
             aiwatcher
           </Link>
-
-          {/* Three, so they fit at any width and never need to scroll — which
-              is what the eleven-area row could not manage. */}
-          <nav className="flex min-w-0 items-center gap-1">
-            {SECTIONS.map((candidate) => (
-              <Link
-                key={candidate.id}
-                to={candidate.home}
-                aria-current={section?.id === candidate.id ? 'page' : undefined}
-                title={candidate.blurb}
-                className={cn(
-                  'flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-3 text-sm transition-colors hover:text-foreground',
-                  section?.id === candidate.id
-                    ? 'border-primary text-foreground'
-                    : 'border-transparent text-muted-foreground',
-                )}
-              >
-                <candidate.icon className="h-3.5 w-3.5" />
-                {candidate.label}
-              </Link>
-            ))}
-          </nav>
 
           <div className="ml-auto flex items-center gap-2">
             {/* Visible as well as bound to a shortcut: a palette nobody is
@@ -107,17 +51,25 @@ export function RootLayout() {
             <button
               type="button"
               onClick={() => setCommandsOpen(true)}
-              className="hidden items-center gap-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:flex"
+              aria-label="Search or jump to a page"
+              className="flex items-center gap-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:flex"
             >
               <Search className="h-3 w-3" />
-              <span>Search or jump to…</span>
-              <kbd className="rounded border border-border px-1 font-mono text-[10px]">⌘K</kbd>
+              <span className="hidden sm:inline">Search or jump to…</span>
+              <kbd className="hidden sm:inline rounded border border-border px-1 font-mono text-[10px]">⌘K</kbd>
             </button>
             <Appearance />
             <UserMenu />
           </div>
         </div>
       </header>
+
+      {shell === 'classic' && <nav aria-label="Work areas" className="flex gap-1 overflow-x-auto border-b border-border px-4">
+        {SECTIONS.map((group) => <Link key={group.id} to={group.home} aria-current={matchedSection?.id === group.id ? 'page' : undefined}
+          className={cn('shrink-0 border-b-2 px-3 py-3 text-sm', matchedSection?.id === group.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground')}>
+          {group.label}
+        </Link>)}
+      </nav>}
 
       <div className="flex">
         {section ? (
@@ -126,11 +78,14 @@ export function RootLayout() {
             pathname={pathname}
             collapsed={collapsed}
             onToggle={toggle}
+            groups={shell === 'classic' ? [section] : SECTIONS}
           />
         ) : null}
         <main className="min-w-0 flex-1 px-4 py-4 md:px-6 md:py-6">
           <div className="mx-auto flex max-w-[100rem] flex-col gap-4">
-            {section ? <NarrowNav section={section} pathname={pathname} /> : null}
+            {matchedSection ? <NarrowNav section={matchedSection} pathname={pathname} showGroups={shell !== 'classic'} /> : null}
+            <PinCurrentView />
+            <NavigationMessage />
             <Outlet />
           </div>
         </main>
@@ -170,14 +125,14 @@ function SectionSidebar({
   pathname,
   collapsed,
   onToggle,
+  groups,
 }: {
   section: NavSection;
   pathname: string;
   collapsed: boolean;
   onToggle: () => void;
+  groups: NavSection[];
 }) {
-  const active = areaOf(section, pathname);
-
   return (
     <aside
       className={cn(
@@ -186,14 +141,20 @@ function SectionSidebar({
       )}
     >
       <div className="flex h-full flex-col overflow-y-auto py-3">
-        <nav className="flex flex-1 flex-col gap-0.5 px-2">
-          {section.areas.map((area) => {
-            const isActive = active?.to === area.to;
+        <nav aria-label="Main navigation" className="flex flex-1 flex-col gap-0.5 px-2">
+          <Link to="/" search={{ start: 'workspace' }} title="Your work" aria-label="Your work" aria-current={pathname === '/' ? 'page' : undefined} className="mb-3 flex items-center gap-2 rounded px-2 py-2 text-sm hover:bg-accent"><Activity className="h-4 w-4" />{!collapsed && 'Your work'}</Link>
+          {!collapsed && <PinnedViews compact />}
+          {groups.map((group) => (
+            <div key={group.id} className="mb-3">
+              {!collapsed && <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{group.label}</p>}
+              {group.areas.map((area) => {
+            const isActive = section.id === group.id && areaOf(group, pathname)?.to === area.to;
             return (
               <div key={area.to} className="flex flex-col">
                 <Link
                   to={area.to}
                   title={collapsed ? area.label : area.blurb}
+                  aria-label={area.label}
                   aria-current={isActive ? 'page' : undefined}
                   className={cn(
                     'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
@@ -230,6 +191,8 @@ function SectionSidebar({
               </div>
             );
           })}
+            </div>
+          ))}
         </nav>
 
         <button
@@ -261,11 +224,14 @@ function SectionSidebar({
  * scrolling rows, because that is what the sidebar is: the section's areas,
  * and then the pages of whichever one you are in.
  */
-function NarrowNav({ section, pathname }: { section: NavSection; pathname: string }) {
+function NarrowNav({ section, pathname, showGroups }: { section: NavSection; pathname: string; showGroups: boolean }) {
   const active = areaOf(section, pathname);
 
   return (
     <div className="flex flex-col gap-1 md:hidden">
+      {showGroups && <nav aria-label="Work areas" className="flex gap-1 overflow-x-auto">
+        {SECTIONS.map((group) => <Link key={group.id} to={group.home} aria-current={section.id === group.id ? 'page' : undefined} className="shrink-0 rounded px-2 py-2 text-sm [&.active]:bg-accent">{group.label}</Link>)}
+      </nav>}
       <nav className="-mx-4 flex items-center gap-1 overflow-x-auto px-4">
         {section.areas.map((area) => (
           <Link

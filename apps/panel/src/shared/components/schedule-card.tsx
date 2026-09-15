@@ -81,13 +81,21 @@ function draftOf(cadence: Cadence): Pick<Draft, 'every' | 'hour' | 'minute' | 'w
   };
 }
 
-export function ScheduleCard({ name, saved }: { name?: string; saved: boolean }) {
+// The owner reports this draft in its navigation/replacement guard and keys
+// the card by the saved definition name, so one schedule never becomes another.
+export function ScheduleCard({ name, saved, onDirtyChange }: {
+  name?: string;
+  saved: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = React.useState<Draft>(EMPTY);
+  const [savedDraft, setSavedDraft] = React.useState<Draft>(EMPTY);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
   const [problems, setProblems] = React.useState<string[]>([]);
   // One-shot, like the pipeline draft next door: what the server has is loaded
   // once and never over the top of somebody mid-edit.
-  const loaded = React.useRef<string | undefined>(undefined);
+  const [loaded, setLoaded] = React.useState<string>();
 
   const current = useQuery({
     queryKey: ['schedule', name],
@@ -105,24 +113,24 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
   });
 
   React.useEffect(() => {
-    if (!name || loaded.current === name) return;
+    if (!name || loaded === name) return;
     // Not `isPending` alone: a failed read has no data either, and treating
     // that as "no schedule" writes an empty form over one that exists and
     // then never loads it, because this ran once.
     if (current.isPending || current.isError) return;
-    loaded.current = name;
+    setLoaded(name);
     const found = current.data?.schedule.schedule;
-    setDraft(
-      found
+    const loadedDraft = found
         ? {
             ...draftOf(found.cadence),
             timezone: found.timezone,
             enabled: found.enabled ?? true,
             overlap: found.overlap ?? 'skip',
           }
-        : EMPTY,
-    );
-  }, [name, current.isPending, current.data]);
+        : EMPTY;
+    setDraft(loadedDraft);
+    setSavedDraft(loadedDraft);
+  }, [name, loaded, current.isPending, current.isError, current.data]);
 
   const save = useMutation({
     // The identity is minted by the press and carried in, not generated here:
@@ -145,10 +153,11 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           request_id: requestId,
         },
       });
-      return answerOf(response, 'That schedule was refused.');
+      return { ...answerOf(response, 'That schedule was refused.'), submitted: draft };
     },
-    onSuccess: () => {
+    onSuccess: (stored) => {
       setProblems([]);
+      setSavedDraft(stored.submitted);
       void queryClient.invalidateQueries({ queryKey: ['schedule', name] });
     },
     onError: (error) => setProblems(rejectionDetails(error)),
@@ -158,19 +167,28 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
     // A successful DELETE is 204 with no body, so "is there data" was never
     // the question — and asking it is what let a refused DELETE clear the
     // form for a schedule that is still there.
-    mutationFn: async () =>
-      confirmDone(
+    mutationFn: async () => {
+      await confirmDone(
         await clearSchedule({ path: { name: name ?? '' } }),
         'That schedule could not be forgotten.',
-      ),
-    onSuccess: () => {
+      );
+      return draft;
+    },
+    onSuccess: (submitted) => {
       setProblems([]);
-      loaded.current = undefined as string | undefined;
-      setDraft(EMPTY);
+      setDraft((previous) => JSON.stringify(previous) === JSON.stringify(submitted) ? EMPTY : previous);
+      setSavedDraft(EMPTY);
+      queryClient.setQueryData(['schedule', name], null);
       void queryClient.invalidateQueries({ queryKey: ['schedule', name] });
     },
     onError: (error) => setProblems(rejectionDetails(error)),
   });
+
+  const busy = save.isPending || forget.isPending;
+  React.useEffect(() => {
+    onDirtyChange?.(dirty || busy);
+    return () => onDirtyChange?.(false);
+  }, [dirty, busy, onDirtyChange]);
 
   if (!saved || !name) {
     return (
@@ -183,12 +201,11 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
     );
   }
 
-  const busy = save.isPending || forget.isPending;
   // The read failed, so nothing was loaded into the form. Saving now would
   // write this component's own defaults over a schedule nobody has seen —
   // which is the same mistake as drawing a failed read as an empty state,
   // arriving one button later.
-  const unread = current.isError;
+  const unread = current.isPending || current.isError || loaded !== name;
   const existing = current.data;
   const field = 'h-8 rounded-md border border-border bg-background px-2 text-xs';
 
@@ -197,13 +214,16 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
       <div className="flex items-center gap-2">
         <CalendarClock className="h-3.5 w-3.5" />
         <span className="text-sm font-medium">Schedule</span>
+        <span className="min-w-0 truncate" title={name}>{name}</span>
         {existing ? (
           <Button
             variant="ghost"
             size="sm"
             className="ml-auto"
             disabled={busy}
-            onClick={() => forget.mutate()}
+            onClick={() => {
+              if (!dirty || window.confirm('Discard unsaved schedule changes and forget this schedule?')) forget.mutate();
+            }}
             title="Forget this schedule. Turning it off keeps the settings instead."
           >
             <Trash2 className="mr-1 h-3 w-3" /> Forget
@@ -211,8 +231,11 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
         ) : null}
       </div>
 
+      {dirty ? <p role="status" className="text-warning">Unsaved schedule changes.</p> : null}
+      <fieldset disabled={unread} className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <select
+          aria-label="Schedule cadence"
           className={field}
           value={draft.every}
           onChange={(event) =>
@@ -226,6 +249,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
 
         {draft.every === 'weekly' ? (
           <select
+            aria-label="Schedule weekday"
             className={field}
             value={draft.weekday}
             onChange={(event) =>
@@ -244,6 +268,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
         {draft.every === 'hourly' ? null : (
           <>
             <input
+              aria-label="Schedule hour"
               type="number"
               min={0}
               max={23}
@@ -257,6 +282,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           </>
         )}
         <input
+          aria-label="Schedule minute"
           type="number"
           min={0}
           max={59}
@@ -270,6 +296,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           <span className="text-muted-foreground">past the hour</span>
         ) : (
           <input
+            aria-label="Schedule time zone"
             className={`${field} min-w-40 flex-1`}
             value={draft.timezone}
             placeholder="Europe/Warsaw"
@@ -333,8 +360,14 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           <span className="text-muted-foreground">off — it starts nothing</span>
         ) : null}
       </div>
+      </fieldset>
+      {dirty ? (
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setDraft(savedDraft)}>
+          Discard schedule changes
+        </Button>
+      ) : null}
 
-      {unread ? (
+      {current.isError ? (
         <Refusal
           error={current.error}
           fallback="That schedule could not be read, so this form was not filled in."
@@ -350,7 +383,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
       {existing?.firings?.[0] ? <LastFiringLine last={existing.firings[0]} /> : null}
 
       {problems.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-destructive">
+        <ul className="flex flex-col gap-1 text-danger">
           {problems.map((problem) => (
             <li key={problem}>{problem}</li>
           ))}
@@ -379,7 +412,7 @@ function LastFiringLine({ last }: { last: SlotRecord }) {
   const when = new Date(last.slot).toLocaleString();
   if (last.outcome === 'refused') {
     return (
-      <p className="text-destructive">
+      <p className="text-danger">
         {when}: could not start — {last.detail ?? 'no reason recorded'}
       </p>
     );

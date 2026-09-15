@@ -58,7 +58,7 @@ it('proposes a case from a trace, and approves and publishes what people wrote',
     {
       method: 'POST',
       path: `/evaluation-reviews/${ID}/actions`,
-      answer: { status: 200, body: item('ready', { expected: 'Nairobi' }) },
+      answer: { status: 200, body: item('ready', { expected: 'Nairobi', split: 'dev' }) },
     },
     {
       method: 'POST',

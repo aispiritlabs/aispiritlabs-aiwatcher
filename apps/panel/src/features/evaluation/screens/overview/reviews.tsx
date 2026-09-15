@@ -10,6 +10,7 @@
  * not change. This renders what the server said, including its refusals.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useDraftChanges, useReportDraftChanges, type ReportDraftChanges } from '@/shared/lib/draft-changes';
 import * as React from 'react';
 
 import { listReviews, proposeCase, publishReviews, reviewCase } from '@/api/generated/sdk.gen';
@@ -56,10 +57,13 @@ export type ReviewSeed = {
 export function Reviews({
   seed,
   onDataset,
+  onDirtyChange,
 }: {
   seed: ReviewSeed;
   onDataset: (dataset: string | undefined) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
+  const drafts = useDraftChanges(onDirtyChange);
   const [draft, setDraft] = React.useState(seed.dataset ?? '');
   const dataset = seed.dataset;
   return (
@@ -95,8 +99,8 @@ export function Reviews({
       </form>
       {dataset ? (
         <>
-          <Propose dataset={dataset} seed={seed} />
-          <Queue dataset={dataset} />
+          <Propose key={JSON.stringify(seed)} dataset={dataset} seed={seed} reportDirty={drafts.report} />
+          <Queue key={dataset} dataset={dataset} reportDirty={drafts.report} dirty={drafts.dirty} />
         </>
       ) : (
         <p className="text-muted-foreground">Name the curation dataset the cases join.</p>
@@ -105,7 +109,9 @@ export function Reviews({
   );
 }
 
-function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
+function Propose({ dataset, seed, reportDirty }: {
+  dataset: string; seed: ReviewSeed; reportDirty: ReportDraftChanges;
+}) {
   const editor = useRoleDecision('editor');
   const queries = useQueryClient();
   const [kind, setKind] = React.useState<'trace' | 'case'>(seed.evaluation ? 'case' : 'trace');
@@ -118,6 +124,11 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
   const [note, setNote] = React.useState('');
   const [split, setSplit] = React.useState('');
   const [content, setContent] = React.useState<ReviewContent>('written');
+  const values = { kind, trace, evaluation, caseId, repetition, question, answer, note, split, content };
+  const snapshot = JSON.stringify(values);
+  const [savedSnapshot, setSavedSnapshot] = React.useState(snapshot);
+  const currentSnapshot = React.useRef(snapshot);
+  currentSnapshot.current = snapshot;
   const propose = useMutation({
     mutationFn: async () => {
       const target: AssessmentTarget =
@@ -129,7 +140,7 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
               case_id: caseId.trim(),
               repetition_id: repetition.trim(),
             };
-      return answerOf(
+      const response = answerOf(
         await proposeCase({
           body: {
             dataset,
@@ -143,14 +154,22 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
         }),
         'the proposal was refused',
       );
+      return { ...response, submitted: values };
     },
-    onSuccess: () => {
-      setQuestion('');
-      setAnswer('');
-      setNote('');
+    onSuccess: ({ submitted }) => {
+      if (currentSnapshot.current === JSON.stringify(submitted)) {
+        setQuestion('');
+        setAnswer('');
+        setNote('');
+        setSavedSnapshot(JSON.stringify({ ...submitted, question: '', answer: '', note: '' }));
+      } else {
+        setSavedSnapshot(JSON.stringify(submitted));
+      }
       void queries.invalidateQueries({ queryKey: ['evaluation-reviews', dataset] });
     },
   });
+  const dirty = snapshot !== savedSnapshot;
+  useReportDraftChanges(reportDirty, 'proposal', dirty || propose.isPending);
   return (
     <form
       className="grid gap-2 rounded border border-border p-3 md:grid-cols-2"
@@ -159,6 +178,7 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
         propose.mutate();
       }}
     >
+      {dirty ? <p role="status" className="text-warning md:col-span-2">Unsaved case proposal.</p> : null}
       <label className="flex flex-col gap-1">
         Seen on
         <select
@@ -265,6 +285,13 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
         >
           {propose.isPending ? 'Proposing…' : 'Propose as a case'}
         </Button>
+        {dirty ? <Button size="sm" type="button" variant="ghost" disabled={propose.isPending}
+          onClick={() => {
+            const saved = JSON.parse(savedSnapshot) as typeof values;
+            setKind(saved.kind); setTrace(saved.trace); setEvaluation(saved.evaluation);
+            setCaseId(saved.caseId); setRepetition(saved.repetition); setQuestion(saved.question);
+            setAnswer(saved.answer); setNote(saved.note); setSplit(saved.split); setContent(saved.content);
+          }}>Discard proposal changes</Button> : null}
         {editor === false ? (
           <span className="text-muted-foreground">{needsRole('editor')}</span>
         ) : null}
@@ -283,7 +310,9 @@ function Propose({ dataset, seed }: { dataset: string; seed: ReviewSeed }) {
   );
 }
 
-function Queue({ dataset }: { dataset: string }) {
+function Queue({ dataset, reportDirty, dirty }: {
+  dataset: string; reportDirty: ReportDraftChanges; dirty: boolean;
+}) {
   const editor = useRoleDecision('editor');
   const queries = useQueryClient();
   const reviews = useQuery({
@@ -300,6 +329,7 @@ function Queue({ dataset }: { dataset: string }) {
       void queries.invalidateQueries({ queryKey: ['datasets'] });
     },
   });
+  useReportDraftChanges(reportDirty, 'publication', publish.isPending);
   if (reviews.error) {
     const failure = reviews.error instanceof ApiFailure ? reviews.error : undefined;
     return (
@@ -318,11 +348,12 @@ function Queue({ dataset }: { dataset: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
-          disabled={editor === false || approved === 0 || publish.isPending}
+          disabled={editor === false || approved === 0 || publish.isPending || dirty}
           onClick={() => publish.mutate()}
         >
           {publish.isPending ? 'Publishing…' : `Publish ${approved} approved as a new version`}
         </Button>
+        {dirty ? <span className="text-muted-foreground">Save or discard review edits before publishing.</span> : null}
         {publish.error ? (
           <span className="text-danger">{(publish.error as Error).message}</span>
         ) : null}
@@ -343,7 +374,7 @@ function Queue({ dataset }: { dataset: string }) {
       ) : (
         <ul className="flex flex-col divide-y divide-border/40">
           {items.map((item) => (
-            <Item key={item.id} dataset={dataset} item={item} editor={editor} />
+            <Item key={item.id} dataset={dataset} item={item} editor={editor} reportDirty={reportDirty} />
           ))}
         </ul>
       )}
@@ -364,23 +395,36 @@ function Item({
   dataset,
   item,
   editor,
+  reportDirty,
 }: {
   dataset: string;
   item: ReviewItem;
   editor: boolean | undefined;
+  reportDirty: ReportDraftChanges;
 }) {
   const queries = useQueryClient();
   const [expected, setExpected] = React.useState(item.expected ?? '');
   const [split, setSplit] = React.useState(item.split ?? '');
   const [reason, setReason] = React.useState('');
+  const [saved, setSaved] = React.useState({ expected: item.expected ?? '', split: item.split ?? '' });
+  const expectedDirty = expected !== saved.expected || split !== saved.split;
+  const dirty = expectedDirty || reason !== '';
   const act = useMutation({
     mutationFn: async (action: ReviewAction) =>
       answerOf(
         await reviewCase({ path: { id: item.id }, query: { dataset }, body: action }),
         'the review refused that',
       ),
-    onSuccess: () => void queries.invalidateQueries({ queryKey: ['evaluation-reviews', dataset] }),
+    onSuccess: (stored, action) => {
+      if (action.action === 'expect') {
+        setSaved({ expected: stored.expected ?? '', split: stored.split ?? '' });
+      } else if (action.action === 'reject') {
+        setReason((current) => current === action.reason ? '' : current);
+      }
+      void queries.invalidateQueries({ queryKey: ['evaluation-reviews', dataset] });
+    },
   });
+  useReportDraftChanges(reportDirty, item.id, dirty || act.isPending);
   const done = item.state === 'published';
   return (
     <li className="flex flex-col gap-1 py-2">
@@ -408,7 +452,8 @@ function Item({
           .filter(Boolean)
           .join(' · ')}
       </div>
-      {done ? (
+      {dirty ? <p role="status" className="text-warning">Unsaved review changes. Save the expected answer before approving or rejecting.</p> : null}
+      {done && !dirty ? (
         <span className="flex items-center gap-1 text-muted-foreground">
           In
           <IdChip
@@ -439,7 +484,7 @@ function Item({
           <Button
             size="sm"
             variant="outline"
-            disabled={editor === false || !expected.trim() || act.isPending}
+            disabled={done || editor === false || !expected.trim() || act.isPending}
             onClick={() =>
               act.mutate({
                 action: 'expect',
@@ -452,7 +497,7 @@ function Item({
           </Button>
           <Button
             size="sm"
-            disabled={editor === false || item.state !== 'ready' || act.isPending}
+            disabled={dirty || editor === false || item.state !== 'ready' || act.isPending}
             onClick={() => act.mutate({ action: 'approve' })}
           >
             Approve
@@ -467,11 +512,17 @@ function Item({
           <Button
             size="sm"
             variant="ghost"
-            disabled={editor === false || !reason.trim() || act.isPending}
+            disabled={done || expectedDirty || editor === false || !reason.trim() || act.isPending}
             onClick={() => act.mutate({ action: 'reject', reason })}
           >
             Reject
           </Button>
+          {dirty ? <Button size="sm" variant="ghost" disabled={act.isPending} onClick={() => {
+            setExpected(item.expected ?? '');
+            setSplit(item.split ?? '');
+            setSaved({ expected: item.expected ?? '', split: item.split ?? '' });
+            setReason('');
+          }}>Discard review changes</Button> : null}
           {act.error ? (
             <span className="text-danger">
               {act.error instanceof ApiFailure && act.error.status === 403

@@ -10,12 +10,14 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AccountRouteImport } from './routes/account'
 import { Route as AnnotationsRouteImport } from './routes/annotations'
 import { Route as ConversationsRouteImport } from './routes/conversations'
 import { Route as DataCurationRouteImport } from './routes/data-curation'
 import { Route as DatasetsRouteImport } from './routes/datasets'
 import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
+import { Route as LearningRouteImport } from './routes/learning'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as TrainingRouteImport } from './routes/training'
 import { Route as WorkflowsRouteImport } from './routes/workflows'
@@ -48,6 +50,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AnnotationsRoute = AnnotationsRouteImport.update({
   id: '/annotations',
   path: '/annotations',
@@ -76,6 +83,11 @@ const EvaluationRoute = EvaluationRouteImport.update({
 const ExperimentsRoute = ExperimentsRouteImport.update({
   id: '/experiments',
   path: '/experiments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LearningRoute = LearningRouteImport.update({
+  id: '/learning',
+  path: '/learning',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ObservabilityRoute = ObservabilityRouteImport.update({
@@ -211,12 +223,14 @@ const TrainingRunsRoute = TrainingRunsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/annotations': typeof AnnotationsRouteWithChildren
   '/conversations': typeof ConversationsRouteWithChildren
   '/data-curation': typeof DataCurationRouteWithChildren
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
@@ -246,9 +260,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/learning': typeof LearningRoute
   '/workflows': typeof WorkflowsRoute
   '/annotations/exports': typeof AnnotationsExportsRoute
   '/annotations/imports': typeof AnnotationsImportsRoute
@@ -277,12 +293,14 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/annotations': typeof AnnotationsRouteWithChildren
   '/conversations': typeof ConversationsRouteWithChildren
   '/data-curation': typeof DataCurationRouteWithChildren
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
@@ -314,12 +332,14 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/account'
     | '/annotations'
     | '/conversations'
     | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/learning'
     | '/observability'
     | '/training'
     | '/workflows'
@@ -349,9 +369,11 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/account'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/learning'
     | '/workflows'
     | '/annotations/exports'
     | '/annotations/imports'
@@ -379,12 +401,14 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/account'
     | '/annotations'
     | '/conversations'
     | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/learning'
     | '/observability'
     | '/training'
     | '/workflows'
@@ -415,12 +439,14 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AccountRoute: typeof AccountRoute
   AnnotationsRoute: typeof AnnotationsRouteWithChildren
   ConversationsRoute: typeof ConversationsRouteWithChildren
   DataCurationRoute: typeof DataCurationRouteWithChildren
   DatasetsRoute: typeof DatasetsRoute
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
+  LearningRoute: typeof LearningRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
   TrainingRoute: typeof TrainingRouteWithChildren
   WorkflowsRoute: typeof WorkflowsRoute
@@ -436,6 +462,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/annotations': {
@@ -478,6 +511,13 @@ declare module '@tanstack/react-router' {
       path: '/experiments'
       fullPath: '/experiments'
       preLoaderRoute: typeof ExperimentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/learning': {
+      id: '/learning'
+      path: '/learning'
+      fullPath: '/learning'
+      preLoaderRoute: typeof LearningRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/observability': {
@@ -757,12 +797,14 @@ const TrainingRouteWithChildren = TrainingRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AccountRoute: AccountRoute,
   AnnotationsRoute: AnnotationsRouteWithChildren,
   ConversationsRoute: ConversationsRouteWithChildren,
   DataCurationRoute: DataCurationRouteWithChildren,
   DatasetsRoute: DatasetsRoute,
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,
+  LearningRoute: LearningRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
   TrainingRoute: TrainingRouteWithChildren,
   WorkflowsRoute: WorkflowsRoute,

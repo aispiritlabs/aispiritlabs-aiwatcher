@@ -8,7 +8,6 @@ use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dataset\Dataset;
 use Aiwatcher\Flow\Dsl\Parser;
 use Aiwatcher\Flow\Dsl\PipelineBuilder;
-use Flow\ETL\Rows;
 
 /**
  * Parse, build, run, and stop.
@@ -116,15 +115,14 @@ final readonly class QueryRunner
             // inference from a full page. Batch by batch rather than `fetch()`, so a managed
             // query read in this process looks between them for a request to stop; the
             // service runs one in a child instead, which a cancel kills (`ChildQuery`).
-            $fetched = new Rows();
+            $rows = [];
 
             foreach ($plan->frame->limit($maxRows + 1)->get() as $batch) {
                 if ($note?->cancelled((string) $executionId) === true) {
                     throw new QueryCancelled((string) $executionId);
                 }
-                $fetched = $fetched->merge($batch);
+                $rows = [...$rows, ...$batch->toArray()];
             }
-            $rows = $fetched->toArray();
         } catch (\Throwable $error) {
             $note?->failed((string) $executionId);
 

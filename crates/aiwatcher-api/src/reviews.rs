@@ -294,6 +294,7 @@ async fn publish_reviews(
             window_seconds: None,
             produced_by: Some(format!("evaluation-reviews/{}", query.dataset)),
             execution_id: None,
+            sample: None,
         })
         .await?;
     let version = published.dataset.latest.version.clone();

@@ -115,6 +115,7 @@ impl ActivityExecutor for PublishExecutor {
                 // the run that produced it — its waterfall, its `step.*` on the
                 // log, and the plan it pinned.
                 execution_id: Some(command.key.execution_id.to_string()),
+                sample: None,
             })
             .await
             .map_err(refusal)?;

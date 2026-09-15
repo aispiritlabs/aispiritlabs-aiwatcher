@@ -109,6 +109,7 @@ dependencies = [
  "aiwatcher-datasets",
  "aiwatcher-evaluation",
  "aiwatcher-execution",
+ "aiwatcher-iam",
  "aiwatcher-jobs",
  "aiwatcher-projector",
  "aiwatcher-prompts",
@@ -136,6 +137,7 @@ dependencies = [
 name = "aiwatcher-auth"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-iam",
  "base64 0.22.1",
  "jsonwebtoken",
  "reqwest",
@@ -238,6 +240,7 @@ name = "aiwatcher-datasets"
 version = "0.1.0"
 dependencies = [
  "aiwatcher-core",
+ "aiwatcher-iam",
  "aiwatcher-prompts",
  "hex",
  "serde",
@@ -289,6 +292,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "aiwatcher-iam"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
  "utoipa",
  "uuid",
 ]
@@ -369,6 +387,7 @@ dependencies = [
  "aiwatcher-datasets",
  "aiwatcher-evaluation",
  "aiwatcher-execution",
+ "aiwatcher-iam",
  "aiwatcher-jobs",
  "aiwatcher-projector",
  "aiwatcher-prompts",
@@ -5600,6 +5619,7 @@ dependencies = [
  "quote",
  "regex",
  "syn 2.0.119",
+ "uuid",
 ]
 
 [[package]]

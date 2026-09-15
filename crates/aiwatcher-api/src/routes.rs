@@ -80,6 +80,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::integrations::hubs::router())
         // ── The caller, rather than the data ─────────────────────────────────
         .merge(crate::auth::router())
+        .merge(crate::iam::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::authenticate,

@@ -56,6 +56,11 @@ export interface CanvasProps {
   onSelect: (id: string | null) => void;
   onChange: (id: string, geometry: Geometry) => void;
   onCreate: (geometry: Geometry) => void;
+  /** Group all pointer moves in one edit for undo/redo. */
+  onEditStart?: () => void;
+  onEditEnd?: () => void;
+  onDraftChange?: (pending: boolean) => void;
+  disabled?: boolean;
   /** Ids that failed validation, drawn in the danger colour. */
   invalid?: string[];
   className?: string;
@@ -85,6 +90,10 @@ export function AnnotationCanvas({
   onSelect,
   onChange,
   onCreate,
+  onEditStart,
+  onEditEnd,
+  onDraftChange,
+  disabled = false,
   invalid,
   className,
 }: CanvasProps) {
@@ -108,6 +117,11 @@ export function AnnotationCanvas({
   const minimumPoints = geometryKind === 'polygon' ? 3 : geometryKind === 'polyline' ? 2 : 1;
   const invalidIds = React.useMemo(() => new Set(invalid ?? []), [invalid]);
   const linkIds = React.useMemo(() => new Set(linkTargets ?? []), [linkTargets]);
+
+  React.useEffect(() => {
+    onDraftChange?.(draft.length > 0);
+  }, [draft.length, onDraftChange]);
+  React.useEffect(() => () => onDraftChange?.(false), [onDraftChange]);
 
   // Fit the plan to the pane, and re-fit until the pane has a real size.
   //
@@ -228,6 +242,7 @@ export function AnnotationCanvas({
   );
 
   const onPointerDown = (event: React.PointerEvent) => {
+    if (disabled) return;
     if (event.button === 1 || event.shiftKey) {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({
@@ -291,6 +306,7 @@ export function AnnotationCanvas({
       );
       if (index >= 0) {
         event.currentTarget.setPointerCapture(event.pointerId);
+        onEditStart?.();
         setDrag({ kind: 'vertex', id: selected.id, index });
         return;
       }
@@ -302,6 +318,7 @@ export function AnnotationCanvas({
       onSelect(hit.id);
       if (event.altKey) {
         event.currentTarget.setPointerCapture(event.pointerId);
+        onEditStart?.();
         setDrag({ kind: 'shape', id: hit.id, from: at });
       }
       return;
@@ -312,6 +329,7 @@ export function AnnotationCanvas({
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
+    if (disabled) return;
     const at = toImage(event);
     setCursor(at);
     if (!drag) return;
@@ -346,6 +364,7 @@ export function AnnotationCanvas({
   };
 
   const onPointerUp = () => {
+    if (drag?.kind === 'vertex' || drag?.kind === 'shape') onEditEnd?.();
     if (drag?.kind === 'bbox') {
       const [from, to] = draft;
       setDraft([]);
@@ -366,10 +385,10 @@ export function AnnotationCanvas({
   // that makes somebody think the tool is stuck. Typing in a field is excluded
   // so `Backspace` still deletes a character.
   React.useEffect(() => {
-    if (draft.length === 0) return;
+    if (draft.length === 0 || disabled) return;
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (event.key === 'Enter') {
         event.preventDefault();
         finishDraft(draft);
@@ -382,7 +401,7 @@ export function AnnotationCanvas({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [draft, finishDraft]);
+  }, [draft, finishDraft, disabled]);
 
   const canFinish = draft.length >= minimumPoints;
   // A bbox is a drag and a keypoint set counts itself down, so neither has a
@@ -403,8 +422,14 @@ export function AnnotationCanvas({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        if (drag?.kind === 'vertex' || drag?.kind === 'shape') onEditEnd?.();
+        setDrag(null);
+        setDraft([]);
+      }}
       onPointerLeave={() => setCursor(null)}
       onDoubleClick={() => {
+        if (disabled) return;
         // Both presses of a double click have already placed a point, because
         // a pointer event carries no click count (`detail` is 0 by spec). The
         // second sits on top of the first, so it is dropped rather than saved
@@ -483,7 +508,7 @@ export function AnnotationCanvas({
         <div
           onPointerDown={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
-          className="absolute left-2 top-2 flex items-center gap-2 rounded-md border border-border bg-background/90 px-2 py-1 text-[11px] shadow-sm backdrop-blur"
+          className="absolute left-2 right-2 top-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-background/90 px-2 py-1 text-[11px] shadow-sm backdrop-blur"
         >
           <span className="font-medium">{activeClass}</span>
           <span className="text-muted-foreground">
@@ -499,6 +524,7 @@ export function AnnotationCanvas({
           </button>
           <button
             type="button"
+            aria-label="Remove last point"
             onClick={() => setDraft(draft.slice(0, -1))}
             className="rounded border border-border px-2 py-0.5 hover:bg-accent"
           >

@@ -213,6 +213,15 @@ export function WorkflowGraph({
   reach?: ReachMode | undefined;
   onReach: (mode: ReachMode | undefined) => void;
 }) {
+  const [colorMode, setColorMode] = React.useState<'light' | 'dark'>(() =>
+    document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  React.useEffect(() => {
+    const update = () => setColorMode(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    update();
+    return () => observer.disconnect();
+  }, []);
   // Keyed on the graph's *shape*, not on its contents. A status change must
   // not move a box; only a node appearing or disappearing may.
   const nodesRef = React.useRef(nodes);
@@ -388,7 +397,7 @@ export function WorkflowGraph({
           // React Flow ships light defaults; this console is dark-only, so the
           // furniture is mapped onto the panel's own tokens rather than themed
           // with a stylesheet override that would drift from `styles.css`.
-          colorMode="dark"
+          colorMode={colorMode}
           style={{ background: 'transparent' }}
         >
           <Background

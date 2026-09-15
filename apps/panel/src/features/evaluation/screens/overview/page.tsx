@@ -37,6 +37,7 @@ import {
 import { TimeRange, windowParam } from '@/shared/components/time-range';
 import { VirtualList } from '@/shared/components/virtual-list';
 import { cn, formatDuration, formatTime, pinchId } from '@/shared/lib/utils';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/evaluation');
 
@@ -107,6 +108,16 @@ function idOf(row: Row): string {
 
 export function EvaluationPage() {
   const search = routeApi.useSearch();
+  const [reviewDirty, setReviewDirty] = React.useState(false);
+  const reviewContext = JSON.stringify([search.review_dataset, search.review_trace,
+    search.review_evaluation, search.review_case, search.review_repetition]);
+  useUnsavedChanges({
+    dirty: reviewDirty,
+    message: 'Case review has unsaved changes or a request in progress.',
+    losesDraft: ({ next }) => next.routeId !== '/evaluation' || !next.search.reviews ||
+      JSON.stringify([next.search.review_dataset, next.search.review_trace,
+        next.search.review_evaluation, next.search.review_case, next.search.review_repetition]) !== reviewContext,
+  });
   const navigate = routeApi.useNavigate();
   const [baselineDraft, setBaselineDraft] = React.useState(search.baseline ?? '');
   React.useEffect(() => setBaselineDraft(search.baseline ?? ''), [search.baseline]);
@@ -266,6 +277,8 @@ export function EvaluationPage() {
       {search.approvals ? <Approvals /> : null}
       {search.reviews ? (
         <Reviews
+          key={reviewContext}
+          onDirtyChange={setReviewDirty}
           seed={{
             dataset: search.review_dataset,
             trace: search.review_trace,

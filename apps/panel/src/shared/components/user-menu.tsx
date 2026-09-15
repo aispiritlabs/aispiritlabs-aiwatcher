@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Link } from '@tanstack/react-router';
 import { LogOut } from 'lucide-react';
 
 import type { Identity } from '@/api/generated';
@@ -24,7 +25,8 @@ export function UserMenu() {
   const trigger = React.useRef<HTMLButtonElement>(null);
   const panelId = React.useId();
 
-  if (!enabled || !session.data) return null;
+  if (!enabled) return <Link to="/account" className="rounded px-2 py-1 text-sm">Account</Link>;
+  if (!session.data) return null;
   const identity = session.data;
   // `proxy` mode declares no logout URL, and that is the honest answer: the
   // session belongs to the proxy in front, so a button here would clear
@@ -84,7 +86,7 @@ export function UserMenu() {
             {identity.groups && identity.groups.length > 0 && (
               <div className="flex flex-col gap-1 border-t border-border py-2">
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Groups
+                  Identity provider groups
                 </span>
                 <div className="flex flex-wrap gap-1">
                   {identity.groups.map((group) => (
@@ -96,6 +98,7 @@ export function UserMenu() {
               </div>
             )}
 
+            <Link to="/account" onClick={() => setOpen(false)} className="block rounded px-2 py-2 text-sm text-primary hover:bg-accent">Profile, account & groups</Link>
             {maySignOut ? (
               <Button
                 variant="ghost"

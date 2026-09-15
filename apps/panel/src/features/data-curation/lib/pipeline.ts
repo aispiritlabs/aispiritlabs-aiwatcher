@@ -1,5 +1,6 @@
 import type {
   BlockSpec,
+  DatasetSample,
   PipelineBlock,
   PipelineEdge,
   StepBlocks,
@@ -294,6 +295,11 @@ export type BlockResult = {
 };
 
 export type PipelineResult = {
+  mode: 'preview' | 'full';
+  complete: boolean;
+  sample?: DatasetSample;
+  /** Notebook revisions actually used, keyed by block ID rather than mutable notebook name. */
+  notebookRevisions: Record<string, string>;
   script: string;
   /** The engine `script` was written for and run on. */
   engine: QueryEngineName;
@@ -407,6 +413,8 @@ export async function runPipeline(options: {
   let rows: Row[] = flow.rows;
   let columns = flow.columns;
   const notebooks: NotebookRun[] = [];
+  const notebookRevisions: Record<string, string> = {};
+  const truncatedStages = flow.truncated ? [flowBlocks.at(-1)!.id] : [];
 
   for (const block of chain) {
     if (block.spec.kind !== 'notebook') continue;
@@ -419,6 +427,8 @@ export async function runPipeline(options: {
         block.spec.revision ?? undefined,
       );
       notebooks.push(run);
+      notebookRevisions[block.id] = run.revision;
+      if (run.truncated) truncatedStages.push(block.id);
       rows = run.rows;
       columns = run.columns;
       options.onBlockResult?.(block.id, {
@@ -453,7 +463,10 @@ export async function runPipeline(options: {
     });
   }
 
-  return { script, engine, flow, notebooks, rows, columns, outcomes };
+  const complete = mode === 'full' && truncatedStages.length === 0;
+  return { script, engine, flow, notebooks, rows, columns, outcomes, mode, complete, notebookRevisions,
+    sample: complete ? undefined : { mode: mode === 'preview' ? 'preview' : 'truncated',
+      truncated_stages: truncatedStages } };
 }
 
 /**

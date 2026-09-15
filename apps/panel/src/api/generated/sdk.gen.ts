@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddressApprovalData, AddressApprovalErrors, AddressApprovalResponses, AdmitLineData, AdmitLineErrors, AdmitLineResponses, AppendImportRowsData, AppendImportRowsErrors, AppendImportRowsResponses, AppendStreamData, AppendStreamErrors, AppendStreamResponses, ApproveSourceData, ApproveSourceErrors, ApproveSourceResponses, ArtifactContentData, ArtifactContentErrors, ArtifactContentResponses, AuthConfigData, AuthConfigResponses, BlockContextData, BlockContextErrors, BlockContextResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, CancelConversationExportData, CancelConversationExportErrors, CancelConversationExportResponses, CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, CancelImportJobData, CancelImportJobErrors, CancelImportJobResponses, ClaimData, ClaimErrors, ClaimResponses, ClearScheduleData, ClearScheduleErrors, ClearScheduleResponses, ClearWorkflowScheduleData, ClearWorkflowScheduleErrors, ClearWorkflowScheduleResponses, CompareCasesData, CompareCasesErrors, CompareCasesResponses, CompareResultsData, CompareResultsErrors, CompareResultsResponses, ConversationPolicyData, ConversationPolicyErrors, ConversationPolicyResponses, ConversationTurnContentData, ConversationTurnContentErrors, ConversationTurnContentResponses, CreateConversationExportData, CreateConversationExportErrors, CreateConversationExportResponses, DeclareScoringRunData, DeclareScoringRunErrors, DeclareScoringRunResponses, DeriveCohortData, DeriveCohortErrors, DeriveCohortResponses, DiffScorecardData, DiffScorecardErrors, DiffScorecardResponses, DiscardBundleData, DiscardBundleErrors, DiscardBundleResponses, EraseConversationContentData, EraseConversationContentErrors, EraseConversationContentResponses, ExecutionHistoryData, ExecutionHistoryErrors, ExecutionHistoryResponses, ExecutionTimersData, ExecutionTimersErrors, ExecutionTimersResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, ForgetResultData, ForgetResultErrors, ForgetResultResponses, GateResultData, GateResultErrors, GateResultResponses, GetAssessmentHistoryData, GetAssessmentHistoryErrors, GetAssessmentHistoryResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetCalibrationData, GetCalibrationErrors, GetCalibrationResponses, GetCasesData, GetCasesErrors, GetCasesResponses, GetConversationDatasetRowsData, GetConversationDatasetRowsErrors, GetConversationDatasetRowsResponses, GetConversationExportData, GetConversationExportErrors, GetConversationExportResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetDerivedCohortData, GetDerivedCohortErrors, GetDerivedCohortResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetExperimentData, GetExperimentErrors, GetExperimentResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetHubImageData, GetHubImageErrors, GetHubImageResponses, GetImageData, GetImageErrors, GetImageResponses, GetImportBatchData, GetImportBatchErrors, GetImportBatchResponses, GetImportJobData, GetImportJobErrors, GetImportJobResponses, GetImportManifestData, GetImportManifestErrors, GetImportManifestResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetResultData, GetResultErrors, GetResultResponses, GetRubricData, GetRubricErrors, GetRubricResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetScheduleData, GetScheduleErrors, GetScheduleResponses, GetScorecardData, GetScorecardErrors, GetScorecardResponses, GetScorerCatalogData, GetScorerCatalogErrors, GetScorerCatalogResponses, GetScoringRunData, GetScoringRunErrors, GetScoringRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowDefinitionData, GetWorkflowDefinitionErrors, GetWorkflowDefinitionResponses, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, GetWorkflowScheduleData, GetWorkflowScheduleErrors, GetWorkflowScheduleResponses, HeartbeatData, HeartbeatErrors, HeartbeatResponses, ImportImagesData, ImportImagesErrors, ImportImagesResponses, IngestData, IngestErrors, IngestResponses, ListApprovalsData, ListApprovalsErrors, ListApprovalsResponses, ListAssessmentsData, ListAssessmentsErrors, ListAssessmentsResponses, ListBundleData, ListBundleErrors, ListBundleResponses, ListConversationArchiveData, ListConversationArchiveErrors, ListConversationArchiveResponses, ListConversationDatasetsData, ListConversationDatasetsErrors, ListConversationDatasetsResponses, ListConversationExportsData, ListConversationExportsErrors, ListConversationExportsResponses, ListConversationsData, ListConversationsResponses, ListConversationTurnsData, ListConversationTurnsErrors, ListConversationTurnsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExperimentsData, ListExperimentsErrors, ListExperimentsResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListHubRowsData, ListHubRowsErrors, ListHubRowsResponses, ListHubsData, ListHubsErrors, ListHubsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListImportBatchesData, ListImportBatchesErrors, ListImportBatchesResponses, ListImportJobsData, ListImportJobsErrors, ListImportJobsResponses, ListImportManifestsData, ListImportManifestsErrors, ListImportManifestsResponses, ListImportRejectsData, ListImportRejectsErrors, ListImportRejectsResponses, ListLinesData, ListLinesErrors, ListLinesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListPipelinesData, ListPipelinesErrors, ListPipelinesResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListResultsData, ListResultsResponses, ListReviewsData, ListReviewsErrors, ListReviewsResponses, ListRubricsData, ListRubricsErrors, ListRubricsResponses, ListRunsData, ListRunsResponses, ListScorecardsData, ListScorecardsErrors, ListScorecardsResponses, ListScorecardVersionsData, ListScorecardVersionsErrors, ListScorecardVersionsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowDefinitionsData, ListWorkflowDefinitionsErrors, ListWorkflowDefinitionsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, OpenEditorData, OpenEditorErrors, OpenEditorResponses, PauseExecutionData, PauseExecutionErrors, PauseExecutionResponses, ProposeCaseData, ProposeCaseErrors, ProposeCaseResponses, ProvideInputData, ProvideInputErrors, ProvideInputResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, PublishResultData, PublishResultErrors, PublishResultResponses, PublishReviewsData, PublishReviewsErrors, PublishReviewsResponses, PublishRubricData, PublishRubricErrors, PublishRubricResponses, PublishScorecardData, PublishScorecardErrors, PublishScorecardResponses, QueueImportJobData, QueueImportJobErrors, QueueImportJobResponses, ReadDeciderLeaseData, ReadDeciderLeaseErrors, ReadDeciderLeaseResponses, ReadInputData, ReadInputErrors, ReadInputResponses, ReadPayloadData, ReadPayloadErrors, ReadPayloadResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordAssessmentData, RecordAssessmentErrors, RecordAssessmentResponses, RecordConversationTurnsData, RecordConversationTurnsErrors, RecordConversationTurnsResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RegisterWorkflowData, RegisterWorkflowErrors, RegisterWorkflowResponses, ReleaseDeciderLeaseData, ReleaseDeciderLeaseErrors, ReleaseDeciderLeaseResponses, ReportData, ReportErrors, ReportResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ResumeExecutionData, ResumeExecutionErrors, ResumeExecutionResponses, RetryStepData, RetryStepErrors, RetryStepResponses, ReviewCaseData, ReviewCaseErrors, ReviewCaseResponses, ReviewConversationTurnData, ReviewConversationTurnErrors, ReviewConversationTurnResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, ReviewsOfTargetData, ReviewsOfTargetErrors, ReviewsOfTargetResponses, RunArtifactsData, RunArtifactsErrors, RunArtifactsResponses, RunBlocksData, RunBlocksErrors, RunBlocksResponses, SaveBlockTemplateData, SaveBlockTemplateErrors, SaveBlockTemplateResponses, SavePipelineData, SavePipelineErrors, SavePipelineResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SealPayloadData, SealPayloadErrors, SealPayloadResponses, SearchBlockLibraryData, SearchBlockLibraryErrors, SearchBlockLibraryResponses, SearchHubsData, SearchHubsErrors, SearchHubsResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, SetScheduleData, SetScheduleErrors, SetScheduleResponses, SetWorkflowScheduleData, SetWorkflowScheduleErrors, SetWorkflowScheduleResponses, StageBundleData, StageBundleErrors, StageBundleResponses, StageImportBatchData, StageImportBatchErrors, StageImportBatchResponses, StageRecordingData, StageRecordingErrors, StageRecordingResponses, StageVariantArtifactData, StageVariantArtifactErrors, StageVariantArtifactResponses, StartExecutionData, StartExecutionErrors, StartExecutionResponses, StartScoringRunData, StartScoringRunErrors, StartScoringRunResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StepContextData, StepContextErrors, StepContextResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, TakeCalibrationData, TakeCalibrationErrors, TakeCalibrationResponses, TakeDeciderLeaseData, TakeDeciderLeaseErrors, TakeDeciderLeaseResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses, WithdrawApprovalData, WithdrawApprovalErrors, WithdrawApprovalResponses, WithdrawLineData, WithdrawLineErrors, WithdrawLineResponses, WriteOutputData, WriteOutputErrors, WriteOutputResponses } from './types.gen';
+import type { AccessData, AccessErrors, AccessResponses, AddressApprovalData, AddressApprovalErrors, AddressApprovalResponses, AdmitLineData, AdmitLineErrors, AdmitLineResponses, AppendImportRowsData, AppendImportRowsErrors, AppendImportRowsResponses, AppendStreamData, AppendStreamErrors, AppendStreamResponses, ApplyData, ApplyErrors, ApplyResponses, ApproveSourceData, ApproveSourceErrors, ApproveSourceResponses, ArtifactContentData, ArtifactContentErrors, ArtifactContentResponses, AuditData, AuditErrors, AuditResponses, AuthConfigData, AuthConfigResponses, BlockContextData, BlockContextErrors, BlockContextResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, CancelConversationExportData, CancelConversationExportErrors, CancelConversationExportResponses, CancelExecutionData, CancelExecutionErrors, CancelExecutionResponses, CancelImportJobData, CancelImportJobErrors, CancelImportJobResponses, ClaimData, ClaimErrors, ClaimResponses, ClearScheduleData, ClearScheduleErrors, ClearScheduleResponses, ClearWorkflowScheduleData, ClearWorkflowScheduleErrors, ClearWorkflowScheduleResponses, CompareCasesData, CompareCasesErrors, CompareCasesResponses, CompareResultsData, CompareResultsErrors, CompareResultsResponses, ConversationPolicyData, ConversationPolicyErrors, ConversationPolicyResponses, ConversationTurnContentData, ConversationTurnContentErrors, ConversationTurnContentResponses, CreateConversationExportData, CreateConversationExportErrors, CreateConversationExportResponses, CreateOrganizationData, CreateOrganizationErrors, CreateOrganizationResponses, DeclareScoringRunData, DeclareScoringRunErrors, DeclareScoringRunResponses, DeriveCohortData, DeriveCohortErrors, DeriveCohortResponses, DiffScorecardData, DiffScorecardErrors, DiffScorecardResponses, DiscardBundleData, DiscardBundleErrors, DiscardBundleResponses, EraseConversationContentData, EraseConversationContentErrors, EraseConversationContentResponses, ExecutionHistoryData, ExecutionHistoryErrors, ExecutionHistoryResponses, ExecutionTimersData, ExecutionTimersErrors, ExecutionTimersResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, ForgetResultData, ForgetResultErrors, ForgetResultResponses, GateResultData, GateResultErrors, GateResultResponses, GetAssessmentHistoryData, GetAssessmentHistoryErrors, GetAssessmentHistoryResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetCalibrationData, GetCalibrationErrors, GetCalibrationResponses, GetCasesData, GetCasesErrors, GetCasesResponses, GetConversationDatasetRowsData, GetConversationDatasetRowsErrors, GetConversationDatasetRowsResponses, GetConversationExportData, GetConversationExportErrors, GetConversationExportResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetDerivedCohortData, GetDerivedCohortErrors, GetDerivedCohortResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExecutionData, GetExecutionErrors, GetExecutionResponses, GetExperimentData, GetExperimentErrors, GetExperimentResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetHubImageData, GetHubImageErrors, GetHubImageResponses, GetImageData, GetImageErrors, GetImageResponses, GetImportBatchData, GetImportBatchErrors, GetImportBatchResponses, GetImportJobData, GetImportJobErrors, GetImportJobResponses, GetImportManifestData, GetImportManifestErrors, GetImportManifestResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPipelineRevisionData, GetPipelineRevisionErrors, GetPipelineRevisionResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetResultData, GetResultErrors, GetResultResponses, GetRubricData, GetRubricErrors, GetRubricResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetScheduleData, GetScheduleErrors, GetScheduleResponses, GetScorecardData, GetScorecardErrors, GetScorecardResponses, GetScorerCatalogData, GetScorerCatalogErrors, GetScorerCatalogResponses, GetScoringRunData, GetScoringRunErrors, GetScoringRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowDefinitionData, GetWorkflowDefinitionErrors, GetWorkflowDefinitionResponses, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, GetWorkflowScheduleData, GetWorkflowScheduleErrors, GetWorkflowScheduleResponses, HeartbeatData, HeartbeatErrors, HeartbeatResponses, ImportImagesData, ImportImagesErrors, ImportImagesResponses, IngestData, IngestErrors, IngestResponses, ListApprovalsData, ListApprovalsErrors, ListApprovalsResponses, ListAssessmentsData, ListAssessmentsErrors, ListAssessmentsResponses, ListBundleData, ListBundleErrors, ListBundleResponses, ListConversationArchiveData, ListConversationArchiveErrors, ListConversationArchiveResponses, ListConversationDatasetsData, ListConversationDatasetsErrors, ListConversationDatasetsResponses, ListConversationExportsData, ListConversationExportsErrors, ListConversationExportsResponses, ListConversationsData, ListConversationsResponses, ListConversationTurnsData, ListConversationTurnsErrors, ListConversationTurnsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExperimentsData, ListExperimentsErrors, ListExperimentsResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListHubRowsData, ListHubRowsErrors, ListHubRowsResponses, ListHubsData, ListHubsErrors, ListHubsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListImportBatchesData, ListImportBatchesErrors, ListImportBatchesResponses, ListImportJobsData, ListImportJobsErrors, ListImportJobsResponses, ListImportManifestsData, ListImportManifestsErrors, ListImportManifestsResponses, ListImportRejectsData, ListImportRejectsErrors, ListImportRejectsResponses, ListLinesData, ListLinesErrors, ListLinesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListPipelinesData, ListPipelinesErrors, ListPipelinesResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListResultsData, ListResultsResponses, ListReviewsData, ListReviewsErrors, ListReviewsResponses, ListRubricsData, ListRubricsErrors, ListRubricsResponses, ListRunsData, ListRunsResponses, ListScorecardsData, ListScorecardsErrors, ListScorecardsResponses, ListScorecardVersionsData, ListScorecardVersionsErrors, ListScorecardVersionsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowDefinitionsData, ListWorkflowDefinitionsErrors, ListWorkflowDefinitionsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, OpenEditorData, OpenEditorErrors, OpenEditorResponses, OrganizationsData, OrganizationsErrors, OrganizationsResponses, PauseExecutionData, PauseExecutionErrors, PauseExecutionResponses, ProjectGetDatasetRowsData, ProjectGetDatasetRowsErrors, ProjectGetDatasetRowsResponses, ProjectGetPipelineRevisionData, ProjectGetPipelineRevisionErrors, ProjectGetPipelineRevisionResponses, ProjectListDatasetsData, ProjectListDatasetsErrors, ProjectListDatasetsResponses, ProjectListPipelinesData, ProjectListPipelinesErrors, ProjectListPipelinesResponses, ProjectListRecipesData, ProjectListRecipesErrors, ProjectListRecipesResponses, ProjectPublishDatasetData, ProjectPublishDatasetErrors, ProjectPublishDatasetResponses, ProjectPublishDatasetSampleData, ProjectPublishDatasetSampleErrors, ProjectPublishDatasetSampleResponses, ProjectSaveBlockTemplateData, ProjectSaveBlockTemplateErrors, ProjectSaveBlockTemplateResponses, ProjectSavePipelineData, ProjectSavePipelineErrors, ProjectSavePipelineResponses, ProjectSaveRecipeData, ProjectSaveRecipeErrors, ProjectSaveRecipeResponses, ProjectsData, ProjectSearchBlockLibraryData, ProjectSearchBlockLibraryErrors, ProjectSearchBlockLibraryResponses, ProjectsErrors, ProjectsResponses, ProposeCaseData, ProposeCaseErrors, ProposeCaseResponses, ProvideInputData, ProvideInputErrors, ProvideInputResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishDatasetSampleData, PublishDatasetSampleErrors, PublishDatasetSampleResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, PublishResultData, PublishResultErrors, PublishResultResponses, PublishReviewsData, PublishReviewsErrors, PublishReviewsResponses, PublishRubricData, PublishRubricErrors, PublishRubricResponses, PublishScorecardData, PublishScorecardErrors, PublishScorecardResponses, QueueImportJobData, QueueImportJobErrors, QueueImportJobResponses, ReadDeciderLeaseData, ReadDeciderLeaseErrors, ReadDeciderLeaseResponses, ReadInputData, ReadInputErrors, ReadInputResponses, ReadPayloadData, ReadPayloadErrors, ReadPayloadResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordAssessmentData, RecordAssessmentErrors, RecordAssessmentResponses, RecordConversationTurnsData, RecordConversationTurnsErrors, RecordConversationTurnsResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RegisterWorkflowData, RegisterWorkflowErrors, RegisterWorkflowResponses, ReleaseDeciderLeaseData, ReleaseDeciderLeaseErrors, ReleaseDeciderLeaseResponses, ReportData, ReportErrors, ReportResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ResumeExecutionData, ResumeExecutionErrors, ResumeExecutionResponses, RetryStepData, RetryStepErrors, RetryStepResponses, ReviewCaseData, ReviewCaseErrors, ReviewCaseResponses, ReviewConversationTurnData, ReviewConversationTurnErrors, ReviewConversationTurnResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, ReviewsOfTargetData, ReviewsOfTargetErrors, ReviewsOfTargetResponses, RunArtifactsData, RunArtifactsErrors, RunArtifactsResponses, RunBlocksData, RunBlocksErrors, RunBlocksResponses, SaveBlockTemplateData, SaveBlockTemplateErrors, SaveBlockTemplateResponses, SavePipelineData, SavePipelineErrors, SavePipelineResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SealPayloadData, SealPayloadErrors, SealPayloadResponses, SearchBlockLibraryData, SearchBlockLibraryErrors, SearchBlockLibraryResponses, SearchHubsData, SearchHubsErrors, SearchHubsResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, SetScheduleData, SetScheduleErrors, SetScheduleResponses, SetWorkflowScheduleData, SetWorkflowScheduleErrors, SetWorkflowScheduleResponses, StageBundleData, StageBundleErrors, StageBundleResponses, StageImportBatchData, StageImportBatchErrors, StageImportBatchResponses, StageRecordingData, StageRecordingErrors, StageRecordingResponses, StageVariantArtifactData, StageVariantArtifactErrors, StageVariantArtifactResponses, StartExecutionData, StartExecutionErrors, StartExecutionResponses, StartScoringRunData, StartScoringRunErrors, StartScoringRunResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StepContextData, StepContextErrors, StepContextResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, TakeCalibrationData, TakeCalibrationErrors, TakeCalibrationResponses, TakeDeciderLeaseData, TakeDeciderLeaseErrors, TakeDeciderLeaseResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses, WithdrawApprovalData, WithdrawApprovalErrors, WithdrawApprovalResponses, WithdrawLineData, WithdrawLineErrors, WithdrawLineResponses, WriteOutputData, WriteOutputErrors, WriteOutputResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -454,7 +454,7 @@ export const recordConversationTurns = <ThrowOnError extends boolean = false>(op
 export const listConversations = <ThrowOnError extends boolean = false>(options?: Options<ListConversationsData, ThrowOnError>): RequestResult<ListConversationsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListConversationsResponses, unknown, ThrowOnError>({ url: '/api/v1/conversations', ...options });
 
 /**
- * Search solutions shared with all readers of this installation.
+ * Search reusable block solutions in the selected registry.
  */
 export const searchBlockLibrary = <ThrowOnError extends boolean = false>(options?: Options<SearchBlockLibraryData, ThrowOnError>): RequestResult<SearchBlockLibraryResponses, SearchBlockLibraryErrors, ThrowOnError> => (options?.client ?? client).get<SearchBlockLibraryResponses, SearchBlockLibraryErrors, ThrowOnError>({ url: '/api/v1/curation-library', ...options });
 
@@ -491,6 +491,12 @@ export const savePipeline = <ThrowOnError extends boolean = false>(options: Opti
         ...options.headers
     }
 });
+
+/**
+ * Read an exact saved pipeline, including its layout and notebook pins.
+ * A missing revision never falls back to the current head.
+ */
+export const getPipelineRevision = <ThrowOnError extends boolean = false>(options: Options<GetPipelineRevisionData, ThrowOnError>): RequestResult<GetPipelineRevisionResponses, GetPipelineRevisionErrors, ThrowOnError> => (options.client ?? client).get<GetPipelineRevisionResponses, GetPipelineRevisionErrors, ThrowOnError>({ url: '/api/v1/curation-pipelines/{name}/revisions/{revision}', ...options });
 
 /**
  * One authored block of one revision, as it would run.
@@ -603,12 +609,25 @@ export const searchHubs = <ThrowOnError extends boolean = false>(options?: Optio
 export const getDatasetRows = <ThrowOnError extends boolean = false>(options: Options<GetDatasetRowsData, ThrowOnError>): RequestResult<GetDatasetRowsResponses, GetDatasetRowsErrors, ThrowOnError> => (options.client ?? client).get<GetDatasetRowsResponses, GetDatasetRowsErrors, ThrowOnError>({ url: '/api/v1/dataset-rows', ...options });
 
 /**
+ * Publish explicitly labelled limited output. Sample metadata is required.
+ * A separate route prevents older servers from ignoring a new sample field.
+ */
+export const publishDatasetSample = <ThrowOnError extends boolean = false>(options: Options<PublishDatasetSampleData, ThrowOnError>): RequestResult<PublishDatasetSampleResponses, PublishDatasetSampleErrors, ThrowOnError> => (options.client ?? client).post<PublishDatasetSampleResponses, PublishDatasetSampleErrors, ThrowOnError>({
+    url: '/api/v1/dataset-samples',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Every saved dataset, newest execution first.
  */
 export const listDatasets = <ThrowOnError extends boolean = false>(options?: Options<ListDatasetsData, ThrowOnError>): RequestResult<ListDatasetsResponses, ListDatasetsErrors, ThrowOnError> => (options?.client ?? client).get<ListDatasetsResponses, ListDatasetsErrors, ThrowOnError>({ url: '/api/v1/datasets', ...options });
 
 /**
- * Persist one completed Flow PHP execution as an immutable dataset version.
+ * Persist exact execution output as an immutable version, optionally labelled as a sample.
  */
 export const publishDataset = <ThrowOnError extends boolean = false>(options: Options<PublishDatasetData, ThrowOnError>): RequestResult<PublishDatasetResponses, PublishDatasetErrors, ThrowOnError> => (options.client ?? client).post<PublishDatasetResponses, PublishDatasetErrors, ThrowOnError>({
     url: '/api/v1/datasets',
@@ -1430,6 +1449,36 @@ export const listExperiments = <ThrowOnError extends boolean = false>(options?: 
  */
 export const getExperiment = <ThrowOnError extends boolean = false>(options: Options<GetExperimentData, ThrowOnError>): RequestResult<GetExperimentResponses, GetExperimentErrors, ThrowOnError> => (options.client ?? client).get<GetExperimentResponses, GetExperimentErrors, ThrowOnError>({ url: '/api/v1/experiments/{context_id}', ...options });
 
+export const organizations = <ThrowOnError extends boolean = false>(options?: Options<OrganizationsData, ThrowOnError>): RequestResult<OrganizationsResponses, OrganizationsErrors, ThrowOnError> => (options?.client ?? client).get<OrganizationsResponses, OrganizationsErrors, ThrowOnError>({ url: '/api/v1/iam/organizations', ...options });
+
+/**
+ * Bootstrap policy: an OIDC instance admin creates an organization owned by
+ * themselves. A client cannot substitute an owner in the request body.
+ */
+export const createOrganization = <ThrowOnError extends boolean = false>(options: Options<CreateOrganizationData, ThrowOnError>): RequestResult<CreateOrganizationResponses, CreateOrganizationErrors, ThrowOnError> => (options.client ?? client).post<CreateOrganizationResponses, CreateOrganizationErrors, ThrowOnError>({
+    url: '/api/v1/iam/organizations',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const audit = <ThrowOnError extends boolean = false>(options: Options<AuditData, ThrowOnError>): RequestResult<AuditResponses, AuditErrors, ThrowOnError> => (options.client ?? client).get<AuditResponses, AuditErrors, ThrowOnError>({ url: '/api/v1/iam/organizations/{organization}/audit', ...options });
+
+export const apply = <ThrowOnError extends boolean = false>(options: Options<ApplyData, ThrowOnError>): RequestResult<ApplyResponses, ApplyErrors, ThrowOnError> => (options.client ?? client).post<ApplyResponses, ApplyErrors, ThrowOnError>({
+    url: '/api/v1/iam/organizations/{organization}/commands',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const projects = <ThrowOnError extends boolean = false>(options: Options<ProjectsData, ThrowOnError>): RequestResult<ProjectsResponses, ProjectsErrors, ThrowOnError> => (options.client ?? client).get<ProjectsResponses, ProjectsErrors, ThrowOnError>({ url: '/api/v1/iam/organizations/{organization}/projects', ...options });
+
+export const access = <ThrowOnError extends boolean = false>(options: Options<AccessData, ThrowOnError>): RequestResult<AccessResponses, AccessErrors, ThrowOnError> => (options.client ?? client).get<AccessResponses, AccessErrors, ThrowOnError>({ url: '/api/v1/iam/organizations/{organization}/projects/{project}/access', ...options });
+
 /**
  * A WebSocket for the whole system, or one run.
  *
@@ -1487,6 +1536,103 @@ export const getModel = <ThrowOnError extends boolean = false>(options: Options<
  */
 export const setModelLabel = <ThrowOnError extends boolean = false>(options: Options<SetModelLabelData, ThrowOnError>): RequestResult<SetModelLabelResponses, SetModelLabelErrors, ThrowOnError> => (options.client ?? client).post<SetModelLabelResponses, SetModelLabelErrors, ThrowOnError>({
     url: '/api/v1/models/{name}/labels',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Search reusable block solutions in the selected registry.
+ */
+export const projectSearchBlockLibrary = <ThrowOnError extends boolean = false>(options: Options<ProjectSearchBlockLibraryData, ThrowOnError>): RequestResult<ProjectSearchBlockLibraryResponses, ProjectSearchBlockLibraryErrors, ThrowOnError> => (options.client ?? client).get<ProjectSearchBlockLibraryResponses, ProjectSearchBlockLibraryErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/curation-library', ...options });
+
+/**
+ * Publish a reusable solution through the same registry operation as the seed.
+ */
+export const projectSaveBlockTemplate = <ThrowOnError extends boolean = false>(options: Options<ProjectSaveBlockTemplateData, ThrowOnError>): RequestResult<ProjectSaveBlockTemplateResponses, ProjectSaveBlockTemplateErrors, ThrowOnError> => (options.client ?? client).post<ProjectSaveBlockTemplateResponses, ProjectSaveBlockTemplateErrors, ThrowOnError>({
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-library',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Every saved curation pipeline, newest save first.
+ */
+export const projectListPipelines = <ThrowOnError extends boolean = false>(options: Options<ProjectListPipelinesData, ThrowOnError>): RequestResult<ProjectListPipelinesResponses, ProjectListPipelinesErrors, ThrowOnError> => (options.client ?? client).get<ProjectListPipelinesResponses, ProjectListPipelinesErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines', ...options });
+
+/**
+ * Save a content-addressed revision of a block pipeline.
+ *
+ * The blocks are checked as a chain here and nowhere else — the canvas draws
+ * what it is told and implements no rules of its own, exactly as the
+ * annotation canvas does not re-implement the shape validator. A refusal is a
+ * 422 whose `details` carry every problem at once.
+ */
+export const projectSavePipeline = <ThrowOnError extends boolean = false>(options: Options<ProjectSavePipelineData, ThrowOnError>): RequestResult<ProjectSavePipelineResponses, ProjectSavePipelineErrors, ThrowOnError> => (options.client ?? client).post<ProjectSavePipelineResponses, ProjectSavePipelineErrors, ThrowOnError>({
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read an exact saved pipeline, including its layout and notebook pins.
+ * A missing revision never falls back to the current head.
+ */
+export const projectGetPipelineRevision = <ThrowOnError extends boolean = false>(options: Options<ProjectGetPipelineRevisionData, ThrowOnError>): RequestResult<ProjectGetPipelineRevisionResponses, ProjectGetPipelineRevisionErrors, ThrowOnError> => (options.client ?? client).get<ProjectGetPipelineRevisionResponses, ProjectGetPipelineRevisionErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines/{name}/revisions/{revision}', ...options });
+
+/**
+ * Every saved Flow PHP recipe, newest save first.
+ */
+export const projectListRecipes = <ThrowOnError extends boolean = false>(options: Options<ProjectListRecipesData, ThrowOnError>): RequestResult<ProjectListRecipesResponses, ProjectListRecipesErrors, ThrowOnError> => (options.client ?? client).get<ProjectListRecipesResponses, ProjectListRecipesErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/curations', ...options });
+
+/**
+ * Save a content-addressed revision of a Flow PHP recipe.
+ */
+export const projectSaveRecipe = <ThrowOnError extends boolean = false>(options: Options<ProjectSaveRecipeData, ThrowOnError>): RequestResult<ProjectSaveRecipeResponses, ProjectSaveRecipeErrors, ThrowOnError> => (options.client ?? client).post<ProjectSaveRecipeResponses, ProjectSaveRecipeErrors, ThrowOnError>({
+    url: '/api/v1/orgs/{organization}/projects/{project}/curations',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One immutable dataset version, returned in small slices for an interactive viewer.
+ */
+export const projectGetDatasetRows = <ThrowOnError extends boolean = false>(options: Options<ProjectGetDatasetRowsData, ThrowOnError>): RequestResult<ProjectGetDatasetRowsResponses, ProjectGetDatasetRowsErrors, ThrowOnError> => (options.client ?? client).get<ProjectGetDatasetRowsResponses, ProjectGetDatasetRowsErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/dataset-rows', ...options });
+
+/**
+ * Publish explicitly labelled limited output. Sample metadata is required.
+ * A separate route prevents older servers from ignoring a new sample field.
+ */
+export const projectPublishDatasetSample = <ThrowOnError extends boolean = false>(options: Options<ProjectPublishDatasetSampleData, ThrowOnError>): RequestResult<ProjectPublishDatasetSampleResponses, ProjectPublishDatasetSampleErrors, ThrowOnError> => (options.client ?? client).post<ProjectPublishDatasetSampleResponses, ProjectPublishDatasetSampleErrors, ThrowOnError>({
+    url: '/api/v1/orgs/{organization}/projects/{project}/dataset-samples',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Every saved dataset, newest execution first.
+ */
+export const projectListDatasets = <ThrowOnError extends boolean = false>(options: Options<ProjectListDatasetsData, ThrowOnError>): RequestResult<ProjectListDatasetsResponses, ProjectListDatasetsErrors, ThrowOnError> => (options.client ?? client).get<ProjectListDatasetsResponses, ProjectListDatasetsErrors, ThrowOnError>({ url: '/api/v1/orgs/{organization}/projects/{project}/datasets', ...options });
+
+/**
+ * Persist exact execution output as an immutable version, optionally labelled as a sample.
+ */
+export const projectPublishDataset = <ThrowOnError extends boolean = false>(options: Options<ProjectPublishDatasetData, ThrowOnError>): RequestResult<ProjectPublishDatasetResponses, ProjectPublishDatasetErrors, ThrowOnError> => (options.client ?? client).post<ProjectPublishDatasetResponses, ProjectPublishDatasetErrors, ThrowOnError>({
+    url: '/api/v1/orgs/{organization}/projects/{project}/datasets',
     ...options,
     headers: {
         'Content-Type': 'application/json',

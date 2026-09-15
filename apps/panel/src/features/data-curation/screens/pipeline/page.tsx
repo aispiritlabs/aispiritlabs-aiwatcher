@@ -13,8 +13,10 @@ import {
 import * as React from 'react';
 
 import {
+  getPipelineRevision,
   listPipelines,
   publishDataset,
+  publishDatasetSample,
   savePipeline,
   startExecution,
 } from '@/api/generated/sdk.gen';
@@ -29,6 +31,7 @@ import { PhaseStrip } from '@/features/data-curation/components/phase-strip';
 import { PipelineNotebook } from '@/features/data-curation/components/pipeline-notebook';
 import { FlowResultView } from '@/shared/components/flow-preview';
 import { ManagedRunCard, useManagedBlocks, useManagedRun } from '@/shared/components/managed-run';
+import { SamplePublication } from '@/shared/components/sample-publication';
 import { ScheduleCard } from '@/shared/components/schedule-card';
 
 import { rejectionDetails } from '@/shared/lib/rejection';
@@ -64,6 +67,7 @@ import {
   type QueryEngineName,
 } from '@/shared/lib/query';
 import { layoutGraph } from '@/shared/lib/workflow-layout';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/data-curation/pipeline');
 
@@ -88,6 +92,7 @@ type Draft = {
 
 /** What the canvas was last known to be, and under which content address. */
 type Pinned = {
+  name: string;
   revision: string;
   blocks: PipelineBlock[];
   edges: { from: string; to: string }[];
@@ -100,6 +105,18 @@ const EMPTY_DRAFT: Draft = {
   edges: [],
 };
 
+const contextOf = (search: { name?: string; revision?: string; draft?: string }) =>
+  JSON.stringify([search.name, search.revision, search.draft]);
+type LoadedContext = { draft: Draft; savedDraft: Draft; pinned?: Pinned };
+
+function pipelineContext(pipeline: CurationPipeline | SavePipelineRequest): LoadedContext {
+  const draft = { name: pipeline.name, description: pipeline.description ?? '',
+    blocks: pipeline.blocks, edges: pipeline.edges ?? [] };
+  return { draft, savedDraft: 'revision' in pipeline ? draft : EMPTY_DRAFT,
+    pinned: 'revision' in pipeline ? { name: pipeline.name, revision: pipeline.revision,
+      blocks: pipeline.blocks, edges: pipeline.edges } : undefined };
+}
+
 export function PipelinePage() {
   const search = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
@@ -107,10 +124,25 @@ export function PipelinePage() {
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const [draft, setDraft] = React.useState<Draft>(EMPTY_DRAFT);
+  const [savedDraft, setSavedDraft] = React.useState<Draft>(EMPTY_DRAFT);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
+  const context = contextOf(search);
+  const activeContext = React.useRef(context);
+  const generation = React.useRef(0);
+  const historyContexts = React.useRef(new Map<string, LoadedContext>());
+  const [contextIssue, setContextIssue] = React.useState('');
+  const [editorGeneration, setEditorGeneration] = React.useState(0);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   // The revision this canvas was last loaded or saved at, with the blocks it
   // held then. A managed run's states may be drawn over the draft only while
   // the two still agree — see `atRevision`.
   const [pinned, setPinned] = React.useState<Pinned>();
+  const [scheduleDirty, setScheduleDirty] = React.useState(false);
+  const [scheduleEditor, setScheduleEditor] = React.useState(0);
   const [outcomes, setOutcomes] = React.useState<PipelineOutcomes>({});
   const [result, setResult] = React.useState<PipelineResult | null>(null);
   const notebookMode = search.view === 'notebook';
@@ -123,6 +155,7 @@ export function PipelinePage() {
   }, []);
   const hasUnsavedCode = Object.values(dirtyEditors).some(Boolean);
   const executionSignature = JSON.stringify([
+    context,
     draft.blocks.map((block) => [block.id, block.spec]),
     draft.edges,
     windowSeconds,
@@ -158,25 +191,59 @@ export function PipelinePage() {
     },
   });
 
-  // The canvas comes back from the URL too, and for the same reason the run
-  // does: `name` was already written there and never read, so a reload landed
-  // on an empty canvas beside a running execution — the chain gone and the run
-  // it was running still going. Once, and only onto a draft nobody has touched,
-  // so this can never overwrite unsaved edits.
+  const linkedRevision = useQuery({
+    queryKey: ['curation-pipeline-revision', search.name, search.revision],
+    enabled: Boolean(search.name && search.revision && !search.draft),
+    queryFn: async () => {
+      const response = await getPipelineRevision({ path: { name: search.name!, revision: search.revision! } });
+      if (response.response?.status === 404) return null;
+      if (!response.data) throw new Error('Could not load the linked pipeline revision.');
+      return response.data;
+    },
+  });
+
+  // Restore a loaded context on every history transition. Keep local imports
+  // for this mounted page; a missing local draft after reload is explicit.
   const hydrated = React.useRef(false);
   React.useEffect(() => {
-    if (hydrated.current || !search.name || draft.blocks.length > 0) return;
-    const pipeline = saved.data?.find((candidate) => candidate.name === search.name);
-    if (!pipeline) return;
+    const changed = activeContext.current !== context;
+    if (changed) {
+      activeContext.current = context;
+      generation.current += 1;
+      hydrated.current = false;
+      setDraft(EMPTY_DRAFT); setSavedDraft(EMPTY_DRAFT); setPinned(undefined);
+      setScheduleEditor((previous) => previous + 1);
+      setEditorGeneration((previous) => previous + 1);
+      setDirtyEditors({}); setScheduleDirty(false);
+      setOutcomes({}); setCellResults({}); setResult(null); setProblems([]);
+      setContextIssue('');
+    }
+    if (hydrated.current) return;
+    const cached = historyContexts.current.get(context);
+    const pipeline = linkedRevision.data ?? saved.data?.find((candidate) => candidate.name === search.name &&
+      (!search.revision || candidate.revision === search.revision));
+    const restored = cached ?? (!search.draft && pipeline ? pipelineContext(pipeline) : undefined);
+    if (!restored) {
+      if (search.draft) setContextIssue('This local flow is no longer available. Import it again or open a saved pipeline.');
+      else if (search.revision ? linkedRevision.isError : search.name && saved.isError)
+        setContextIssue('Could not load the linked pipeline. Retry loading it.');
+      else if (search.revision ? linkedRevision.data === null : search.name && saved.data)
+        setContextIssue('The linked pipeline revision is unavailable. Open an available saved pipeline.');
+      return;
+    }
+    // The initial request may finish after somebody starts an empty draft.
+    if (dirty && !changed && !cached) return;
     hydrated.current = true;
-    setDraft({
-      name: pipeline.name,
-      description: pipeline.description ?? '',
-      blocks: pipeline.blocks,
-      edges: pipeline.edges ?? [],
-    });
-    setPinned({ revision: pipeline.revision, blocks: pipeline.blocks, edges: pipeline.edges });
-  }, [saved.data, search.name, draft.blocks.length]);
+    setContextIssue('');
+    setDraft(restored.draft); setSavedDraft(restored.savedDraft); setPinned(restored.pinned);
+    historyContexts.current.set(context, restored);
+    if (!search.revision && restored.pinned) {
+      const next = { ...search, revision: restored.pinned.revision };
+      activeContext.current = contextOf(next);
+      historyContexts.current.set(activeContext.current, restored);
+      void navigate({ search: next, replace: true, ignoreBlocker: true });
+    }
+  }, [context, saved.data, saved.isError, linkedRevision.data, linkedRevision.isError]);
 
   /**
    * The revision this canvas *is*, or `undefined` once somebody has changed it.
@@ -257,36 +324,36 @@ export function PipelinePage() {
   const view = chain?.find((block) => block.spec.kind === 'view');
   const publishTo = view?.spec.kind === 'view' ? view.spec.dataset : undefined;
 
-  const load = (pipeline: CurationPipeline | SavePipelineRequest) => {
+  const load = (pipeline: CurationPipeline | SavePipelineRequest, confirmed = false, view?: 'notebook') => {
+    if (!confirmed && !confirmDiscard()) return;
+    generation.current += 1;
+    setEditorGeneration((previous) => previous + 1);
+    setDirtyEditors({}); setScheduleDirty(false);
+    setContextIssue('');
+    setScheduleEditor((previous) => previous + 1);
     hydrated.current = true;
-    // An example has no revision — nothing saved it — so loading one leaves
-    // the canvas at no revision, which is the truth.
-    setPinned(
-      'revision' in pipeline
-        ? { revision: pipeline.revision, blocks: pipeline.blocks, edges: pipeline.edges }
-        : undefined,
-    );
-    setDraft({
-      name: pipeline.name,
-      description: pipeline.description ?? '',
-      blocks: pipeline.blocks,
-      edges: pipeline.edges ?? [],
-    });
+    const restored = pipelineContext(pipeline);
+    setPinned(restored.pinned);
+    setDraft(restored.draft);
+    setSavedDraft(restored.savedDraft);
+    const next = { ...search, name: pipeline.name,
+      revision: 'revision' in pipeline ? pipeline.revision : undefined,
+      draft: 'revision' in pipeline ? undefined : crypto.randomUUID(),
+      block: undefined, execution: undefined, view: view ?? search.view };
+    activeContext.current = contextOf(next);
+    historyContexts.current.set(activeContext.current, restored);
     setOutcomes({});
     setResult(null);
     setProblems([]);
-    void navigate({
-      search: (previous) => ({
-        ...previous,
-        name: pipeline.name,
-        block: undefined,
-        execution: undefined,
-      }),
-    });
+    void navigate({ search: next, ignoreBlocker: true });
   };
 
   const save = useMutation({
     mutationFn: async () => {
+      const contextGeneration = generation.current;
+      if (scheduleDirty && pinned?.name !== draft.name) {
+        throw new Error('Save or discard the schedule changes before saving the pipeline under a different name.');
+      }
       // The pin is taken here rather than kept in step with every keystroke:
       // what a saved pipeline records is the code that was there when it was
       // saved.
@@ -300,23 +367,38 @@ export function PipelinePage() {
         },
       });
       if (!response.data) throw response.error ?? new Error('The pipeline could not be saved.');
-      return response.data;
+      return { ...response.data, submitted: draft, contextGeneration };
     },
     onSuccess: (stored) => {
+      void queryClient.invalidateQueries({ queryKey: ['curation-pipelines'] });
+      if (!mounted.current || generation.current !== stored.contextGeneration) return;
       setProblems([]);
       // The stored blocks rather than the draft's: saving pins each notebook's
       // revision, so what came back is what this canvas now is.
-      setDraft((previous) => ({ ...previous, blocks: stored.pipeline.blocks }));
+      setDraft((previous) => ({ ...previous,
+        blocks: JSON.stringify(previous.blocks) === JSON.stringify(stored.submitted.blocks)
+          ? stored.pipeline.blocks : previous.blocks,
+      }));
+      setSavedDraft({ name: stored.pipeline.name, description: stored.pipeline.description ?? '',
+        blocks: stored.pipeline.blocks, edges: stored.pipeline.edges ?? [] });
       setPinned({
+        name: stored.pipeline.name,
         revision: stored.pipeline.revision,
         blocks: stored.pipeline.blocks,
         edges: stored.pipeline.edges,
       });
-      void queryClient.invalidateQueries({ queryKey: ['curation-pipelines'] });
+      const restored = pipelineContext(stored.pipeline);
+      const next = { name: stored.pipeline.name, revision: stored.pipeline.revision, draft: undefined };
+      activeContext.current = contextOf(next);
+      historyContexts.current.set(activeContext.current, restored);
+      void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true, ignoreBlocker: true });
     },
     // Every reason at once, from the registry, which is the only place that
     // decides whether a chain is runnable.
-    onError: (error) => setProblems(rejectionDetails(error)),
+    onMutate: () => generation.current,
+    onError: (error, _variables, contextGeneration) => {
+      if (mounted.current && generation.current === contextGeneration) setProblems(rejectionDetails(error));
+    },
   });
 
   // Content written for another engine is shown, not run (AW-3): a chain's
@@ -331,41 +413,54 @@ export function PipelinePage() {
       setCellResults({});
       setResult(null);
       const signature = currentSignature.current;
+      const contextGeneration = generation.current;
       const end = until ? chain.findIndex((block) => block.id === until) : chain.length - 1;
       if (end < 0) throw new Error('This cell is no longer in the flow.');
       const produced = await runPipeline({
         chain: chain.slice(0, end + 1),
         inspectBlocks: notebookMode || Boolean(until),
         onBlockResult: (id, value) => {
-          if (currentSignature.current === signature)
+          if (mounted.current && generation.current === contextGeneration && currentSignature.current === signature)
             setCellResults((previous) => ({ ...previous, [id]: value }));
         },
         mode,
         engine: deployed ?? 'flow',
         windowSeconds: windowParam(windowSeconds),
         onOutcome: (id, outcome) => {
-          if (currentSignature.current === signature)
+          if (mounted.current && generation.current === contextGeneration && currentSignature.current === signature)
             setOutcomes((previous) => ({ ...previous, [id]: outcome }));
         },
       });
-      return { produced, signature, complete: end === chain.length - 1 };
+      return { produced, signature, contextGeneration, complete: end === chain.length - 1 };
     },
-    onSuccess: ({ produced, signature, complete }) => {
-      if (complete && currentSignature.current === signature) setResult(produced);
+    onSuccess: ({ produced, signature, contextGeneration, complete }) => {
+      if (complete && mounted.current && generation.current === contextGeneration && currentSignature.current === signature) setResult(produced);
     },
   });
 
   const publish = useMutation({
-    mutationFn: async () => {
-      if (!result) throw new Error('Run the pipeline before publishing what it produced.');
+    mutationFn: async (asSample: boolean) => {
+      if (!result || (asSample ? !result.sample : !result.complete)) {
+        throw new Error('Ordinary publication requires a complete run. Limited output must be published explicitly as a sample.');
+      }
       if (!publishTo) throw new Error('The view block has no dataset name.');
       // Saved first, always: the version records the chain that made it, and a
       // chain that was never saved is a reference to nothing. The Flow script
       // alone does not describe this execution — a notebook ran after it.
-      const stored = await save.mutateAsync();
-      const response = await publishDataset({
+      // Persist the executed notebook revisions, not the current mutable heads.
+      // Keep this snapshot separate from the editor so a refused publication
+      // leaves its result available for retry.
+      const definition = await savePipeline({ body: { ...draft, blocks: draft.blocks.map((block) =>
+        block.spec.kind === 'notebook' && result.notebookRevisions[block.id]
+          ? { ...block, spec: { ...block.spec, revision: result.notebookRevisions[block.id] } } : block),
+      } });
+      if (!definition.data) throw new Error('Could not save the executed pipeline definition.');
+      const stored = definition.data;
+      void queryClient.invalidateQueries({ queryKey: ['curation-pipelines'] });
+      const response = await (asSample ? publishDatasetSample : publishDataset)({
         body: {
-          name: publishTo,
+          name: asSample ? `${publishTo}/samples` : publishTo,
+          sample: asSample ? result.sample : undefined,
           description: draft.description,
           pipeline: result.script,
           engine: result.engine,
@@ -381,6 +476,8 @@ export function PipelinePage() {
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
+
+  React.useEffect(() => { publish.reset(); }, [execute.submittedAt]);
 
   // The run the server owns, if this page is following one. Held by id rather
   // than by object: the projection is re-read from the store on every frame,
@@ -425,14 +522,19 @@ export function PipelinePage() {
         },
       });
       if (!response.data) throw response.error ?? new Error('The run could not be started.');
-      return response.data;
+      return { ...response.data, contextGeneration: stored.contextGeneration };
     },
-    onSuccess: (accepted) =>
+    onSuccess: (accepted) => {
+      if (!mounted.current || generation.current !== accepted.contextGeneration) return;
       void navigate({
         search: (previous) => ({ ...previous, execution: accepted.execution.execution_id }),
         replace: true,
-      }),
-    onError: (error) => setProblems(rejectionDetails(error)),
+      });
+    },
+    onMutate: () => generation.current,
+    onError: (error, _variables, contextGeneration) => {
+      if (mounted.current && generation.current === contextGeneration) setProblems(rejectionDetails(error));
+    },
   });
 
   const importInput = React.useRef<HTMLInputElement>(null);
@@ -440,16 +542,21 @@ export function PipelinePage() {
   const importFlow = useMutation({
     mutationFn: async (file: File) => {
       if (file.size > MAX_BUNDLE_BYTES) throw new Error('A flow bundle must be at most 8 MiB.');
-      return importBundle(await file.text());
+      const contextGeneration = generation.current;
+      return { pipeline: await importBundle(await file.text()), contextGeneration };
     },
-    onSuccess: (pipeline) => {
-      load(pipeline);
+    onSuccess: ({ pipeline, contextGeneration }) => {
+      if (!mounted.current || generation.current !== contextGeneration) return;
+      load(pipeline, true);
       setTransferNotice(
         'Flow and Python sources imported. Review the code and parameters, then Preview or Save.',
       );
       void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
     },
-    onError: (error) => setProblems(rejectionDetails(error)),
+    onMutate: () => generation.current,
+    onError: (error, _variables, contextGeneration) => {
+      if (mounted.current && generation.current === contextGeneration) setProblems(rejectionDetails(error));
+    },
   });
   const exportFlow = useMutation({
     mutationFn: async () => exportBundle(draft),
@@ -464,11 +571,18 @@ export function PipelinePage() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setTransferNotice('Exported the flow, parameters, layout and exact Python source revisions.');
     },
-    onError: (error) => setProblems(rejectionDetails(error)),
+    onMutate: () => generation.current,
+    onError: (error, _variables, contextGeneration) => {
+      if (mounted.current && generation.current === contextGeneration) setProblems(rejectionDetails(error));
+    },
   });
   const newNotebookFlow = useMutation({
-    mutationFn: () => createNotebook(),
-    onSuccess: (notebook) => {
+    mutationFn: async () => {
+      const contextGeneration = generation.current;
+      return { notebook: await createNotebook(), contextGeneration };
+    },
+    onSuccess: ({ notebook, contextGeneration }) => {
+      if (!mounted.current || generation.current !== contextGeneration) return;
       const name = `curation/notebook-${crypto.randomUUID().slice(0, 8)}`;
       load({
         name,
@@ -513,19 +627,13 @@ export function PipelinePage() {
           { from: 'prepare', to: 'python' },
           { from: 'python', to: 'publish' },
         ],
-      });
-      void navigate({
-        search: (previous) => ({
-          ...previous,
-          name,
-          view: 'notebook',
-          block: undefined,
-          execution: undefined,
-        }),
-      });
+      }, true, 'notebook');
       void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
     },
-    onError: (error) => setProblems(rejectionDetails(error)),
+    onMutate: () => generation.current,
+    onError: (error, _variables, contextGeneration) => {
+      if (mounted.current && generation.current === contextGeneration) setProblems(rejectionDetails(error));
+    },
   });
   const [libraryBusy, setLibraryBusy] = React.useState(false);
   // Not a library entry: the library holds solutions somebody on this
@@ -555,7 +663,29 @@ export function PipelinePage() {
     importFlow.isPending ||
     exportFlow.isPending;
 
-  const locked = busy || hasUnsavedCode;
+  React.useEffect(() => {
+    save.reset(); execute.reset(); publish.reset(); startOnServer.reset();
+    importFlow.reset(); exportFlow.reset(); newNotebookFlow.reset();
+    setTransferNotice('');
+  }, [editorGeneration]);
+
+  const contextLoading = !hydrated.current && Boolean(search.name) && !search.draft &&
+    (search.revision ? linkedRevision.isPending : saved.isPending);
+  const locked = busy || hasUnsavedCode || contextLoading;
+  const renameNeedsSchedule = scheduleDirty && pinned?.name !== draft.name;
+  const confirmDiscard = useUnsavedChanges({
+    dirty: dirty || hasUnsavedCode || scheduleDirty,
+    pending: busy,
+    message: 'This pipeline or its schedule has unsaved changes.',
+    losesDraft: ({ next }) => next.routeId !== '/data-curation/pipeline' || contextOf(next.search) !== context ||
+      (hasUnsavedCode && ((next.search.view === 'notebook') !== notebookMode ||
+        (!notebookMode && next.search.block !== search.block))),
+  });
+
+  const deleteBlock = (id: string) => {
+    if (busy || (hasUnsavedCode && !confirmDiscard())) return;
+    setDraft((previous) => withoutBlock(previous, id));
+  };
 
   const addBlock = (template: SaveBlockTemplateRequest) => {
     const id = nextId(template.id, draft.blocks);
@@ -593,7 +723,8 @@ export function PipelinePage() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" inert={importFlow.isPending || newNotebookFlow.isPending}
+      aria-busy={importFlow.isPending || newNotebookFlow.isPending}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">Pipeline</h1>
@@ -623,12 +754,16 @@ export function PipelinePage() {
 
       <Card className="flex flex-wrap items-center gap-2 p-3">
         <input
+          aria-label="Pipeline name"
+          disabled={contextLoading}
           value={draft.name}
           onChange={(event) => setDraft((previous) => ({ ...previous, name: event.target.value }))}
           placeholder="curation/name"
           className="h-9 w-64 rounded-md border border-border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
         <input
+          aria-label="Pipeline description"
+          disabled={contextLoading}
           value={draft.description}
           onChange={(event) =>
             setDraft((previous) => ({ ...previous, description: event.target.value }))
@@ -637,13 +772,19 @@ export function PipelinePage() {
           className="h-9 min-w-[16rem] flex-1 rounded-md border border-border bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
         <Button
+          aria-label="Save pipeline"
           variant="ghost"
           onClick={() => save.mutate()}
-          disabled={locked || !draft.blocks.length}
+          disabled={locked || renameNeedsSchedule || !draft.blocks.length}
         >
           {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />} Save
         </Button>
       </Card>
+
+      {dirty ? <p role="status" className="text-xs text-warning">Unsaved pipeline changes.</p> : null}
+      {renameNeedsSchedule ? <p role="status" className="text-xs text-warning">
+        Save or discard the schedule changes before saving the pipeline under a different name.
+      </p> : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -655,7 +796,7 @@ export function PipelinePage() {
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = '';
-            if (file) importFlow.mutate(file);
+            if (file && confirmDiscard()) importFlow.mutate(file);
           }}
         />
         <Button variant="outline" disabled={locked} onClick={() => importInput.current?.click()}>
@@ -682,7 +823,7 @@ export function PipelinePage() {
                 key={`${pipeline.name}-${pipeline.revision}`}
                 type="button"
                 onClick={() => load(pipeline)}
-                disabled={locked}
+                disabled={busy}
                 className="w-full p-3 text-left hover:bg-accent/40 disabled:opacity-50"
               >
                 <p className="truncate text-sm font-medium">{pipeline.name}</p>
@@ -697,6 +838,12 @@ export function PipelinePage() {
           <p className="p-3 text-xs text-muted-foreground">Nothing saved yet.</p>
         )}
       </Card>
+
+      {contextLoading ? <p role="status" className="text-sm text-muted-foreground">Loading pipeline…</p> : null}
+      {contextIssue ? <Card role="alert" className="border-warning/40 p-3 text-sm">
+        {contextIssue}
+        {saved.isError || linkedRevision.isError ? <Button variant="outline" onClick={() => void (search.revision ? linkedRevision.refetch() : saved.refetch())}>Retry pipeline</Button> : null}
+      </Card> : null}
 
       {problems.length > 0 ? (
         <Card className="border-danger/40 p-3">
@@ -727,14 +874,14 @@ export function PipelinePage() {
       <div className="flex flex-wrap items-center gap-2">
         <Button
           variant={notebookMode ? 'outline' : 'default'}
-          disabled={locked}
+          disabled={busy}
           onClick={() => void navigate({ search: (previous) => ({ ...previous, view: 'canvas' }) })}
         >
           Canvas view
         </Button>
         <Button
           variant={notebookMode ? 'default' : 'outline'}
-          disabled={locked}
+          disabled={busy}
           onClick={() =>
             void navigate({ search: (previous) => ({ ...previous, view: 'notebook' }) })
           }
@@ -744,13 +891,13 @@ export function PipelinePage() {
         <Button
           variant="outline"
           disabled={locked || notebooksReady.data === false}
-          onClick={() => newNotebookFlow.mutate()}
+          onClick={() => { if (confirmDiscard()) newNotebookFlow.mutate(); }}
         >
           New notebook flow
         </Button>
         {hasUnsavedCode ? (
           <p className="text-xs text-warning">
-            Save notebook or discard code edits before running, exporting or changing views.
+            Save notebook code and fix settings before running or exporting. Changing views asks before discarding edits.
           </p>
         ) : null}
       </div>
@@ -801,7 +948,7 @@ export function PipelinePage() {
               void navigate({ search: (previous) => ({ ...previous, reach: mode }), replace: true })
             }
             onSelect={(block) => {
-              if (!locked)
+              if (!busy)
                 void navigate({ search: (previous) => ({ ...previous, block }), replace: true });
             }}
             onMove={(id, position) =>
@@ -834,7 +981,7 @@ export function PipelinePage() {
                 ),
               }))
             }
-            onDelete={(id) => setDraft((previous) => withoutBlock(previous, id))}
+            onDelete={deleteBlock}
           />
         </>
       )}
@@ -881,7 +1028,7 @@ export function PipelinePage() {
           <Button
             variant="outline"
             onClick={() => startOnServer.mutate()}
-            disabled={locked || !chain}
+            disabled={locked || renameNeedsSchedule || !chain}
             title="Compile this pipeline on the server and run it there. The browser may close."
           >
             {startOnServer.isPending ? <Spinner /> : <ServerCog className="h-3.5 w-3.5" />} Run on
@@ -889,8 +1036,8 @@ export function PipelinePage() {
           </Button>
           <Button
             variant="ghost"
-            onClick={() => publish.mutate()}
-            disabled={locked || !result || !publishTo}
+            onClick={() => publish.mutate(false)}
+            disabled={locked || renameNeedsSchedule || !result?.complete || !publishTo}
             title={
               publishTo
                 ? `Publish as ${publishTo}`
@@ -902,6 +1049,19 @@ export function PipelinePage() {
         </div>
       </div>
 
+      {result?.sample && publishTo ? <SamplePublication
+        name={`${publishTo}/samples`} rowCount={result.rows.length} sample={result.sample}
+        pending={publish.isPending} disabled={locked || renameNeedsSchedule}
+        error={publish.variables === true ? publish.error : null}
+        published={publish.variables === true ? publish.data : undefined}
+        onPublish={() => publish.mutate(true)}
+      /> : null}
+      {result && !result.complete && (
+        <p role="status" className="text-sm text-warning">
+          {result.mode === 'preview' ? 'Preview sample' : 'Truncated result'} — ordinary publication is unavailable.
+          Publish an explicit sample above, run the complete pipeline, or use a server run for larger datasets.
+        </p>
+      )}
       {foreign ? (
         <p className="text-xs text-warning">
           {foreign} Run on the server is refused for the same reason, by name.
@@ -917,6 +1077,7 @@ export function PipelinePage() {
 
       {notebookMode && chain ? (
         <PipelineNotebook
+          key={editorGeneration}
           chain={chain}
           outcomes={outcomes}
           results={cellResults}
@@ -930,11 +1091,11 @@ export function PipelinePage() {
               ),
             }))
           }
-          onDelete={(id) => setDraft((previous) => withoutBlock(previous, id))}
+          onDelete={deleteBlock}
           onRunTo={(id) => execute.mutate({ mode: 'preview', until: id })}
           onDirtyChange={reportDirty}
-          onPublish={() => publish.mutate()}
-          canPublish={Boolean(result && publishTo)}
+          onPublish={() => publish.mutate(false)}
+          canPublish={Boolean(result?.complete && publishTo && !renameNeedsSchedule)}
         />
       ) : null}
       {notebookMode && execute.error ? (
@@ -942,14 +1103,14 @@ export function PipelinePage() {
           {execute.error.message}
         </p>
       ) : null}
-      {notebookMode && publish.error ? (
+      {notebookMode && publish.error && publish.variables !== true ? (
         <p role="alert" className="text-sm text-danger">
           {publish.error.message}
         </p>
       ) : null}
-      {notebookMode && publish.data ? (
+      {notebookMode && publish.data && publish.variables !== true ? (
         <p role="status" className="text-sm text-primary">
-          Dataset {publish.data.dataset.name} saved with {publish.data.dataset.latest.row_count}{' '}
+          {publish.data.dataset.latest.sample ? 'Sample' : 'Dataset'} {publish.data.dataset.name} saved with {publish.data.dataset.latest.row_count}{' '}
           rows.
         </p>
       ) : null}
@@ -962,7 +1123,8 @@ export function PipelinePage() {
           {/* Beside the managed run rather than under the canvas: both answer
               "what does the server do with this", and a schedule read next to
               the run it produces is how somebody checks it did. */}
-          <ScheduleCard name={pinned ? draft.name : undefined} saved={Boolean(pinned)} />
+          <ScheduleCard key={`${pinned?.name ?? 'unsaved'}:${scheduleEditor}`} name={pinned?.name}
+            saved={Boolean(pinned)} onDirtyChange={setScheduleDirty} />
 
           {executionId || startOnServer.isPending ? (
             <ManagedRunCard
@@ -983,15 +1145,15 @@ export function PipelinePage() {
             />
           ) : null}
 
-          {publish.data ? (
+          {publish.data && publish.variables !== true ? (
             <Card className="border-success/40 p-3 text-sm">
-              Dataset <strong>{publish.data.dataset.name}</strong> saved as version{' '}
+              {publish.data.dataset.latest.sample ? 'Sample' : 'Dataset'} <strong>{publish.data.dataset.name}</strong> saved as version{' '}
               <code className="id">{publish.data.dataset.latest.version.slice(0, 12)}</code> with{' '}
               {publish.data.dataset.latest.row_count} rows, produced by{' '}
               <code className="id">{publish.data.dataset.latest.produced_by?.slice(0, 40)}</code>.
             </Card>
           ) : null}
-          {publish.error ? (
+          {publish.error && publish.variables !== true ? (
             <Card className="border-danger/40 p-3 text-sm text-danger">
               {publish.error.message}
             </Card>
@@ -1038,6 +1200,7 @@ export function PipelinePage() {
 
         {!notebookMode && selected ? (
           <BlockInspector
+            key={`${editorGeneration}:${selected.id}`}
             block={selected}
             disabled={busy}
             onDirtyChange={reportDirty}
@@ -1050,8 +1213,7 @@ export function PipelinePage() {
               }))
             }
             onDelete={() => {
-              setDraft((previous) => withoutBlock(previous, selected.id));
-              void navigate({ search: (previous) => ({ ...previous, block: undefined }) });
+              deleteBlock(selected.id);
             }}
           />
         ) : (

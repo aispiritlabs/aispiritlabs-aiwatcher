@@ -73,6 +73,7 @@ impl AttemptScope {
     #[must_use]
     pub fn identity(&self, expires_at: i64) -> Identity {
         Identity {
+            issuer: None,
             subject: format!("attempt:{}", self.key()),
             username: None,
             name: None,

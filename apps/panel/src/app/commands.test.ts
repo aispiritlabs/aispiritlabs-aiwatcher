@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { searchSchema as learning } from '@/features/learning/screens/overview/search';
 
 import { allCommands, fuzzyScore, search } from '@/app/commands';
 import { SECTIONS } from '@/app/navigation';
@@ -58,6 +59,7 @@ const SCHEMAS: Record<string, { parse: (value: unknown) => unknown }> = {
   '/prompts': prompts,
   '/training/models': trainingModels,
   '/training/runs': trainingRuns,
+  '/learning': learning,
   '/workflows': workflows,
 };
 

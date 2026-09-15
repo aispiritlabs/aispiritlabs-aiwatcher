@@ -263,20 +263,32 @@ function rewritten(DataFrame $frame, string $prices, bool $native): DataFrame
 
     return $frame
         ->withEntry('day', \Flow\ETL\DSL\call(
-            static fn(string $start): string => \substr($start, 0, 10),
-            [ref('start')],
+            lit('substr'),
             \Flow\Types\DSL\type_string(),
+            [ref('start'), lit(0), lit(10)],
         ))
         ->withEntry('total_tokens', \Flow\ETL\DSL\call(
-            static fn(int $in, int $out): int => $in + $out,
-            [ref('input_tokens'), ref('output_tokens')],
+            lit('profile_total_tokens'),
             \Flow\Types\DSL\type_integer(),
+            [ref('input_tokens'), ref('output_tokens')],
         ))
         ->withEntry('cost_usd', \Flow\ETL\DSL\call(
-            static fn(int $in, int $out, float $pin, float $pout): float => $in * $pin + $out * $pout,
-            [ref('input_tokens'), ref('output_tokens'), ref('price_in'), ref('price_out')],
+            lit('profile_cost_usd'),
             \Flow\Types\DSL\type_float(),
+            [ref('input_tokens'), ref('output_tokens'), ref('price_in'), ref('price_out')],
         ));
+}
+
+// Flow 0.44 requires a serializable callable expression, so these baselines
+// name pure functions rather than embedding closures in the expression graph.
+function profile_total_tokens(int $in, int $out): int
+{
+    return $in + $out;
+}
+
+function profile_cost_usd(int $in, int $out, float $pin, float $pout): float
+{
+    return $in * $pin + $out * $pout;
 }
 
 function write_q4(DataFrame $frame, string $name): int

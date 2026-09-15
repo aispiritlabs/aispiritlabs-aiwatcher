@@ -44,6 +44,7 @@ import {
 } from '@/shared/components/ui/primitives';
 import { needsRole, useCan } from '@/shared/lib/auth';
 import { cn, formatTime } from '@/shared/lib/utils';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/prompts/$name');
 
@@ -53,6 +54,13 @@ export function PromptPage() {
   const navigate = routeApi.useNavigate();
   const queryClient = useQueryClient();
   const [editing, setEditing] = React.useState(false);
+  const [editorDirty, setEditorDirty] = React.useState(false);
+  const publishedTarget = React.useRef<string | undefined>(undefined);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const select = React.useCallback(
     (next: Partial<z.infer<typeof searchSchema>>) => {
@@ -78,6 +86,9 @@ export function PromptPage() {
 
   const head = prompt.data?.head;
   const selectedId = search.version ?? head?.labels?.production ?? head?.versions?.[0]?.version_id;
+  const context = JSON.stringify([name, selectedId]);
+  const currentContext = React.useRef(context);
+  currentContext.current = context;
 
   // The current version arrives with the detail; anything else is one more
   // request. Versions are immutable, so once fetched they never go stale —
@@ -146,13 +157,30 @@ export function PromptPage() {
         body: { name, parent: selectedId, ...input },
       });
       if (!response.data) throw response.error ?? new Error('failed to publish');
-      return response.data;
+      return { ...response.data, context };
     },
     onSuccess: async (published) => {
-      setEditing(false);
-      await invalidate();
-      select({ version: published.version.version_id, view: 'diff' });
+      if (mounted.current && currentContext.current === published.context) {
+        publishedTarget.current = published.version.version_id;
+        setEditing(false);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['prompt', published.version.name] }),
+        queryClient.invalidateQueries({ queryKey: ['prompts'] }),
+      ]);
+      if (mounted.current && currentContext.current === published.context) {
+        select({ version: published.version.version_id, view: 'diff' });
+      }
     },
+  });
+  const confirmDiscard = useUnsavedChanges({
+    dirty: editing && editorDirty,
+    pending: editing && publish.isPending,
+    message: 'This prompt version has unsaved changes.',
+    losesDraft: ({ next }) => next.routeId !== '/prompts/$name' ||
+      next.params.name !== name ||
+      (next.search.version !== search.version &&
+        !(publishedTarget.current && next.search.version === publishedTarget.current)),
   });
 
   if (isRegistryDisabled(prompt.error)) return <RegistryDisabled />;
@@ -202,9 +230,16 @@ export function PromptPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => setEditing((open) => !open)}
+            onClick={() => {
+              if (editing && !confirmDiscard()) return;
+              if (!editing) {
+                publishedTarget.current = undefined;
+                select({ version: selectedId });
+              }
+              setEditing(!editing);
+            }}
             className="gap-1.5"
-            disabled={!mayAuthor}
+            disabled={!mayAuthor || publish.isPending || selected.isPending || !selected.data}
             title={mayAuthor ? undefined : needsRole('editor')}
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -248,12 +283,14 @@ export function PromptPage() {
         <Stat label="Updated" value={formatTime(head.updated_at)} />
       </Card>
 
-      {editing ? (
+      {editing && selected.data ? (
         <NewVersionForm
+          key={context}
           base={selected.data?.text ?? ''}
           pending={publish.isPending}
           error={publish.error}
-          onCancel={() => setEditing(false)}
+          onCancel={() => { if (confirmDiscard()) setEditing(false); }}
+          onDirtyChange={setEditorDirty}
           onSubmit={(input) => publish.mutate(input)}
         />
       ) : null}
@@ -762,16 +799,23 @@ function NewVersionForm({
   error,
   onCancel,
   onSubmit,
+  onDirtyChange,
 }: {
   base: string;
   pending: boolean;
   error: unknown;
   onCancel: () => void;
   onSubmit: (input: { text: string; notes?: string; label?: string }) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const [text, setText] = React.useState(base);
   const [notes, setNotes] = React.useState('');
   const [promote, setPromote] = React.useState(false);
+  const dirty = text !== base || notes !== '' || promote;
+  React.useEffect(() => {
+    onDirtyChange(dirty);
+    return () => onDirtyChange(false);
+  }, [dirty, onDirtyChange]);
 
   return (
     <Card className="p-4">
@@ -786,12 +830,15 @@ function NewVersionForm({
           });
         }}
       >
+        <fieldset disabled={pending} className="flex min-w-0 flex-col gap-3">
+        {dirty ? <p role="status" className="text-xs text-warning">Unsaved prompt changes.</p> : null}
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-muted-foreground">
             Prompt text. The version id is <code>sha256</code> of exactly this, so an unchanged save
             writes nothing.
           </span>
           <textarea
+            aria-label="Prompt text"
             value={text}
             onChange={(event) => setText(event.target.value)}
             rows={14}
@@ -826,6 +873,7 @@ function NewVersionForm({
             Cancel
           </Button>
         </div>
+        </fieldset>
       </form>
     </Card>
   );

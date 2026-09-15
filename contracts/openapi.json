@@ -2838,7 +2838,7 @@
         "tags": [
           "datasets"
         ],
-        "summary": "Search solutions shared with all readers of this installation.",
+        "summary": "Search reusable block solutions in the selected registry.",
         "operationId": "search_block_library",
         "parameters": [
           {
@@ -3070,6 +3070,75 @@
           },
           "422": {
             "description": "The blocks do not form a runnable chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/curation-pipelines/{name}/revisions/{revision}": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Read an exact saved pipeline, including its layout and notebook pins.\nA missing revision never falls back to the current head.",
+        "operationId": "get_pipeline_revision",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurationPipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -3840,6 +3909,87 @@
         }
       }
     },
+    "/api/v1/dataset-samples": {
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Publish explicitly labelled limited output. Sample metadata is required.\nA separate route prevents older servers from ignoring a new sample field.",
+        "operationId": "publish_dataset_sample",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDatasetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/datasets": {
       "get": {
         "tags": [
@@ -3874,7 +4024,7 @@
         "tags": [
           "datasets"
         ],
-        "summary": "Persist one completed Flow PHP execution as an immutable dataset version.",
+        "summary": "Persist exact execution output as an immutable version, optionally labelled as a sample.",
         "operationId": "publish_dataset",
         "requestBody": {
           "content": {
@@ -8849,6 +8999,324 @@
         }
       }
     },
+    "/api/v1/iam/organizations": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "organizations",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IamOrganization"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Bootstrap policy: an OIDC instance admin creates an organization owned by\nthemselves. A client cannot substitute an owner in the request body.",
+        "operationId": "create_organization",
+        "parameters": [
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrganization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamOrganization"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/audit": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "audit",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/commands": {
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "apply",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IamCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamChange"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/projects": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "projects",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IamProjectAccess"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/projects/{project}/access": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "access",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamProjectAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/v1/live": {
       "get": {
         "tags": [
@@ -8925,6 +9393,7 @@
           {
             "name": "model",
             "in": "query",
+            "description": "Narrows LLM calls, tokens and LLM latency only; run, tool and step\ncounters still cover all runs selected by the other filters.",
             "required": false,
             "schema": {
               "type": [
@@ -9246,6 +9715,1100 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/curation-library": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Search reusable block solutions in the selected registry.",
+        "operationId": "project_search_block_library",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTemplatePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Publish a reusable solution through the same registry operation as the seed.",
+        "operationId": "project_save_block_template",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveBlockTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/curation-pipelines": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Every saved curation pipeline, newest save first.",
+        "operationId": "project_list_pipelines",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Save a content-addressed revision of a block pipeline.",
+        "description": "The blocks are checked as a chain here and nowhere else — the canvas draws\nwhat it is told and implements no rules of its own, exactly as the\nannotation canvas does not re-implement the shape validator. A refusal is a\n422 whose `details` carry every problem at once.",
+        "operationId": "project_save_pipeline",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact revision already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPipeline"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new revision was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The blocks do not form a runnable chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/curation-pipelines/{name}/revisions/{revision}": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Read an exact saved pipeline, including its layout and notebook pins.\nA missing revision never falls back to the current head.",
+        "operationId": "project_get_pipeline_revision",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurationPipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/curations": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Every saved Flow PHP recipe, newest save first.",
+        "operationId": "project_list_recipes",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Save a content-addressed revision of a Flow PHP recipe.",
+        "operationId": "project_save_recipe",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact revision already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRecipe"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new revision was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRecipe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/dataset-rows": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "One immutable dataset version, returned in small slices for an interactive viewer.",
+        "operationId": "project_get_dataset_rows",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetRowsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/dataset-samples": {
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Publish explicitly labelled limited output. Sample metadata is required.\nA separate route prevents older servers from ignoring a new sample field.",
+        "operationId": "project_publish_dataset_sample",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDatasetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/datasets": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Every saved dataset, newest execution first.",
+        "operationId": "project_list_datasets",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Persist exact execution output as an immutable version, optionally labelled as a sample.",
+        "operationId": "project_publish_dataset",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDatasetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact version already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
           }
         }
       }
@@ -13349,6 +14912,81 @@
           "text"
         ]
       },
+      "AuditAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "organization",
+              "type"
+            ],
+            "properties": {
+              "organization": {
+                "$ref": "#/components/schemas/IamOrganization"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "organization_created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "command",
+              "change",
+              "type"
+            ],
+            "properties": {
+              "change": {
+                "$ref": "#/components/schemas/IamChange"
+              },
+              "command": {
+                "$ref": "#/components/schemas/IamCommand"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "command_applied"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "AuditEntry": {
+        "type": "object",
+        "description": "Successful administrative mutations only; committed with the state change.",
+        "required": [
+          "sequence",
+          "organization",
+          "actor",
+          "occurred_at",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/IamPrincipal"
+          },
+          "occurred_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic within this organization; pagination resumes after this value."
+          }
+        }
+      },
       "AuthMode": {
         "type": "string",
         "description": "Where identity comes from.",
@@ -13615,10 +15253,12 @@
       },
       "Bucket": {
         "type": "object",
-        "description": "One point on the timeline.",
+        "description": "Current run statuses and observed calls, grouped by run start time.\nToken and call counts use the same retained completed spans as totals.",
         "required": [
           "at",
           "runs",
+          "succeeded",
+          "running",
           "failed",
           "llm_calls",
           "tool_calls",
@@ -13641,7 +15281,7 @@
               "null"
             ],
             "format": "double",
-            "description": "What the bucket's runs reported they cost, landing where each run\nstarted, like its tokens."
+            "description": "Reported cost of the same retained, filtered calls as the totals,\nattributed to the run's start like its tokens."
           },
           "failed": {
             "type": "integer",
@@ -13661,7 +15301,17 @@
             "type": "integer",
             "format": "int64"
           },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "succeeded": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -15447,6 +17097,18 @@
         "type": "string",
         "description": "Groups an entire flow. Inherited unchanged by everything the flow causes."
       },
+      "CreateOrganization": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Credential": {
         "type": "string",
         "description": "How the caller proved who they are.\n\nKept on the identity because the three are not interchangeable when\nsomething goes wrong: a session is a browser, a bearer is a machine, and a\nproxy header is a statement by whatever sits in front of this process.",
@@ -15667,6 +17329,27 @@
           }
         }
       },
+      "DatasetSample": {
+        "type": "object",
+        "description": "Explicit sampling metadata, included in the immutable content identity.\nPreview is a bounded execution, not a random or representative sample.",
+        "required": [
+          "mode",
+          "truncated_stages"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/SampleMode"
+          },
+          "truncated_stages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IDs of stages whose output was truncated. Empty for an untruncated preview."
+          }
+        },
+        "additionalProperties": false
+      },
       "DatasetSource": {
         "type": "object",
         "description": "One corpus.",
@@ -15881,6 +17564,17 @@
           "row_count": {
             "type": "integer",
             "minimum": 0
+          },
+          "sample": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DatasetSample",
+                "description": "Absent for ordinary versions, including every version written before samples existed."
+              }
+            ]
           },
           "version": {
             "type": "string"
@@ -19878,6 +21572,10 @@
           "keypoints"
         ]
       },
+      "GrantId": {
+        "type": "string",
+        "format": "uuid"
+      },
       "HeldOutBar": {
         "type": "object",
         "description": "A bar fitted without each fold of a calibration set and scored on that\nfold, so every item is scored once by a bar that never saw it.\n\nA fold is a case while the set holds at most [`EVERY_CASE_ITS_OWN_FOLD`]\ncases — every bar fitted on all the others, which is the most a small set\ncan lend a fit — and one of ten dealt from a digest of the case beyond. A\ncase two people judged is one fold with both judgements either way, and the\nsame set is dealt the same way on every run. Compare it with `agreement`,\nthe card's own bar, which was never fitted on these items either;\n`fitted_agreement` above both is the flattery a fit on everything carries.",
@@ -20307,6 +22005,458 @@
           }
         }
       },
+      "IamChange": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Applied"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "TeamCreated"
+            ],
+            "properties": {
+              "TeamCreated": {
+                "$ref": "#/components/schemas/IamTeam"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ProjectCreated"
+            ],
+            "properties": {
+              "ProjectCreated": {
+                "$ref": "#/components/schemas/IamProject"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "GrantCreated"
+            ],
+            "properties": {
+              "GrantCreated": {
+                "$ref": "#/components/schemas/IamGrant"
+              }
+            }
+          }
+        ]
+      },
+      "IamCommand": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "principal",
+              "role",
+              "type"
+            ],
+            "properties": {
+              "principal": {
+                "$ref": "#/components/schemas/IamPrincipal"
+              },
+              "role": {
+                "$ref": "#/components/schemas/IamOrganizationRole"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "principal",
+              "type"
+            ],
+            "properties": {
+              "principal": {
+                "$ref": "#/components/schemas/IamPrincipal"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "remove_member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create_team"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "team",
+              "type"
+            ],
+            "properties": {
+              "team": {
+                "$ref": "#/components/schemas/TeamId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "delete_team"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "team",
+              "principal",
+              "present",
+              "type"
+            ],
+            "properties": {
+              "present": {
+                "type": "boolean"
+              },
+              "principal": {
+                "$ref": "#/components/schemas/IamPrincipal"
+              },
+              "team": {
+                "$ref": "#/components/schemas/TeamId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_team_member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create_project"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "project",
+              "grantee",
+              "role",
+              "window",
+              "type"
+            ],
+            "properties": {
+              "grantee": {
+                "$ref": "#/components/schemas/IamGrantee"
+              },
+              "project": {
+                "$ref": "#/components/schemas/ProjectId"
+              },
+              "role": {
+                "$ref": "#/components/schemas/IamProjectRole"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "grant"
+                ]
+              },
+              "window": {
+                "$ref": "#/components/schemas/IamGrantWindow"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "project",
+              "grant",
+              "type"
+            ],
+            "properties": {
+              "grant": {
+                "$ref": "#/components/schemas/GrantId"
+              },
+              "project": {
+                "$ref": "#/components/schemas/ProjectId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "revoke_grant"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "IamEffectiveGrant": {
+        "type": "object",
+        "description": "Each independently active source remains visible. Expiring a workshop\ngrant must not conceal a permanent source that still grants access.",
+        "required": [
+          "grant",
+          "role"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/IamGrant"
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          }
+        }
+      },
+      "IamGrant": {
+        "type": "object",
+        "required": [
+          "id",
+          "scope",
+          "grantee",
+          "role",
+          "window"
+        ],
+        "properties": {
+          "grantee": {
+            "$ref": "#/components/schemas/IamGrantee"
+          },
+          "id": {
+            "$ref": "#/components/schemas/GrantId"
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/IamProjectScope"
+          },
+          "window": {
+            "$ref": "#/components/schemas/IamGrantWindow"
+          }
+        }
+      },
+      "IamGrantWindow": {
+        "type": "object",
+        "description": "Half-open intervals in Unix seconds: start inclusive, end exclusive.\nAfter edit_until a still-readable grant falls back to Viewer. No read_until\nmeans indefinite read access, even when the edit period has ended.",
+        "required": [
+          "valid_from"
+        ],
+        "properties": {
+          "edit_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "read_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "valid_from": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "IamGrantee": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/IamPrincipal"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "team"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/TeamId"
+              }
+            }
+          }
+        ]
+      },
+      "IamOrganization": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "IamOrganizationRole": {
+        "type": "string",
+        "enum": [
+          "member",
+          "admin",
+          "owner"
+        ]
+      },
+      "IamPrincipal": {
+        "type": "object",
+        "description": "A stable provider namespace and its subject, compared exactly. Email and\ndisplay names are deliberately absent; neither is an identity key.",
+        "required": [
+          "provider",
+          "subject"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "IamProject": {
+        "type": "object",
+        "required": [
+          "scope",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/IamProjectScope"
+          }
+        }
+      },
+      "IamProjectAccess": {
+        "type": "object",
+        "required": [
+          "project",
+          "role",
+          "grants",
+          "evaluated_at"
+        ],
+        "properties": {
+          "evaluated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IamEffectiveGrant"
+            }
+          },
+          "project": {
+            "$ref": "#/components/schemas/IamProject"
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          }
+        }
+      },
+      "IamProjectRole": {
+        "type": "string",
+        "enum": [
+          "viewer",
+          "editor",
+          "admin"
+        ]
+      },
+      "IamProjectScope": {
+        "type": "object",
+        "required": [
+          "organization",
+          "project"
+        ],
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectId"
+          }
+        }
+      },
+      "IamTeam": {
+        "type": "object",
+        "required": [
+          "id",
+          "organization",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          }
+        }
+      },
       "Identity": {
         "type": "object",
         "description": "An authenticated caller.",
@@ -20350,6 +22500,13 @@
               "type": "string"
             },
             "description": "What the provider asserted, verbatim. Kept beside the resolved roles so\nan operator debugging \"why is this person only a viewer\" can see the\ninput to the mapping rather than guessing at it."
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The verified OIDC issuer. Absent for older sessions and non-OIDC\ncredentials; those cannot be converted into an IAM principal by\nguessing the provider currently configured on the instance."
           },
           "name": {
             "type": [
@@ -23045,6 +25202,10 @@
           }
         }
       },
+      "OrganizationId": {
+        "type": "string",
+        "format": "uuid"
+      },
       "Origin": {
         "type": "string",
         "description": "Who drew a shape.\n\nThe whole reason a model-assisted pass is affordable: pre-annotation is\nwelcome and is recorded as such, so an export can require that a human\nlooked at it. A field that defaulted to `human` for machine output would\nmake the distinction unrecoverable one import later.",
@@ -23468,6 +25629,10 @@
           }
         },
         "additionalProperties": false
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid"
       },
       "ProjectPage": {
         "type": "object",
@@ -24036,6 +26201,17 @@
             ],
             "description": "Saved recipe name, when the run came from one."
           },
+          "sample": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DatasetSample",
+                "description": "Absent for ordinary versions, including every version written before samples existed."
+              }
+            ]
+          },
           "source": {
             "type": "string"
           },
@@ -24237,7 +26413,7 @@
         "properties": {
           "created": {
             "type": "boolean",
-            "description": "False when this exact pipeline and exact ordered set of rows already existed."
+            "description": "False when this exact output and sample classification already existed."
           },
           "dataset": {
             "$ref": "#/components/schemas/DatasetSummary"
@@ -26319,6 +28495,14 @@
           }
         },
         "additionalProperties": false
+      },
+      "SampleMode": {
+        "type": "string",
+        "description": "Why a published version contains a limited output rather than a full run.",
+        "enum": [
+          "preview",
+          "truncated"
+        ]
       },
       "SampleRecord": {
         "type": "object",
@@ -28773,6 +30957,10 @@
           "session",
           "case"
         ]
+      },
+      "TeamId": {
+        "type": "string",
+        "format": "uuid"
       },
       "TensorSpec": {
         "type": "object",

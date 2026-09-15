@@ -798,21 +798,16 @@ there.
 - Filters live in the URL, not in component state, so a link to a filtered view
   lands the reader on the same view. That includes the search boxes: the input
   holds a draft, a 250 ms debounce commits it to the search params.
-- Routes are grouped by product area, and the areas are grouped into **three
-  sections** — Feature, Training, Inference — described once in
-  `src/app/navigation.ts` and drawn by the root layout as a header of sections
-  and a sidebar of that section's areas and their pages. The split is the
-  lifecycle: Feature is what a model learns from and reads an object store,
-  Training is fitting it and judging it, Inference is what is running now and
-  folds the event log. `/` and `/observability` redirect rather than render, so
-  old links keep working. Which section is lit comes from the pathname, never
-  from a click, so a run detail reached from a pasted link lights the same tab
-  as one reached by pressing it; a path in no section lights nothing rather
-  than the first. An area layout route holds only what its views *share* — the
-  stream, in `observability.tsx` — because a tab row there would be the
-  sidebar's links a second time, free to disagree the day a page is added to
-  one of them. What survives a move between an area's views is that area's own
-  `NavArea.carries`: the period in Observability, the project in Annotations.
+- Routes are grouped into peer work areas — Data, Models & quality,
+  Applications, Workflows and Learning — described once in `src/app/navigation.ts`.
+  The desktop sidebar exposes all areas; mobile navigation exposes the same
+  groups and their pages. `/` renders a neutral work overview. Existing object
+  URLs and area redirects remain valid. `/account` exposes the current identity
+  and read-only identity-provider groups from the global header. These groups
+  are not application teams and do not imply project-level authorization.
+  Active areas come from the pathname. An area layout route owns only shared
+  state, such as the observability stream. `NavArea.carries` retains the period
+  in Observability and the annotation project in Annotations.
 - `observability/live` is the one view that reads the log rather than a fold of
   it. Its filter is applied by the server — `Scope::Selection` and the repeated
   `?agent=&runtime=&workflow=&session=` parameters — because `llm.chunk` is

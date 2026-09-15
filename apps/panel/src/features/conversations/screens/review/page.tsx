@@ -29,6 +29,8 @@ import {
   Spinner,
 } from '@/shared/components/ui/primitives';
 import { cn } from '@/shared/lib/utils';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
+import { useDraftChanges, useReportDraftChanges, type ReportDraftChanges } from '@/shared/lib/draft-changes';
 
 const routeApi = getRouteApi('/conversations/review');
 
@@ -44,6 +46,7 @@ export function ReviewPage() {
   const search = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
   const queryClient = useQueryClient();
+  const drafts = useDraftChanges();
 
   const policy = useQuery({
     queryKey: ['conversation-policy'],
@@ -64,12 +67,25 @@ export function ReviewPage() {
     },
   });
 
+  const conversations = archive.data ?? [];
+  const selected = search.conversation ?? conversations[0]?.conversation_id;
+  // Keep the selected conversation stable when a review reorders the archive.
+  React.useEffect(() => {
+    if (!search.conversation && selected) {
+      void navigate({ search: (previous) => ({ ...previous, conversation: selected }), replace: true });
+    }
+  }, [search.conversation, selected, navigate]);
+  useUnsavedChanges({
+    dirty: drafts.dirty,
+    message: 'Conversation review has unsaved changes or a request in progress.',
+    losesDraft: ({ next }) => next.routeId !== '/conversations/review' ||
+      (next.search.conversation ?? selected) !== selected ||
+      next.search.review !== search.review || next.search.finding !== search.finding,
+  });
+
   if (isRegistryDisabled(policy.error) || isRegistryDisabled(archive.error)) {
     return <ArchiveDisabled />;
   }
-
-  const conversations = archive.data ?? [];
-  const selected = search.conversation ?? conversations[0]?.conversation_id;
 
   return (
     <div className="flex flex-col gap-4">
@@ -109,7 +125,8 @@ export function ReviewPage() {
           }}
         />
         {selected ? (
-          <TurnList conversationId={selected} review={search.review} finding={search.finding} />
+          <TurnList key={selected} conversationId={selected} review={search.review}
+            finding={search.finding} reportDirty={drafts.report} />
         ) : (
           <EmptyState
             title="Nothing has been archived yet"
@@ -242,10 +259,12 @@ function TurnList({
   conversationId,
   review,
   finding,
+  reportDirty,
 }: {
   conversationId: string;
   review?: TurnReviewState;
   finding?: FindingKind;
+  reportDirty: ReportDraftChanges;
 }) {
   const navigate = routeApi.useNavigate();
   const turns = useQuery({
@@ -285,7 +304,7 @@ function TurnList({
       {turns.isLoading ? <Spinner /> : null}
       {turns.data?.turns.length === 0 ? <EmptyState title="No turn matches those filters" /> : null}
       {turns.data?.turns.map((turn) => (
-        <TurnCard key={turn.turn_id} turn={turn} />
+        <TurnCard key={turn.turn_id} turn={turn} reportDirty={reportDirty} />
       ))}
     </div>
   );
@@ -322,13 +341,15 @@ function FilterChips<T extends string>({
   );
 }
 
-function TurnCard({ turn }: { turn: ArchivedTurn }) {
+function TurnCard({ turn, reportDirty }: { turn: ArchivedTurn; reportDirty: ReportDraftChanges }) {
   const queryClient = useQueryClient();
   const [revealed, setRevealed] = React.useState(false);
-  const [note, setNote] = React.useState('');
+  const [note, setNote] = React.useState(turn.review?.note ?? '');
   const [preference, setPreference] = React.useState<PreferenceLabel | undefined>(
     turn.review?.preference ?? undefined,
   );
+  const [saved, setSaved] = React.useState({ note, preference });
+  const dirty = note !== saved.note || preference !== saved.preference;
 
   const content = useTurnContent(turn.conversation_id, turn.turn_id, revealed);
 
@@ -342,14 +363,15 @@ function TurnCard({ turn }: { turn: ArchivedTurn }) {
           review: { state, note, preference },
         },
       });
-      return response.data;
+      return { ...response.data, submitted: { note, preference } };
     },
-    onSuccess: () => {
-      setNote('');
+    onSuccess: ({ submitted }) => {
+      setSaved(submitted);
       void queryClient.invalidateQueries({ queryKey: ['conversation-turns'] });
       void queryClient.invalidateQueries({ queryKey: ['conversation-archive'] });
     },
   });
+  useReportDraftChanges(reportDirty, turn.turn_id, dirty || decide.isPending);
 
   const erased = turn.state === 'erased';
 
@@ -450,9 +472,11 @@ function TurnCard({ turn }: { turn: ArchivedTurn }) {
         )}
 
         {!erased ? (
-          <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <fieldset disabled={decide.isPending} className="flex min-w-0 flex-col gap-2 border-t border-border pt-3">
+            {dirty ? <p role="status" className="text-warning">Unsaved conversation review.</p> : null}
             <div className="flex flex-wrap items-center gap-2">
               <input
+                aria-label={`Review note for ${turn.message_id}`}
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="Why — required to reject"
@@ -484,8 +508,12 @@ function TurnCard({ turn }: { turn: ArchivedTurn }) {
               {decide.isError ? (
                 <span className="text-danger">{(decide.error as Error).message}</span>
               ) : null}
+              {dirty ? <Button size="sm" variant="ghost" onClick={() => {
+                setNote(saved.note);
+                setPreference(saved.preference);
+              }}>Discard review changes</Button> : null}
             </div>
-          </div>
+          </fieldset>
         ) : null}
       </CardContent>
     </Card>

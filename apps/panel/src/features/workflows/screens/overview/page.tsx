@@ -146,7 +146,13 @@ export function WorkflowsPage() {
     () => (executions.data?.pages ?? []).flatMap((page) => page.executions),
     [executions.data],
   );
-  const selectedExecution = search.execution ?? executionRows[0]?.workflow_run_id;
+  const selectedExecution = search.execution;
+  const firstExecution = executionRows[0]?.workflow_run_id;
+  React.useEffect(() => {
+    if (!selectedExecution && firstExecution) {
+      void navigate({ search: (previous) => ({ ...previous, execution: firstExecution }), replace: true });
+    }
+  }, [selectedExecution, firstExecution, navigate]);
 
   return (
     <div className="flex flex-col gap-4">

@@ -1,7 +1,7 @@
 {
   "size": "100MB",
   "format": "csv",
-  "finished_at": "2026-09-10T11:35:46+0200",
+  "finished_at": "2026-09-14T17:01:46+0200",
   "machine": {
     "os": "Darwin 25.6.0",
     "python": "3.14.3",
@@ -10,7 +10,7 @@
     "memory_gib": "64",
     "php": "8.5.10",
     "polars": "1.44.2",
-    "flow": "0.43.0"
+    "flow": "0.44.0"
   },
   "corpus": {
     "seed": 20260910,
@@ -20,7 +20,7 @@
     "parquet_bytes": 14471628,
     "bytes_per_row": 190.2,
     "runs": 45935,
-    "generated_in_s": 2.0,
+    "generated_in_s": 0.5,
     "polars": "1.44.2",
     "numpy": "2.5.3"
   },
@@ -39,10 +39,10 @@
       "engine": "polars",
       "query": "q1",
       "status": "ok",
-      "seconds": 0.051,
-      "wall": 0.17019725000136532,
-      "cpu": 0.28,
-      "max_rss": 250150912,
+      "seconds": 0.081,
+      "wall": 0.2093954589945497,
+      "cpu": 0.32,
+      "max_rss": 282804224,
       "result": {
         "count": 6377
       },
@@ -52,10 +52,10 @@
       "engine": "polars-1t",
       "query": "q1",
       "status": "ok",
-      "seconds": 0.142,
-      "wall": 0.2598712500039255,
-      "cpu": 0.24,
-      "max_rss": 177848320,
+      "seconds": 0.145,
+      "wall": 0.27115474999300204,
+      "cpu": 0.25,
+      "max_rss": 178503680,
       "result": {
         "count": 6377
       },
@@ -65,10 +65,10 @@
       "engine": "flow",
       "query": "q1",
       "status": "ok",
-      "seconds": 6.885,
-      "wall": 6.982068666999112,
-      "cpu": 6.87,
-      "max_rss": 54935552,
+      "seconds": 4.075,
+      "wall": 4.156874666005024,
+      "cpu": 4.09,
+      "max_rss": 44433408,
       "result": {
         "count": 6377
       },
@@ -78,10 +78,10 @@
       "engine": "polars",
       "query": "q2",
       "status": "ok",
-      "seconds": 0.049,
-      "wall": 0.17012354100006633,
+      "seconds": 0.047,
+      "wall": 0.17461266700411215,
       "cpu": 0.33,
-      "max_rss": 263028736,
+      "max_rss": 254066688,
       "result": [
         {
           "model": "claude-haiku-4-5",
@@ -146,10 +146,10 @@
       "engine": "polars-1t",
       "query": "q2",
       "status": "ok",
-      "seconds": 0.169,
-      "wall": 0.29065866699966136,
-      "cpu": 0.28,
-      "max_rss": 179978240,
+      "seconds": 0.184,
+      "wall": 0.31726216700917576,
+      "cpu": 0.29000000000000004,
+      "max_rss": 179748864,
       "result": [
         {
           "model": "claude-haiku-4-5",
@@ -214,10 +214,10 @@
       "engine": "flow",
       "query": "q2",
       "status": "ok",
-      "seconds": 10.04,
-      "wall": 10.111791457995423,
-      "cpu": 9.95,
-      "max_rss": 61980672,
+      "seconds": 6.236,
+      "wall": 6.313863624993246,
+      "cpu": 6.109999999999999,
+      "max_rss": 51281920,
       "result": [
         {
           "model": "gemini-3-pro",
@@ -282,10 +282,10 @@
       "engine": "polars",
       "query": "q3",
       "status": "ok",
-      "seconds": 0.046,
-      "wall": 0.17206300000543706,
-      "cpu": 0.35,
-      "max_rss": 254558208,
+      "seconds": 0.077,
+      "wall": 0.2640701250056736,
+      "cpu": 0.39,
+      "max_rss": 265535488,
       "result": {
         "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars/q3.csv"
       },
@@ -295,25 +295,12 @@
       "engine": "polars-1t",
       "query": "q3",
       "status": "ok",
-      "seconds": 0.183,
-      "wall": 0.29939020800520666,
-      "cpu": 0.28,
-      "max_rss": 189054976,
+      "seconds": 0.186,
+      "wall": 0.32006862499110866,
+      "cpu": 0.30000000000000004,
+      "max_rss": 190267392,
       "result": {
         "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars-1t/q3.csv"
-      },
-      "error": null
-    },
-    {
-      "engine": "flow",
-      "query": "q3",
-      "status": "ok",
-      "seconds": 12.255,
-      "wall": 12.328527082994697,
-      "cpu": 12.21,
-      "max_rss": 66256896,
-      "result": {
-        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/flow/q3.csv"
       },
       "error": null
     },
@@ -321,10 +308,10 @@
       "engine": "polars",
       "query": "q4",
       "status": "ok",
-      "seconds": 0.164,
-      "wall": 0.28622149999137037,
-      "cpu": 0.48,
-      "max_rss": 317898752,
+      "seconds": 0.069,
+      "wall": 0.20518850001099054,
+      "cpu": 0.45999999999999996,
+      "max_rss": 346587136,
       "result": {
         "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars/q4.csv"
       },
@@ -334,10 +321,10 @@
       "engine": "polars-1t",
       "query": "q4",
       "status": "ok",
-      "seconds": 0.249,
-      "wall": 0.36677937500644475,
+      "seconds": 0.238,
+      "wall": 0.3602896249940386,
       "cpu": 0.36,
-      "max_rss": 191676416,
+      "max_rss": 190676992,
       "result": {
         "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars-1t/q4.csv"
       },
@@ -347,12 +334,25 @@
       "engine": "flow",
       "query": "q4",
       "status": "ok",
-      "seconds": 19.301,
-      "wall": 19.3729062499915,
-      "cpu": 19.119999999999997,
-      "max_rss": 71811072,
+      "seconds": 11.438,
+      "wall": 11.519441416996415,
+      "cpu": 11.26,
+      "max_rss": 63356928,
       "result": {
         "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/flow/q4.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "flow",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 8.213,
+      "wall": 8.294615584003623,
+      "cpu": 8.13,
+      "max_rss": 55017472,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/flow/q3.csv"
       },
       "error": null
     }

@@ -670,6 +670,8 @@ pub struct Config {
     /// Who may reach this instance, and what they may do once they have.
     /// `AuthMode::None` by default — see `aiwatcher_auth`.
     pub auth: AuthConfig,
+    /// Opt-in metadata control plane; requires OIDC and the postgres feature.
+    pub iam_postgres_url: Option<String>,
     pub log_format: LogFormat,
 }
 
@@ -789,6 +791,7 @@ impl Default for Config {
             workflow_retention: None,
             answer_limits: aiwatcher_api::state::AnswerLimits::default(),
             auth: AuthConfig::default(),
+            iam_postgres_url: None,
             log_format: LogFormat::default(),
         }
     }
@@ -1115,6 +1118,7 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_WORKFLOW_STORE") {
             config.workflow_store = raw.parse()?;
         }
+        config.iam_postgres_url = var("AIWATCHER_IAM_POSTGRES_URL");
         config.workflow_postgres_url = var("AIWATCHER_WORKFLOW_POSTGRES_URL");
         if let Some(raw) = var("AIWATCHER_WORKFLOW_POSTGRES_MAX_CONNECTIONS") {
             config.workflow_postgres_max_connections =
@@ -1292,6 +1296,22 @@ impl Config {
     /// [`ConfigError`] naming the variable that is missing or unusable, and
     /// what made it required.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.iam_postgres_url.is_some() && self.auth.mode != AuthMode::Oidc {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_AUTH_MODE=oidc",
+                because: "AIWATCHER_IAM_POSTGRES_URL enables the IAM control plane",
+            });
+        }
+        if self
+            .iam_postgres_url
+            .as_ref()
+            .is_some_and(|url| url.trim().is_empty())
+        {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_IAM_POSTGRES_URL",
+                because: "IAM requires a nonempty PostgreSQL connection URL",
+            });
+        }
         // A witness digesting under a key names two credentials this deployment
         // issued: one it could not derive a key for is a witness whose every
         // digest would read as nothing.
@@ -2527,5 +2547,27 @@ mod tests {
             "http".parse::<WorkflowRunnerKind>().expect("http stays"),
             WorkflowRunnerKind::Http
         );
+    }
+}
+
+#[cfg(test)]
+mod iam_tests {
+    use super::*;
+
+    #[test]
+    fn iam_is_off_by_default_and_requires_oidc() {
+        assert!(Config::default().iam_postgres_url.is_none());
+        for mode in [AuthMode::None, AuthMode::Local, AuthMode::Proxy] {
+            let config = Config {
+                iam_postgres_url: Some("postgres://localhost/test".into()),
+                auth: AuthConfig {
+                    mode,
+                    ..AuthConfig::default()
+                },
+                ..Config::default()
+            };
+            let error = config.validate().expect_err("non-OIDC IAM must not start");
+            assert!(error.to_string().contains("AIWATCHER_AUTH_MODE=oidc"));
+        }
     }
 }

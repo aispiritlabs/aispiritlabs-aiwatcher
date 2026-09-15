@@ -8,15 +8,16 @@ use Flow\ETL\Exception\InvalidArgumentException;
 use Flow\ETL\Exception\RuntimeException;
 use Flow\ETL\FlowContext;
 use Flow\ETL\Function\AggregatingFunction;
+use Flow\ETL\Function\ResolvesFromChildren;
 use Flow\ETL\Function\WindowFunction;
 use Flow\ETL\Row;
-use Flow\ETL\Row\Entry;
-use Flow\ETL\Row\EntryFactory;
 use Flow\ETL\Row\Reference;
 use Flow\ETL\Window;
 use Flow\ETL\Window\WindowContext;
+use Flow\Types\Type;
 
-use function Flow\ETL\DSL\float_entry;
+use function Flow\Types\DSL\type_float;
+use function Flow\Types\DSL\type_optional;
 
 /**
  * One [`Descriptive`] statistic over one column, as an aggregation Flow can run.
@@ -42,6 +43,10 @@ use function Flow\ETL\DSL\float_entry;
  */
 final class Statistic implements AggregatingFunction, WindowFunction
 {
+    use ResolvesFromChildren;
+
+    private readonly string $outputName;
+
     /** @var list<float> */
     private array $values = [];
 
@@ -51,13 +56,15 @@ final class Statistic implements AggregatingFunction, WindowFunction
         private readonly Reference $ref,
         private readonly Descriptive $of,
         private readonly float $percentage = 50.0,
-    ) {}
+    ) {
+        $this->outputName = $ref->hasAlias() ? $ref->name() : $ref->to() . '_' . $of->value;
+    }
 
     public function aggregate(Row $row, FlowContext $context): void
     {
         try {
             /** @var mixed $value */
-            $value = $row->valueOf($this->ref);
+            $value = $row->get($this->ref);
         } catch (InvalidArgumentException $error) {
             $context
                 ->functions()
@@ -99,7 +106,7 @@ final class Statistic implements AggregatingFunction, WindowFunction
 
         foreach ($window->frame() as $row) {
             /** @var mixed $value */
-            $value = $row->valueOf($this->ref);
+            $value = $row->get($this->ref);
 
             if (!\is_numeric($value)) {
                 continue;
@@ -113,9 +120,9 @@ final class Statistic implements AggregatingFunction, WindowFunction
 
     public function over(Window $window): static
     {
-        $this->frame = $window;
-
-        return $this;
+        $copy = clone $this;
+        $copy->frame = $window;
+        return $copy;
     }
 
     public function window(): Window
@@ -127,16 +134,31 @@ final class Statistic implements AggregatingFunction, WindowFunction
         return $this->frame;
     }
 
-    public function result(EntryFactory $entryFactory): Entry
+    public function children(): array
     {
-        if (!$this->ref->hasAlias()) {
-            // `age_median`, the way Flow names `age_avg` — and the same name
-            // `PipelineBuilder::aggregateOutputName` predicts, which is what
-            // lets a later sortBy() name the column this writes.
-            $this->ref->as($this->ref->to() . '_' . $this->of->value);
-        }
+        return [$this->ref];
+    }
 
-        return float_entry($this->ref->name(), $this->of->of($this->values, $this->percentage));
+    public function withChildren(array $children): static
+    {
+        $copy = new self($children[0], $this->of, $this->percentage);
+        $copy->frame = $this->frame;
+        return $copy;
+    }
+
+    public function outputName(): string
+    {
+        return $this->outputName;
+    }
+
+    public function returns(): Type
+    {
+        return type_optional(type_float());
+    }
+
+    public function value(): ?float
+    {
+        return $this->of->of($this->values, $this->percentage);
     }
 
     public function toString(): string

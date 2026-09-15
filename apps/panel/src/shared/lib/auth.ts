@@ -121,7 +121,7 @@ export function useCan(needed: Role): boolean {
   const config = useAuthConfig();
   const enabled = config.data?.enabled === true;
   const session = useSession(enabled);
-  return enabled ? can(session.data, needed) : true;
+  return config.isSuccess && (enabled ? can(session.data, needed) : true);
 }
 
 /**
@@ -137,7 +137,7 @@ export function useRoleDecision(needed: Role): boolean | undefined {
   const config = useAuthConfig();
   const enabled = config.data?.enabled === true;
   const session = useSession(enabled);
-  if (!config.isFetched) return undefined;
+  if (!config.isSuccess) return undefined;
   // With authentication off there is nobody to refuse, which is the same
   // reasoning `useCan` states: a permission system nobody asked for.
   if (!enabled) return true;

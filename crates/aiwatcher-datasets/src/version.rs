@@ -43,6 +43,7 @@ pub(crate) async fn read(registry: &Registry, name: &str, version: &str) -> Resu
         &artifact.items,
         &artifact.source,
         artifact.window_seconds,
+        artifact.summary.sample.as_ref(),
     )?;
     if head.name != name
         || artifact.name != name
@@ -148,5 +149,70 @@ mod tests {
             registry.verified_version("verified", pin).await,
             Err(RegistryError::NotFound(_))
         ));
+    }
+    #[tokio::test]
+    async fn sample_identity_is_distinct_verified_and_preserved_in_catalogue_and_rows() {
+        for engine in QueryEngine::ALL {
+            let registry = Registry::new(Arc::new(MemoryObjectStore::new()), "datasets");
+            let ordinary = registry.publish(request(engine)).await.unwrap();
+            let mut sampled = request(engine);
+            let metadata = crate::DatasetSample {
+                mode: crate::SampleMode::Preview,
+                truncated_stages: vec!["python".into()],
+            };
+            sampled.sample = Some(metadata.clone());
+            let sample = registry.publish(sampled.clone()).await.unwrap();
+            assert_ne!(
+                sample.dataset.latest.version,
+                ordinary.dataset.latest.version
+            );
+            assert_eq!(sample.dataset.latest.sample, Some(metadata.clone()));
+            assert_eq!(sample.dataset.versions.len(), 2);
+            assert!(!registry.publish(sampled).await.unwrap().created);
+            let version = &sample.dataset.latest.version;
+            let artifact = registry
+                .verified_version("verified", version)
+                .await
+                .unwrap();
+            assert_eq!(artifact.summary.sample, Some(metadata));
+            let mut forged = artifact;
+            forged.summary.sample = None;
+            registry
+                .write_json(&registry.dataset_version_key("verified", version), &forged)
+                .await
+                .unwrap();
+            assert!(matches!(
+                registry.verified_version("verified", version).await,
+                Err(RegistryError::Corrupt { .. })
+            ));
+            // Publishing a sample does not change old content IDs or verified reads.
+            assert!(
+                registry
+                    .verified_version("verified", &ordinary.dataset.latest.version)
+                    .await
+                    .is_ok()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_samples_require_bounded_nonempty_stage_ids() {
+        let registry = Registry::new(Arc::new(MemoryObjectStore::new()), "datasets");
+        for stages in [
+            vec![],
+            vec!["".into()],
+            vec!["x".repeat(241)],
+            vec!["query".into(); 129],
+        ] {
+            let mut sample = request(QueryEngine::Flow);
+            sample.sample = Some(crate::DatasetSample {
+                mode: crate::SampleMode::Truncated,
+                truncated_stages: stages,
+            });
+            assert!(matches!(
+                registry.publish(sample).await,
+                Err(RegistryError::Invalid(_))
+            ));
+        }
     }
 }

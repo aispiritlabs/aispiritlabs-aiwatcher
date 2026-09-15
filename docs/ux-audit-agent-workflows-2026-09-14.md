@@ -388,3 +388,12 @@ Z obejrzanego Home warto zaczerpnąć stały sidebar z czytelnymi grupami, wyszu
 Kolejność implementacji z sekcji 13 pozostaje aktualna. W etapie A dodać synchronizację tabeli i wykresów oraz kontekst projektu tam, gdzie backend go wspiera. W etapie B uwzględnić porównanie per case i zapisane konfiguracje pomiaru. Playground oraz widoki zespołowe można dodać po działającym przepływie referencji i wersji. Edytor dokumentowego workflow pozostaje własnym wymaganiem AIWatchera; nie został zweryfikowany jako wzorzec W&B w tym przeglądzie.
 
 Kryteria dodatkowe: ten sam filtr ogranicza tabelę i jej wykresy; otwarcie modelu z historycznego runu wybiera dokładną wersję; porównanie przypadku daje dostęp do obu odpowiedzi i konfiguracji; praca w Playground nie zmienia konfiguracji produkcyjnej; powrót z zasobu współdzielonego przywraca obiekt źródłowy i kontekst zadania. Firma skupiona wyłącznie na danych, anotacji i treningu nie musi przechodzić przez agentów na żadnym etapie.
+
+
+## 15. Realizacja i konto użytkownika — aktualizacja 14.09.2026
+
+[Plan migracji UX](ux-migration-plan-2026-09-14.md) jest rejestrem etapów i kryteriów odbioru. Podstawą pozostają równorzędne obszary pracy: firma może zaczynać od przygotowania danych i kończyć na ewaluacji modelu, bez agenta.
+
+Górny pasek zawiera globalne wyszukiwanie nawigacyjne, wygląd i konto. Profil prezentuje faktyczną sesję oraz grupy SSO jako dane tylko do odczytu. Docelowo dojdą organizacja i projekt; samo dodanie selektora nie realizuje izolacji danych. Authentik odpowiada za tożsamość, a AIWatcher za członkostwa, zespoły, zaproszenia i ograniczone czasowo uprawnienia projektowe. Obecna implementacja profilu nie deklaruje tych przyszłych uprawnień jako działających.
+
+Zestawienie z oceną audytu potwierdziło błędy publikacji próbki, mianownika skuteczności, paginacji Runs, zmiennego celu komend workflow i przywracania zaakceptowanej rewizji zamiast zapisanego szkicu. Nie potwierdzono uogólnień o braku wszystkich potwierdzeń zapisu i filtra review; skorygowano je w dokumencie oceny.

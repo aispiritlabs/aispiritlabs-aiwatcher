@@ -14,6 +14,7 @@
 #   aiwatcher-conversations  the encrypted conversation archive and its exports
 #   aiwatcher-execution  the plan, the pure decider, and the workflow store
 #   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
+#   aiwatcher-iam        organization membership, project grants and access policy
 #   aiwatcher-auth       OIDC relying party: discovery, JWKS, sessions, roles
 #   aiwatcher-projector  the consumer pipeline + live hub + read model
 #   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
@@ -50,6 +51,7 @@ aiwatcher-conversations = { path = "crates/aiwatcher-conversations", version = "
 aiwatcher-execution = { path = "crates/aiwatcher-execution", version = "0.1.0" }
 aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
 aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }
+aiwatcher-iam = { path = "crates/aiwatcher-iam", version = "0.1.0" }
 aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
 aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
 aiwatcher-server = { path = "crates/aiwatcher-server", version = "0.1.0" }

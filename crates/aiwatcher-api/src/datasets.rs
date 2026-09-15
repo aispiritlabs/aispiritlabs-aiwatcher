@@ -1,22 +1,21 @@
 //! Saved Flow curation recipes and the versioned dataset artifacts they produce.
 //!
 //! The PHP service executes a transformation; these routes persist its exact
-//! script and output behind the same editor permission as prompt authoring.
+//! script and output behind an instance editor role (legacy) or a current
+//! project editor grant (scoped).
 
-use std::sync::Arc;
-
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 
 use aiwatcher_datasets::{
     DatasetPage, DatasetRowsPage, PipelinePage, PublishDatasetRequest, PublishedDataset,
-    RecipePage, Registry, SavePipelineRequest, SaveRecipeRequest, SavedPipeline, SavedRecipe,
+    RecipePage, SavePipelineRequest, SaveRecipeRequest, SavedPipeline, SavedRecipe,
 };
 use serde::Deserialize;
 
-use crate::auth::Caller;
+use crate::dataset_scope::{DatasetRead, DatasetWrite};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa::OpenApi;
@@ -31,9 +30,11 @@ use utoipa::OpenApi;
     list_datasets,
     get_dataset_rows,
     publish_dataset,
+    publish_dataset_sample,
     list_recipes,
     save_recipe,
     list_pipelines,
+    get_pipeline_revision,
     save_pipeline,
     search_block_library,
     save_block_template,
@@ -43,21 +44,104 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    let mut api = Api::openapi();
+    // Both route families execute these same handlers/extractors. Derive the
+    // scoped contract from the legacy operations so their bodies cannot drift.
+    for (path, mut item) in api.paths.paths.clone() {
+        for (operation, write) in [(&mut item.get, false), (&mut item.post, true)] {
+            let Some(operation) = operation else { continue };
+            operation.operation_id = operation
+                .operation_id
+                .take()
+                .map(|id| format!("project_{id}"));
+            let parameters = operation.parameters.get_or_insert_with(Vec::new);
+            for name in ["organization", "project"] {
+                parameters.push(
+                    utoipa::openapi::path::ParameterBuilder::new()
+                        .name(name)
+                        .parameter_in(utoipa::openapi::path::ParameterIn::Path)
+                        .required(utoipa::openapi::Required::True)
+                        .schema(Some(
+                            utoipa::openapi::ObjectBuilder::new()
+                                .schema_type(utoipa::openapi::Type::String)
+                                .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(
+                                    utoipa::openapi::KnownFormat::Uuid,
+                                ))),
+                        ))
+                        .build(),
+                );
+            }
+            if write {
+                parameters.push(
+                    utoipa::openapi::path::ParameterBuilder::new()
+                        .name("X-AIWatcher-IAM")
+                        .parameter_in(utoipa::openapi::path::ParameterIn::Header)
+                        .required(utoipa::openapi::Required::True)
+                        .description(Some("Required value: 1"))
+                        .schema(Some(
+                            utoipa::openapi::ObjectBuilder::new()
+                                .schema_type(utoipa::openapi::Type::String),
+                        ))
+                        .build(),
+                );
+            }
+            for status in ["401", "403", "404", "503"] {
+                operation
+                    .responses
+                    .responses
+                    .entry(status.into())
+                    .or_insert_with(|| {
+                        utoipa::openapi::ResponseBuilder::new()
+                            .description("Current project authorization failed or is unavailable")
+                            .build()
+                            .into()
+                    });
+            }
+        }
+        api.paths.paths.insert(
+            path.replacen(
+                "/api/v1",
+                "/api/v1/orgs/{organization}/projects/{project}",
+                1,
+            ),
+            item,
+        );
+    }
+    api
 }
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::dataset_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/datasets", get(list_datasets).post(publish_dataset))
-        .route("/api/v1/dataset-rows", get(get_dataset_rows))
-        .route("/api/v1/curations", get(list_recipes).post(save_recipe))
+        .route("/datasets", get(list_datasets).post(publish_dataset))
+        .route("/dataset-rows", get(get_dataset_rows))
         .route(
-            "/api/v1/curation-library",
+            "/dataset-samples",
+            axum::routing::post(publish_dataset_sample),
+        )
+        .route("/curations", get(list_recipes).post(save_recipe))
+        .route(
+            "/curation-library",
             get(search_block_library).post(save_block_template),
         )
         .route(
-            "/api/v1/curation-pipelines",
+            "/curation-pipelines",
             get(list_pipelines).post(save_pipeline),
+        )
+        .route(
+            "/curation-pipelines/{name}/revisions/{revision}",
+            get(get_pipeline_revision),
         )
 }
 
@@ -71,17 +155,6 @@ pub struct DatasetRowsQuery {
     pub search: Option<String>,
 }
 
-fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
-    state
-        .datasets
-        .as_ref()
-        .ok_or(ApiError::DatasetRegistryDisabled)
-}
-
-fn may_author(caller: &Caller) -> ApiResult<()> {
-    caller.require(aiwatcher_auth::Role::Editor).map(|_| ())
-}
-
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryQuery {
@@ -90,7 +163,7 @@ pub struct LibraryQuery {
     pub limit: Option<usize>,
 }
 
-/// Search solutions shared with all readers of this installation.
+/// Search reusable block solutions in the selected registry.
 #[utoipa::path(
     get, path = "/api/v1/curation-library", params(LibraryQuery),
     responses(
@@ -100,11 +173,11 @@ pub struct LibraryQuery {
     ), tag = "datasets",
 )]
 async fn search_block_library(
-    State(state): State<AppState>,
+    DatasetRead(registry): DatasetRead,
     Query(query): Query<LibraryQuery>,
 ) -> ApiResult<Json<aiwatcher_datasets::BlockTemplatePage>> {
     Ok(Json(
-        registry(&state)?
+        registry
             .block_templates(
                 query.search.as_deref().unwrap_or_default(),
                 query.offset.unwrap_or(0),
@@ -127,12 +200,11 @@ async fn search_block_library(
     ), tag = "datasets",
 )]
 async fn save_block_template(
-    State(state): State<AppState>,
-    caller: Caller,
+    registry: DatasetWrite,
     Json(request): Json<aiwatcher_datasets::SaveBlockTemplateRequest>,
 ) -> ApiResult<Json<aiwatcher_datasets::BlockTemplate>> {
-    may_author(&caller)?;
-    Ok(Json(registry(&state)?.save_block_template(request).await?))
+    let registry = registry.authorize().await?;
+    Ok(Json(registry.save_block_template(request).await?))
 }
 
 /// Every saved dataset, newest execution first.
@@ -145,8 +217,8 @@ async fn save_block_template(
     ),
     tag = "datasets",
 )]
-async fn list_datasets(State(state): State<AppState>) -> ApiResult<Json<DatasetPage>> {
-    Ok(Json(registry(&state)?.datasets().await?))
+async fn list_datasets(DatasetRead(registry): DatasetRead) -> ApiResult<Json<DatasetPage>> {
+    Ok(Json(registry.datasets().await?))
 }
 
 /// One immutable dataset version, returned in small slices for an interactive viewer.
@@ -163,11 +235,11 @@ async fn list_datasets(State(state): State<AppState>) -> ApiResult<Json<DatasetP
     tag = "datasets",
 )]
 async fn get_dataset_rows(
-    State(state): State<AppState>,
+    DatasetRead(registry): DatasetRead,
     Query(query): Query<DatasetRowsQuery>,
 ) -> ApiResult<Json<DatasetRowsPage>> {
     Ok(Json(
-        registry(&state)?
+        registry
             .rows(
                 &query.name,
                 query.version.as_deref(),
@@ -179,7 +251,7 @@ async fn get_dataset_rows(
     ))
 }
 
-/// Persist one completed Flow PHP execution as an immutable dataset version.
+/// Persist exact execution output as an immutable version, optionally labelled as a sample.
 #[utoipa::path(
     post,
     path = "/api/v1/datasets",
@@ -194,18 +266,46 @@ async fn get_dataset_rows(
     tag = "datasets",
 )]
 async fn publish_dataset(
-    State(state): State<AppState>,
-    caller: Caller,
+    registry: DatasetWrite,
     Json(request): Json<PublishDatasetRequest>,
 ) -> ApiResult<(StatusCode, Json<PublishedDataset>)> {
-    may_author(&caller)?;
-    let published = registry(&state)?.publish(request).await?;
+    let registry = registry.authorize().await?;
+    let published = registry.publish(request).await?;
     let status = if published.created {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
     Ok((status, Json(published)))
+}
+
+/// Publish explicitly labelled limited output. Sample metadata is required.
+/// A separate route prevents older servers from ignoring a new sample field.
+#[utoipa::path(
+    post,
+    path = "/api/v1/dataset-samples",
+    request_body = PublishDatasetRequest,
+    responses(
+        (status = 201, body = PublishedDataset),
+        (status = 200, body = PublishedDataset),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 413, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "datasets",
+)]
+async fn publish_dataset_sample(
+    registry: DatasetWrite,
+    Json(request): Json<PublishDatasetRequest>,
+) -> ApiResult<(StatusCode, Json<PublishedDataset>)> {
+    if request.sample.is_none() {
+        return Err(aiwatcher_datasets::RegistryError::Invalid(
+            "sample metadata is required".into(),
+        )
+        .into());
+    }
+    publish_dataset(registry, Json(request)).await
 }
 
 /// Every saved Flow PHP recipe, newest save first.
@@ -218,8 +318,8 @@ async fn publish_dataset(
     ),
     tag = "data-curation",
 )]
-async fn list_recipes(State(state): State<AppState>) -> ApiResult<Json<RecipePage>> {
-    Ok(Json(registry(&state)?.recipes().await?))
+async fn list_recipes(DatasetRead(registry): DatasetRead) -> ApiResult<Json<RecipePage>> {
+    Ok(Json(registry.recipes().await?))
 }
 
 /// Save a content-addressed revision of a Flow PHP recipe.
@@ -237,12 +337,11 @@ async fn list_recipes(State(state): State<AppState>) -> ApiResult<Json<RecipePag
     tag = "data-curation",
 )]
 async fn save_recipe(
-    State(state): State<AppState>,
-    caller: Caller,
+    registry: DatasetWrite,
     Json(request): Json<SaveRecipeRequest>,
 ) -> ApiResult<(StatusCode, Json<SavedRecipe>)> {
-    may_author(&caller)?;
-    let saved = registry(&state)?.save_recipe(request).await?;
+    let registry = registry.authorize().await?;
+    let saved = registry.save_recipe(request).await?;
     let status = if saved.created {
         StatusCode::CREATED
     } else {
@@ -261,8 +360,39 @@ async fn save_recipe(
     ),
     tag = "data-curation",
 )]
-async fn list_pipelines(State(state): State<AppState>) -> ApiResult<Json<PipelinePage>> {
-    Ok(Json(registry(&state)?.pipelines().await?))
+async fn list_pipelines(DatasetRead(registry): DatasetRead) -> ApiResult<Json<PipelinePage>> {
+    Ok(Json(registry.pipelines().await?))
+}
+
+#[derive(Deserialize)]
+struct PipelineRevisionPath {
+    name: String,
+    revision: String,
+}
+
+/// Read an exact saved pipeline, including its layout and notebook pins.
+/// A missing revision never falls back to the current head.
+#[utoipa::path(
+    get,
+    path = "/api/v1/curation-pipelines/{name}/revisions/{revision}",
+    params(("name" = String, Path), ("revision" = String, Path)),
+    responses(
+        (status = 200, body = aiwatcher_datasets::CurationPipeline),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "data-curation",
+)]
+async fn get_pipeline_revision(
+    DatasetRead(registry): DatasetRead,
+    Path(PipelineRevisionPath { name, revision }): Path<PipelineRevisionPath>,
+) -> ApiResult<Json<aiwatcher_datasets::CurationPipeline>> {
+    let pipeline = registry
+        .pipeline(&name, Some(&revision))
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("pipeline {name}@{revision}")))?;
+    Ok(Json(pipeline))
 }
 
 /// Save a content-addressed revision of a block pipeline.
@@ -286,12 +416,11 @@ async fn list_pipelines(State(state): State<AppState>) -> ApiResult<Json<Pipelin
     tag = "data-curation",
 )]
 async fn save_pipeline(
-    State(state): State<AppState>,
-    caller: Caller,
+    registry: DatasetWrite,
     Json(request): Json<SavePipelineRequest>,
 ) -> ApiResult<(StatusCode, Json<SavedPipeline>)> {
-    may_author(&caller)?;
-    let saved = registry(&state)?.save_pipeline(request).await?;
+    let registry = registry.authorize().await?;
+    let saved = registry.save_pipeline(request).await?;
     let status = if saved.created {
         StatusCode::CREATED
     } else {

@@ -5,10 +5,10 @@
   "license": "MIT",
   "require": {
     "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
-    "flow-php/etl": "^0.43",
-    "flow-php/etl-adapter-csv": "^0.43",
-    "flow-php/etl-adapter-http": "^0.43",
-    "flow-php/etl-adapter-parquet": "^0.43",
+    "flow-php/etl": "^0.44",
+    "flow-php/etl-adapter-csv": "^0.44",
+    "flow-php/etl-adapter-http": "^0.44",
+    "flow-php/etl-adapter-parquet": "^0.44",
     "hi-folks/statistics": "^1.5",
     "nyholm/psr7": "^1.8",
     "symfony/http-client": "^7.0 || ^8.0"

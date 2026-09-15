@@ -3,8 +3,9 @@ import { getRouteApi } from '@tanstack/react-router';
 import { Beaker, Play, Save, Sparkles } from 'lucide-react';
 import * as React from 'react';
 
-import { listRecipes, publishDataset, saveRecipe } from '@/api/generated/sdk.gen';
+import { listRecipes, publishDataset, publishDatasetSample, saveRecipe } from '@/api/generated/sdk.gen';
 import type { CurationRecipe } from '@/api/generated/types.gen';
+import { SamplePublication } from '@/shared/components/sample-publication';
 import { FlowDiagnostics, FlowResultView } from '@/shared/components/flow-preview';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/shared/components/ui/primitives';
@@ -22,8 +23,11 @@ import {
   type QueryEngineName,
 } from '@/shared/lib/query';
 import { answerOf } from '@/shared/lib/result';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/data-curation/recipe');
+const contextOf = (search: { q?: string; writtenFor?: string; name?: string; dataset?: string; description?: string }) =>
+  JSON.stringify([search.q, search.writtenFor, search.name, search.dataset, search.description]);
 
 export function DataCurationPage() {
   const search = routeApi.useSearch();
@@ -50,9 +54,23 @@ export function DataCurationPage() {
   const [name, setName] = React.useState(search.name ?? 'production/successful-sessions');
   const [dataset, setDataset] = React.useState(search.dataset ?? 'evaluation/production-sessions');
   const [description, setDescription] = React.useState(
-    'Cases curated from retained production runs.',
+    search.description ?? 'Cases curated from retained production runs.',
   );
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
+  const snapshot = JSON.stringify({ text, writtenFor, name, dataset, description });
+  const [savedSnapshot, setSavedSnapshot] = React.useState(snapshot);
+  const currentSnapshot = React.useRef(snapshot);
+  currentSnapshot.current = snapshot;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const dirty = snapshot !== savedSnapshot;
+  const resultSignature = JSON.stringify([draft, draftEngine, windowSeconds, name, dataset, description]);
+  const context = contextOf(search);
+  const loadedContext = React.useRef(context);
+  const generation = React.useRef(0);
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
@@ -69,34 +87,41 @@ export function DataCurationPage() {
 
   const test = useMutation({ mutationFn: () => checkQuery(draft) });
   const simulate = useMutation({
-    mutationFn: () => simulateQuery(draft, windowParam(windowSeconds)),
+    mutationFn: async () => {
+      const result = await simulateQuery(draft, windowParam(windowSeconds));
+      return { ...result, signature: resultSignature,
+        sample: { mode: 'preview' as const, truncated_stages: result.truncated ? ['query'] : [] } };
+    },
   });
   const save = useMutation({
     mutationFn: async () => {
+      const contextGeneration = generation.current;
       const checked = await checkQuery(draft);
       if (!checked.ok)
         throw new Error(checked.diagnostics[0]?.message ?? 'The pipeline is invalid.');
       const response = await saveRecipe({
         body: { name, description, pipeline: draft, engine: draftEngine },
       });
-      return answerOf(response, 'Could not save the recipe.');
+      return { ...answerOf(response, 'Could not save the recipe.'), snapshot, contextGeneration,
+        search: { q: draft, writtenFor: draftEngine, name, dataset, description } };
     },
-    onSuccess: () => {
+    onSuccess: (stored) => {
       void queryClient.invalidateQueries({ queryKey: ['curations'] });
-      void navigate({
-        search: { q: draft, writtenFor: draftEngine, name, dataset, window: search.window },
-        replace: true,
-      });
+      if (!mounted.current || generation.current !== stored.contextGeneration) return;
+      setSavedSnapshot(stored.snapshot);
+      if (currentSnapshot.current === stored.snapshot) {
+        loadedContext.current = contextOf(stored.search);
+        void navigate({ search: (previous) => ({ ...previous, ...stored.search }),
+          replace: true, ignoreBlocker: true });
+      }
     },
   });
   const execute = useMutation({
     mutationFn: async () => {
-      const result = await runQuery(draft, windowParam(windowSeconds));
-      if (result.truncated) {
-        throw new Error(
-          'The result exceeds the 1,000-row execution cap. Narrow the filters or add an explicit limit before saving a version.',
-        );
-      }
+      const responseResult = await runQuery(draft, windowParam(windowSeconds));
+      const result = { ...responseResult, signature: resultSignature,
+        sample: responseResult.truncated ? { mode: 'truncated' as const, truncated_stages: ['query'] } : undefined };
+      if (result.truncated) return { result, published: undefined };
       const response = await publishDataset({
         body: {
           name: dataset,
@@ -118,10 +143,32 @@ export function DataCurationPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
 
+  const latestResult = execute.submittedAt > simulate.submittedAt ? execute.data?.result : simulate.data;
+  const publishSample = useMutation({
+    mutationFn: async () => {
+      if (!latestResult?.sample || latestResult.signature !== resultSignature) {
+        throw new Error('Run again before publishing a sample of the current recipe.');
+      }
+      const response = await publishDatasetSample({ body: {
+        name: `${dataset.trim()}/samples`, description, recipe: name || undefined,
+        pipeline: draft, engine: draftEngine, columns: latestResult.columns, items: latestResult.rows,
+        source: latestResult.source, window_seconds: latestResult.window_seconds ?? undefined,
+        sample: latestResult.sample,
+      } });
+      return answerOf(response, 'Could not publish the sample.');
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
+  });
+
+  React.useEffect(() => { publishSample.reset(); }, [simulate.submittedAt, execute.submittedAt]);
+
   // An example is a recipe nobody saved, so it fills in the two boxes a saved
   // one already carries — and lands in the URL like every other filter here,
   // which is what makes "look at this curation" a link rather than a paragraph.
   const loadExample = (example: QueryExample) => {
+    if (!confirmDiscard()) return;
+    generation.current += 1;
+    loadedContext.current = contextOf({ q: example.query, writtenFor: deployed ?? 'flow', name: example.name, dataset: example.dataset, description: example.description });
     setName(example.name);
     setDataset(example.dataset);
     setDescription(example.description);
@@ -130,6 +177,8 @@ export function DataCurationPage() {
     test.reset();
     simulate.reset();
     execute.reset();
+    save.reset();
+    publishSample.reset();
     void navigate({
       search: (previous) => ({
         ...previous,
@@ -137,23 +186,58 @@ export function DataCurationPage() {
         writtenFor: deployed ?? 'flow',
         name: example.name,
         dataset: example.dataset,
+        description: example.description,
       }),
-      replace: true,
+      ignoreBlocker: true,
     });
   };
 
   const loadRecipe = (recipe: CurationRecipe) => {
+    if (!confirmDiscard()) return;
+    generation.current += 1;
+    const next = { q: recipe.pipeline, writtenFor: recipe.engine ?? 'flow',
+      name: recipe.name, dataset, description: recipe.description ?? '' };
+    loadedContext.current = contextOf(next);
+    void navigate({ search: (previous) => ({ ...previous, ...next }), ignoreBlocker: true });
     setName(recipe.name);
     setDescription(recipe.description ?? '');
     setDraft(recipe.pipeline);
     setWrittenFor(recipe.engine ?? 'flow');
+    setSavedSnapshot(JSON.stringify({ text: recipe.pipeline, writtenFor: recipe.engine ?? 'flow',
+      name: recipe.name, dataset, description: recipe.description ?? '' }));
     test.reset();
     simulate.reset();
     execute.reset();
+    save.reset();
+    publishSample.reset();
   };
 
   const flowReady = available.data === true && !foreign;
-  const busy = test.isPending || simulate.isPending || execute.isPending || save.isPending;
+  const busy = test.isPending || simulate.isPending || execute.isPending || save.isPending || publishSample.isPending;
+  const confirmDiscard = useUnsavedChanges({ dirty, pending: busy,
+    message: 'This recipe has unsaved changes.',
+    losesDraft: ({ next }) => next.routeId !== '/data-curation/recipe' || contextOf(next.search) !== context,
+  });
+
+  React.useEffect(() => {
+    if (loadedContext.current === context) return;
+    loadedContext.current = context;
+    generation.current += 1;
+    const restored = {
+      text: search.q ?? null,
+      writtenFor: search.q === undefined ? null : linkedEngine(search.q, search.writtenFor, undefined),
+      name: search.name ?? 'production/successful-sessions',
+      dataset: search.dataset ?? 'evaluation/production-sessions',
+      description: search.description ?? 'Cases curated from retained production runs.',
+    };
+    setDraft(restored.text);
+    setWrittenFor(restored.writtenFor);
+    setName(restored.name);
+    setDataset(restored.dataset);
+    setDescription(restored.description);
+    setSavedSnapshot(JSON.stringify(restored));
+    test.reset(); simulate.reset(); execute.reset(); save.reset(); publishSample.reset();
+  }, [context]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -171,6 +255,8 @@ export function DataCurationPage() {
           onChange={(window) => void navigate({ search: (previous) => ({ ...previous, window }) })}
         />
       </div>
+
+      {dirty ? <p role="status" className="text-xs text-warning">Unsaved recipe changes.</p> : null}
 
       {available.data === false ? (
         <EmptyState
@@ -257,7 +343,7 @@ export function DataCurationPage() {
             </Card>
           ) : null}
           {save.error ? <ErrorCard error={save.error} /> : null}
-          {execute.data ? (
+          {execute.data?.published ? (
             <Card className="border-success/40 p-3 text-sm">
               Dataset <strong>{execute.data.published.dataset.name}</strong> saved as version{' '}
               <code className="id">
@@ -266,8 +352,15 @@ export function DataCurationPage() {
               with {execute.data.published.dataset.latest.row_count} rows.
             </Card>
           ) : null}
+          {latestResult?.sample ? <SamplePublication
+            name={`${dataset.trim()}/samples`} rowCount={latestResult.rows.length} sample={latestResult.sample}
+            pending={publishSample.isPending}
+            disabled={busy || !dataset.trim() || latestResult.signature !== resultSignature}
+            error={publishSample.error} published={publishSample.data}
+            onPublish={() => publishSample.mutate()}
+          /> : null}
           <FlowResultView
-            result={execute.data?.result ?? simulate.data}
+            result={latestResult}
             error={execute.error ?? simulate.error}
           />
         </div>
@@ -286,6 +379,7 @@ export function DataCurationPage() {
                   key={example.name}
                   type="button"
                   onClick={() => loadExample(example)}
+                  disabled={busy}
                   className="w-full p-3 text-left hover:bg-accent/40"
                 >
                   <p className="truncate text-sm font-medium">{example.title}</p>
@@ -324,6 +418,7 @@ export function DataCurationPage() {
                     key={`${recipe.name}-${recipe.revision}`}
                     type="button"
                     onClick={() => loadRecipe(recipe)}
+                    disabled={busy}
                     className="w-full p-3 text-left hover:bg-accent/40"
                   >
                     <p className="truncate text-sm font-medium">{recipe.name}</p>

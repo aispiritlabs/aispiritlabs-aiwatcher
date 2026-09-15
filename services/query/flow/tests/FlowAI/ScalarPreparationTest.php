@@ -14,29 +14,45 @@ use Flow\ETL\Transformer\ScalarFunctionTransformer;
 use PHPUnit\Framework\TestCase;
 
 use function Flow\ETL\DSL\data_frame;
-use function Flow\ETL\DSL\datetime_entry;
+use function Flow\ETL\DSL\datetime_schema;
 use function Flow\ETL\DSL\flow_context;
 use function Flow\ETL\DSL\from_array;
-use function Flow\ETL\DSL\int_entry;
+use function Flow\ETL\DSL\int_schema;
 use function Flow\ETL\DSL\ref;
 use function Flow\ETL\DSL\rows;
-use function Flow\ETL\DSL\str_entry;
+use function Flow\ETL\DSL\schema;
+use function Flow\ETL\DSL\str_schema;
 
 final class ScalarPreparationTest extends TestCase
 {
     public function test_fit_keeps_the_exact_rows_and_scalar_preserves_unrelated_typed_entries(): void
     {
         $context = flow_context();
-        $date = datetime_entry('created_at', new \DateTimeImmutable('2026-09-09T12:00:00Z'));
-        $input = rows(Row::create(str_entry('category', 'a'), $date, int_entry('id', 7)));
+        $date = new \DateTimeImmutable('2026-09-09T12:00:00Z');
+        $input = rows(
+            schema(
+                str_schema('category'),
+                datetime_schema('created_at')->addMetadata('source', 'fixture'),
+                int_schema('id'),
+            ),
+            new Row([
+                'category' => 'a',
+                'created_at' => $date,
+                'id' => 7,
+            ]),
+        );
         $state = new FittedState();
         $fit = new FitPreparation('oneHotEncode', ['category'], [], $state);
         self::assertSame($input, $fit->transform($input, $context));
         $function = new OneHot([ref('category')], $state);
         $result = (new ScalarFunctionTransformer('encoded', $function))->transform($input, $context);
         self::assertSame($date, $result->first()->get('created_at'));
+        self::assertSame(
+            $input->schema()->findDefinition('created_at')->normalize(),
+            $result->schema()->findDefinition('created_at')->normalize(),
+        );
         self::assertSame($input->first()->get('id'), $result->first()->get('id'));
-        self::assertSame(['category="a"' => 1.0], $result->first()->valueOf('encoded'));
+        self::assertSame(['category="a"' => 1.0], $result->first()->get('encoded'));
         self::assertSame(['category="a"' => 1.0], \unserialize(\serialize($function))->eval($input->first(), $context));
     }
 
@@ -47,11 +63,11 @@ final class ScalarPreparationTest extends TestCase
             new FitPreparation('oneHotEncode', ['x'], [], $state),
             new OneHot([ref('x')], $state),
         ]));
-        $input = rows(Row::create(str_entry('x', 'train')));
+        $input = rows(schema(str_schema('x')), new Row(['x' => 'train']));
         $fit->transform($input, flow_context());
         self::assertSame(['x="train"' => 1.0], $function->eval($input->first(), flow_context()));
         // A fresh execution replaces its fitted parameters, never accumulates vocabulary.
-        $other = rows(Row::create(str_entry('x', 'other')));
+        $other = rows(schema(str_schema('x')), new Row(['x' => 'other']));
         $fit->transform($other, flow_context());
         self::assertSame(['x="other"' => 1.0], $function->eval($other->first(), flow_context()));
     }
@@ -61,7 +77,7 @@ final class ScalarPreparationTest extends TestCase
         $state = (new OneHotEncoder(['x']))->fit([['x' => 'known']])->toState();
         $source = (static function (): \Generator {
             yield ['x' => 'unknown', 'id' => 1];
-            // Flow 0.43 Segment advances the source once before yielding output.
+            // An explicit schema and one-row batches must not consume the next page.
             yield ['x' => 'known', 'id' => 2];
             throw new \RuntimeException('input was collected beyond native one-page lookahead');
         })();
@@ -69,10 +85,12 @@ final class ScalarPreparationTest extends TestCase
             'oneHotEncode',
             ['x'],
             ['output' => 'features', 'state' => \json_encode($state, \JSON_THROW_ON_ERROR)],
-        ))->apply(data_frame()->read(from_array($source)));
+        ))->apply(data_frame()->read(
+            from_array($source)->withSchema(schema(str_schema('x'), int_schema('id')))->withBatchSize(1),
+        ));
         $pages = $frame->get();
         self::assertTrue($pages->valid(), 'no inference page was produced');
-        self::assertSame(['x="known"' => 0.0], $pages->current()->first()->valueOf('features'));
+        self::assertSame(['x="known"' => 0.0], $pages->current()->first()->get('features'));
     }
 
     public function test_in_place_imputation_keeps_the_original_missing_indicator(): void

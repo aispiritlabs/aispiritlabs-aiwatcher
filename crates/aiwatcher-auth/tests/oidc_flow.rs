@@ -266,10 +266,171 @@ async fn a_sign_in_ends_in_a_session_carrying_the_roles_the_groups_map_to() {
         .await
         .expect("the session is accepted");
     assert_eq!(restored.subject, "5f2c-alice");
+    assert_eq!(restored.issuer.as_deref(), Some(provider.issuer.as_str()));
+    assert!(
+        restored.expires_at.unwrap()
+            >= time::OffsetDateTime::now_utc().unix_timestamp() + 8 * 60 * 60 - 5,
+        "the issued session uses its own TTL, not the ID token's expiry"
+    );
+    assert_eq!(
+        auth.iam_principal(&restored).unwrap().provider,
+        provider.issuer
+    );
     assert!(restored.can(Role::Admin));
 
     // And the state cookie is cleared, having done its job.
     assert_eq!(signed_in.state_cleanup.max_age, Some(0));
+}
+
+#[tokio::test]
+async fn iam_uses_verified_issuer_and_subject_without_importing_instance_roles_or_groups() {
+    use aiwatcher_iam::{IamStore, memory::MemoryIamStore};
+    let (one, two) = (Provider::start().await, Provider::start().await);
+    let (auth_one, auth_two) = (authenticator(&one).await, authenticator(&two).await);
+    let identity_one = auth_one
+        .authenticate(
+            None,
+            Some(&format!("Bearer {}", one.id_token().await)),
+            |_| None,
+        )
+        .await
+        .unwrap();
+    let identity_two = auth_two
+        .authenticate(
+            None,
+            Some(&format!("Bearer {}", two.id_token().await)),
+            |_| None,
+        )
+        .await
+        .unwrap();
+    let principal_one = auth_one.iam_principal(&identity_one).unwrap();
+    let principal_two = auth_two.iam_principal(&identity_two).unwrap();
+    assert_eq!(principal_one.subject, principal_two.subject);
+    assert_ne!(principal_one.provider, principal_two.provider);
+    let store = MemoryIamStore::default();
+    store
+        .create_organization(&principal_one, "Owned by issuer one")
+        .await
+        .unwrap();
+    assert!(identity_two.can(Role::Admin));
+    assert!(
+        store
+            .organizations(&principal_two)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut renamed = identity_one.clone();
+    renamed.email = Some("changed@example.test".into());
+    renamed.username = Some("new-display-name".into());
+    renamed.groups.clear();
+    renamed.roles = vec![Role::Viewer];
+    assert_eq!(auth_one.iam_principal(&renamed).unwrap(), principal_one);
+    assert_eq!(
+        store
+            .organizations(&auth_one.iam_principal(&renamed).unwrap())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn issuer_bound_sessions_cannot_be_reused_after_switching_provider_with_the_same_signing_key()
+{
+    let (one, two) = (Provider::start().await, Provider::start().await);
+    let (auth_one, auth_two) = (authenticator(&one).await, authenticator(&two).await);
+    let login = auth_one.begin_login(None).unwrap();
+    *one.nonce.lock().await = Some(parameter(&login.url, "nonce"));
+    let signed_in = auth_one
+        .complete_login(
+            "code",
+            &parameter(&login.url, "state"),
+            Some(&as_cookie_header(&login.cookie)),
+        )
+        .await
+        .unwrap();
+    let header = as_cookie_header(&signed_in.session);
+    assert!(
+        auth_one
+            .authenticate(Some(&header), None, |_| None)
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        auth_two.authenticate(Some(&header), None, |_| None).await,
+        Err(aiwatcher_auth::AuthError::Session(_))
+    ));
+    assert!(auth_two.iam_principal(&signed_in.identity).is_err());
+}
+
+#[tokio::test]
+async fn legacy_sessions_remain_compatible_but_need_a_new_sign_in_for_iam() {
+    let provider = Provider::start().await;
+    let auth = authenticator(&provider).await;
+    let mut identity = auth
+        .authenticate(
+            None,
+            Some(&format!("Bearer {}", provider.id_token().await)),
+            |_| None,
+        )
+        .await
+        .unwrap();
+    identity.credential = Credential::Session;
+    let mut legacy = serde_json::to_value(&identity).unwrap();
+    legacy.as_object_mut().unwrap().remove("issuer");
+    let cookie = aiwatcher_auth::signing::Signer::new(b"a-session-signing-key")
+        .seal(&legacy, time::Duration::minutes(5))
+        .unwrap();
+    let restored = auth
+        .authenticate(
+            Some(&format!("{}={cookie}", auth.cookie_name())),
+            None,
+            |_| None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.issuer, None);
+    assert_eq!(restored.subject, identity.subject);
+    assert!(
+        auth.iam_principal(&restored).is_err(),
+        "never guess the issuer of an old session"
+    );
+}
+
+#[tokio::test]
+async fn iam_refuses_non_oidc_credentials_and_expired_identities() {
+    let provider = Provider::start().await;
+    let auth = authenticator(&provider).await;
+    let identity = auth
+        .authenticate(
+            None,
+            Some(&format!("Bearer {}", provider.id_token().await)),
+            |_| None,
+        )
+        .await
+        .unwrap();
+    assert!(auth.iam_principal(&identity).is_ok());
+    for credential in [
+        Credential::Anonymous,
+        Credential::Local,
+        Credential::Token,
+        Credential::Attempt,
+        Credential::Proxy,
+    ] {
+        let mut other = identity.clone();
+        other.credential = credential;
+        assert!(
+            auth.iam_principal(&other).is_err(),
+            "{credential:?} is not scoped by OIDC"
+        );
+    }
+    for expires_at in [None, Some(0)] {
+        let mut other = identity.clone();
+        other.expires_at = expires_at;
+        assert!(auth.iam_principal(&other).is_err());
+    }
 }
 
 #[tokio::test]

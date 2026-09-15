@@ -7,5 +7,6 @@ export const searchSchema = z.object({
   writtenFor: z.enum(QUERY_ENGINES).optional(),
   name: z.string().optional(),
   dataset: z.string().optional(),
+  description: z.string().optional(),
   window: z.number().int().nonnegative().optional(),
 });

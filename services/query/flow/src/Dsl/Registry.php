@@ -66,38 +66,8 @@ final class Registry
         'uuid_v7',
     ];
 
-    /**
-     * Names Flow offers that a query may not use, and why.
-     *
-     * The one refusal here that is about correctness rather than safety. Flow
-     * 0.43's loose comparisons fall through to an array comparison when either
-     * side is null, which makes them silently wrong on nullable data —
-     * measured on three rows where one column is null:
-     *
-     * ```text
-     * ref('op')->equals(lit('execute_tool'))     -> ['execute_tool', null]   wrong
-     * ref('op')->notEquals(lit('execute_tool'))  -> ['chat']                 wrong
-     * ref('op')->same(lit('execute_tool'))       -> ['execute_tool']         right
-     * ref('op')->notSame(lit('execute_tool'))    -> ['chat', null]           right
-     * ```
-     *
-     * Every column in every dataset here is nullable, so admitting these would
-     * be offering a filter that quietly returns the wrong rows. They are
-     * refused *with the reason* rather than silently absent, because "unknown
-     * function" would send somebody looking for a typo.
-     */
-    public const array DECLINED = [
-        'equals' =>
-            'Use ->same(...). Flow\'s ->equals() compares loosely and, when either side is '
-                . 'null, falls through to an array comparison that matches anything — and every column '
-                . 'in these datasets can be null.',
-        'notEquals' =>
-            'Use ->notSame(...). Flow\'s ->notEquals() drops rows where the column is '
-                . 'null, rather than keeping them as "not equal".',
-        'equal' =>
-            'Use ref(\'a\')->same(ref(\'b\')) or ->same(lit(\'value\')). The standalone '
-                . 'equal() compares loosely and mishandles nulls.',
-    ];
+    /** Flow 0.44 fixes the nullable comparisons previously declined here. */
+    public const array DECLINED = [];
 
     /** @var array<string, \ReflectionFunction>|null Built once per request; see the measurement below. */
     private static ?array $functions = null;
@@ -126,7 +96,11 @@ final class Registry
             $function = new \ReflectionFunction($name);
             $short = $function->getShortName();
 
-            if (self::declined($short) !== null || self::takesACallable($function)) {
+            if (
+                self::declined($short) !== null
+                || self::takesACallable($function)
+                || Admission::refuses($function) !== null
+            ) {
                 continue;
             }
 

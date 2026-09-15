@@ -82,6 +82,7 @@ impl LocalAuth {
     #[must_use]
     pub fn identity(&self) -> Identity {
         Identity {
+            issuer: None,
             subject: format!("token:{SUBJECT}"),
             username: Some(SUBJECT.to_owned()),
             name: None,

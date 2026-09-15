@@ -29,6 +29,13 @@ use function Flow\ETL\DSL\ref;
  */
 final class AdmissionTest extends TestCase
 {
+    public function test_expression_based_callable_invocation_is_refused_on_both_surfaces(): void
+    {
+        self::assertNotNull(Admission::refuses(new \ReflectionFunction('Flow\\ETL\\DSL\\call')));
+        self::assertNotNull(Admission::refuses(new \ReflectionMethod(ref('age'), 'call')));
+        self::assertNotContains('call', Values::names(ref('age')));
+    }
+
     public function test_a_relative_return_type_names_the_class_it_stands_for(): void
     {
         $method = (new \ReflectionClass(DataFrame::class))->getMethod('withEntry');

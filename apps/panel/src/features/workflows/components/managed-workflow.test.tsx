@@ -17,6 +17,7 @@ const definitions = [
 describe('starting a registered workflow', () => {
   it('pins the chosen revision, sends parameters and an idempotency key', async () => {
     serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       { method: 'GET', path: '/workflow-definitions', answer: { status: 200, body: definitions } },
       {
         method: 'POST',
@@ -52,6 +53,7 @@ describe('starting a registered workflow', () => {
 
   it('keeps invalid parameters in the form without sending a launch', async () => {
     const server = serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       { method: 'GET', path: '/workflow-definitions', answer: { status: 200, body: definitions } },
     ]);
     render(withQueries(<WorkflowLauncher onStarted={vi.fn()} />));
@@ -68,6 +70,7 @@ describe('starting a registered workflow', () => {
 describe('managed commands', () => {
   it('shows server refusals instead of hiding controls as an external workflow', async () => {
     serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       {
         method: 'GET',
         path: '/executions/run-1',
@@ -83,6 +86,7 @@ describe('managed commands', () => {
 
   it('retries the selected failed step only when the server permits it', async () => {
     const server = serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       {
         method: 'GET',
         path: '/executions/run-1',
@@ -112,6 +116,7 @@ describe('managed commands', () => {
     // moves it on, so this view has to be able to give one — before this, a run
     // that parked here had every control except the one that mattered.
     const server = serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       {
         method: 'GET',
         path: '/executions/run-1',
@@ -166,6 +171,7 @@ describe('managed commands', () => {
     // planned — which is exactly when somebody should read the question twice
     // before pressing approve.
     serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       {
         method: 'GET',
         path: '/executions/run-1',
@@ -211,6 +217,7 @@ describe('managed commands', () => {
     // binding, or a context still being read, must not have "the code decided
     // to ask" put under a gate somebody authored.
     serve([
+      { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false, mode: 'none' } } },
       {
         method: 'GET',
         path: '/executions/run-1',

@@ -65,3 +65,48 @@ npm run build
 The architecture check is also part of `build` and `typecheck`, so future changes
 cannot quietly reintroduce dependencies from shared code into individual features
 or from feature code into route registration.
+
+## Navigation rollout (UX-09)
+
+`VITE_AIWATCHER_SHELL` is a **build-time** setting. Set it before `npm run build`
+or when starting Vite:
+
+| Value | Behaviour |
+| --- | --- |
+| `user` or unset | All work areas by default; the user can switch to classic section navigation. |
+| `classic` | Force classic navigation for this deployment, including users who saved the new layout. |
+| `new` | Force all work areas for this deployment. |
+
+For a UI rollback, rebuild/redeploy the panel with `VITE_AIWATCHER_SHELL=classic`.
+Returning to `user` restores each user's choice. Both modes use the same router,
+screens, authentication gate and API; this flag does not change authorization,
+data scope or stored data. The classic layout retains all current work areas.
+The UI switch updates only navigation, without remounting the active editor.
+
+Choose the start page and manage pins from **Your work → Navigation preferences**.
+The logo and Your work links use `/?start=workspace` to bypass the preferred
+start. The preferred start applies only to a bare root entry; deep links,
+root query parameters and hashes keep their destination. Updating the preference
+does not immediately leave the overview. Navigation layout is also available
+above an open view, beside **Pin this view**.
+
+Preferences use `${scope}:navigation`, where `scope` is the existing local-view
+boundary for API instance and identity provider/subject. Schema version 1 stores
+layout, sidebar state, start page and up to 20 named internal links. Pins retain
+the link's filters, revision and hash; they do not save unsaved edits or retain
+the underlying data. They remain subject to current server permissions.
+
+When no scoped preferences exist, the old `aiwatcher.sidebar` value seeds the
+sidebar state. The original is retained; the new schema is written and read back
+on the first preference change. Saved training/evaluation views and appearance
+settings keep their existing formats and keys. Malformed or unknown navigation
+schemas are left untouched. Storage errors allow session-only preferences with
+an explicit message. Storage events synchronize other tabs; writes read the
+latest compatible record before merging a change.
+
+**Navigation diagnostics** shows completed moves between areas, grouped by
+layout, for the current session. It aggregates at most 100 distinct combinations
+in memory, excluding same-area filter changes and blocked moves. It stores no
+object IDs, raw URLs, queries or identity, resets on identity change/reload, and
+does not send events to a service. Central rollout metrics and automatic cohort
+assignment are not implemented by this local diagnostic.

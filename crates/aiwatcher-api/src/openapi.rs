@@ -433,6 +433,7 @@ impl ApiDoc {
             crate::worker::openapi(),
             crate::integrations::hubs::openapi(),
             crate::auth::openapi(),
+            crate::iam::openapi(),
         ] {
             document.merge(module);
         }
@@ -567,6 +568,7 @@ mod tests {
             ("worker", crate::worker::openapi()),
             ("hubs", crate::integrations::hubs::openapi()),
             ("auth", crate::auth::openapi()),
+            ("iam", crate::iam::openapi()),
         ];
         let merged = operations(&ApiDoc::document());
 

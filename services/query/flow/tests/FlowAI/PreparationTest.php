@@ -112,6 +112,22 @@ final class PreparationTest extends TestCase
         ));
     }
 
+    public function test_most_frequent_imputation_accepts_paginated_dynamic_hub_fields(): void
+    {
+        $catalog = new \Aiwatcher\Flow\Dataset\Catalog(new \Aiwatcher\Flow\Tests\Fake\TitanicApi(), 'http://api', 2);
+        $plan = (new \Aiwatcher\Flow\Dsl\PipelineBuilder($catalog))->build(\Aiwatcher\Flow\Dsl\Parser::parse(
+            "data_frame()->read(hub_rows, dataset: 'phihung/titanic')"
+            . "->withEntry('sex', array_get(ref('row'), 'Sex'))"
+            . "->imputeMissing('sex', output: 'filled', strategy: 'most_frequent')"
+            . "->select(ref('sex'), ref('filled'))",
+        ));
+        $rows = $plan->frame->fetch()->toArray();
+        self::assertNotEmpty($rows);
+        foreach ($rows as $row) {
+            self::assertSame($row['sex'], $row['filled']);
+        }
+    }
+
     private function apply(Preparation $step, array $rows): array
     {
         return $step

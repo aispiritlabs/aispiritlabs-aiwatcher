@@ -25,6 +25,8 @@ describe('feature route integration', () => {
     '/data-curation/pipeline',
     '/data-curation/recipe',
     '/datasets',
+    '/account',
+    '/learning',
     '/evaluation',
     '/experiments',
     '/observability/explore',
@@ -45,7 +47,6 @@ describe('feature route integration', () => {
   });
 
   it.each([
-    ['/', '/observability/explore'],
     ['/observability', '/observability/explore'],
     ['/annotations', '/annotations/label'],
     ['/conversations', '/conversations/review'],
@@ -54,6 +55,12 @@ describe('feature route integration', () => {
   ])('keeps the redirect from %s to %s', async (from, to) => {
     const router = await open(from);
     expect(router.state.location.pathname).toBe(to);
+  });
+
+  it('opens a neutral workspace at the root', async () => {
+    const router = await open('/');
+    expect(router.state.location.pathname).toBe('/');
+    expect(router.state.matches.at(-1)?.status).toBe('success');
   });
 
   it('preserves a shared pipeline selection through the extracted URL contract', async () => {

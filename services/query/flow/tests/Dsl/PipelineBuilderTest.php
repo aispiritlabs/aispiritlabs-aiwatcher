@@ -251,30 +251,23 @@ final class PipelineBuilderTest extends TestCase
         $this->build("data_frame()->read(default)->withEntry('x', to_output())");
     }
 
-    /**
-     * The reason `equals` is not offered, kept as a live assertion.
-     *
-     * Measured against Flow 0.43: with a null in the column, `equals` matches
-     * it and `notEquals` drops it — wrong in both directions. Since every
-     * column in every dataset here is nullable, offering them by name would be
-     * offering a filter that quietly returns the wrong rows. If a later Flow
-     * fixes this, this test is where to notice.
-     */
-    public function test_the_loose_comparisons_are_declined_with_the_reason(): void
+    public function test_loose_comparisons_follow_sql_null_semantics(): void
     {
-        foreach (['equals' => '->same(', 'notEquals' => '->notSame('] as $method => $replacement) {
-            try {
-                $this->build(\sprintf(
-                    "data_frame()->read(default)->filter(ref('status')->%s(lit('failed')))",
-                    $method,
-                ));
-                self::fail('expected ' . $method . ' to be declined');
-            } catch (ParseError $error) {
-                self::assertStringContainsString('deliberately not available', $error->getMessage());
-                // The message has to name the replacement, not just refuse.
-                self::assertStringContainsString($replacement, $error->getMessage());
-            }
-        }
+        $same = $this->build(
+            "data_frame()->read(spans)->filter(ref('tool')->same(lit('web_search')))->select(ref('tool'))",
+        );
+        $equal = $this->build(
+            "data_frame()->read(spans)->filter(ref('tool')->equals(lit('web_search')))->select(ref('tool'))",
+        );
+        self::assertSame($same, $equal);
+        self::assertCount(1, $equal);
+        $expected = $this->build(
+            "data_frame()->read(spans)->filter(ref('tool')->isNotNull()->and(ref('tool')->notSame(lit('web_search'))))->select(ref('tool'))",
+        );
+        $unequal = $this->build(
+            "data_frame()->read(spans)->filter(ref('tool')->notEquals(lit('web_search')))->select(ref('tool'))",
+        );
+        self::assertSame($expected, $unequal);
     }
 
     public function test_a_strict_filter_keeps_only_matching_rows(): void

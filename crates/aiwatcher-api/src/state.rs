@@ -276,6 +276,8 @@ pub struct AppState {
     /// means. The 501 is reserved for the sign-in routes, which cannot do
     /// anything useful without a provider.
     pub auth: Option<Arc<Authenticator>>,
+    /// Optional IAM metadata control plane; does not scope existing data routes.
+    pub iam: Option<Arc<dyn aiwatcher_iam::IamStore>>,
     pub health: HealthState,
 }
 

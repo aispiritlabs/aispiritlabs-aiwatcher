@@ -10,13 +10,33 @@ use Flow\ETL\FlowContext;
 use Flow\ETL\Function\ScalarFunction;
 use Flow\ETL\Function\ScalarFunctionChain;
 use Flow\ETL\Row;
+use Flow\Types\Type;
 
-final class SplitAssignment extends ScalarFunctionChain
+use function Flow\Types\DSL\type_string;
+
+final class SplitAssignment implements ScalarFunction
 {
+    use ScalarFunctionChain;
+
     public function __construct(
         private readonly ScalarFunction $id,
         private readonly FittedState $state,
     ) {}
+
+    public function children(): array
+    {
+        return [$this->id];
+    }
+
+    public function withChildren(array $children): static
+    {
+        return new self($children[0], $this->state);
+    }
+
+    public function returns(): Type
+    {
+        return type_string();
+    }
 
     public function eval(Row $row, FlowContext $context): string
     {

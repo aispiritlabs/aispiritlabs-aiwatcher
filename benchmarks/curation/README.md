@@ -27,6 +27,14 @@ just bench-curation-run                  # …started from the shell, times read
 | `rust/`, `rust-datafusion/` | the same query on the `polars` and `datafusion` crates, standalone Rust projects |
 | `mojo/q2.mojo`, `mojo/marrow_q2.py` | the same query in marrow: compiled Mojo, and marrow's Python frontend |
 
+## Flow 0.44.0 migration (2026-09-14)
+
+The service and benchmark now use Flow **0.44.0**. Fresh measurements and the
+migration checks are in [the migration report](results/flow-0.44.0.md), with full
+[100 MB](results/100MB.md) and [1 GB](results/1GB.md) CSV/Parquet matrices.
+The sections below retain the historical **0.43.0** measurements; they have not
+been relabeled as measurements of the new version.
+
 ## The corpus
 
 A synthetic `spans` corpus at the grain of the Flow service's `spans` dataset:

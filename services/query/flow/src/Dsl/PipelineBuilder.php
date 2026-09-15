@@ -13,7 +13,6 @@ use Flow\ETL\DataFrame\GroupedDataFrame;
 use Flow\ETL\Function\AggregatingFunction;
 use Flow\ETL\Function\ScalarFunction;
 use Flow\ETL\Function\WindowFunction;
-use Flow\ETL\Row\EntryReference;
 use Flow\ETL\Row\Reference;
 
 use function Flow\ETL\DSL\all;
@@ -392,8 +391,8 @@ final class PipelineBuilder
             'drop' => $frame->drop(...$this->references($step)),
             'dropDuplicates' => $frame->dropDuplicates(...$this->references($step)),
             'rename' => $this->rename($frame, $step),
-            'groupBy' => $frame->groupBy(...$this->references($step)),
-            'sortBy' => $frame->sortBy(...$this->references($step)),
+            'groupBy' => $frame->groupBy($this->references($step)),
+            'sortBy' => $frame->sortBy($this->references($step)),
             'filter' => $frame->filter($this->scalarFunction($step)),
             'limit' => $frame->limit($this->limit($step)),
             'withEntry' => $this->withEntry($frame, $step),
@@ -864,7 +863,9 @@ final class PipelineBuilder
         $keys = $this->known['__group_keys__'] ?? null;
         $this->known = \array_fill_keys(\array_merge(\is_array($keys) ? $keys : [], $produced), true);
 
-        return $frame->aggregate(...$aggregations);
+        return $frame instanceof GroupedDataFrame
+            ? $frame->aggregate(...$aggregations)
+            : $frame->aggregate($aggregations);
     }
 
     /**
@@ -1318,7 +1319,7 @@ final class PipelineBuilder
             $reference = $reference->as($node->alias);
         }
 
-        if ($node->order !== null && $reference instanceof EntryReference) {
+        if ($node->order !== null && $reference instanceof Reference) {
             $reference = $node->order === 'desc' ? $reference->desc() : $reference->asc();
         }
 

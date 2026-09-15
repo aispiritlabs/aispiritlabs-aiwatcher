@@ -50,11 +50,12 @@ export function TimeRange({
   onChange: (seconds: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Time range">
       <span className="mr-1 text-xs text-muted-foreground">last</span>
       {TIME_WINDOWS.map((option) => (
         <Button
           key={option.label}
+          aria-pressed={value === option.seconds}
           size="sm"
           variant={value === option.seconds ? 'default' : 'outline'}
           onClick={() => onChange(option.seconds)}

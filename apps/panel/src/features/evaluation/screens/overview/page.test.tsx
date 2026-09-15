@@ -8,6 +8,7 @@ const route = vi.hoisted(() => ({
   search: { report: 'candidate', baseline: 'failed' } as Record<string, unknown>,
 }));
 vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => {}, // Navigation guards are exercised with the real router in draft.test.tsx.
   Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
   getRouteApi: () => ({
     useSearch: () => route.search,

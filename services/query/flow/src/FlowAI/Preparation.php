@@ -59,6 +59,8 @@ final readonly class Preparation
                             : [],
                     ),
                     $state,
+                    $input,
+                    ($this->options['strategy'] ?? 'median') !== 'most_frequent',
                 ),
             ),
         };

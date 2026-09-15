@@ -100,3 +100,19 @@ executor in `aiwatcher-server/src/execution/`, Build mode's emitter and the ship
 content in the panel, seed variants, a `Dockerfile.query` target, CI's `query` matrix —
 is AW-3's phase 4, which added DuckDB, laid out task by task in
 [its job note](../../docs/specs/AW-3-datafusion-and-duckdb-as-query-and-curation-engines/03-job.md).
+
+### Flow 0.44.0
+
+The Flow engine and curation benchmark pin the 0.44 release line. The public query
+syntax still accepts variadic `groupBy`, `sortBy` and `aggregate`; the builder
+adapts those calls to the new array arguments. Custom statistics and preparation
+expressions declare return types and expression children. HTTP pages are typed
+before native JSON projection, preserving bounded pagination and dynamic hub fields.
+
+`equals` and `notEquals` are available after the upstream nullable-comparison fix;
+SQL comparisons against null produce unknown and are excluded by a filter. Use
+`isNull` explicitly when null should match. `call()` remains excluded even though
+Flow now accepts the callable as an expression. A sum of an all-null group is now
+null; the curation benchmark uses `coalesce(..., 0)` to match Polars' zero sum.
+
+See [the migration benchmark](../../benchmarks/curation/results/flow-0.44.0.md).

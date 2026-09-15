@@ -361,6 +361,7 @@ impl IngestToken {
     #[must_use]
     pub fn identity(&self) -> Identity {
         Identity {
+            issuer: None,
             subject: format!("token:{}", self.label),
             username: Some(self.label.clone()),
             name: None,
@@ -581,6 +582,32 @@ impl Authenticator {
         self.config.mode
     }
 
+    /// Bind a verified OIDC identity to IAM's provider/subject key. Call only
+    /// with an identity returned by this authenticator, never request JSON.
+    /// No IdP group, instance role, email or display name creates membership.
+    /// Legacy sessions must sign in again before they can enter scoped IAM.
+    pub fn iam_principal(&self, identity: &Identity) -> AuthResult<aiwatcher_iam::Principal> {
+        let issuer = self
+            .provider
+            .as_ref()
+            .map(|provider| provider.issuer.as_str());
+        if self.config.mode != AuthMode::Oidc
+            || issuer.is_none()
+            || identity.issuer.as_deref() != issuer
+            || !matches!(
+                identity.credential,
+                Credential::Session | Credential::Bearer
+            )
+            || identity
+                .expires_at
+                .is_none_or(|expires| expires <= time::OffsetDateTime::now_utc().unix_timestamp())
+        {
+            return Err(AuthError::Unauthenticated);
+        }
+        aiwatcher_iam::Principal::new(issuer.unwrap_or_default(), &identity.subject)
+            .map_err(|_| AuthError::Unauthenticated)
+    }
+
     #[must_use]
     pub fn cookie_name(&self) -> &str {
         &self.config.cookie_name
@@ -683,7 +710,23 @@ impl Authenticator {
         if let Some(session) =
             cookie_header.and_then(|raw| cookie::read(raw, &self.config.cookie_name))
         {
-            return self.signer.open::<Identity>(session);
+            let identity = self.signer.open::<Identity>(session)?;
+            // An issuer-bound session cannot be transplanted to a different
+            // provider even when two deployments share the signing secret.
+            // Older cookies stay compatible with the legacy API, but are
+            // deliberately refused by iam_principal until a new sign-in.
+            if identity.issuer.is_some()
+                && identity.issuer.as_deref()
+                    != self
+                        .provider
+                        .as_ref()
+                        .map(|provider| provider.issuer.as_str())
+            {
+                return Err(AuthError::Session(
+                    "the session belongs to another identity provider".into(),
+                ));
+            }
+            return Ok(identity);
         }
 
         // Before the ingest tokens and the JWT path, and recognised by its
@@ -757,9 +800,13 @@ impl Authenticator {
         credential: Credential,
         extra_groups: Option<Vec<String>>,
     ) -> AuthResult<Identity> {
+        let issuer = self.provider.as_ref().ok_or_else(|| {
+            AuthError::Configuration("no verified OIDC issuer is configured".into())
+        })?;
         let groups = extra_groups.unwrap_or_else(|| claims.groups(&self.config.groups_claim));
         let roles = self.config.roles.resolve(&claims.sub, &groups)?;
         Ok(Identity {
+            issuer: Some(issuer.issuer.clone()),
             subject: claims.sub,
             username: claims.preferred_username,
             name: claims.name,
@@ -881,9 +928,18 @@ impl Authenticator {
             groups = found;
         }
 
-        let identity = self.identity_from_claims(claims, Credential::Session, Some(groups))?;
+        let mut identity = self.identity_from_claims(claims, Credential::Session, Some(groups))?;
         let ttl = time::Duration::try_from(self.config.session_ttl)
             .unwrap_or_else(|_| time::Duration::hours(8));
+        // The ID token proved a sign-in; the new session has its own lifetime.
+        // IAM must not reject a valid eight-hour session when the original
+        // assertion's shorter lifetime ends. Bearer identities keep token exp.
+        identity.expires_at = Some(
+            time::OffsetDateTime::now_utc()
+                .unix_timestamp()
+                .checked_add(ttl.whole_seconds())
+                .ok_or_else(|| AuthError::Configuration("session lifetime is too large".into()))?,
+        );
         let session = self.seal_session(&identity, ttl)?;
 
         tracing::info!(

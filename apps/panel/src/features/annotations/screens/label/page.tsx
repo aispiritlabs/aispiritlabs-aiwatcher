@@ -1,6 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
-import { Check, MousePointer2, PenLine, Upload } from 'lucide-react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { getRouteApi, useBlocker } from '@tanstack/react-router';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  MousePointer2,
+  PenLine,
+  Redo2,
+  Undo2,
+  Upload,
+} from 'lucide-react';
 import * as React from 'react';
 import { z } from 'zod';
 import { searchSchema } from './search';
@@ -20,6 +29,7 @@ import type {
   Annotation,
   Geometry,
   ImageHead,
+  ImagePage,
   LabelClass,
   ReviewState,
   Split,
@@ -37,14 +47,22 @@ import {
   classOf,
   defaultAttributes,
   nextId,
-  sameAnnotations,
 } from '@/features/annotations/lib/annotations';
+import { useAnnotationHistory } from '@/features/annotations/lib/annotation-history';
+import { VirtualList } from '@/shared/components/virtual-list';
 import { rejectionDetails } from '@/shared/lib/rejection';
 import { RegistryDisabled, isRegistryDisabled } from '@/shared/components/registry-disabled';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/shared/components/ui/primitives';
 import { cn } from '@/shared/lib/utils';
 
 const routeApi = getRouteApi('/annotations/label');
+const imageContext = (image: string | undefined, revision: string | undefined) =>
+  JSON.stringify([image, revision]);
+function uniqueImages(pages: ImagePage[]): ImageHead[] {
+  const found = new Map<string, ImageHead>();
+  for (const page of pages) for (const head of page.images) found.set(head.image.image_id, head);
+  return [...found.values()];
+}
 
 /** `aiwatcher://blob/<sha>` → the route that serves those bytes. */
 function imageSrc(uri: string): string {
@@ -78,6 +96,14 @@ export function LabelPage() {
   if (projects.isError && isRegistryDisabled(projects.error)) {
     return <RegistryDisabled area="Annotations" />;
   }
+  if (projects.isError) {
+    return (
+      <EmptyState
+        title="Could not load annotation projects"
+        hint="The request failed. Reload to try again; existing projects have not been removed."
+      />
+    );
+  }
   if (projects.isLoading) {
     return (
       <div className="flex justify-center p-10">
@@ -95,7 +121,16 @@ export function LabelPage() {
       projectName={projectName}
       projects={available.map((project) => project.name)}
       search={search}
-      onSearch={(next) => navigate({ search: (previous) => ({ ...previous, ...next }) })}
+      onSearch={(next, options) =>
+        navigate({
+          ...options,
+          search: (previous) => ({
+            ...previous,
+            ...('image' in next || 'project' in next ? { revision: undefined } : {}),
+            ...next,
+          }),
+        })
+      }
       onInvalidate={() => {
         void queryClient.invalidateQueries({ queryKey: ['annotation-images', projectName] });
       }}
@@ -113,16 +148,18 @@ function Workspace({
   projectName: string;
   projects: string[];
   search: z.infer<typeof searchSchema>;
-  onSearch: (next: Partial<z.infer<typeof searchSchema>>) => void;
+  onSearch: (next: Partial<z.infer<typeof searchSchema>>, options?: { replace?: boolean }) => void;
   onInvalidate: () => void;
 }) {
   const queryClient = useQueryClient();
   const [tool, setTool] = React.useState<Tool>('select');
   const [activeClass, setActiveClass] = React.useState<string>('');
-  const [draft, setDraft] = React.useState<Annotation[] | null>(null);
+  const history = useAnnotationHistory();
+  const [canvasDraft, setCanvasDraft] = React.useState(false);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [linking, setLinking] = React.useState<string | null>(null);
   const [problems, setProblems] = React.useState<string[]>([]);
+  const savedRevision = React.useRef<string | undefined>(undefined);
 
   const project = useQuery({
     queryKey: ['annotation-project', projectName],
@@ -132,9 +169,11 @@ function Workspace({
     },
   });
 
-  const images = useQuery({
+  const images = useInfiniteQuery({
     queryKey: ['annotation-images', projectName, search.review, search.split, search.q],
-    queryFn: async () => {
+    initialPageParam: 0,
+    getNextPageParam: (page: ImagePage) => page.next_offset ?? undefined,
+    queryFn: async ({ pageParam }) => {
       const response = await listImages({
         throwOnError: true,
         query: {
@@ -142,22 +181,54 @@ function Workspace({
           review: search.review,
           split: search.split,
           search: search.q || undefined,
-          limit: 200,
+          limit: 50,
+          offset: pageParam,
         },
       });
       return response.data;
     },
   });
 
-  const imageId = search.image ?? images.data?.images[0]?.image.image_id;
+  const heads = React.useMemo(() => uniqueImages(images.data?.pages ?? []), [images.data]);
+  const imageId = search.image ?? heads[0]?.image.image_id;
+  const context = imageContext(imageId, search.revision);
+  const navigationContext = JSON.stringify([context, search.q, search.review, search.split]);
+  const activeNavigation = React.useRef<string | null>(navigationContext);
+  React.useEffect(() => {
+    activeNavigation.current = navigationContext;
+    return () => {
+      activeNavigation.current = null;
+    };
+  }, [navigationContext]);
+
+  // Pin the first selection so filtering/refetching never silently changes the canvas.
+  React.useEffect(() => {
+    if (!search.image && imageId)
+      onSearch({ project: projectName, image: imageId }, { replace: true });
+  }, [search.image, imageId, projectName, onSearch]);
+  const currentIndex = heads.findIndex((head) => head.image.image_id === imageId);
+  const previousImage = currentIndex > 0 ? heads[currentIndex - 1] : undefined;
+  const nextImage = currentIndex >= 0 ? heads[currentIndex + 1] : undefined;
+  const goNext = async () => {
+    if (nextImage) {
+      onSearch({ image: nextImage.image.image_id });
+      return;
+    }
+    if (!images.hasNextPage || currentIndex < 0 || images.isFetching) return;
+    const result = await images.fetchNextPage();
+    if (activeNavigation.current !== navigationContext || result.isError) return;
+    const loaded = uniqueImages(result.data?.pages ?? []);
+    const next = loaded[loaded.findIndex((head) => head.image.image_id === imageId) + 1];
+    if (next) onSearch({ image: next.image.image_id });
+  };
 
   const detail = useQuery({
-    queryKey: ['annotation-image', projectName, imageId],
+    queryKey: ['annotation-image', projectName, imageId, search.revision],
     enabled: Boolean(imageId),
     queryFn: async () => {
       const response = await getImage({
         throwOnError: true,
-        query: { project: projectName, image_id: imageId ?? '' },
+        query: { project: projectName, image_id: imageId ?? '', revision: search.revision },
       });
       return response.data;
     },
@@ -165,21 +236,25 @@ function Workspace({
 
   const classes: LabelClass[] = project.data?.schema.classes ?? [];
 
-  // The draft resets when a different image is opened, and starts from that
-  // image's accepted revision. Anything unsaved is lost, which is why saving
-  // is one keystroke away and the button says so.
   React.useEffect(() => {
-    setDraft(detail.data?.revision?.annotations ?? []);
+    if (detail.data) history.load(context, detail.data.revision?.annotations ?? []);
+  }, [context, detail.data, history.load]);
+  React.useEffect(() => {
+    savedRevision.current = undefined;
     setSelectedId(null);
     setLinking(null);
     setProblems([]);
-  }, [detail.data?.revision?.revision, imageId]);
+    setTool('select');
+    setCanvasDraft(false);
+  }, [imageId, search.revision]);
 
   React.useEffect(() => {
     if (!activeClass && classes[0]) setActiveClass(classes[0].name);
   }, [activeClass, classes]);
 
-  const annotations = draft ?? [];
+  const ready = history.context === context && Boolean(detail.data) && !detail.isError;
+  const annotations = ready ? history.present : [];
+  const setDraft = history.change;
   const selected = annotations.find((annotation) => annotation.id === selectedId) ?? null;
 
   const save = useMutation({
@@ -206,12 +281,21 @@ function Workspace({
         setSelectedId(null);
         setLinking(null);
       }
-      queryClient.setQueryData(['annotation-image', projectName, imageId], {
-        ...detail.data,
-        ...saved.head,
-        revision: saved.revision,
-      });
-      void queryClient.invalidateQueries({ queryKey: ['annotation-image', projectName, imageId] });
+      queryClient.setQueryData(
+        ['annotation-image', projectName, imageId, saved.revision.revision],
+        {
+          ...detail.data,
+          ...saved.head,
+          revision: saved.revision,
+        },
+      );
+      savedRevision.current = saved.revision.revision;
+      history.markSaved(
+        blocker.status === 'blocked' ? context : imageContext(imageId, saved.revision.revision),
+        saved.revision.annotations,
+      );
+      if (blocker.status !== 'blocked')
+        onSearch({ image: imageId, revision: saved.revision.revision });
       onInvalidate();
     },
     onError: (error) => setProblems(rejectionDetails(error)),
@@ -276,42 +360,6 @@ function Workspace({
     setSelectedId(id);
   };
 
-  React.useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if (event.key >= '1' && event.key <= '9') {
-        const definition = classes[Number(event.key) - 1];
-        if (definition) {
-          setActiveClass(definition.name);
-          setTool('draw');
-        }
-      } else if (event.key === 'd') {
-        setTool('draw');
-      } else if (event.key === 'v') {
-        setTool('select');
-      } else if (
-        event.key.toLowerCase() === 'a' &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        imageId &&
-        !save.isPending
-      ) {
-        event.preventDefault();
-        save.mutate(true);
-      } else if ((event.key === 'Delete' || event.key === 'x') && selectedId) {
-        setDraft(annotations.filter((annotation) => annotation.id !== selectedId));
-        setSelectedId(null);
-      } else if (event.key === 's' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        save.mutate(false);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [annotations, classes, imageId, save, selectedId]);
-
   const counts = React.useMemo(() => {
     const out: Record<string, number> = {};
     for (const annotation of annotations) {
@@ -332,12 +380,135 @@ function Workspace({
     return ids;
   }, [annotations, problems]);
 
-  const dirty = draft !== null && !sameAnnotations(draft, detail.data?.revision?.annotations ?? []);
+  const dirty = (history.context === context && history.dirty) || canvasDraft;
+  const blocker = useBlocker({
+    shouldBlockFn: ({ next }) => {
+      if (!dirty && !save.isPending && !review.isPending) return false;
+      const target = next.search as { image?: string; project?: string; revision?: string };
+      return (
+        next.pathname !== '/annotations/label' ||
+        (target.project ?? projectName) !== projectName ||
+        (target.image ?? imageId) !== imageId ||
+        (target.revision !== search.revision &&
+          !(savedRevision.current && target.revision === savedRevision.current))
+      );
+    },
+    enableBeforeUnload: dirty || save.isPending || review.isPending,
+    withResolver: true,
+  });
+
+  React.useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.altKey) return;
+      const key = event.key.toLowerCase();
+      const command = event.metaKey || event.ctrlKey;
+      if (command && ['s', 'z', 'y'].includes(key)) event.preventDefault();
+      if (save.isPending || review.isPending || !ready || blocker.status === 'blocked') return;
+      if (history.gesture) return;
+      if (command) {
+        if (canvasDraft || history.gesture) return;
+        if (key === 'z') {
+          event.shiftKey ? history.redo() : history.undo();
+          setSelectedId(null);
+          setLinking(null);
+          setProblems([]);
+        } else if (key === 'y') {
+          history.redo();
+          setSelectedId(null);
+          setLinking(null);
+          setProblems([]);
+        } else if (key === 's') save.mutate(false);
+        return;
+      }
+      if (event.key >= '1' && event.key <= '9') {
+        const definition = classes[Number(event.key) - 1];
+        if (definition) {
+          setActiveClass(definition.name);
+          setTool('draw');
+        }
+      } else if (event.key === 'd') {
+        setTool('draw');
+      } else if (event.key === 'v') {
+        setTool('select');
+      } else if (
+        event.key.toLowerCase() === 'a' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        imageId &&
+        !save.isPending &&
+        !canvasDraft &&
+        !history.gesture
+      ) {
+        event.preventDefault();
+        save.mutate(true);
+      } else if ((event.key === 'Delete' || event.key === 'x') && selectedId) {
+        setDraft(annotations.filter((annotation) => annotation.id !== selectedId));
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    annotations,
+    classes,
+    imageId,
+    save,
+    review.isPending,
+    selectedId,
+    ready,
+    canvasDraft,
+    history,
+    blocker.status,
+  ]);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div
+      className="flex flex-col gap-3"
+      inert={save.isPending || review.isPending}
+      aria-busy={save.isPending || review.isPending}
+    >
+      {blocker.status === 'blocked' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded border border-warning p-3 text-sm"
+        >
+          <span className="mr-auto">This image has unsaved changes.</span>
+          <Button
+            disabled={save.isPending || canvasDraft || Boolean(history.gesture) || !ready}
+            onClick={() => {
+              void save
+                .mutateAsync(false)
+                .then(() => blocker.proceed())
+                .catch(() => {});
+            }}
+          >
+            Save draft & leave
+          </Button>
+          <Button variant="outline" disabled={save.isPending} onClick={blocker.proceed}>
+            Discard & leave
+          </Button>
+          <Button variant="ghost" onClick={blocker.reset}>
+            Keep editing
+          </Button>
+        </div>
+      )}
+      {canvasDraft && (
+        <p role="status" className="text-xs text-warning">
+          Finish or cancel the current shape before saving. Leaving discards the unfinished shape.
+        </p>
+      )}
+      {search.revision && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Viewing saved revision <span className="font-mono">{search.revision}</span>. Acceptance is
+          a separate review action.
+        </p>
+      )}
       <header className="flex flex-wrap items-center gap-2">
         <select
+          aria-label="Annotation project"
           value={projectName}
           onChange={(event) => onSearch({ project: event.target.value, image: undefined })}
           className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
@@ -368,10 +539,11 @@ function Workspace({
       </header>
 
       <div className="grid gap-3 lg:grid-cols-[16rem_1fr_18rem]">
-        <Card className="flex max-h-[calc(100vh-12rem)] flex-col overflow-hidden">
-          <div className="flex flex-col gap-2 border-b border-border p-2">
+        <Card className="flex h-72 flex-col overflow-hidden lg:h-auto lg:max-h-[calc(100vh-12rem)]">
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border p-2">
             <input
-              defaultValue={search.q ?? ''}
+              aria-label="Search images"
+              value={search.q ?? ''}
               onChange={(event) => onSearch({ q: event.target.value || undefined })}
               placeholder="source, family, level…"
               className="rounded-md border border-border bg-background px-2 py-1 text-xs"
@@ -391,48 +563,123 @@ function Workspace({
               />
             </div>
           </div>
-          <ul className="flex-1 overflow-y-auto p-1">
-            {(images.data?.images ?? []).map((head) => (
-              <li key={head.image.image_id}>
-                <button
-                  type="button"
-                  onClick={() => onSearch({ image: head.image.image_id })}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-md p-1 text-left text-xs',
-                    head.image.image_id === imageId ? 'bg-accent' : 'hover:bg-accent/50',
-                  )}
-                >
-                  <img
-                    src={imageSrc(head.image.uri)}
-                    alt=""
-                    loading="lazy"
-                    className="h-10 w-10 shrink-0 rounded border border-border object-cover"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{head.image.group_id}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
-                      {head.image.level ?? head.image.source}
-                    </span>
+          {images.isLoading ? (
+            <p role="status" className="p-3 text-xs">
+              Loading images…
+            </p>
+          ) : null}
+          {images.isError ? (
+            <div role="alert" className="p-2 text-xs text-danger">
+              Could not load images.{' '}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void (images.isFetchNextPageError ? images.fetchNextPage() : images.refetch())
+                }
+              >
+                Retry images
+              </Button>
+            </div>
+          ) : null}
+          <VirtualList
+            key={JSON.stringify([search.q, search.review, search.split])}
+            items={heads}
+            estimateSize={56}
+            scrollToIndex={currentIndex >= 0 ? currentIndex : undefined}
+            className="min-h-0 flex-1 p-1"
+            keyOf={(head) => head.image.image_id}
+            renderRow={(head) => (
+              <button
+                type="button"
+                aria-label={`Open image ${head.image.group_id} (${head.image.image_id})`}
+                aria-current={head.image.image_id === imageId ? 'true' : undefined}
+                onClick={() => {
+                  if (head.image.image_id !== imageId) onSearch({ image: head.image.image_id });
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md p-1 text-left text-xs',
+                  head.image.image_id === imageId ? 'bg-accent' : 'hover:bg-accent/50',
+                )}
+              >
+                <img
+                  src={imageSrc(head.image.uri)}
+                  alt=""
+                  loading="lazy"
+                  className="h-10 w-10 shrink-0 rounded border border-border object-cover"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{head.image.group_id}</span>
+                  <span className="block truncate text-[10px] text-muted-foreground">
+                    {head.image.level ?? head.image.source}
                   </span>
-                  <Badge
-                    tone={REVIEW_TONES[head.review ?? 'draft']}
-                    className="px-1.5 py-0 text-[10px]"
-                  >
-                    {(head.review ?? 'draft').replace('_', ' ')}
-                  </Badge>
-                </button>
-              </li>
-            ))}
-            {images.data && images.data.images.length === 0 && (
-              <EmptyState
-                title="No images yet"
-                hint="Add one with Import, or register a URL through the API."
-              />
+                </span>
+                <Badge
+                  tone={REVIEW_TONES[head.review ?? 'draft']}
+                  className="px-1.5 py-0 text-[10px]"
+                >
+                  {(head.review ?? 'draft').replace('_', ' ')}
+                </Badge>
+              </button>
             )}
-          </ul>
+          />
+          {images.data && heads.length === 0 && (
+            <EmptyState
+              title={
+                search.q || search.review || search.split
+                  ? 'No images match these filters'
+                  : 'No images yet'
+              }
+              hint={
+                search.q || search.review || search.split
+                  ? 'Change the search or filters. The selected image remains open.'
+                  : 'Add one with Import, or register a URL through the API.'
+              }
+            />
+          )}
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border p-2 text-xs">
+            <span role="status">
+              {heads.length} loaded · {images.data?.pages[0]?.total ?? 0} matching
+            </span>
+            {images.hasNextPage ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={images.isFetching}
+                onClick={() => void images.fetchNextPage()}
+              >
+                {images.isFetchingNextPage ? 'Loading…' : 'Load more images'}
+              </Button>
+            ) : null}
+          </div>
         </Card>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex min-w-0 flex-col gap-2">
+          <nav aria-label="Image navigation" className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!previousImage}
+              onClick={() => previousImage && onSearch({ image: previousImage.image.image_id })}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Previous image
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                images.isFetching || (!nextImage && !(currentIndex >= 0 && images.hasNextPage))
+              }
+              onClick={() => void goNext()}
+            >
+              Next image <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+            <span className="min-w-0 break-all text-xs text-muted-foreground">
+              {imageId
+                ? `${detail.data?.image.group_id ?? imageId}${currentIndex >= 0 ? ` · ${currentIndex + 1} of ${images.data?.pages[0]?.total ?? heads.length}` : ' · outside the loaded results'}`
+                : 'No image selected'}
+            </span>
+          </nav>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex overflow-hidden rounded-md border border-border">
               <ToolButton active={tool === 'select'} onClick={() => setTool('select')} hotkey="v">
@@ -442,6 +689,36 @@ function Workspace({
                 <PenLine className="h-3.5 w-3.5" /> Draw
               </ToolButton>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Undo annotation change"
+              title="Undo (Ctrl/Cmd+Z)"
+              disabled={!ready || !history.canUndo || canvasDraft}
+              onClick={() => {
+                history.undo();
+                setSelectedId(null);
+                setLinking(null);
+                setProblems([]);
+              }}
+            >
+              <Undo2 className="h-3.5 w-3.5" /> Undo
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Redo annotation change"
+              title="Redo (Ctrl/Cmd+Shift+Z)"
+              disabled={!ready || !history.canRedo || canvasDraft}
+              onClick={() => {
+                history.redo();
+                setSelectedId(null);
+                setLinking(null);
+                setProblems([]);
+              }}
+            >
+              <Redo2 className="h-3.5 w-3.5" /> Redo
+            </Button>
             {detail.data && (
               <>
                 <Badge tone="neutral" className="px-2 py-0.5 text-[11px]">
@@ -464,14 +741,18 @@ function Workspace({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!imageId || save.isPending}
+                disabled={
+                  !imageId || !ready || save.isPending || canvasDraft || Boolean(history.gesture)
+                }
                 onClick={() => save.mutate(false)}
               >
                 Save draft
               </Button>
               <Button
                 size="sm"
-                disabled={!imageId || save.isPending}
+                disabled={
+                  !imageId || !ready || save.isPending || canvasDraft || Boolean(history.gesture)
+                }
                 onClick={() => save.mutate(true)}
               >
                 <Check className="h-3.5 w-3.5" /> Save &amp; accept
@@ -482,8 +763,23 @@ function Workspace({
             </div>
           </div>
 
-          {detail.data ? (
+          {detail.isError ? (
+            <Card className="p-3">
+              <EmptyState
+                title="Could not load this image revision"
+                hint="Check the image and revision link, or retry the request."
+              />
+              <Button size="sm" variant="outline" onClick={() => void detail.refetch()}>
+                Retry image
+              </Button>
+            </Card>
+          ) : detail.data && ready ? (
             <AnnotationCanvas
+              key={context}
+              disabled={save.isPending || review.isPending || blocker.status === 'blocked'}
+              onEditStart={history.begin}
+              onEditEnd={history.end}
+              onDraftChange={setCanvasDraft}
               src={imageSrc(detail.data.image.uri)}
               width={detail.data.image.width}
               height={detail.data.image.height}
@@ -504,7 +800,13 @@ function Workspace({
             />
           ) : (
             <Card className="flex h-[calc(100vh-16rem)] items-center justify-center">
-              <EmptyState title="Pick an image" hint="Or import one to start labelling." />
+              {imageId && detail.isPending ? (
+                <p role="status" className="text-sm text-muted-foreground">
+                  Loading image…
+                </p>
+              ) : (
+                <EmptyState title="Pick an image" hint="Or import one to start labelling." />
+              )}
             </Card>
           )}
 
@@ -593,6 +895,7 @@ function ToolButton({
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
         'flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors',
@@ -620,6 +923,7 @@ function FilterSelect({
 }) {
   return (
     <select
+      aria-label={placeholder === 'review' ? 'Review filter' : 'Split filter'}
       value={value ?? ''}
       onChange={(event) => onChange(event.target.value || undefined)}
       className="flex-1 rounded-md border border-border bg-background px-1.5 py-1 text-[11px]"

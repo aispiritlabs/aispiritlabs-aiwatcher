@@ -63,10 +63,11 @@ export function BlockInspector({
           <input
             value={block.title}
             onChange={(event) => onChange({ ...block, title: event.target.value })}
+            aria-label="Block title"
             placeholder="Untitled block"
             className="h-8 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 text-sm font-medium outline-none hover:border-border focus-visible:border-border"
           />
-          <Button variant="ghost" size="sm" onClick={onDelete} title="Remove this block">
+          <Button variant="ghost" size="sm" onClick={onDelete} title="Remove this block" aria-label="Remove this block">
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -273,22 +274,36 @@ function NotebookEditor({
     setParamsError(null);
   }, [spec.notebook]);
 
+  const source = draft ?? notebook.data?.source ?? '';
+  const latest = React.useRef({ source, spec, onChange });
+  latest.current = { source, spec, onChange };
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   const save = useMutation({
-    mutationFn: async () => saveNotebook(spec.notebook, draft ?? ''),
-    onSuccess: (saved) => {
-      setDraft(null);
-      onChange({ ...spec, revision: saved.revision });
+    mutationFn: async () => ({ saved: await saveNotebook(spec.notebook, source), submitted: source,
+      notebook: spec.notebook }),
+    onSuccess: ({ saved, submitted, notebook: name }) => {
+      queryClient.setQueryData(['ml-pipeline', 'notebook', name, saved.revision], saved);
       void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
+      if (!mounted.current || latest.current.spec.notebook !== name) return;
+      // Confirm only the submitted source, and retain settings changed while saving.
+      setDraft(latest.current.source === submitted ? null : latest.current.source);
+      latest.current.onChange({ ...latest.current.spec, revision: saved.revision });
     },
   });
 
-  const source = draft ?? notebook.data?.source ?? '';
   const copy = useMutation({
     mutationFn: (empty: boolean) => (empty ? createNotebook() : createNotebook(source)),
     onSuccess: (created) => {
-      setDraft(null);
-      onChange({ ...spec, notebook: created.name, revision: created.revision });
+      queryClient.setQueryData(['ml-pipeline', 'notebook', created.name, created.revision], created);
       void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
+      if (!mounted.current) return;
+      setDraft(null);
+      latest.current.onChange({ ...latest.current.spec, notebook: created.name, revision: created.revision });
     },
   });
   React.useEffect(() => {
@@ -319,7 +334,7 @@ function NotebookEditor({
         <Button
           size="sm"
           variant="outline"
-          disabled={dirty || copy.isPending}
+          disabled={dirty || copy.isPending || save.isPending}
           onClick={() => copy.mutate(true)}
         >
           New notebook
@@ -327,7 +342,7 @@ function NotebookEditor({
         <Button
           size="sm"
           variant="outline"
-          disabled={!source || copy.isPending || save.isPending}
+          disabled={!source || paramsError !== null || copy.isPending || save.isPending}
           onClick={() => copy.mutate(false)}
         >
           Save as copy
@@ -350,6 +365,8 @@ function NotebookEditor({
       >
         <textarea
           value={params}
+          disabled={copy.isPending}
+          aria-invalid={paramsError !== null}
           onChange={(event) => {
             setParams(event.target.value);
             try {
@@ -371,24 +388,29 @@ function NotebookEditor({
           )}
         />
       </Field>
-      {paramsError ? <p className="text-xs text-danger">{paramsError}</p> : null}
+      {paramsError ? <div className="flex flex-wrap items-center gap-2">
+        <p role="alert" className="text-xs text-danger">{paramsError}</p>
+        <Button size="sm" variant="ghost" disabled={copy.isPending} onClick={() => {
+          setParams(JSON.stringify(spec.params ?? {}, null, 2)); setParamsError(null);
+        }}>Discard invalid settings</Button>
+      </div> : null}
 
       <Field label="Code">
         <textarea
           value={source}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => setDraft(event.target.value === notebook.data?.source ? null : event.target.value)}
           spellCheck={false}
           rows={14}
-          disabled={notebook.isLoading || notebook.isError}
+          disabled={notebook.isLoading || notebook.isError || copy.isPending}
           className="id w-full resize-y rounded-md border border-border bg-transparent p-2 outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
         />
       </Field>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => save.mutate()} disabled={draft === null || save.isPending}>
+        <Button size="sm" onClick={() => save.mutate()} disabled={draft === null || save.isPending || copy.isPending || notebook.isLoading || notebook.isError}>
           {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />} Save notebook
         </Button>
         {draft !== null ? (
-          <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+          <Button size="sm" variant="ghost" disabled={save.isPending || copy.isPending} onClick={() => setDraft(null)}>
             Discard code edits
           </Button>
         ) : null}
@@ -396,7 +418,7 @@ function NotebookEditor({
           variant="outline"
           size="sm"
           onClick={() => void notebook.refetch()}
-          disabled={notebook.isFetching || dirty}
+          disabled={notebook.isFetching || dirty || save.isPending || copy.isPending}
         >
           <RefreshCw className="h-3.5 w-3.5" /> Reload
         </Button>
@@ -411,7 +433,8 @@ function NotebookEditor({
           </a>
         ) : null}
       </div>
-      {save.error ? <p className="text-xs text-danger">{save.error.message}</p> : null}
+      {dirty ? <p role="status" className="text-xs text-warning">Unsaved notebook changes.</p> : null}
+      {save.error ? <p role="alert" className="text-xs text-danger">{save.error.message}</p> : null}
 
       {notebook.data ? (
         <div className="flex flex-col gap-1">

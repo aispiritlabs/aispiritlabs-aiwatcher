@@ -21,6 +21,7 @@ const OPTIMIZATION = 'opt-7f3c2a9e1d4b';
 // The page reads its name and its selection from the URL. Holding them here is
 // the whole router as far as this page is concerned.
 vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => {}, // Navigation guards are exercised with the real router in draft.test.tsx.
   Link: ({ children }: { children: React.ReactNode }) => <a href="#link">{children}</a>,
   getRouteApi: () => ({
     useParams: () => ({ name: NAME }),

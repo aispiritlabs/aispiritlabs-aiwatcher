@@ -748,6 +748,29 @@ export const AttributeKind = {
  */
 export type AttributeKind = typeof AttributeKind[keyof typeof AttributeKind];
 
+export type AuditAction = {
+    organization: IamOrganization;
+    type: 'organization_created';
+} | {
+    change: IamChange;
+    command: IamCommand;
+    type: 'command_applied';
+};
+
+/**
+ * Successful administrative mutations only; committed with the state change.
+ */
+export type AuditEntry = {
+    action: AuditAction;
+    actor: IamPrincipal;
+    occurred_at: number;
+    organization: OrganizationId;
+    /**
+     * Monotonic within this organization; pagination resumes after this value.
+     */
+    sequence: number;
+};
+
 /**
  * Where identity comes from.
  */
@@ -867,21 +890,24 @@ export type BlockTemplatePage = {
 };
 
 /**
- * One point on the timeline.
+ * Current run statuses and observed calls, grouped by run start time.
+ * Token and call counts use the same retained completed spans as totals.
  */
 export type Bucket = {
     at: string;
     cached_tokens: number;
     /**
-     * What the bucket's runs reported they cost, landing where each run
-     * started, like its tokens.
+     * Reported cost of the same retained, filtered calls as the totals,
+     * attributed to the run's start like its tokens.
      */
     cost_usd?: number | null;
     failed: number;
     input_tokens: number;
     llm_calls: number;
     output_tokens: number;
+    running: number;
     runs: number;
+    succeeded: number;
     tool_calls: number;
 };
 
@@ -1865,6 +1891,10 @@ export type ConversationSummary = {
  */
 export type CorrelationId = string;
 
+export type CreateOrganization = {
+    name: string;
+};
+
 /**
  * How the caller proved who they are.
  *
@@ -1981,6 +2011,18 @@ export type DatasetRowsPage = {
 };
 
 /**
+ * Explicit sampling metadata, included in the immutable content identity.
+ * Preview is a bounded execution, not a random or representative sample.
+ */
+export type DatasetSample = {
+    mode: SampleMode;
+    /**
+     * IDs of stages whose output was truncated. Empty for an untruncated preview.
+     */
+    truncated_stages: Array<string>;
+};
+
+/**
  * One corpus.
  */
 export type DatasetSource = {
@@ -2066,6 +2108,7 @@ export type DatasetVersionSummary = {
     produced_by?: string | null;
     recipe?: string | null;
     row_count: number;
+    sample?: null | DatasetSample;
     version: string;
 };
 
@@ -4070,6 +4113,8 @@ export const GeometryKind = {
  */
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 
+export type GrantId = string;
+
 /**
  * A bar fitted without each fold of a calibration set and scored on that
  * fold, so every item is scored once by a bar that never saw it.
@@ -4352,6 +4397,136 @@ export type HumanInputSpec = {
     timeout_seconds?: number | null;
 };
 
+export type IamChange = 'Applied' | {
+    TeamCreated: IamTeam;
+} | {
+    ProjectCreated: IamProject;
+} | {
+    GrantCreated: IamGrant;
+};
+
+export type IamCommand = {
+    principal: IamPrincipal;
+    role: IamOrganizationRole;
+    type: 'set_member';
+} | {
+    principal: IamPrincipal;
+    type: 'remove_member';
+} | {
+    name: string;
+    type: 'create_team';
+} | {
+    team: TeamId;
+    type: 'delete_team';
+} | {
+    present: boolean;
+    principal: IamPrincipal;
+    team: TeamId;
+    type: 'set_team_member';
+} | {
+    name: string;
+    type: 'create_project';
+} | {
+    grantee: IamGrantee;
+    project: ProjectId;
+    role: IamProjectRole;
+    type: 'grant';
+    window: IamGrantWindow;
+} | {
+    grant: GrantId;
+    project: ProjectId;
+    type: 'revoke_grant';
+};
+
+/**
+ * Each independently active source remains visible. Expiring a workshop
+ * grant must not conceal a permanent source that still grants access.
+ */
+export type IamEffectiveGrant = {
+    grant: IamGrant;
+    role: IamProjectRole;
+};
+
+export type IamGrant = {
+    grantee: IamGrantee;
+    id: GrantId;
+    role: IamProjectRole;
+    scope: IamProjectScope;
+    window: IamGrantWindow;
+};
+
+/**
+ * Half-open intervals in Unix seconds: start inclusive, end exclusive.
+ * After edit_until a still-readable grant falls back to Viewer. No read_until
+ * means indefinite read access, even when the edit period has ended.
+ */
+export type IamGrantWindow = {
+    edit_until?: number | null;
+    read_until?: number | null;
+    valid_from: number;
+};
+
+export type IamGrantee = {
+    kind: 'user';
+    value: IamPrincipal;
+} | {
+    kind: 'team';
+    value: TeamId;
+};
+
+export type IamOrganization = {
+    id: OrganizationId;
+    name: string;
+};
+
+export const IamOrganizationRole = {
+    MEMBER: 'member',
+    ADMIN: 'admin',
+    OWNER: 'owner'
+} as const;
+
+export type IamOrganizationRole = typeof IamOrganizationRole[keyof typeof IamOrganizationRole];
+
+/**
+ * A stable provider namespace and its subject, compared exactly. Email and
+ * display names are deliberately absent; neither is an identity key.
+ */
+export type IamPrincipal = {
+    provider: string;
+    subject: string;
+};
+
+export type IamProject = {
+    name: string;
+    scope: IamProjectScope;
+};
+
+export type IamProjectAccess = {
+    evaluated_at: number;
+    grants: Array<IamEffectiveGrant>;
+    project: IamProject;
+    role: IamProjectRole;
+};
+
+export const IamProjectRole = {
+    VIEWER: 'viewer',
+    EDITOR: 'editor',
+    ADMIN: 'admin'
+} as const;
+
+export type IamProjectRole = typeof IamProjectRole[keyof typeof IamProjectRole];
+
+export type IamProjectScope = {
+    organization: OrganizationId;
+    project: ProjectId;
+};
+
+export type IamTeam = {
+    id: TeamId;
+    name: string;
+    organization: OrganizationId;
+};
+
 /**
  * An authenticated caller.
  */
@@ -4371,6 +4546,12 @@ export type Identity = {
      * input to the mapping rather than guessing at it.
      */
     groups?: Array<string>;
+    /**
+     * The verified OIDC issuer. Absent for older sessions and non-OIDC
+     * credentials; those cannot be converted into an IAM principal by
+     * guessing the provider currently configured on the instance.
+     */
+    issuer?: string | null;
     name?: string | null;
     /**
      * The worker queues this caller may claim attempts on.
@@ -5817,6 +5998,8 @@ export type OptimizationSummary = {
     variables_lost?: Array<string>;
 };
 
+export type OrganizationId = string;
+
 /**
  * Who drew a shape.
  *
@@ -6105,6 +6288,8 @@ export type ProgressRequest = {
     profiles?: Array<ProfileInput>;
     samples?: Array<SampleInput>;
 };
+
+export type ProjectId = string;
 
 export type ProjectPage = {
     projects: Array<AnnotationProject>;
@@ -6410,6 +6595,7 @@ export type PublishDatasetRequest = {
      * Saved recipe name, when the run came from one.
      */
     recipe?: string | null;
+    sample?: null | DatasetSample;
     source: string;
     window_seconds?: number | null;
 };
@@ -6486,7 +6672,7 @@ export type Published = {
 
 export type PublishedDataset = {
     /**
-     * False when this exact pipeline and exact ordered set of rows already existed.
+     * False when this exact output and sample classification already existed.
      */
     created: boolean;
     dataset: DatasetSummary;
@@ -7677,6 +7863,16 @@ export type SampleInput = {
     };
     step?: number | null;
 };
+
+/**
+ * Why a published version contains a limited output rather than a full run.
+ */
+export const SampleMode = { PREVIEW: 'preview', TRUNCATED: 'truncated' } as const;
+
+/**
+ * Why a published version contains a limited output rather than a full run.
+ */
+export type SampleMode = typeof SampleMode[keyof typeof SampleMode];
 
 /**
  * A point on a finer series — a learning rate, a gradient norm.
@@ -9039,6 +9235,8 @@ export const TargetKind = {
  * Which of the four a query names.
  */
 export type TargetKind = typeof TargetKind[keyof typeof TargetKind];
+
+export type TeamId = string;
 
 /**
  * A number a request has to look like.
@@ -11239,6 +11437,30 @@ export type SavePipelineResponses = {
 
 export type SavePipelineResponse = SavePipelineResponses[keyof SavePipelineResponses];
 
+export type GetPipelineRevisionData = {
+    body?: never;
+    path: {
+        name: string;
+        revision: string;
+    };
+    query?: never;
+    url: '/api/v1/curation-pipelines/{name}/revisions/{revision}';
+};
+
+export type GetPipelineRevisionErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetPipelineRevisionError = GetPipelineRevisionErrors[keyof GetPipelineRevisionErrors];
+
+export type GetPipelineRevisionResponses = {
+    200: CurationPipeline;
+};
+
+export type GetPipelineRevisionResponse = GetPipelineRevisionResponses[keyof GetPipelineRevisionResponses];
+
 export type BlockContextData = {
     body?: never;
     path: {
@@ -11571,6 +11793,29 @@ export type GetDatasetRowsResponses = {
 };
 
 export type GetDatasetRowsResponse = GetDatasetRowsResponses[keyof GetDatasetRowsResponses];
+
+export type PublishDatasetSampleData = {
+    body: PublishDatasetRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/dataset-samples';
+};
+
+export type PublishDatasetSampleErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishDatasetSampleError = PublishDatasetSampleErrors[keyof PublishDatasetSampleErrors];
+
+export type PublishDatasetSampleResponses = {
+    200: PublishedDataset;
+    201: PublishedDataset;
+};
+
+export type PublishDatasetSampleResponse = PublishDatasetSampleResponses[keyof PublishDatasetSampleResponses];
 
 export type ListDatasetsData = {
     body?: never;
@@ -13534,6 +13779,154 @@ export type GetExperimentResponses = {
 
 export type GetExperimentResponse = GetExperimentResponses[keyof GetExperimentResponses];
 
+export type OrganizationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/iam/organizations';
+};
+
+export type OrganizationsErrors = {
+    401: unknown;
+    501: unknown;
+};
+
+export type OrganizationsResponses = {
+    200: Array<IamOrganization>;
+};
+
+export type OrganizationsResponse = OrganizationsResponses[keyof OrganizationsResponses];
+
+export type CreateOrganizationData = {
+    body: CreateOrganization;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/iam/organizations';
+};
+
+export type CreateOrganizationErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type CreateOrganizationResponses = {
+    201: IamOrganization;
+};
+
+export type CreateOrganizationResponse = CreateOrganizationResponses[keyof CreateOrganizationResponses];
+
+export type AuditData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: {
+        after?: number;
+        limit?: number;
+    };
+    url: '/api/v1/iam/organizations/{organization}/audit';
+};
+
+export type AuditErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AuditResponses = {
+    200: Array<AuditEntry>;
+};
+
+export type AuditResponse = AuditResponses[keyof AuditResponses];
+
+export type ApplyData = {
+    body: IamCommand;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/commands';
+};
+
+export type ApplyErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type ApplyResponses = {
+    200: IamChange;
+};
+
+export type ApplyResponse = ApplyResponses[keyof ApplyResponses];
+
+export type ProjectsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/projects';
+};
+
+export type ProjectsErrors = {
+    401: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type ProjectsResponses = {
+    200: Array<IamProjectAccess>;
+};
+
+export type ProjectsResponse = ProjectsResponses[keyof ProjectsResponses];
+
+export type AccessData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+        project: ProjectId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/projects/{project}/access';
+};
+
+export type AccessErrors = {
+    401: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AccessResponses = {
+    200: IamProjectAccess;
+};
+
+export type AccessResponse = AccessResponses[keyof AccessResponses];
+
 export type LiveWebsocketData = {
     body?: never;
     path?: never;
@@ -13556,6 +13949,10 @@ export type GetMetricsData = {
          */
         window_seconds?: number | null;
         agent_id?: string | null;
+        /**
+         * Narrows LLM calls, tokens and LLM latency only; run, tool and step
+         * counters still cover all runs selected by the other filters.
+         */
         model?: string | null;
         conversation_id?: string | null;
         /**
@@ -13681,6 +14078,493 @@ export type SetModelLabelResponses = {
 };
 
 export type SetModelLabelResponse = SetModelLabelResponses[keyof SetModelLabelResponses];
+
+export type ProjectSearchBlockLibraryData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        search?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-library';
+};
+
+export type ProjectSearchBlockLibraryErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSearchBlockLibraryError = ProjectSearchBlockLibraryErrors[keyof ProjectSearchBlockLibraryErrors];
+
+export type ProjectSearchBlockLibraryResponses = {
+    200: BlockTemplatePage;
+};
+
+export type ProjectSearchBlockLibraryResponse = ProjectSearchBlockLibraryResponses[keyof ProjectSearchBlockLibraryResponses];
+
+export type ProjectSaveBlockTemplateData = {
+    body: SaveBlockTemplateRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-library';
+};
+
+export type ProjectSaveBlockTemplateErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSaveBlockTemplateError = ProjectSaveBlockTemplateErrors[keyof ProjectSaveBlockTemplateErrors];
+
+export type ProjectSaveBlockTemplateResponses = {
+    200: BlockTemplate;
+};
+
+export type ProjectSaveBlockTemplateResponse = ProjectSaveBlockTemplateResponses[keyof ProjectSaveBlockTemplateResponses];
+
+export type ProjectListPipelinesData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines';
+};
+
+export type ProjectListPipelinesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListPipelinesError = ProjectListPipelinesErrors[keyof ProjectListPipelinesErrors];
+
+export type ProjectListPipelinesResponses = {
+    200: PipelinePage;
+};
+
+export type ProjectListPipelinesResponse = ProjectListPipelinesResponses[keyof ProjectListPipelinesResponses];
+
+export type ProjectSavePipelineData = {
+    body: SavePipelineRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines';
+};
+
+export type ProjectSavePipelineErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    /**
+     * The blocks do not form a runnable chain
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSavePipelineError = ProjectSavePipelineErrors[keyof ProjectSavePipelineErrors];
+
+export type ProjectSavePipelineResponses = {
+    /**
+     * This exact revision already existed
+     */
+    200: SavedPipeline;
+    /**
+     * A new revision was stored
+     */
+    201: SavedPipeline;
+};
+
+export type ProjectSavePipelineResponse = ProjectSavePipelineResponses[keyof ProjectSavePipelineResponses];
+
+export type ProjectGetPipelineRevisionData = {
+    body?: never;
+    path: {
+        name: string;
+        revision: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curation-pipelines/{name}/revisions/{revision}';
+};
+
+export type ProjectGetPipelineRevisionErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetPipelineRevisionError = ProjectGetPipelineRevisionErrors[keyof ProjectGetPipelineRevisionErrors];
+
+export type ProjectGetPipelineRevisionResponses = {
+    200: CurationPipeline;
+};
+
+export type ProjectGetPipelineRevisionResponse = ProjectGetPipelineRevisionResponses[keyof ProjectGetPipelineRevisionResponses];
+
+export type ProjectListRecipesData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curations';
+};
+
+export type ProjectListRecipesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListRecipesError = ProjectListRecipesErrors[keyof ProjectListRecipesErrors];
+
+export type ProjectListRecipesResponses = {
+    200: RecipePage;
+};
+
+export type ProjectListRecipesResponse = ProjectListRecipesResponses[keyof ProjectListRecipesResponses];
+
+export type ProjectSaveRecipeData = {
+    body: SaveRecipeRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/curations';
+};
+
+export type ProjectSaveRecipeErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSaveRecipeError = ProjectSaveRecipeErrors[keyof ProjectSaveRecipeErrors];
+
+export type ProjectSaveRecipeResponses = {
+    /**
+     * This exact revision already existed
+     */
+    200: SavedRecipe;
+    /**
+     * A new revision was stored
+     */
+    201: SavedRecipe;
+};
+
+export type ProjectSaveRecipeResponse = ProjectSaveRecipeResponses[keyof ProjectSaveRecipeResponses];
+
+export type ProjectGetDatasetRowsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        name: string;
+        version?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+        search?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/dataset-rows';
+};
+
+export type ProjectGetDatasetRowsErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetDatasetRowsError = ProjectGetDatasetRowsErrors[keyof ProjectGetDatasetRowsErrors];
+
+export type ProjectGetDatasetRowsResponses = {
+    200: DatasetRowsPage;
+};
+
+export type ProjectGetDatasetRowsResponse = ProjectGetDatasetRowsResponses[keyof ProjectGetDatasetRowsResponses];
+
+export type ProjectPublishDatasetSampleData = {
+    body: PublishDatasetRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/dataset-samples';
+};
+
+export type ProjectPublishDatasetSampleErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishDatasetSampleError = ProjectPublishDatasetSampleErrors[keyof ProjectPublishDatasetSampleErrors];
+
+export type ProjectPublishDatasetSampleResponses = {
+    200: PublishedDataset;
+    201: PublishedDataset;
+};
+
+export type ProjectPublishDatasetSampleResponse = ProjectPublishDatasetSampleResponses[keyof ProjectPublishDatasetSampleResponses];
+
+export type ProjectListDatasetsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/datasets';
+};
+
+export type ProjectListDatasetsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListDatasetsError = ProjectListDatasetsErrors[keyof ProjectListDatasetsErrors];
+
+export type ProjectListDatasetsResponses = {
+    200: DatasetPage;
+};
+
+export type ProjectListDatasetsResponse = ProjectListDatasetsResponses[keyof ProjectListDatasetsResponses];
+
+export type ProjectPublishDatasetData = {
+    body: PublishDatasetRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/datasets';
+};
+
+export type ProjectPublishDatasetErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishDatasetError = ProjectPublishDatasetErrors[keyof ProjectPublishDatasetErrors];
+
+export type ProjectPublishDatasetResponses = {
+    /**
+     * This exact version already existed
+     */
+    200: PublishedDataset;
+    /**
+     * A new version was stored
+     */
+    201: PublishedDataset;
+};
+
+export type ProjectPublishDatasetResponse = ProjectPublishDatasetResponses[keyof ProjectPublishDatasetResponses];
 
 export type ListPromptsData = {
     body?: never;

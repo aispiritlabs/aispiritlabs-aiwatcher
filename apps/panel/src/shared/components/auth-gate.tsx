@@ -69,6 +69,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  if (config.isError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4" role="alert">
+        <p>Could not verify the sign-in configuration.</p>
+        <Button onClick={() => void config.refetch()}>Try again</Button>
+      </div>
+    );
+  }
+
   if (!enabled) return <>{children}</>;
 
   if (session.isError) {

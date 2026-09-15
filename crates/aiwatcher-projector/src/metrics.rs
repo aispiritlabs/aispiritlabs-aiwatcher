@@ -29,6 +29,8 @@ pub struct MetricsFilter {
     /// Only runs that started within this many seconds of now.
     pub window_seconds: Option<i64>,
     pub agent_id: Option<String>,
+    /// Narrows LLM calls, tokens and LLM latency only; run, tool and step
+    /// counters still cover all runs selected by the other filters.
     pub model: Option<String>,
     pub conversation_id: Option<String>,
     /// Buckets in the timeline. Clamped to 6..=200.
@@ -138,20 +140,23 @@ pub struct ToolBreakdown {
     pub latency: Percentiles,
 }
 
-/// One point on the timeline.
+/// Current run statuses and observed calls, grouped by run start time.
+/// Token and call counts use the same retained completed spans as totals.
 #[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
 pub struct Bucket {
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
     pub runs: u64,
+    pub succeeded: u64,
+    pub running: u64,
     pub failed: u64,
     pub llm_calls: u64,
     pub tool_calls: u64,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
-    /// What the bucket's runs reported they cost, landing where each run
-    /// started, like its tokens.
+    /// Reported cost of the same retained, filtered calls as the totals,
+    /// attributed to the run's start like its tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
 }
@@ -331,12 +336,30 @@ pub fn compute(
     // hour.
     let earliest = matching.iter().map(|run| run.started_at).min();
     let window_from = from.or(earliest).unwrap_or(now);
+    let mut timeline = empty_timeline(window_from, now, filter.buckets);
+    let width = (now - window_from).as_seconds_f64().max(1.0) / timeline.len() as f64;
 
     for run in &matching {
+        let offset = (run.started_at - window_from).as_seconds_f64();
+        let index =
+            ((offset / width).floor() as isize).clamp(0, timeline.len() as isize - 1) as usize;
+        let Some(bucket) = timeline.get_mut(index) else {
+            continue;
+        };
+        bucket.runs += 1;
         match run.status {
-            RunStatus::Succeeded => totals.succeeded += 1,
-            RunStatus::Failed => totals.failed += 1,
-            RunStatus::Running => totals.running += 1,
+            RunStatus::Succeeded => {
+                totals.succeeded += 1;
+                bucket.succeeded += 1;
+            }
+            RunStatus::Failed => {
+                totals.failed += 1;
+                bucket.failed += 1;
+            }
+            RunStatus::Running => {
+                totals.running += 1;
+                bucket.running += 1;
+            }
         }
         if let Some(duration) = run.duration_ms {
             run_latencies.push(duration as f64);
@@ -385,6 +408,11 @@ pub fn compute(
                     if cost.is_some() {
                         totals.costed_calls += 1;
                     }
+                    bucket.llm_calls += 1;
+                    bucket.input_tokens += input;
+                    bucket.output_tokens += output;
+                    bucket.cached_tokens += cached;
+                    add_cost(&mut bucket.cost_usd, cost);
                     llm_latencies.push(elapsed);
 
                     // Time to first token: the assembler records it as a span
@@ -425,6 +453,7 @@ pub fn compute(
                 }
                 genai::operation::EXECUTE_TOOL => {
                     totals.tool_calls += 1;
+                    bucket.tool_calls += 1;
                     tool_latencies.push(elapsed);
                     let name = string_attr(span, genai::TOOL_NAME)
                         .unwrap_or("unknown")
@@ -561,31 +590,26 @@ pub fn compute(
         by_model,
         by_tool,
         by_step,
-        timeline: timeline(&matching, spans, window_from, now, filter.buckets),
+        timeline,
     }
 }
 
-/// Bucket the runs across the window.
-///
-/// A run's tokens land in the bucket it *started* in, not the one each LLM call
-/// happened in. That keeps a run's cost attributable to one point on the chart;
-/// splitting it across buckets would make a long run look like several cheap
-/// ones.
-fn timeline(
-    runs: &[&RunSummary],
-    spans: &HashMap<String, Vec<CompletedSpan>>,
+/// Calls and tokens are attributed to the run's start, like its status.
+/// Filling these buckets in the totals fold keeps filters and span retention
+/// identical across the headline numbers, breakdowns and timeline.
+fn empty_timeline(
     from: OffsetDateTime,
     to: OffsetDateTime,
     requested: Option<usize>,
 ) -> Vec<Bucket> {
     let count = requested.unwrap_or(48).clamp(6, 200);
-    let span_seconds = (to - from).as_seconds_f64().max(1.0);
-    let width = span_seconds / count as f64;
-
-    let mut buckets: Vec<Bucket> = (0..count)
+    let width = (to - from).as_seconds_f64().max(1.0) / count as f64;
+    (0..count)
         .map(|index| Bucket {
             at: from + time::Duration::seconds_f64(width * index as f64),
             runs: 0,
+            succeeded: 0,
+            running: 0,
             failed: 0,
             llm_calls: 0,
             tool_calls: 0,
@@ -594,27 +618,7 @@ fn timeline(
             cached_tokens: 0,
             cost_usd: None,
         })
-        .collect();
-
-    for run in runs {
-        let offset = (run.started_at - from).as_seconds_f64();
-        let index = ((offset / width).floor() as isize).clamp(0, count as isize - 1) as usize;
-        let Some(bucket) = buckets.get_mut(index) else {
-            continue;
-        };
-        bucket.runs += 1;
-        if run.status == RunStatus::Failed {
-            bucket.failed += 1;
-        }
-        bucket.input_tokens += run.input_tokens;
-        bucket.output_tokens += run.output_tokens;
-        bucket.cached_tokens += run.cached_tokens;
-        add_cost(&mut bucket.cost_usd, run.cost_usd);
-        bucket.llm_calls += run.llm_calls;
-        bucket.tool_calls += run.tool_calls;
-        let _ = spans;
-    }
-    buckets
+        .collect()
 }
 
 #[cfg(test)]
@@ -747,6 +751,20 @@ mod tests {
         assert_eq!(summary.totals.failed, 1);
         assert_eq!(summary.totals.running, 1);
         assert_eq!(summary.window.runs_retained, 3);
+        for bucket in &summary.timeline {
+            assert_eq!(
+                bucket.runs,
+                bucket.succeeded + bucket.failed + bucket.running
+            );
+        }
+        assert_eq!(summary.timeline.iter().map(|b| b.succeeded).sum::<u64>(), 1);
+        assert_eq!(summary.timeline.iter().map(|b| b.failed).sum::<u64>(), 1);
+        assert_eq!(summary.timeline.iter().map(|b| b.running).sum::<u64>(), 1);
+        assert_eq!(
+            summary.timeline.iter().map(|b| b.input_tokens).sum::<i64>(),
+            0,
+            "evicted or unclosed spans supply no token evidence, just like totals"
+        );
     }
 
     #[test]
@@ -940,9 +958,13 @@ mod tests {
             ),
             run("b", RunStatus::Failed, datetime!(2026-08-27 18:20:30 UTC)),
         ];
+        let spans = HashMap::from([
+            ("a".to_owned(), vec![llm_span("a", "opus", 100, false)]),
+            ("b".to_owned(), vec![llm_span("b", "opus", 100, false)]),
+        ]);
         let summary = compute(
             &runs,
-            &HashMap::new(),
+            &spans,
             &MetricsFilter {
                 window_seconds: Some(600),
                 buckets: Some(10),
@@ -962,6 +984,142 @@ mod tests {
         assert_eq!(
             summary.timeline.iter().map(|b| b.input_tokens).sum::<i64>(),
             1600
+        );
+    }
+
+    #[test]
+    fn model_filter_keeps_timeline_totals_and_breakdowns_on_the_same_evidence() {
+        let runs = vec![
+            run(
+                "a",
+                RunStatus::Succeeded,
+                now() - time::Duration::minutes(5),
+            ),
+            run("b", RunStatus::Running, now()),
+        ];
+        let spans = HashMap::from([(
+            "a".to_owned(),
+            vec![
+                llm_span("a", "opus", 900, true),
+                llm_span("a", "haiku", 100, false),
+                tool_span("a", "search", 200, true),
+            ],
+        )]);
+        for model in [None, Some("opus"), Some("missing")] {
+            let summary = compute(
+                &runs,
+                &spans,
+                &MetricsFilter {
+                    model: model.map(str::to_owned),
+                    ..MetricsFilter::default()
+                },
+                5000,
+                now(),
+            );
+            assert_eq!(summary.totals.runs, 2, "model narrows LLM calls, not runs");
+            assert_eq!(
+                summary.totals.llm_calls,
+                match model {
+                    None => 2,
+                    Some("opus") => 1,
+                    _ => 0,
+                }
+            );
+            assert_eq!(
+                summary.timeline.iter().map(|b| b.input_tokens).sum::<i64>(),
+                summary.totals.input_tokens
+            );
+            assert_eq!(
+                summary
+                    .timeline
+                    .iter()
+                    .map(|b| b.output_tokens)
+                    .sum::<i64>(),
+                summary.totals.output_tokens
+            );
+            assert_eq!(
+                summary
+                    .timeline
+                    .iter()
+                    .map(|b| b.cached_tokens)
+                    .sum::<i64>(),
+                summary.totals.cached_tokens
+            );
+            assert_eq!(
+                summary.timeline.iter().map(|b| b.llm_calls).sum::<u64>(),
+                summary.totals.llm_calls
+            );
+            assert_eq!(
+                summary.timeline.iter().map(|b| b.tool_calls).sum::<u64>(),
+                summary.totals.tool_calls
+            );
+            assert_eq!(
+                summary.by_model.iter().map(|m| m.input_tokens).sum::<i64>(),
+                summary.totals.input_tokens
+            );
+            assert_eq!(
+                summary.timeline.last().expect("last bucket").running,
+                1,
+                "run at the right boundary is included once"
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_costs_follow_model_filters_and_span_retention_without_double_counting() {
+        let mut observed = run("a", RunStatus::Succeeded, now());
+        observed.cost_usd = Some(99.0); // Run totals must not be added to span costs.
+        let runs = vec![observed];
+        let mut opus = llm_span("a", "opus", 100, true);
+        opus.attributes.push(attr(own::usage::COST_USD, 0.25_f64));
+        let mut haiku = llm_span("a", "haiku", 100, true);
+        haiku.attributes.push(attr(own::usage::COST_USD, 0.5_f64));
+        let spans = HashMap::from([("a".to_owned(), vec![opus, haiku])]);
+        for (model, expected, calls) in [
+            (None, Some(0.75), 2),
+            (Some("opus"), Some(0.25), 1),
+            (Some("missing"), None, 0),
+        ] {
+            let summary = compute(
+                &runs,
+                &spans,
+                &MetricsFilter {
+                    model: model.map(str::to_owned),
+                    ..MetricsFilter::default()
+                },
+                5000,
+                now(),
+            );
+            assert_eq!(summary.totals.cost_usd, expected);
+            assert_eq!(summary.totals.costed_calls, calls);
+            let costs: Vec<_> = summary
+                .timeline
+                .iter()
+                .filter_map(|bucket| bucket.cost_usd)
+                .collect();
+            assert_eq!(costs, expected.into_iter().collect::<Vec<_>>());
+            assert_eq!(
+                summary
+                    .timeline
+                    .iter()
+                    .map(|bucket| bucket.runs)
+                    .sum::<u64>(),
+                1
+            );
+        }
+        let evicted = compute(
+            &runs,
+            &HashMap::new(),
+            &MetricsFilter::default(),
+            5000,
+            now(),
+        );
+        assert_eq!(evicted.totals.cost_usd, None);
+        assert!(
+            evicted
+                .timeline
+                .iter()
+                .all(|bucket| bucket.cost_usd.is_none())
         );
     }
 

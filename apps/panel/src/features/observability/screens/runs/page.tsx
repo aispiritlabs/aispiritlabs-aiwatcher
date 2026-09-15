@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, getRouteApi } from '@tanstack/react-router';
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from '@tanstack/react-table';
 import * as React from 'react';
@@ -147,23 +147,31 @@ export function RunsPage() {
   const navigate = routeApi.useNavigate();
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ['runs', search, windowSeconds],
-    queryFn: async () => {
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
       const response = await listRuns({
         query: {
+          before: pageParam,
           status: search.status,
           conversation_id: search.conversation_id,
           agent_id: search.agent_id,
           window_seconds: windowParam(windowSeconds),
         },
       });
-      if (response.error) throw new Error('failed to list runs');
+      if (!response.data) throw new Error('failed to list runs');
       return response.data;
     },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
 
-  const runs = React.useMemo(() => query.data?.runs ?? [], [query.data]);
+  const runs = React.useMemo(
+    () => Array.from(new Map(
+      (query.data?.pages.flatMap((page) => page.runs) ?? []).map((run) => [run.run_id, run]),
+    ).values()),
+    [query.data],
+  );
   const table = useReactTable({
     data: runs,
     columns,
@@ -176,7 +184,7 @@ export function RunsPage() {
         <div>
           <h1 className="text-lg font-semibold">Runs</h1>
           <p className="text-sm text-muted-foreground">
-            {query.data ? `${query.data.total_known} matching` : 'loading…'}
+            {query.data ? `${runs.length} loaded · ${query.data.pages[0]?.total_known ?? runs.length} matching` : 'loading…'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -221,7 +229,7 @@ export function RunsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
               {table.getHeaderGroups().map((group) => (
@@ -253,6 +261,11 @@ export function RunsPage() {
             </tbody>
           </table>
         </Card>
+      )}
+      {query.hasNextPage && (
+        <Button variant="outline" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+          {query.isFetchingNextPage ? 'Loading…' : 'Load more runs'}
+        </Button>
       )}
     </div>
   );

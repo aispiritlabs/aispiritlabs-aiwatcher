@@ -16,11 +16,9 @@ use function Flow\ETL\Adapter\Http\http_stop_when_empty_path;
 use function Flow\ETL\Adapter\Http\http_stop_when_max_results;
 use function Flow\ETL\DSL\array_expand;
 use function Flow\ETL\DSL\array_get;
-use function Flow\ETL\DSL\cast;
 use function Flow\ETL\DSL\data_frame;
 use function Flow\ETL\DSL\optional;
 use function Flow\ETL\DSL\ref;
-use function Flow\Types\DSL\type_array;
 
 /**
  * Every dataset a query can read, and how to turn one into a `DataFrame`.
@@ -189,9 +187,14 @@ final readonly class Catalog
             );
         }
 
+        $columns = [];
+        foreach ($dataset->columns as $column => $type) {
+            $columns[self::source($dataset, $column)] = $type;
+        }
+
         $frame = data_frame()
             ->read(from_http_paginated($this->client, $request, $pagination))
-            ->withEntry('__body', cast(ref('response_body'), type_array()))
+            ->transform(new DecodeResponse($dataset->rowsPath, $columns))
             ->withEntry('__row', array_expand(array_get(ref('__body'), $dataset->rowsPath)));
 
         if ($rowLimit !== null) {

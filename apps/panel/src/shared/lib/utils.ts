@@ -64,7 +64,11 @@ export function formatTime(iso: string | null | undefined): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime())
     ? '—'
-    : date.toLocaleTimeString(undefined, {
+    : date.toLocaleString(undefined, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        timeZoneName: 'short',
         hour12: false,
         hour: '2-digit',
         minute: '2-digit',

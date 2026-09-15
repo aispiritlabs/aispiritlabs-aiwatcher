@@ -11,6 +11,14 @@ use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error("IAM control plane is disabled (AIWATCHER_IAM_POSTGRES_URL)")]
+    IamDisabled,
+    #[error("IAM operation refused")]
+    IamForbidden,
+    #[error("IAM storage is unavailable")]
+    IamUnavailable,
+    #[error("an organization must retain at least one owner")]
+    IamLastOwner,
     #[error("evaluation: {0}")]
     Evaluation(#[from] aiwatcher_evaluation::EvaluationError),
     #[error("durable evaluations require an object store (AIWATCHER_PROMPT_STORE)")]
@@ -290,6 +298,10 @@ impl ApiError {
 
     fn parts(&self) -> (StatusCode, &'static str) {
         match self {
+            Self::IamDisabled => (StatusCode::NOT_IMPLEMENTED, "iam_disabled"),
+            Self::IamForbidden => (StatusCode::FORBIDDEN, "iam_forbidden"),
+            Self::IamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "iam_unavailable"),
+            Self::IamLastOwner => (StatusCode::CONFLICT, "iam_last_owner"),
             Self::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             Self::BadRequest(_) | Self::Core(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::IngestDisabled => (StatusCode::FORBIDDEN, "ingest_disabled"),
@@ -749,3 +761,19 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
+
+impl From<aiwatcher_iam::Error> for ApiError {
+    fn from(error: aiwatcher_iam::Error) -> Self {
+        use aiwatcher_iam::Error;
+        match error {
+            Error::NotFound => Self::NotFound("IAM resource".into()),
+            Error::Forbidden => Self::IamForbidden,
+            Error::LastOwner => Self::IamLastOwner,
+            Error::Invalid(message) => Self::BadRequest(message),
+            Error::Backend(_) | Error::Incompatible(_) => {
+                tracing::error!(%error, "IAM storage operation failed");
+                Self::IamUnavailable
+            }
+        }
+    }
+}

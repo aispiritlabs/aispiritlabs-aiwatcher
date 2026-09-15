@@ -49,6 +49,7 @@ import {
   type QueryResult,
 } from '@/shared/lib/query';
 import { cn, formatCount } from '@/shared/lib/utils';
+import { useUnsavedChanges } from '@/shared/lib/unsaved-changes';
 
 const routeApi = getRouteApi('/observability/query');
 
@@ -90,6 +91,18 @@ export function QueryPage() {
   const [written, setWritten] = React.useState<string | null>(search.q ?? null);
   const text = written ?? contentFor(engine)?.starterQuery ?? '';
   const pipeline = mode === 'build' ? built : text;
+  const currentText = React.useRef(text);
+  currentText.current = text;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  // History and incoming query links replace text only after the navigation
+  // guard has resolved. View/filter changes keep the local editor intact.
+  React.useEffect(() => setWritten(search.q ?? null), [search.q, search.writtenFor]);
+  const dirty = written !== null && written !== (search.q ?? contentFor(engine)?.starterQuery ?? '');
 
   // The engine the editor's text was written for. Text from a link is what the
   // link says, and Flow's when it says nothing; the starter and what Build hands
@@ -98,6 +111,13 @@ export function QueryPage() {
   // reads as the text being wrong.
   const writtenFor = written === null ? engine : linkedEngine(search.q, search.writtenFor, engine);
   const foreign = mode === 'write' ? writtenElsewhere(writtenFor, deployed) : null;
+  useUnsavedChanges({
+    dirty,
+    message: 'This query has changes that are not in its link yet.',
+    losesDraft: ({ next }) => next.routeId !== '/observability/query' ||
+      ((next.search.q !== search.q || next.search.writtenFor !== search.writtenFor) &&
+        !(next.search.q === currentText.current && next.search.writtenFor === writtenFor)),
+  });
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
@@ -124,7 +144,7 @@ export function QueryPage() {
       // Only `write` mode writes the text back: in `build` the URL already
       // holds the draft that produced it, and storing both would be two
       // representations of one query, free to disagree on the next reload.
-      if (mode === 'write') {
+      if (mounted.current && mode === 'write' && currentText.current === text) {
         void navigate({
           search: (previous) => ({ ...previous, q: text, writtenFor }),
           replace: true,
@@ -262,12 +282,13 @@ export function QueryPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <ModeToggle
               mode={mode}
-              onBuild={() => patch({ mode: 'build', q: undefined, writtenFor: undefined })}
+              onBuild={() => patch({ mode: 'build', q: written ?? undefined, writtenFor })}
               onWrite={() => {
                 // The compiled text becomes the written one, so nothing is
                 // lost crossing over — and `mode` is what makes it one-way.
-                setWritten(built);
-                patch({ mode: 'write', q: built, writtenFor: engine });
+                const next = written ?? built;
+                setWritten(next);
+                patch({ mode: 'write', q: next, writtenFor: written === null ? engine : writtenFor });
               }}
             />
             <WatchLive draft={draft} windowSeconds={windowSeconds} />
@@ -294,6 +315,7 @@ export function QueryPage() {
                   </p>
                 ) : null}
                 <textarea
+                  aria-label={`${ENGINE_LABEL[writtenFor]} query`}
                   value={text}
                   onChange={(event) => setWritten(event.target.value)}
                   onKeyDown={onKeyDown}
@@ -305,6 +327,8 @@ export function QueryPage() {
               </>
             )}
           </Card>
+
+          {dirty ? <p role="status" className="text-xs text-warning">Unsaved query changes. Run successfully to update the query link.</p> : null}
 
           <Diagnostics check={check.data} pending={check.isFetching} stale={settled !== pipeline} />
 

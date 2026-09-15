@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -59,7 +59,7 @@ describe('reading a schedule', () => {
     await waitFor(() => expect(hourBox().value).toBe('9'));
     // No refusal, and the form works: this is what most pipelines look like.
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(button(/^Save$/).disabled).toBe(false);
+    await waitFor(() => expect(button(/^Save$/).disabled).toBe(false));
     expect(screen.queryByRole('button', { name: /Forget/ })).toBeNull();
   });
 
@@ -139,6 +139,45 @@ describe('forgetting a schedule', () => {
 });
 
 describe('saving a schedule', () => {
+  it.each([false, true])('acknowledges only submitted settings (newer edit: %s)', async (newer) => {
+    serve([{ method: 'GET', path: SCHEDULE, answer: { status: 200, body: AT_SEVEN } }]);
+    const originalFetch = fetch;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', (input: Request | string, init?: RequestInit) =>
+      input instanceof Request && input.method === 'PUT'
+        ? new Promise<Response>((resolve) => { finish = resolve; }) : originalFetch(input, init));
+    const report = vi.fn();
+    render(withQueries(<ScheduleCard name="import" saved onDirtyChange={report} />));
+    await waitFor(() => expect(hourBox().value).toBe('7'));
+    fireEvent.change(hourBox(), { target: { value: '8' } });
+    await userEvent.click(button(/^Save$/));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    if (newer) fireEvent.change(hourBox(), { target: { value: '10' } });
+    await act(async () => finish(new Response(JSON.stringify(AT_SEVEN),
+      { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await waitFor(() => expect(button(/^Save$/).disabled).toBe(false));
+    expect(hourBox().value).toBe(newer ? '10' : '8');
+    expect(report).toHaveBeenLastCalledWith(newer);
+    if (newer) {
+      await userEvent.click(screen.getByRole('button', { name: 'Discard schedule changes' }));
+      expect(hourBox().value).toBe('8');
+      expect(report).toHaveBeenLastCalledWith(false);
+    }
+  });
+
+  it('keeps the form disabled until the first read completes', async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => { finish = resolve; }));
+    render(withQueries(<ScheduleCard name="import" saved />));
+    expect(hourBox().closest('fieldset')?.disabled).toBe(true);
+    expect(button(/^Save$/).disabled).toBe(true);
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    await act(async () => finish(new Response(JSON.stringify(AT_SEVEN),
+      { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await waitFor(() => expect(hourBox().value).toBe('7'));
+    expect(hourBox().closest('fieldset')?.disabled).toBe(false);
+  });
+
   it('reports the refusal with every problem the server named', async () => {
     serve([
       {
@@ -162,6 +201,7 @@ describe('saving a schedule', () => {
     render(withQueries(<ScheduleCard name="import" saved />));
     await waitFor(() => expect(hourBox().value).toBe('9'));
 
+    await waitFor(() => expect(button(/^Save$/).disabled).toBe(false));
     await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 
     await screen.findByText('the view block names no dataset');

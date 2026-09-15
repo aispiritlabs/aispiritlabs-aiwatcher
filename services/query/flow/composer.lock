@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "864d10e5e7e241b4306909e101e9545f",
+    "content-hash": "9be77748bc950abad9b65796e143b6fa",
     "packages": [
         {
             "name": "brick/math",
@@ -67,16 +67,16 @@
         },
         {
             "name": "flow-php/array-dot",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/array-dot.git",
-                "reference": "eb391d6fceca6ba5adf221e446660c98c9022740"
+                "reference": "0ab036aae6449e83f688a40e8bffc01a756dde0f"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/array-dot/zipball/eb391d6fceca6ba5adf221e446660c98c9022740",
-                "reference": "eb391d6fceca6ba5adf221e446660c98c9022740",
+                "url": "https://api.github.com/repos/flow-php/array-dot/zipball/0ab036aae6449e83f688a40e8bffc01a756dde0f",
+                "reference": "0ab036aae6449e83f688a40e8bffc01a756dde0f",
                 "shasum": ""
             },
             "require": {
@@ -110,32 +110,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/array-dot/issues",
-                "source": "https://github.com/flow-php/array-dot/tree/0.43.0"
+                "source": "https://github.com/flow-php/array-dot/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-05-22T09:44:19+00:00"
+            "time": "2026-09-12T13:05:51+00:00"
         },
         {
             "name": "flow-php/etl",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/etl.git",
-                "reference": "cf510520b0418a47192e5298e2927b93b2ec90b5"
+                "reference": "c5f8ce37b8b47bfad4d59d6f392c42a037dd6531"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/etl/zipball/cf510520b0418a47192e5298e2927b93b2ec90b5",
-                "reference": "cf510520b0418a47192e5298e2927b93b2ec90b5",
+                "url": "https://api.github.com/repos/flow-php/etl/zipball/c5f8ce37b8b47bfad4d59d6f392c42a037dd6531",
+                "reference": "c5f8ce37b8b47bfad4d59d6f392c42a037dd6531",
                 "shasum": ""
             },
             "require": {
@@ -149,8 +145,7 @@
                 "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
                 "psr/clock": "^1.0",
                 "psr/simple-cache": "^1.0 || ^2.0 || ^3.0",
-                "symfony/string": "^6.4 || ^7.4 || ^8.0",
-                "webmozart/glob": "^3.0 || ^4.0"
+                "symfony/string": "^6.4 || ^7.4 || ^8.0"
             },
             "require-dev": {
                 "ramsey/uuid": "^4.5",
@@ -187,32 +182,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/etl/issues",
-                "source": "https://github.com/flow-php/etl/tree/0.43.0"
+                "source": "https://github.com/flow-php/etl/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-08-10T13:25:53+00:00"
+            "time": "2026-09-14T10:12:25+00:00"
         },
         {
             "name": "flow-php/etl-adapter-csv",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/etl-adapter-csv.git",
-                "reference": "2fe9839a52325784a406ecca97294b81f6345a8e"
+                "reference": "780dd59794d7b273d307900dba7db8613bd9bffc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/etl-adapter-csv/zipball/2fe9839a52325784a406ecca97294b81f6345a8e",
-                "reference": "2fe9839a52325784a406ecca97294b81f6345a8e",
+                "url": "https://api.github.com/repos/flow-php/etl-adapter-csv/zipball/780dd59794d7b273d307900dba7db8613bd9bffc",
+                "reference": "780dd59794d7b273d307900dba7db8613bd9bffc",
                 "shasum": ""
             },
             "require": {
@@ -246,32 +237,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/etl-adapter-csv/issues",
-                "source": "https://github.com/flow-php/etl-adapter-csv/tree/0.43.0"
+                "source": "https://github.com/flow-php/etl-adapter-csv/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-07-27T12:31:55+00:00"
+            "time": "2026-09-12T15:46:48+00:00"
         },
         {
             "name": "flow-php/etl-adapter-http",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/etl-adapter-http.git",
-                "reference": "07f2c61d358e131b306b97d73c2a8875bf1d3856"
+                "reference": "11fcd140f8936a3eb0ad8ccb24b11969f3755fef"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/etl-adapter-http/zipball/07f2c61d358e131b306b97d73c2a8875bf1d3856",
-                "reference": "07f2c61d358e131b306b97d73c2a8875bf1d3856",
+                "url": "https://api.github.com/repos/flow-php/etl-adapter-http/zipball/11fcd140f8936a3eb0ad8ccb24b11969f3755fef",
+                "reference": "11fcd140f8936a3eb0ad8ccb24b11969f3755fef",
                 "shasum": ""
             },
             "require": {
@@ -311,32 +298,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/etl-adapter-http/issues",
-                "source": "https://github.com/flow-php/etl-adapter-http/tree/0.43.0"
+                "source": "https://github.com/flow-php/etl-adapter-http/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-07-24T17:02:31+00:00"
+            "time": "2026-09-12T10:06:59+00:00"
         },
         {
             "name": "flow-php/etl-adapter-parquet",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/etl-adapter-parquet.git",
-                "reference": "66c4637eb7be8a97887978f93bf102035e951688"
+                "reference": "b927d1835436375f079b87196a60b37e9c9da163"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/etl-adapter-parquet/zipball/66c4637eb7be8a97887978f93bf102035e951688",
-                "reference": "66c4637eb7be8a97887978f93bf102035e951688",
+                "url": "https://api.github.com/repos/flow-php/etl-adapter-parquet/zipball/b927d1835436375f079b87196a60b37e9c9da163",
+                "reference": "b927d1835436375f079b87196a60b37e9c9da163",
                 "shasum": ""
             },
             "require": {
@@ -371,40 +354,35 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/etl-adapter-parquet/issues",
-                "source": "https://github.com/flow-php/etl-adapter-parquet/tree/0.43.0"
+                "source": "https://github.com/flow-php/etl-adapter-parquet/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-08-07T14:16:01+00:00"
+            "time": "2026-09-12T15:46:50+00:00"
         },
         {
             "name": "flow-php/filesystem",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/filesystem.git",
-                "reference": "00f75f6d98cc7e462911a269620a63e01274fd24"
+                "reference": "a496d2f3a9449b8d3863036c3b4ecb1639ebd371"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/filesystem/zipball/00f75f6d98cc7e462911a269620a63e01274fd24",
-                "reference": "00f75f6d98cc7e462911a269620a63e01274fd24",
+                "url": "https://api.github.com/repos/flow-php/filesystem/zipball/a496d2f3a9449b8d3863036c3b4ecb1639ebd371",
+                "reference": "a496d2f3a9449b8d3863036c3b4ecb1639ebd371",
                 "shasum": ""
             },
             "require": {
                 "flow-php/telemetry": "self.version",
                 "flow-php/types": "self.version",
                 "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
-                "symfony/polyfill-mbstring": "^1.33",
-                "webmozart/glob": "^3.0 || ^4.0"
+                "symfony/polyfill-mbstring": "^1.33"
             },
             "type": "library",
             "autoload": {
@@ -435,32 +413,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/filesystem/issues",
-                "source": "https://github.com/flow-php/filesystem/tree/0.43.0"
+                "source": "https://github.com/flow-php/filesystem/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-07-29T13:55:36+00:00"
+            "time": "2026-09-13T19:35:01+00:00"
         },
         {
             "name": "flow-php/parquet",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/parquet.git",
-                "reference": "78dd2400aee447d2e123be6f8fd9fa97f4e8a742"
+                "reference": "e905fafb20080caaa6f30f894ee5182fd91471a3"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/parquet/zipball/78dd2400aee447d2e123be6f8fd9fa97f4e8a742",
-                "reference": "78dd2400aee447d2e123be6f8fd9fa97f4e8a742",
+                "url": "https://api.github.com/repos/flow-php/parquet/zipball/e905fafb20080caaa6f30f894ee5182fd91471a3",
+                "reference": "e905fafb20080caaa6f30f894ee5182fd91471a3",
                 "shasum": ""
             },
             "require": {
@@ -504,32 +478,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/parquet/issues",
-                "source": "https://github.com/flow-php/parquet/tree/0.43.0"
+                "source": "https://github.com/flow-php/parquet/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-07-29T13:27:28+00:00"
+            "time": "2026-09-12T15:46:49+00:00"
         },
         {
             "name": "flow-php/snappy",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/snappy.git",
-                "reference": "d42c40b627144033f844103ec5ae0c1f325314e1"
+                "reference": "426b1d14d487d370753756aafc012245c92ef254"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/snappy/zipball/d42c40b627144033f844103ec5ae0c1f325314e1",
-                "reference": "d42c40b627144033f844103ec5ae0c1f325314e1",
+                "url": "https://api.github.com/repos/flow-php/snappy/zipball/426b1d14d487d370753756aafc012245c92ef254",
+                "reference": "426b1d14d487d370753756aafc012245c92ef254",
                 "shasum": ""
             },
             "require": {
@@ -563,32 +533,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/snappy/issues",
-                "source": "https://github.com/flow-php/snappy/tree/0.43.0"
+                "source": "https://github.com/flow-php/snappy/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-06-04T17:28:33+00:00"
+            "time": "2026-09-12T10:06:56+00:00"
         },
         {
             "name": "flow-php/telemetry",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/telemetry.git",
-                "reference": "d65719862540fc1273fa47337f087706b02aa930"
+                "reference": "8f7bff67747ac353da71fc7958b29911e1bce4dc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/telemetry/zipball/d65719862540fc1273fa47337f087706b02aa930",
-                "reference": "d65719862540fc1273fa47337f087706b02aa930",
+                "url": "https://api.github.com/repos/flow-php/telemetry/zipball/8f7bff67747ac353da71fc7958b29911e1bce4dc",
+                "reference": "8f7bff67747ac353da71fc7958b29911e1bce4dc",
                 "shasum": ""
             },
             "require": {
@@ -621,32 +587,28 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/telemetry/issues",
-                "source": "https://github.com/flow-php/telemetry/tree/0.43.0"
+                "source": "https://github.com/flow-php/telemetry/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-08-10T13:25:58+00:00"
+            "time": "2026-09-12T10:06:56+00:00"
         },
         {
             "name": "flow-php/types",
-            "version": "0.43.0",
+            "version": "0.44.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/flow-php/types.git",
-                "reference": "8227fea6891137f2301683f39a368a741f0c9eec"
+                "reference": "ade3cb7d402ebf98409866062844c170233a1dae"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/flow-php/types/zipball/8227fea6891137f2301683f39a368a741f0c9eec",
-                "reference": "8227fea6891137f2301683f39a368a741f0c9eec",
+                "url": "https://api.github.com/repos/flow-php/types/zipball/ade3cb7d402ebf98409866062844c170233a1dae",
+                "reference": "ade3cb7d402ebf98409866062844c170233a1dae",
                 "shasum": ""
             },
             "require": {
@@ -675,19 +637,15 @@
             ],
             "support": {
                 "issues": "https://github.com/flow-php/types/issues",
-                "source": "https://github.com/flow-php/types/tree/0.43.0"
+                "source": "https://github.com/flow-php/types/tree/0.44.0"
             },
             "funding": [
                 {
                     "url": "https://flow-php.com/sponsor",
                     "type": "custom"
-                },
-                {
-                    "url": "https://github.com/norberttech",
-                    "type": "github"
                 }
             ],
-            "time": "2026-08-10T13:25:59+00:00"
+            "time": "2026-09-14T10:12:18+00:00"
         },
         {
             "name": "hi-folks/statistics",
@@ -2067,55 +2025,6 @@
                 }
             ],
             "time": "2026-07-28T07:33:02+00:00"
-        },
-        {
-            "name": "webmozart/glob",
-            "version": "4.7.0",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/webmozarts/glob.git",
-                "reference": "8a2842112d6916e61e0e15e316465b611f3abc17"
-            },
-            "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/webmozarts/glob/zipball/8a2842112d6916e61e0e15e316465b611f3abc17",
-                "reference": "8a2842112d6916e61e0e15e316465b611f3abc17",
-                "shasum": ""
-            },
-            "require": {
-                "php": "^7.3 || ^8.0.0"
-            },
-            "require-dev": {
-                "phpunit/phpunit": "^9.5",
-                "symfony/filesystem": "^5.3"
-            },
-            "type": "library",
-            "extra": {
-                "branch-alias": {
-                    "dev-master": "4.1-dev"
-                }
-            },
-            "autoload": {
-                "psr-4": {
-                    "Webmozart\\Glob\\": "src/"
-                }
-            },
-            "notification-url": "https://packagist.org/downloads/",
-            "license": [
-                "MIT"
-            ],
-            "authors": [
-                {
-                    "name": "Bernhard Schussek",
-                    "email": "bschussek@gmail.com"
-                }
-            ],
-            "description": "A PHP implementation of Ant's glob.",
-            "support": {
-                "issues": "https://github.com/webmozarts/glob/issues",
-                "source": "https://github.com/webmozarts/glob/tree/4.7.0"
-            },
-            "time": "2024-03-07T20:33:40+00:00"
         }
     ],
     "packages-dev": [

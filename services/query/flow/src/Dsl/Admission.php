@@ -90,6 +90,12 @@ final class Admission
      */
     public static function refuses(\ReflectionFunctionAbstract $callable): ?string
     {
+        // In 0.44 call() accepts an expression that evaluates to a callable.
+        // Its result type still identifies code invocation on both DSL surfaces.
+        if (self::returned($callable) === 'Flow\\ETL\\Function\\CallUserFunc') {
+            return 'it invokes a callable supplied by the query';
+        }
+
         foreach ($callable->getParameters() as $parameter) {
             foreach (self::types($parameter) as $type) {
                 $short = \strrchr($type, '\\');
