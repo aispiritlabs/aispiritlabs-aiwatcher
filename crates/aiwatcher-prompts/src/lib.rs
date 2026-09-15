@@ -20,6 +20,7 @@
 //! ADR_0011.
 
 pub mod adapters;
+mod scope;
 pub mod sigv4;
 mod version;
 
@@ -90,6 +91,9 @@ pub enum RegistryError {
 
     #[error("{value:?} is not a usable identifier: use letters, digits, '.', '_' and '-'")]
     InvalidIdentifier { value: String },
+
+    #[error("{0}")]
+    InvalidScope(&'static str),
 
     #[error(transparent)]
     Store(#[from] PortError),
@@ -277,16 +281,21 @@ pub struct PromptPage {
 }
 
 /// The registry.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Registry {
     store: Arc<dyn ObjectStore>,
     config: RegistryConfig,
+    scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl Registry {
     #[must_use]
     pub fn new(store: Arc<dyn ObjectStore>, config: RegistryConfig) -> Self {
-        Self { store, config }
+        Self {
+            store,
+            config,
+            scope: None,
+        }
     }
 
     #[must_use]
@@ -826,6 +835,7 @@ impl Registry {
     }
 
     async fn read_json<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        self.check_key(key)?;
         let Some(bytes) = self.store.get(key).await? else {
             return Ok(None);
         };
@@ -838,6 +848,7 @@ impl Registry {
     }
 
     async fn write_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.check_key(key)?;
         let body = serde_json::to_vec_pretty(value).map_err(|source| RegistryError::Corrupt {
             key: key.to_owned(),
             source,
@@ -856,7 +867,7 @@ impl Registry {
             .await?
             .into_iter()
             .map(|entry| entry.key)
-            .filter(|key| key.ends_with(".json"))
+            .filter(|key| key.starts_with(prefix) && key.ends_with(".json"))
             .collect();
         Ok(futures::stream::iter(keys)
             .map(|key| async move {

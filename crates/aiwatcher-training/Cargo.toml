@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-iam.workspace = true
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

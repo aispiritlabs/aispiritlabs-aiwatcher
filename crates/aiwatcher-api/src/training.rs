@@ -12,9 +12,7 @@
 //! request per epoch rather than four, and one place where a retry is made
 //! idempotent.
 
-use std::sync::Arc;
-
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -22,13 +20,13 @@ use serde::Deserialize;
 
 use aiwatcher_training::{
     FinishRunRequest, ModelDetail, ModelHead, ModelLabelRequest, ModelPage, ProgressRequest,
-    RegisterModelRequest, RegisteredModel, Registry, RunFilter, StartRunRequest, TrainingRun,
+    RegisterModelRequest, RegisteredModel, RunFilter, StartRunRequest, TrainingRun,
     TrainingRunPage, TrainingRunSummary, TrainingStatus,
 };
 
-use crate::auth::Caller;
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::training_scope::{TrainingPromote, TrainingRead, TrainingWrite};
 use utoipa::OpenApi;
 
 /// This module's operations, as the contract they satisfy.
@@ -53,50 +51,45 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/training-runs",
+            "/training-runs",
             get(list_training_runs).post(start_training_run),
         )
-        .route("/api/v1/training-runs/{run_id}", get(get_training_run))
+        .route("/training-runs/{run_id}", get(get_training_run))
         .route(
-            "/api/v1/training-runs/{run_id}/progress",
+            "/training-runs/{run_id}/progress",
             post(record_training_progress),
         )
-        .route(
-            "/api/v1/training-runs/{run_id}/finish",
-            post(finish_training_run),
-        )
-        .route("/api/v1/models", get(list_models).post(register_model))
-        .route("/api/v1/models/{name}", get(get_model))
-        .route("/api/v1/models/{name}/labels", post(set_model_label))
+        .route("/training-runs/{run_id}/finish", post(finish_training_run))
+        .route("/models", get(list_models).post(register_model))
+        .route("/models/{name}", get(get_model))
+        .route("/models/{name}/labels", post(set_model_label))
 }
 
-fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
-    state
-        .training
-        .as_ref()
-        .ok_or(ApiError::TrainingRegistryDisabled)
+#[derive(Deserialize)]
+struct RunPath {
+    run_id: String,
 }
-
-/// Writing here is an editor's. A trainer runs where nobody can complete an
-/// interactive sign-in, so it carries an ingest token — which is capped at
-/// editor for exactly this reason, and cannot promote anything to production
-/// because a *label* is the one write in this module that changes what a
-/// deployment loads.
-fn may_write(caller: &Caller) -> ApiResult<()> {
-    caller.require(aiwatcher_auth::Role::Editor).map(|_| ())
-}
-
-/// Moving a label is what changes which weights a service loads next. Same
-/// role as a rerun and a launch, and for the same reason: it is the write that
-/// reaches outside aiwatcher.
-fn may_promote(caller: &Caller) -> ApiResult<()> {
-    caller.require(aiwatcher_auth::Role::Admin).map(|_| ())
+#[derive(Deserialize)]
+struct ModelPath {
+    name: String,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -131,7 +124,7 @@ pub struct ModelVersionQuery {
     tag = "training",
 )]
 async fn list_training_runs(
-    State(state): State<AppState>,
+    TrainingRead(registry): TrainingRead,
     Query(query): Query<TrainingRunsQuery>,
 ) -> ApiResult<Json<TrainingRunPage>> {
     let filter = RunFilter {
@@ -140,9 +133,7 @@ async fn list_training_runs(
         dataset: query.dataset,
     };
     Ok(Json(
-        registry(&state)?
-            .runs(&filter, query.limit.unwrap_or(50))
-            .await?,
+        registry.runs(&filter, query.limit.unwrap_or(50)).await?,
     ))
 }
 
@@ -160,10 +151,10 @@ async fn list_training_runs(
     tag = "training",
 )]
 async fn get_training_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
+    TrainingRead(registry): TrainingRead,
+    Path(RunPath { run_id }): Path<RunPath>,
 ) -> ApiResult<Json<TrainingRun>> {
-    Ok(Json(registry(&state)?.run(&run_id).await?))
+    Ok(Json(registry.run(&run_id).await?))
 }
 
 /// Open a training run.
@@ -186,15 +177,11 @@ async fn get_training_run(
     tag = "training",
 )]
 async fn start_training_run(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: TrainingWrite,
     Json(request): Json<StartRunRequest>,
 ) -> ApiResult<(StatusCode, Json<TrainingRun>)> {
-    may_write(&caller)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(registry(&state)?.start(request).await?),
-    ))
+    let registry = write.authorize().await?;
+    Ok((StatusCode::CREATED, Json(registry.start(request).await?)))
 }
 
 /// One batch of progress: epochs, sampled points, checkpoints, profiles.
@@ -218,13 +205,12 @@ async fn start_training_run(
     tag = "training",
 )]
 async fn record_training_progress(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(run_id): Path<String>,
+    write: TrainingWrite,
+    Path(RunPath { run_id }): Path<RunPath>,
     Json(request): Json<ProgressRequest>,
 ) -> ApiResult<Json<TrainingRunSummary>> {
-    may_write(&caller)?;
-    let run = registry(&state)?.progress(&run_id, request).await?;
+    let registry = write.authorize().await?;
+    let run = registry.progress(&run_id, request).await?;
     Ok(Json(run.summary()))
 }
 
@@ -244,13 +230,12 @@ async fn record_training_progress(
     tag = "training",
 )]
 async fn finish_training_run(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(run_id): Path<String>,
+    write: TrainingWrite,
+    Path(RunPath { run_id }): Path<RunPath>,
     Json(request): Json<FinishRunRequest>,
 ) -> ApiResult<Json<TrainingRunSummary>> {
-    may_write(&caller)?;
-    let run = registry(&state)?.finish(&run_id, request).await?;
+    let registry = write.authorize().await?;
+    let run = registry.finish(&run_id, request).await?;
     Ok(Json(run.summary()))
 }
 
@@ -266,8 +251,8 @@ async fn finish_training_run(
     ),
     tag = "training",
 )]
-async fn list_models(State(state): State<AppState>) -> ApiResult<Json<ModelPage>> {
-    Ok(Json(registry(&state)?.models().await?))
+async fn list_models(TrainingRead(registry): TrainingRead) -> ApiResult<Json<ModelPage>> {
+    Ok(Json(registry.models().await?))
 }
 
 /// One model: its versions, its labels, and one version's record.
@@ -284,15 +269,11 @@ async fn list_models(State(state): State<AppState>) -> ApiResult<Json<ModelPage>
     tag = "training",
 )]
 async fn get_model(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
+    TrainingRead(registry): TrainingRead,
+    Path(ModelPath { name }): Path<ModelPath>,
     Query(query): Query<ModelVersionQuery>,
 ) -> ApiResult<Json<ModelDetail>> {
-    Ok(Json(
-        registry(&state)?
-            .model(&name, query.version.as_deref())
-            .await?,
-    ))
+    Ok(Json(registry.model(&name, query.version.as_deref()).await?))
 }
 
 /// Register what a run produced.
@@ -316,12 +297,11 @@ async fn get_model(
     tag = "training",
 )]
 async fn register_model(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: TrainingWrite,
     Json(request): Json<RegisterModelRequest>,
 ) -> ApiResult<(StatusCode, Json<RegisteredModel>)> {
-    may_write(&caller)?;
-    let registered = registry(&state)?.register_model(request).await?;
+    let registry = write.authorize().await?;
+    let registered = registry.register_model(request).await?;
     let status = if registered.created {
         StatusCode::CREATED
     } else {
@@ -333,7 +313,8 @@ async fn register_model(
 /// Point a label at a version.
 ///
 /// The one write here that changes what a service loads next, so it needs
-/// `admin` — and the one the registry itself can refuse: a version with no
+/// instance `admin` on legacy routes or project `admin` on scoped routes
+/// — and the one the registry itself can refuse: a version with no
 /// held-out measurement, or one trained on a dataset name nobody can
 /// reconstruct, is not promotable however much anybody wants it to be.
 #[utoipa::path(
@@ -352,11 +333,10 @@ async fn register_model(
     tag = "training",
 )]
 async fn set_model_label(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    TrainingPromote(write): TrainingPromote,
+    Path(ModelPath { name }): Path<ModelPath>,
     Json(request): Json<ModelLabelRequest>,
 ) -> ApiResult<Json<ModelHead>> {
-    may_promote(&caller)?;
-    Ok(Json(registry(&state)?.set_label(&name, request).await?))
+    let registry = write.authorize().await?;
+    Ok(Json(registry.set_label(&name, request).await?))
 }

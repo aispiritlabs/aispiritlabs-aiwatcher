@@ -17,6 +17,7 @@ mod registry;
 mod result;
 mod review;
 mod rubric;
+mod scope;
 mod scorecard;
 mod scoring;
 mod store;

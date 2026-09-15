@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-iam.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 hex.workspace = true

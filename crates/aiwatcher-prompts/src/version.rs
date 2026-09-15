@@ -9,6 +9,7 @@ pub(crate) async fn read(
     version: &PromptVersionId,
 ) -> Result<Option<PromptVersion>> {
     let key = registry.version_key(name, version);
+    registry.check_key(&key)?;
     let Some(bytes) = registry.store.get(&key).await? else {
         return Ok(None);
     };

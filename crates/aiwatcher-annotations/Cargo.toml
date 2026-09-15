@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-iam.workspace = true
 # The lease, the cursor, the shard and the content address a finished job is
 # named by, shared with the conversation archive's export. See ADR_0022.
 aiwatcher-jobs.workspace = true

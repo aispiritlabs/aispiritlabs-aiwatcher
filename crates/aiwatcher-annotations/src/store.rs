@@ -28,6 +28,7 @@ use crate::{Error, Result, digest};
 pub(crate) struct Backend {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl Backend {
@@ -35,7 +36,49 @@ impl Backend {
         Self {
             store,
             prefix: prefix.into().trim_matches('/').to_owned(),
+            scope: None,
         }
+    }
+
+    pub(crate) fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        if let Some(current) = self.scope {
+            return if current == scope {
+                Ok(self.clone())
+            } else {
+                Err(Error::Invalid(
+                    "registry is already bound to another project".into(),
+                ))
+            };
+        }
+        let backend = Self {
+            store: self.store.clone(),
+            prefix: format!(
+                "{}/scopes/{}/{}/registry",
+                self.prefix, scope.organization.0, scope.project.0
+            ),
+            scope: Some(scope),
+        };
+        backend.check_key(&backend.projects_prefix())?;
+        Ok(backend)
+    }
+
+    pub(crate) fn is_scoped(&self) -> bool {
+        self.scope.is_some()
+    }
+
+    /// Guard raw keys and listing prefixes, including legacy access paths.
+    fn check_key(&self, key: &str) -> Result<()> {
+        if !key.starts_with(&format!("{}/", self.prefix))
+            || key
+                .trim_end_matches('/')
+                .split('/')
+                .any(|part| matches!(part, "" | "." | "..") || part.contains('\\'))
+        {
+            return Err(Error::Invalid(
+                "object key escapes the annotation registry".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// A project's name, as a path segment.
@@ -146,8 +189,8 @@ impl Backend {
         format!("{}/imports/manifests/index.json", self.prefix)
     }
 
-    /// Blobs are keyed by content and shared across projects: the same plan
-    /// registered into two projects is one copy of the bytes.
+    /// Blobs are shared between annotation collections in this registry only.
+    /// Distinct IAM projects have separate copies even for identical bytes.
     pub(crate) fn blob_key(&self, image_id: &str) -> String {
         format!("{}/blobs/{image_id}", self.prefix)
     }
@@ -160,6 +203,7 @@ impl Backend {
         &self,
         key: &str,
     ) -> Result<Option<T>> {
+        self.check_key(key)?;
         let Some(body) = self.store.get(key).await? else {
             return Ok(None);
         };
@@ -172,6 +216,7 @@ impl Backend {
     }
 
     pub(crate) async fn write_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.check_key(key)?;
         let body = serde_json::to_vec(value).map_err(|error| Error::Corrupt {
             key: key.to_owned(),
             message: error.to_string(),
@@ -181,22 +226,30 @@ impl Backend {
     }
 
     pub(crate) async fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.check_key(key)?;
         Ok(self.store.get(key).await?)
     }
 
     pub(crate) async fn put_bytes(&self, key: &str, body: Vec<u8>) -> Result<()> {
+        self.check_key(key)?;
         self.store.put(key, body).await?;
         Ok(())
     }
 
     pub(crate) async fn keys(&self, prefix: &str) -> Result<Vec<String>> {
-        Ok(self
-            .store
-            .list(prefix)
-            .await?
-            .into_iter()
-            .map(|entry| entry.key)
-            .collect())
+        self.check_key(prefix)?;
+        let entries = self.store.list(prefix).await?;
+        let mut keys = Vec::with_capacity(entries.len());
+        for entry in entries {
+            self.check_key(&entry.key)?;
+            if !entry.key.starts_with(prefix) {
+                return Err(Error::Invalid(
+                    "store returned a key outside the requested prefix".into(),
+                ));
+            }
+            keys.push(entry.key);
+        }
+        Ok(keys)
     }
 }
 

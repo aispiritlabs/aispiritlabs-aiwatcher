@@ -21,6 +21,7 @@ impl Registry {
             ));
         }
         let key = self.model_version_key(name, version);
+        self.check_key(&key)?;
         let body = self
             .store
             .get(&key)

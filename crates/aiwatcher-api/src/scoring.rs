@@ -23,8 +23,8 @@
 use aiwatcher_auth::Role;
 use aiwatcher_core::ArtifactRef;
 use aiwatcher_evaluation::{
-    CalibrationRequest, CalibrationVersion, CohortRequest, DeclaredRun, DerivedCohort,
-    RecordedCatalog, ScoringRun, ScoringRunView,
+    CalibrationRequest, CalibrationVersion, DeclaredRun, RecordedCatalog, ScoringRun,
+    ScoringRunView,
 };
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
@@ -94,8 +94,6 @@ pub struct ScoringAccepted {
     start_scoring_run,
     take_calibration,
     get_calibration,
-    derive_cohort,
-    get_derived_cohort,
     get_scorer_catalog
 ))]
 struct Api;
@@ -103,7 +101,9 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    let mut api = Api::openapi();
+    api.merge(crate::cohorts::openapi());
+    api
 }
 
 pub fn router() -> Router<AppState> {
@@ -123,12 +123,8 @@ pub fn router() -> Router<AppState> {
             "/api/v1/evaluation-calibrations/{version}",
             get(get_calibration),
         )
-        .route("/api/v1/evaluation-cohorts", post(derive_cohort))
         .route("/api/v1/evaluation-scorers", get(get_scorer_catalog))
-        .route(
-            "/api/v1/evaluation-cohorts/{cases}",
-            get(get_derived_cohort),
-        )
+        .merge(crate::cohorts::router())
 }
 
 fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
@@ -392,52 +388,6 @@ async fn get_calibration(
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("calibration set {version}")))
-}
-
-/// Take a cohort from a dataset version this deployment owns.
-///
-/// The first `limit` cases of a version's split, as the owner holds them, with
-/// the three files a cohort pins derived here — so a declaration names them
-/// and nobody writes or stages them. Admitting the pair derives them again from
-/// the owner. A conversation corpus's cases are content, so an admin takes a
-/// cohort from one, as an admin reads its cases.
-#[utoipa::path(post, path = "/api/v1/evaluation-cohorts", request_body = CohortRequest,
-    responses((status = 200, body = DerivedCohort), (status = 400, body = crate::error::ErrorBody),
-    (status = 403, body = crate::error::ErrorBody), (status = 404, body = crate::error::ErrorBody),
-    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn derive_cohort(
-    State(state): State<AppState>,
-    caller: Caller,
-    Json(request): Json<CohortRequest>,
-) -> ApiResult<Json<DerivedCohort>> {
-    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
-    Ok(Json(
-        registry(&state)?
-            .clone()
-            .with_content_access(caller.require(Role::Admin).is_ok())
-            .derive_cohort(&request, &requester, now())
-            .await?,
-    ))
-}
-
-/// Where the cases under one digest were derived from, if this deployment
-/// derived them.
-#[utoipa::path(get, path = "/api/v1/evaluation-cohorts/{cases}",
-    params(("cases" = String, Path, description = "The digest of a cohort's cases")),
-    responses((status = 200, body = DerivedCohort), (status = 400, body = crate::error::ErrorBody),
-    (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
-    tag = "evaluation")]
-async fn get_derived_cohort(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(cases): Path<String>,
-) -> ApiResult<Json<DerivedCohort>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .derived_cohort(&cases)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("a cohort derived with cases {cases}")))
 }
 
 /// What the scorer service says it measures, as the work role last recorded it.

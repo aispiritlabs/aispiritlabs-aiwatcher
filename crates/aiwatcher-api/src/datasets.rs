@@ -44,77 +44,14 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let mut api = Api::openapi();
-    // Both route families execute these same handlers/extractors. Derive the
-    // scoped contract from the legacy operations so their bodies cannot drift.
-    for (path, mut item) in api.paths.paths.clone() {
-        for (operation, write) in [(&mut item.get, false), (&mut item.post, true)] {
-            let Some(operation) = operation else { continue };
-            operation.operation_id = operation
-                .operation_id
-                .take()
-                .map(|id| format!("project_{id}"));
-            let parameters = operation.parameters.get_or_insert_with(Vec::new);
-            for name in ["organization", "project"] {
-                parameters.push(
-                    utoipa::openapi::path::ParameterBuilder::new()
-                        .name(name)
-                        .parameter_in(utoipa::openapi::path::ParameterIn::Path)
-                        .required(utoipa::openapi::Required::True)
-                        .schema(Some(
-                            utoipa::openapi::ObjectBuilder::new()
-                                .schema_type(utoipa::openapi::Type::String)
-                                .format(Some(utoipa::openapi::SchemaFormat::KnownFormat(
-                                    utoipa::openapi::KnownFormat::Uuid,
-                                ))),
-                        ))
-                        .build(),
-                );
-            }
-            if write {
-                parameters.push(
-                    utoipa::openapi::path::ParameterBuilder::new()
-                        .name("X-AIWatcher-IAM")
-                        .parameter_in(utoipa::openapi::path::ParameterIn::Header)
-                        .required(utoipa::openapi::Required::True)
-                        .description(Some("Required value: 1"))
-                        .schema(Some(
-                            utoipa::openapi::ObjectBuilder::new()
-                                .schema_type(utoipa::openapi::Type::String),
-                        ))
-                        .build(),
-                );
-            }
-            for status in ["401", "403", "404", "503"] {
-                operation
-                    .responses
-                    .responses
-                    .entry(status.into())
-                    .or_insert_with(|| {
-                        utoipa::openapi::ResponseBuilder::new()
-                            .description("Current project authorization failed or is unavailable")
-                            .build()
-                            .into()
-                    });
-            }
-        }
-        api.paths.paths.insert(
-            path.replacen(
-                "/api/v1",
-                "/api/v1/orgs/{organization}/projects/{project}",
-                1,
-            ),
-            item,
-        );
-    }
-    api
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
     Router::new().nest("/api/v1", resource_router()).nest(
         "/api/v1/orgs/{organization}/projects/{project}",
         resource_router()
-            .layer(axum::Extension(crate::dataset_scope::ScopedRoute))
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
             .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
                 axum::http::header::CACHE_CONTROL,
                 axum::http::HeaderValue::from_static("no-store"),

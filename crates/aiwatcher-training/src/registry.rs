@@ -1,6 +1,7 @@
 //! The object-store side: key layout, the accumulate-in-place write, and the
 //! two caps that keep a six-hour run one readable object.
 
+mod scope;
 mod version;
 
 use std::collections::BTreeMap;
@@ -29,6 +30,7 @@ use crate::{
 pub struct Registry {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl Registry {
@@ -37,6 +39,7 @@ impl Registry {
         Self {
             store,
             prefix: prefix.into().trim_matches('/').to_owned(),
+            scope: None,
         }
     }
 
@@ -356,6 +359,7 @@ impl Registry {
     pub async fn set_label(&self, name: &str, request: ModelLabelRequest) -> Result<ModelHead> {
         validate_slug(name, "a model name")?;
         validate_slug(&request.label, "a label")?;
+        validate_slug(&request.version, "a model version")?;
         let version: ModelVersion = self
             .read_json(&self.model_version_key(name, &request.version))
             .await?
@@ -402,6 +406,7 @@ impl Registry {
         });
         let current = match wanted {
             Some(version) => {
+                validate_slug(&version, "a model version")?;
                 self.read_json::<ModelVersion>(&self.model_version_key(name, &version))
                     .await?
             }
@@ -428,7 +433,9 @@ impl Registry {
                 limit: MAX_RUN_BYTES,
             });
         }
-        self.store.put(&self.run_key(&run.run_id), body).await?;
+        let key = self.run_key(&run.run_id);
+        self.check_key(&key)?;
+        self.store.put(&key, body).await?;
         self.write_json(&self.run_summary_key(&run.run_id), &run.summary())
             .await
     }
@@ -458,6 +465,7 @@ impl Registry {
     }
 
     async fn read_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        self.check_key(key)?;
         let Some(body) = self.store.get(key).await? else {
             return Ok(None);
         };
@@ -470,6 +478,7 @@ impl Registry {
     }
 
     async fn write_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.check_key(key)?;
         let body = serde_json::to_vec(value).map_err(|error| Error::Corrupt {
             key: key.to_owned(),
             message: error.to_string(),

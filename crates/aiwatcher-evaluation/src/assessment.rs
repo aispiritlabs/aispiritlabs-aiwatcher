@@ -249,6 +249,7 @@ pub(crate) async fn rubric_version(
     name: &str,
     version: &str,
 ) -> Result<Option<RubricVersion>> {
+    crate::scope::component(version, "rubric_version")?;
     store.read(&store::rubric_version(name, version)).await
 }
 
@@ -423,8 +424,8 @@ pub(crate) async fn history(
     before: Option<u32>,
     limit: Option<u32>,
 ) -> Result<AssessmentHistory> {
-    text(target_id, "target_id")?;
-    text(standing, "standing_id")?;
+    crate::scope::component(target_id, "target_id")?;
+    crate::scope::component(standing, "standing_id")?;
     let limit = limit.unwrap_or(HISTORY_PAGE);
     require(
         (1..=MAX_HISTORY_PAGE).contains(&limit),

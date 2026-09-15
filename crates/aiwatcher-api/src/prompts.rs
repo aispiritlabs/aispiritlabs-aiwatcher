@@ -1,9 +1,8 @@
 //! The prompt registry's HTTP surface.
 //!
-//! The only routes in this API that write something durable other than an
-//! event. Everything else here reads a projection of the log; these read and
-//! write an object store, because a prompt has to outlive the runs that used
-//! it — see `aiwatcher_prompts`.
+//! These routes read and write an object store, because a prompt has to
+//! outlive the runs that used it. The legacy and project families share
+//! handlers; the extractors select authorized storage before any access.
 //!
 //! Two shapes are worth noticing:
 //!
@@ -16,9 +15,7 @@
 //!   with a `label` is the shorthand for doing both at once, which is what a
 //!   first publish wants.
 
-use std::sync::Arc;
-
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -26,12 +23,10 @@ use serde::{Deserialize, Serialize};
 use aiwatcher_core::prompts::{
     OptimizationRecord, PromptHead, PromptName, PromptVersion, PromptVersionId,
 };
-use aiwatcher_prompts::{
-    OptimizationRequest, PromptFilter, PromptPage, PublishRequest, Published, Registry,
-};
+use aiwatcher_prompts::{OptimizationRequest, PromptFilter, PromptPage, PublishRequest, Published};
 
-use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::prompt_scope::{PromptRead, PromptWrite};
 use crate::state::AppState;
 use utoipa::OpenApi;
 
@@ -56,45 +51,56 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/prompts", get(list_prompts).post(publish_prompt))
-        .route("/api/v1/prompts/{name}", get(get_prompt))
+        .route("/prompts", get(list_prompts).post(publish_prompt))
+        .route("/prompts/{name}", get(get_prompt))
         .route(
-            "/api/v1/prompts/{name}/versions/{version_id}",
+            "/prompts/{name}/versions/{version_id}",
             get(get_prompt_version),
         )
+        .route("/prompts/{name}/labels/{label}", put(set_prompt_label))
+        .route("/prompts/{name}/optimizations", post(record_optimization))
         .route(
-            "/api/v1/prompts/{name}/labels/{label}",
-            put(set_prompt_label),
-        )
-        .route(
-            "/api/v1/prompts/{name}/optimizations",
-            post(record_optimization),
-        )
-        .route(
-            "/api/v1/prompts/{name}/optimizations/{optimization_id}",
+            "/prompts/{name}/optimizations/{optimization_id}",
             get(get_optimization),
         )
-        .route("/api/v1/prompts/{name}/rebuild", post(rebuild_prompt))
+        .route("/prompts/{name}/rebuild", post(rebuild_prompt))
 }
 
-/// Authoring a prompt is an editor's job, not a viewer's.
-///
-/// Every write in this module goes through here rather than each handler
-/// naming the role, because they are one decision: the registry is the one
-/// store aiwatcher keeps that outlives retention, so what is written into it
-/// is still there long after the run that used it has been evicted.
-fn may_author(caller: &Caller) -> ApiResult<()> {
-    caller.require(aiwatcher_auth::Role::Editor).map(|_| ())
+#[derive(Deserialize)]
+struct PromptPath {
+    name: String,
 }
-
-/// The registry, or a 501 explaining that this deployment has none.
-fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
-    state.prompts.as_ref().ok_or(ApiError::RegistryDisabled)
+#[derive(Deserialize)]
+struct VersionPath {
+    name: String,
+    version_id: String,
+}
+#[derive(Deserialize)]
+struct LabelPath {
+    name: String,
+    label: String,
+}
+#[derive(Deserialize)]
+struct OptimizationPath {
+    name: String,
+    optimization_id: String,
 }
 
 /// A path segment, as a validated name.
@@ -129,10 +135,10 @@ pub struct PromptDetail {
     tag = "prompts",
 )]
 async fn list_prompts(
-    State(state): State<AppState>,
+    PromptRead(registry): PromptRead,
     Query(filter): Query<PromptFilter>,
 ) -> ApiResult<Json<PromptPage>> {
-    Ok(Json(registry(&state)?.list(&filter).await?))
+    Ok(Json(registry.list(&filter).await?))
 }
 
 /// Publish a version.
@@ -154,12 +160,11 @@ async fn list_prompts(
     tag = "prompts",
 )]
 async fn publish_prompt(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: PromptWrite,
     Json(request): Json<PublishRequest>,
 ) -> ApiResult<(axum::http::StatusCode, Json<Published>)> {
-    may_author(&caller)?;
-    let published = registry(&state)?.publish(request).await?;
+    let registry = write.authorize().await?;
+    let published = registry.publish(request).await?;
     let status = if published.created {
         axum::http::StatusCode::CREATED
     } else {
@@ -181,10 +186,9 @@ async fn publish_prompt(
     tag = "prompts",
 )]
 async fn get_prompt(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
+    PromptRead(registry): PromptRead,
+    Path(PromptPath { name }): Path<PromptPath>,
 ) -> ApiResult<Json<PromptDetail>> {
-    let registry = registry(&state)?;
     let name = name_of(&name)?;
     let head = registry
         .head(&name)
@@ -213,12 +217,12 @@ async fn get_prompt(
     tag = "prompts",
 )]
 async fn get_prompt_version(
-    State(state): State<AppState>,
-    Path((name, version_id)): Path<(String, String)>,
+    PromptRead(registry): PromptRead,
+    Path(VersionPath { name, version_id }): Path<VersionPath>,
 ) -> ApiResult<Json<PromptVersion>> {
     let name = name_of(&name)?;
     let version = version_of(&version_id)?;
-    registry(&state)?
+    registry
         .version(&name, &version)
         .await?
         .map(Json)
@@ -250,15 +254,14 @@ pub struct LabelRequest {
     tag = "prompts",
 )]
 async fn set_prompt_label(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path((name, label)): Path<(String, String)>,
+    write: PromptWrite,
+    Path(LabelPath { name, label }): Path<LabelPath>,
     Json(request): Json<LabelRequest>,
 ) -> ApiResult<Json<PromptHead>> {
-    may_author(&caller)?;
+    let registry = write.authorize().await?;
     let name = name_of(&name)?;
     Ok(Json(
-        registry(&state)?
+        registry
             .set_label(&name, &label, &request.version_id)
             .await?,
     ))
@@ -285,16 +288,13 @@ async fn set_prompt_label(
     tag = "prompts",
 )]
 async fn record_optimization(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    write: PromptWrite,
+    Path(PromptPath { name }): Path<PromptPath>,
     Json(request): Json<OptimizationRequest>,
 ) -> ApiResult<(axum::http::StatusCode, Json<OptimizationRecord>)> {
-    may_author(&caller)?;
+    let registry = write.authorize().await?;
     let name = name_of(&name)?;
-    let record = registry(&state)?
-        .record_optimization(&name, request)
-        .await?;
+    let record = registry.record_optimization(&name, request).await?;
     Ok((axum::http::StatusCode::CREATED, Json(record)))
 }
 
@@ -314,11 +314,14 @@ async fn record_optimization(
     tag = "prompts",
 )]
 async fn get_optimization(
-    State(state): State<AppState>,
-    Path((name, optimization_id)): Path<(String, String)>,
+    PromptRead(registry): PromptRead,
+    Path(OptimizationPath {
+        name,
+        optimization_id,
+    }): Path<OptimizationPath>,
 ) -> ApiResult<Json<OptimizationRecord>> {
     let name = name_of(&name)?;
-    registry(&state)?
+    registry
         .optimization(&name, &optimization_id)
         .await?
         .map(Json)
@@ -343,11 +346,10 @@ async fn get_optimization(
     tag = "prompts",
 )]
 async fn rebuild_prompt(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    write: PromptWrite,
+    Path(PromptPath { name }): Path<PromptPath>,
 ) -> ApiResult<Json<PromptHead>> {
-    may_author(&caller)?;
+    let registry = write.authorize().await?;
     let name = name_of(&name)?;
-    Ok(Json(registry(&state)?.rebuild(&name).await?))
+    Ok(Json(registry.rebuild(&name).await?))
 }

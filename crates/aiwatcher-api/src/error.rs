@@ -512,9 +512,9 @@ fn registry_parts(error: &aiwatcher_prompts::RegistryError) -> (StatusCode, &'st
         RegistryError::UnknownPrompt(_)
         | RegistryError::UnknownVersion { .. }
         | RegistryError::UnknownOptimization { .. } => (StatusCode::NOT_FOUND, "not_found"),
-        RegistryError::Invalid(_) | RegistryError::InvalidIdentifier { .. } => {
-            (StatusCode::BAD_REQUEST, "bad_request")
-        }
+        RegistryError::Invalid(_)
+        | RegistryError::InvalidIdentifier { .. }
+        | RegistryError::InvalidScope(_) => (StatusCode::BAD_REQUEST, "bad_request"),
         RegistryError::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
         // The model registry's answer to the same act, for the same reason:
         // a refused promotion is a decision about content, not a conflict.

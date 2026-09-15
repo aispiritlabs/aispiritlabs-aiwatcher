@@ -233,6 +233,7 @@ fn split_name(value: &str, field: &str) -> Result<()> {
 }
 
 async fn current(store: &Store, dataset: &str, id: &str) -> Result<Option<ReviewItem>> {
+    crate::scope::component(id, "review.id")?;
     let mut keys: Vec<String> = store
         .0
         .list(&store::review(dataset, id))
@@ -475,8 +476,16 @@ pub(crate) async fn published(
                 break;
             };
             if current.state == ReviewState::Published {
+                if current.published_in.as_deref() != Some(version) {
+                    return Err(EvaluationError::Contested);
+                }
                 done = Some(current);
                 break;
+            }
+            // The dataset contains this approved snapshot. A later edit or
+            // rejection must never be marked as if those new words were in it.
+            if &current != item {
+                return Err(EvaluationError::Contested);
             }
             let next = ReviewItem {
                 state: ReviewState::Published,

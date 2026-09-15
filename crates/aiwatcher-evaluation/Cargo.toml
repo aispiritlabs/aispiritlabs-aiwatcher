@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-iam.workspace = true
 async-trait.workspace = true
 time.workspace = true
 hex.workspace = true
@@ -21,6 +22,7 @@ thiserror.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+aiwatcher-prompts.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 
 [lints]

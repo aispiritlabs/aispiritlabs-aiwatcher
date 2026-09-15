@@ -900,6 +900,7 @@ pub(crate) async fn version(
     name: &str,
     version: &str,
 ) -> Result<Option<ScorecardVersion>> {
+    crate::scope::component(version, "scorecard_version")?;
     store.read(&store::scorecard_version(name, version)).await
 }
 

@@ -24,15 +24,55 @@ pub struct SavedWorkflow {
     pub registered_at: OffsetDateTime,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DefinitionRegistry {
     store: Arc<dyn ObjectStore>,
+    prefix: String,
+    scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl DefinitionRegistry {
     #[must_use]
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            prefix: "workflows".into(),
+            scope: None,
+        }
+    }
+
+    /// Isolate authored definitions in a project without changing their revisions.
+    /// Callers must authorize each operation separately. This does not scope
+    /// execution, schedules, task queues or the resources named in a definition.
+    pub fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        if let Some(current) = self.scope {
+            return if current == scope {
+                Ok(self.clone())
+            } else {
+                Err(DefinitionError::Refused(vec![
+                    "registry is already bound to another project".into(),
+                ]))
+            };
+        }
+        Ok(Self {
+            store: self.store.clone(),
+            prefix: format!(
+                "{}/scopes/{}/{}/registry",
+                self.prefix, scope.organization.0, scope.project.0
+            ),
+            scope: Some(scope),
+        })
+    }
+
+    fn head_key(&self, name: &str) -> String {
+        format!("{}/heads/{}.json", self.prefix, digest(name.as_bytes()))
+    }
+    fn version_key(&self, name: &str, revision: &str) -> String {
+        format!(
+            "{}/versions/{}/{revision}.json",
+            self.prefix,
+            digest(name.as_bytes())
+        )
     }
 
     /// Save a validated definition, version before head. Repeated content is one revision.
@@ -61,14 +101,15 @@ impl DefinitionRegistry {
                     registered_at,
                 };
                 self.put(
-                    &version_key(&saved.definition.name, &saved.revision.0),
+                    &self.version_key(&saved.definition.name, &saved.revision.0),
                     &saved,
                 )
                 .await?;
                 saved
             }
         };
-        self.put(&head_key(&saved.definition.name), &saved).await?;
+        self.put(&self.head_key(&saved.definition.name), &saved)
+            .await?;
         Ok(saved)
     }
 
@@ -77,16 +118,12 @@ impl DefinitionRegistry {
     pub async fn get(&self, name: &str, revision: Option<&str>) -> Result<Option<SavedWorkflow>> {
         let key = match revision {
             Some(revision) => {
-                if revision.len() != 64
-                    || !revision
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-                {
+                if !is_digest(revision) {
                     return Ok(None);
                 }
-                version_key(name, revision)
+                self.version_key(name, revision)
             }
-            None => head_key(name),
+            None => self.head_key(name),
         };
         let Some(body) = self.store.get(&key).await? else {
             return Ok(None);
@@ -109,9 +146,32 @@ impl DefinitionRegistry {
     /// A store that refused, or a stored record that will not read back.
     pub async fn list(&self) -> Result<Vec<SavedWorkflow>> {
         let mut definitions = Vec::new();
-        for entry in self.store.list("workflows/heads/").await? {
+        let prefix = format!("{}/heads/", self.prefix);
+        for entry in self.store.list(&prefix).await? {
+            // Validate the returned address before reading it, including on
+            // legacy routes. A store listing cannot widen the requested scope.
+            if !entry
+                .key
+                .strip_prefix(&prefix)
+                .and_then(|key| key.strip_suffix(".json"))
+                .is_some_and(is_digest)
+            {
+                return Err(DefinitionError::Corrupt {
+                    key: entry.key,
+                    message: "store returned a key outside the requested heads".into(),
+                });
+            }
             if let Some(body) = self.store.get(&entry.key).await? {
-                definitions.push(read(&entry.key, &body)?);
+                let saved: SavedWorkflow = read(&entry.key, &body)?;
+                if entry.key != self.head_key(&saved.definition.name)
+                    || saved.revision != saved.definition.revision()
+                {
+                    return Err(DefinitionError::Corrupt {
+                        key: entry.key,
+                        message: "it describes a different definition or revision".into(),
+                    });
+                }
+                definitions.push(saved);
             }
         }
         definitions.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
@@ -135,12 +195,9 @@ fn read(key: &str, body: &[u8]) -> Result<SavedWorkflow> {
     })
 }
 
-fn head_key(name: &str) -> String {
-    format!("workflows/heads/{}.json", digest(name.as_bytes()))
-}
-fn version_key(name: &str, revision: &str) -> String {
-    format!(
-        "workflows/versions/{}/{revision}.json",
-        digest(name.as_bytes())
-    )
+fn is_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }

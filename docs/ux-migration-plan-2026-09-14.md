@@ -22,7 +22,7 @@ Inspiracje W&B: oddzielenie kontekstu globalnego, projektu i obiektu; wspólne f
 | UX-08 | Awarie i dostępność | Awaria auth/config zamyka dostęp do panelu, pokazuje retry. Uprawnienia UI nie zakładają auth=none przy błędzie. Błąd routera ma komunikat. TimeRange zawija się i komunikuje aktywną opcję. Poprawiono kolor błędów, daty ze strefą czasową, tytuły stron i reakcję grafu workflow na motyw. |
 | UX-09 | Nawigacja | Wdrożono neutralny start, wszystkie obszary, grupy mobilne i globalne wyszukiwanie/konto. Przełącznik nowy/klasyczny układ zachowuje edytor i URL; flaga wdrożenia wymusza rollout/rollback. Preferowany start, nazwane przypięcia pełnych linków, wersjonowany zapis per instancja/tożsamość i lokalna diagnostyka przejść. Centralna analityka i automatyczne kohorty pozostają poza tą implementacją. |
 | UX-10 | Profil | `/account`: bieżąca tożsamość, role instancji, grupy SSO tylko do odczytu; jawny tryb lokalny. Brak deklaracji fikcyjnych zespołów i projektowych uprawnień. |
-| IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz pierwszy rejestr zasobów z zakresem organizacja/projekt (datasety i curation). Jest dry-run inwentaryzacji migracji. Pozostałe rejestry, query, strumienie, zadania i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
+| IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz rejestry zasobów z zakresem organizacja/projekt (datasety, curation, prompty, treningi, modele, anotacje z plikami obrazów oraz formularze, oceny, karty ewaluacji, definicje workflow oraz review przypadków z publikacją do datasetu i kohorty z natywnych datasetów/anotacji). Jest dry-run inwentaryzacji migracji. Pozostałe rejestry, query, strumienie, zadania i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
 | IAM-02 | Zaproszenia i dostęp warsztatowy | Niewdrożone; zależą od IAM-01. |
 | FLOW-01 | Pełne przejścia i lineage | Pozostają dedykowane strony agentów, powiązania wersji prompt/model/dataset, porównania przedziałów i wspólne filtry. |
 | LEARN-01 | Learning | Wdrożono `/learning`: stan niedostępnych warsztatów oraz 9 slotów laboratoriów bez fikcyjnej treści, wyników i aktywnych operacji. Listy/szczegóły rzeczywistych warsztatów i provisioning pozostają. |
@@ -292,3 +292,157 @@ Walidacja:
 - `just openapi-check` i `git diff --check`: powodzenie.
 
 Następny zakres IAM-01: kolejne adaptery zasobów oraz przekazanie i egzekwowanie zakresu w query, notebookach i publikacji przez wykonania. Pełna walidacja manifestu, wykonawca migracji i cutover muszą poprzedzić udostępnienie całej aplikacji wielu organizacjom. **Cała migracja UX pozostaje w toku.**
+
+
+## Kontynuacja — rejestr promptów z zakresem IAM-01
+
+Data: 15.09.2026. **Drugi adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#second-resource-boundary-project-prompt-registry).
+
+- **API:** osiem operacji promptów pod `/api/v1/orgs/{organization}/projects/{project}` — lista z filtrami/paginacją, publikacja, szczegół, dokładna wersja, etykiety, zapis i odczyt optymalizacji oraz odbudowa indeksu. Wspólne handlery ze starymi trasami; kontrakt OpenAPI i klient panelu aktualizowane razem.
+- **Autoryzacja:** wspólna z datasetami kontrola principal OIDC i bieżącego grantu. Viewer czyta, editor/admin zapisuje; własność organizacji i rola instancji nie zastępują grantu projektu. Wszystkie mutacje, także PUT etykiety i odbudowa, wymagają `X-AIWatcher-IAM: 1`. Mutacje JSON ponownie sprawdzają grant po odebraniu body. Odpowiedzi tras mają `Cache-Control: no-store`.
+- **Magazyn:** osobne klucze `<prompt-prefix>/scopes/<org>/<project>/registry/` obejmują heady, wersje i optymalizacje. Zakres nie zmienia hasha tekstu, metadanych niezmiennej wersji ani ID raportu. Te same teksty w różnych projektach wymagają osobnych publikacji. Rejestr odmawia przepięcia do innego projektu i wyjścia klucza poza zakres.
+- **Granice odczytu i zapisu:** znajomość cudzej nazwy, wersji lub ID optymalizacji nie daje odczytu, zmiany etykiety ani możliwości użycia baseline’u. Odbudowa czyta wyłącznie obiekty danego projektu; etykieta w jednym projekcie nie zmienia drugiego. Stare API nadal widzi tylko globalne prompty, również po wyłączeniu IAM. Prawidłowy stary prompt nazwany `scopes` pozostaje dostępny, a zakodowane separatory nie otwierają dostępu do projektu.
+- **Granice etapu:** panel, SDK, runtime, cache i kontekst wykonań nadal wymagają integracji zakresu. Referencje datasetów/ewaluacji w optymalizacji i metadane parent/model są zachowane dosłownie, bez walidacji całego lineage. Obecny dry-run datasetów nie obejmuje jeszcze promptów. Nie wykonano migracji danych ani wdrożenia; selektory organizacji/projektów pozostają nieaktywne. Kontrola grantu nie anuluje już dopuszczonej operacji object store.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-prompts -p aiwatcher-datasets`: **303 testy przeszły** (198 HTTP, 23 biblioteki/kontraktu API, 49 promptów, 33 datasetów). Dodano **5 scenariuszy HTTP i 2 testy magazynu**. **6 istniejących testów integracyjnych RustFS/S3 pominięto** zgodnie z ich jawnym `ignore`; nie uruchamiano usługi RustFS.
+- `cargo test -p aiwatcher-server --test evaluation prompts::`: **4 testy**, powodzenie. Adapter ewaluacji obsługuje nowy błąd zakresu jako niedostępne źródło z odmową dostępu.
+- Clippy API/promptów/datasetów oraz serwera z `--all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build` (granice architektury, Vite, TypeScript): powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. Interfejs nie zmienił się; nie wykonywano nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono osiem operacji, wymagane parametry organizacji/projektu i nagłówki mutacji, także PUT. `just openapi-check` oraz `git diff --check`: powodzenie.
+- Testy HTTP korzystają z rzeczywistego routera i podpisanych sesji OIDC z lokalnym discovery/JWKS oraz pamięciowego IAM. Testy magazynu używają rzeczywistego systemu plików, ponownego otwarcia rejestru i kontroli zachowania wersji/raportów. Nie są pełnym E2E z Authentikiem, PostgreSQL, S3 ani runtime.
+
+Następny zakres IAM-01: pozostałe adaptery zasobów oraz przekazanie i egzekwowanie zakresu w query, notebookach i publikacji przez wykonania. Pełny manifest, wykonawca migracji i cutover pozostają osobnymi bramkami przed udostępnieniem całej aplikacji wielu organizacjom.
+
+
+## Kontynuacja — treningi i modele z zakresem IAM-01
+
+Data: 15.09.2026. **Trzeci adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#third-resource-boundary-project-training-and-model-registry).
+
+- **API:** dziewięć operacji treningów/modeli pod `/api/v1/orgs/{organization}/projects/{project}` — lista i szczegół treningu, start rekordu, postęp, zakończenie, lista i szczegół modelu, rejestracja wersji i zmiana etykiety. Obie rodziny tras korzystają ze wspólnych handlerów.
+- **Role:** viewer czyta, editor zapisuje wyniki treningu i rejestruje model, **admin projektu zmienia etykiety modeli**. Wspólna kontrola zakresu zachowuje wymaganą rolę do ponownego sprawdzenia po odebraniu JSON. Wygaśnięcie admina nie pozwala na promocję nawet przy niezależnym grancie editor. Stare trasy zachowują role instancji. Mutacje w trasach projektu wymagają nagłówka IAM, a odpowiedzi tych tras wyłączają cache.
+- **Magazyn:** osobne rekordy i podsumowania treningów oraz heady i wersje modeli w `<training-prefix>/scopes/<org>/<project>/registry/`. Powtarzające się nazwy i ID nie łączą danych między projektami. Model czerpie pochodzenie z treningu w tym samym zakresie; nie odczytuje globalnego treningu. Zakres nie zmienia hashy modeli, krzywych, raportów ani zapisanych referencji. Rejestr odmawia przepięcia do innego projektu.
+- **Zgodność i granice:** brak wskazanej wersji znanego modelu zwraca lokalny head bez pola `current`, zgodnie z dotychczasowym API. Nie ma zastąpienia wersją z innego projektu. Stare trasy nie ujawniają danych projektowych po wyłączeniu IAM. Parametry wersji i klucze magazynu odrzucają próby wyjścia poza zakres również na starych trasach.
+- **Promocja:** nadal wymaga niezmiennej referencji datasetu i pomiaru held-out; administrator projektu nie omija tego warunku. To kontrola istniejących metadanych, bez dowodu wykonania ewaluacji ani weryfikacji dostępu do źródłowego datasetu.
+- **Pozostały zakres:** URI checkpointów/profili i pakietów są zapisanymi referencjami, nie izolowanym magazynem bajtów modeli. Panel, SDK, poświadczenia maszynowe, runtime, cache i zatrzymywanie zadań wymagają własnej integracji. Endpoint start/finish zmienia rekord treningu, nie uruchamia ani nie zatrzymuje procesu. Nie wykonano migracji danych ani wdrożenia; selektory UI pozostają nieaktywne.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-training`: **252 testy**, powodzenie (203 HTTP, 23 biblioteki/kontraktu API, 26 rejestru treningów/modeli). Dodano **5 scenariuszy HTTP i 2 testy magazynu**. Zestaw HTTP obejmuje również regresje wcześniejszych zakresów datasetów i promptów po rozszerzeniu wspólnej kontroli ról.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-training --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono dziewięć operacji, wymagane parametry zakresu i nagłówki mutacji. `just openapi-check`, `cargo fmt --all --check` oraz `git diff --check`: powodzenie.
+- Testy HTTP korzystają z rzeczywistego routera, podpisanych sesji OIDC i lokalnego discovery/JWKS oraz pamięciowego IAM. Testy magazynu używają osobnego katalogu plikowego, ponownego otwarcia rejestru i kontroli historycznej tożsamości modeli. Katalogi testowe usunięto po kontroli. Nie wykonywano E2E z Authentikiem, PostgreSQL, S3 ani procesami treningu.
+
+Następne bramki: pozostałe rejestry, zakres w query/notebookach/wykonaniach oraz dostęp do artefaktów; następnie pełny manifest i wykonawca migracji, testy odebrania dostępu oraz cutover.
+
+
+## Kontynuacja — anotacje i pliki obrazów z zakresem IAM-01
+
+Data: 15.09.2026. **Czwarty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#fourth-resource-boundary-project-annotations-and-image-bytes).
+
+- **API:** czternaście lokalnych operacji anotacji pod `/api/v1/orgs/{organization}/projects/{project}` — projekty anotacyjne, obrazy i ich filtrowana/paginowana lista, rysunki, review, eksporty, COCO oraz zapis i odczyt plików obrazów. Nazwa projektu anotacyjnego jest osobnym identyfikatorem wewnątrz projektu IAM; nazwy z ukośnikiem pozostają obsługiwane.
+- **Autoryzacja:** viewer czyta, editor/admin zapisuje. Mutacje projektu wymagają nagłówka IAM i ponownego sprawdzenia grantu po odebraniu JSON lub bajtów obrazu. Autor rysunku i reviewer pochodzą z tożsamości wywołującego. Odpowiedzi scoped mają `no-store`, także pliki obrazów, które na starych trasach zachowują dotychczasowy cache.
+- **Magazyn:** `<annotation-prefix>/scopes/<org>/<project>/registry/` obejmuje schematy, heady obrazów, rewizje, eksporty oraz **bajty obrazów i metadane ich typu**. Ten sam hash w innym projekcie wymaga osobnego uploadu; nie daje odczytu cudzych bajtów. Deduplication plików działa tylko między kolekcjami w jednym projekcie IAM. Klucze magazynu są sprawdzane, a rejestru nie można przepiąć do innego zakresu.
+- **Referencje i historia:** rejestracja lokalnego `aiwatcher://blob/<hash>` wymaga zgodności image ID i obecności pliku w projekcie. Hashe schematów, rewizji i eksportów pozostają niezmienione; zachowane są autorzy, prawa użycia, przypięcia review i podziały danych. COCO i weryfikowany odczyt biblioteczny korzystają z tych samych ograniczonych zasobów. Review w jednym projekcie nie zmienia drugiego.
+- **Zgodność:** stare trasy nie odczytują plików ani anotacji projektowych, również po wyłączeniu IAM. URI blobu zachowuje dotychczasowy format; jego interpretacja wymaga przekazania zakresu klienta. Panel, SDK i konsumenci eksportów nadal wymagają tego podłączenia.
+- **Pozostały zakres:** import z pobieraniem zewnętrznych obrazów, katalog źródeł i kolejki/workerzy importu pozostają przy starych trasach. Nie dodano do nich pozornych aliasów scoped. Wymagają własnych poświadczeń zakresu, kontroli podczas wykonywania i przerwania po odebraniu dostępu. Nie wykonano migracji danych ani wdrożenia; selektory UI pozostają nieaktywne.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-annotations -p aiwatcher-api`: **305 testów**, powodzenie. Dodano **5 scenariuszy HTTP i 2 testy magazynu** obejmujące izolację, role, wygaśnięcie i cofnięcie grantów, ponowną kontrolę po odebraniu body oraz zachowanie historii i hashy.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-annotations --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono czternaście operacji, wymagane parametry zakresu, nagłówki mutacji i unikalność identyfikatorów operacji. `just openapi-check`, `cargo fmt --all --check` oraz `git diff --check`: powodzenie.
+- Testy HTTP używają rzeczywistego routera, podpisanych sesji OIDC z lokalnym discovery/JWKS oraz pamięciowego IAM. Testy magazynu zapisują rzeczywiste pliki, ponownie otwierają rejestr i sprawdzają bajty, metadane, rewizje, manifesty oraz COCO. Nie wykonywano E2E z Authentikiem, PostgreSQL, S3 ani workerami importu.
+
+Następne bramki: pozostałe rejestry, importy i zadania, zakres w query/notebookach/wykonaniach oraz konsumenci artefaktów; następnie pełny manifest, wykonawca migracji i cutover.
+
+
+## Kontynuacja — formularze, oceny i karty ewaluacji z zakresem IAM-01
+
+Data: 15.09.2026. **Piąty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#fifth-resource-boundary-project-forms-assessments-and-scorecards).
+
+- **API:** jedenaście operacji pod `/api/v1/orgs/{organization}/projects/{project}` — publikacja/lista/szczegół formularzy ocen, zapis/lista/historia ocen oraz publikacja/lista/szczegół/wersje/porównanie kart pomiarowych. Obie rodziny tras korzystają ze wspólnych handlerów i schematów.
+- **Role i sesje:** viewer czyta, editor/admin zapisuje. Mutacje wymagają nagłówka IAM i ponownej kontroli grantu po odebraniu JSON. Autor publikacji i osoba zapisująca ocenę pochodzą z sesji. Odpowiedzi projektowe wyłączają cache; role instancji nie zastępują grantów projektu.
+- **Magazyn:** trzy rodziny obiektów mieszczą się w `evaluation-scopes/<org>/<project>/registry/` skonfigurowanego magazynu ewaluacji. Adapter zachowuje atomowe tworzenie, sprawdza klucze i wyniki listowania. Odmawia przepięcia do innego projektu i dostępu do pozostałych rodzin obiektów. Stare API zachowuje swój magazyn; próby przejścia ścieżką do innego zakresu są odrzucane również tam.
+- **Referencje i historia:** ocena oraz karta z sędzią wymagają formularza obecnego w tym samym projekcie. Zachowane są hashe wersji, metadane publikacji, identyfikatory celu i autora oceny oraz numery rewizji. Zmiana oceny lub karty nie zmienia historii w innym projekcie; powtórzona publikacja tych samych treści zachowuje hashe.
+- **Granice:** cel oceny pozostaje zapisaną referencją, bez potwierdzenia dostępu do źródłowego wyniku/trace/span. Rejestr projektowy odłącza globalny resolver źródeł. Publikacja kart wymagających zewnętrznego katalogu scorerów jest jawnie odrzucana do czasu objęcia katalogu polityką projektu. Karty z wbudowanymi scorerami i sędzią opartym na lokalnym formularzu są obsługiwane; zapis nie uruchamia pomiaru.
+- **Pozostały zakres:** wyniki, dowody, approvals, review, kohorty, nagrania, kalibracje i wykonania wymagają osobnych adapterów. Panel/SDK nadal korzystają ze starych tras, selektory UI pozostają nieaktywne. Nie wykonano migracji danych ani wdrożenia.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-evaluation -p aiwatcher-api`: **328 testów**, powodzenie. Dodano **5 scenariuszy HTTP i 2 testy magazynu** obejmujące wszystkie jedenaście operacji, izolację referencji i historii, role, wygaśnięcie i cofnięcie grantów oraz odmowę zapisu po odebraniu spóźnionego body.
+- `cargo test -p aiwatcher-server --test evaluation`: **128 testów**, powodzenie; **1 test RustFS/S3 jawnie pominięty**, ponieważ wymaga osobnej usługi. Kontrola obejmuje zgodność dotychczasowych ewaluacji po dodaniu walidacji kluczy magazynu.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-evaluation --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono jedenaście operacji, wymagane parametry zakresu, nagłówki mutacji i unikalność identyfikatorów. `just openapi-check`, `cargo fmt --all --check` oraz `git diff --check`: powodzenie.
+- Testy HTTP używają rzeczywistego routera, podpisanych sesji OIDC z lokalnym discovery/JWKS oraz pamięciowego IAM. Testy plikowe obejmują ponowne otwarcie rejestru, porównanie surowych bajtów niezmiennych dokumentów i paginację historii. Nie wykonywano pełnego E2E z Authentikiem, PostgreSQL, S3 ani workerami.
+
+Następne bramki: pozostałe rejestry i referencje między zasobami, importy i zadania, zakres w query/notebookach/wykonaniach; następnie pełny manifest, wykonawca migracji i cutover.
+
+
+## Kontynuacja — definicje workflow z zakresem IAM-01
+
+Data: 15.09.2026. **Szósty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#sixth-resource-boundary-project-workflow-definitions).
+
+- **API:** lista, szczegół z opcjonalną rewizją oraz publikacja definicji workflow pod `/api/v1/orgs/{organization}/projects/{project}`. Nazwy z ukośnikiem pozostają obsługiwane. Obie rodziny tras współdzielą handlery i kontrakt.
+- **Role:** viewer czyta, editor/admin publikuje. Mutacja wymaga nagłówka IAM i ponownego sprawdzenia grantu po odebraniu JSON. Autor rejestracji pochodzi z sesji; odpowiedzi projektowe wyłączają cache.
+- **Magazyn:** heady i niezmienne wersje pod `workflows/scopes/<org>/<project>/registry/`. Brak przepięcia rejestru do innego projektu i fallbacku do globalnych danych. Nazwy są hashowane, rewizje zachowują walidację SHA-256. Listowanie sprawdza adres obiektu przed odczytem oraz zgodność treści z nazwą i rewizją, również na starych trasach.
+- **Historia:** zakres nie zmienia definicji, hasha rewizji ani tożsamości skompilowanego planu. Zachowane są autor i czas rejestracji, parametry, przypięte wersje zadań i bramki akceptacji. Zmiana heada nie zmienia starszej wersji ani sąsiedniego projektu.
+- **Walidacja i uruchamianie:** publikacja nadal wymaga poprawnego grafu i zgodności z szablonami podów wdrożenia. Nie uruchamia workflow i nie nadaje dostępu do kolejki ani klastra. Istniejące trasy startu i harmonogramów nie znajdują definicji dostępnej wyłącznie w projekcie; znana rewizja nie daje dostępu przez stare API.
+- **Pozostały zakres:** scoped wykonania, harmonogramy, poświadczenia workerów, zasoby wskazane w parametrach, cache i zatrzymywanie pracy po cofnięciu grantu wymagają integracji. Nie dodano aliasów tych tras. UI i wywołania panelu/SDK pozostają przed cutoverem; nie wykonano migracji ani wdrożenia.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-execution`: **526 testów**, powodzenie. Dodano **5 scenariuszy HTTP i 2 testy magazynu**: izolacja nazw i wersji, role, wygasanie/cofnięcie grantów, odmowa spóźnionej publikacji, walidacja grafu/podów oraz brak dostępu przez stare trasy wykonania i harmonogramów.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-execution --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono trzy operacje, wymagane parametry zakresu, nagłówek publikacji i unikalność identyfikatorów. `just openapi-check`, `cargo fmt --all --check` oraz `git diff --check`: powodzenie.
+- Testy HTTP korzystają z rzeczywistego routera, podpisanych sesji OIDC z lokalnym discovery/JWKS oraz pamięciowego IAM i silnika wykonania. Testy plikowe ponownie otwierają rejestr i porównują niezmienne bajty, metadane i skompilowane plany. Niepoprawny adapter listowania potwierdza odmowę odczytu cudzych kluczy przed pobraniem bajtów. Nie uruchamiano pełnego E2E z Authentikiem, PostgreSQL, S3, workerami ani klastrem.
+
+Następne bramki: pozostałe rejestry, referencje między zasobami i autoryzacja wykonań, następnie pełny manifest, wykonawca migracji i cutover.
+
+
+## Kontynuacja — review przypadków i publikacja do datasetu z zakresem IAM-01
+
+Data: 15.09.2026. **Siódmy adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#seventh-resource-boundary-project-case-reviews-and-dataset-publication).
+
+- **API:** pięć operacji pod `/api/v1/orgs/{organization}/projects/{project}` — kolejka datasetu, propozycja przypadku, wyszukanie review po celu, zapis oczekiwanej odpowiedzi/akceptacja/odrzucenie oraz publikacja zatwierdzonych przypadków. Wspólne handlery ze starymi trasami, zaktualizowane OpenAPI i klient panelu.
+- **Role:** viewer czyta, editor/admin zapisuje i publikuje zatwierdzone przypadki. Akceptacja treści `observed` wymaga **administratora projektu**. Rola administratora instancji nie wystarcza; wygaśnięcia grantu admin podczas wysyłania formularza nie zastępuje niezależny grant editor. Mutacje wymagają nagłówka IAM i ponownej kontroli po odebraniu JSON, odpowiedzi projektowe mają `no-store`.
+- **Magazyn:** rewizje review i indeksy celów pod `evaluation-scopes/<org>/<project>/registry/`. Zachowane są identyfikatory, oryginalne bajty rewizji, autorzy, referencje celu/oceny i podziały danych. Rejestr sprawdza klucze oraz odrzuca cudze wyniki listowania przed odczytem bajtów, również przy znanym ID review.
+- **Publikacja:** rejestr review i rejestr datasetów otrzymują ten sam zakres z trasy. Dopisywane są wyłącznie zatwierdzone przypadki oraz wcześniejsze wiersze datasetu tego projektu. Brak lokalnego datasetu tworzy nowy; nie korzysta z globalnego ani sąsiedniego heada. Review zapisuje rzeczywistą wersję datasetu i autora publikacji. Niezatwierdzone propozycje nie trafiają do wyniku, a zmiana oczekiwanej odpowiedzi nadal usuwa wcześniejszą akceptację.
+- **Konflikt podczas publikacji:** poprawiono także stare trasy — późniejsza edycja/odrzucenie review nie zostaje oznaczone jako opublikowane we wcześniejszym snapshotcie. Zmieniona rewizja lub przypisanie do innej opublikowanej wersji daje 409; ponowne oznaczenie tej samej wersji jest idempotentne. Nie jest to transakcja między rejestrami: awaria lub konflikt po zapisie datasetu może pozostawić wersję bez wszystkich oznaczeń review. Trwała koordynacja i odzyskiwanie publikacji oraz równoległe aktualizacje heada datasetu pozostają osobnym zakresem.
+- **Granice źródeł:** propozycja projektowa wymaga jawnie dostarczonego tekstu `written` lub `observed`. Pobieranie słów z wyniku ewaluacji i deklarowanie ich jako `measured` są odrzucane do czasu izolacji dowodów i resolverów. Referencje trace/result/assessment pozostają metadanymi pochodzenia, bez potwierdzenia dostępu do źródła. Globalny resolver nie jest używany.
+- **Pozostały zakres:** panel i SDK nadal korzystają ze starych tras, selektory UI pozostają nieaktywne. Nie wykonano migracji ani wdrożenia; dry-run datasetów nie obejmuje jeszcze review i indeksów. Kontrola grantu nie anuluje dopuszczonej wcześniej operacji magazynu.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-evaluation -p aiwatcher-datasets`: **374 testy**, powodzenie. Dodano **5 scenariuszy HTTP i 3 testy rejestru**; istniejące regresje API i datasetów również przeszły. Osobno potwierdzono wszystkie 5 testów plików/zakresu ewaluacji, w tym konflikt publikacji.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-evaluation -p aiwatcher-datasets --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono pięć operacji, wymagane parametry zakresu i nagłówki mutacji oraz odpowiedź 409 publikacji. `just openapi-check`, `cargo fmt --all --check` oraz `git diff --check`: powodzenie.
+- Testy HTTP używają rzeczywistego routera, podpisanych sesji OIDC z lokalnym discovery/JWKS oraz pamięciowego IAM. Testy magazynu obejmują rzeczywiste pliki, ponowne otwarcie, niezmienne bajty rewizji i indeksów oraz odmowę odczytu cudzych kluczy. Nie wykonano pełnego E2E z Authentikiem, PostgreSQL, S3 ani workerami.
+
+Następne bramki: izolacja wyników/dowodów ewaluacji i ich resolverów, pozostałe rejestry, autoryzacja query/notebooków/wykonań i strumieni; pełny manifest, wykonawca migracji oraz cutover. Publikacja review wymaga jeszcze trwałej koordynacji między rejestrami i odzyskiwania po częściowym zapisie.
+
+
+## Kontynuacja — kohorty z datasetów i anotacji z zakresem IAM-01
+
+Data: 15.09.2026. **Ósmy adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#eighth-resource-boundary-project-cohorts-from-native-datasets).
+
+- **API:** tworzenie kohorty oraz odczyt zapisanych metadanych po hashu przypadków pod `/api/v1/orgs/{organization}/projects/{project}/evaluation-cohorts`. Wspólne handlery i schematy ze starymi trasami; kontrakt i klient panelu zaktualizowane.
+- **Role:** viewer odczytuje, editor/admin tworzy. Mutacja wymaga nagłówka IAM i ponownej kontroli aktualnego grantu po odebraniu JSON; odpowiedzi projektowe mają `no-store`. Rola instancji nie zastępuje dostępu do projektu.
+- **Resolver:** nowa jawna fabryka `SourceAuthority::for_project_cohorts` domyślnie odmawia. Adapter serwera wiąże rejestry datasetów i anotacji z projektem. Nie zachowuje dostępu do katalogu na dysku, globalnych pakietów ewaluacyjnych, rozmów, promptów ani modeli. Odmawia zmiany zakresu i rozwiązywania pełnego manifestu ewaluacji. Działa z istniejącym podłączeniem natywnych rejestrów serwera, bez nowej konfiguracji wdrożenia.
+- **Źródła:** każda próba utworzenia ponownie weryfikuje konkretną wersję datasetu lub eksportu anotacji, nawet gdy metadane kohorty już istnieją. Zmiana heada nie zmienia starych przypięć; brak lub uszkodzenie źródła powoduje odmowę bez szukania danych globalnych. Anotacje zachowują weryfikację plików obrazów, dataset — wybór splitu, limit pierwszych N przypadków i licznik wierszy bez splitu.
+- **Magazyn i historia:** `evaluation-scopes/<org>/<project>/registry/evaluation-cohorts/`. Zachowane hashe przypadków i schematów, URI przypięć, wersje źródeł, pierwszy autor i czas utworzenia. Identyczne dane zapisane niezależnie w dwóch projektach dają te same przypięcia i osobne metadane. Znany hash/wersja nie otwiera cudzych ani globalnych danych.
+- **Odczyt historyczny:** GET zwraca zapis pochodzenia, nie aktualne potwierdzenie istnienia wszystkich bajtów źródła. URI `aiwatcher://` pozostaje przypięciem interpretowanym w tym samym projekcie, nie adresem pobierania plików przez nowe API.
+- **Granice etapu:** korpusy rozmów są niedostępne także dla administratora. Nie udostępniono projektowych wyników, approvals, pakietów, nagrań, deklaracji pomiarów, workerów ani automatycznego pobierania tekstu z wyników do review. Panel/SDK nadal korzystają ze starych tras, selektory UI pozostają nieaktywne. Nie wykonano migracji ani wdrożenia; inwentaryzacja migracji nie obejmuje jeszcze kohort. Kontrola grantu nie anuluje już dopuszczonej operacji źródła/magazynu.

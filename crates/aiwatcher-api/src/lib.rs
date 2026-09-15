@@ -22,16 +22,20 @@
 //!
 //! ADR_0021, ADR_0022, ADR_0025, ADR_0026.
 
+mod annotation_scope;
 pub mod annotations;
 pub mod artifacts;
 pub mod assessments;
 pub mod auth;
+mod cohorts;
 pub mod context;
 pub mod conversations;
 mod dataset_scope;
 pub mod datasets;
+mod definition_scope;
 pub mod definitions;
 pub mod error;
+mod evaluation_scope;
 pub mod evaluations;
 pub mod executions;
 pub mod experiments;
@@ -43,6 +47,8 @@ pub mod integrations;
 pub mod live;
 pub mod metrics;
 pub mod openapi;
+mod project_scope;
+mod prompt_scope;
 pub mod prompts;
 pub mod reviews;
 pub mod routes;
@@ -53,6 +59,7 @@ pub mod scoring;
 pub mod state;
 pub mod stream;
 pub mod training;
+mod training_scope;
 pub mod worker;
 pub mod workflows;
 

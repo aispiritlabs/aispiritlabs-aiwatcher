@@ -50,6 +50,9 @@ mod gc;
 #[path = "evaluation/curation.rs"]
 mod curation;
 
+#[path = "evaluation/project_cohorts.rs"]
+mod project_cohorts;
+
 #[path = "evaluation/fixture.rs"]
 mod fixture;
 

@@ -8,61 +8,10 @@ async fn fixture() -> IamFixture {
     )));
     f
 }
-async fn project(f: &IamFixture, cookie: &str, org: &str) -> String {
-    let (status, body) = f
-        .request(
-            "POST",
-            &format!("{ROOT}/{org}/commands"),
-            Some(cookie),
-            json!({"type":"create_project","name":"Test"}),
-            true,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    body["ProjectCreated"]["scope"]["project"]
-        .as_str()
-        .unwrap()
-        .into()
-}
-fn base(org: &str, project: &str) -> String {
-    format!("/api/v1/orgs/{org}/projects/{project}")
-}
 fn dataset(value: &str) -> Value {
     json!({"name":"shared/name","pipeline":"data_frame()->read(default)","columns":["value"],
         "items":[{"value":value}],"source":"fixture"})
 }
-async fn command(f: &IamFixture, owner: &str, org: &str, command: Value) -> Value {
-    let (status, body) = f
-        .request(
-            "POST",
-            &format!("{ROOT}/{org}/commands"),
-            Some(owner),
-            command,
-            true,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    body
-}
-async fn grant(
-    f: &IamFixture,
-    owner: &str,
-    org: &str,
-    project: &str,
-    role: &str,
-    window: Value,
-) -> Value {
-    let principal = json!({"provider":f.issuer,"subject":"member"});
-    command(
-        f,
-        owner,
-        org,
-        json!({"type":"set_member","principal":principal,"role":"member"}),
-    )
-    .await;
-    command(f, owner, org, json!({"type":"grant","project":project,"grantee":{"kind":"user","value":principal},"role":role,"window":window})).await["GrantCreated"]["id"].clone()
-}
-
 #[tokio::test]
 async fn project_datasets_isolate_bytes_names_versions_and_legacy_routes() {
     let f = fixture().await;

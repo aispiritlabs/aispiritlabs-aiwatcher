@@ -50,7 +50,10 @@ pub fn router() -> Router<AppState> {
         ))
 }
 
-pub(crate) fn context<'a>(state: &'a AppState, caller: &Caller) -> ApiResult<(&'a dyn IamStore, Principal)> {
+pub(crate) fn context<'a>(
+    state: &'a AppState,
+    caller: &Caller,
+) -> ApiResult<(&'a dyn IamStore, Principal)> {
     let store = state.iam.as_deref().ok_or(ApiError::IamDisabled)?;
     let principal = state
         .auth

@@ -14,7 +14,7 @@ use aiwatcher_evaluation::{
     AssessmentTargetQuery, CaseProposal, ReviewAction, ReviewItem, ReviewPage, ReviewState,
     TargetReviews,
 };
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -24,7 +24,9 @@ use std::collections::BTreeMap;
 use utoipa::OpenApi;
 
 use crate::auth::Caller;
+use crate::dataset_scope::DatasetWrite;
 use crate::error::{ApiError, ApiResult};
+use crate::evaluation_scope::{EvaluationRead, EvaluationWrite};
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -41,28 +43,32 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/evaluation-reviews",
-            get(list_reviews).post(propose_case),
-        )
-        .route("/api/v1/evaluation-reviews/publish", post(publish_reviews))
-        .route(
-            "/api/v1/evaluation-reviews/of-target",
-            get(reviews_of_target),
-        )
-        .route("/api/v1/evaluation-reviews/{id}/actions", post(review_case))
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
 }
 
-fn evaluations(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
-    state
-        .evaluations
-        .as_deref()
-        .ok_or(ApiError::EvaluationDisabled)
+fn resource_router() -> Router<AppState> {
+    Router::new()
+        .route("/evaluation-reviews", get(list_reviews).post(propose_case))
+        .route("/evaluation-reviews/publish", post(publish_reviews))
+        .route("/evaluation-reviews/of-target", get(reviews_of_target))
+        .route("/evaluation-reviews/{id}/actions", post(review_case))
+}
+
+#[derive(Deserialize)]
+struct ReviewPath {
+    id: String,
 }
 
 fn now() -> i64 {
@@ -81,12 +87,10 @@ struct DatasetQuery {
     responses((status = 200, body = ReviewPage), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn list_reviews(
-    State(state): State<AppState>,
-    caller: Caller,
+    EvaluationRead(evaluations): EvaluationRead,
     Query(query): Query<DatasetQuery>,
 ) -> ApiResult<Json<ReviewPage>> {
-    caller.require(Role::Viewer)?;
-    Ok(Json(evaluations(&state)?.reviews(&query.dataset).await?))
+    Ok(Json(evaluations.reviews(&query.dataset).await?))
 }
 
 /// Every proposal seen on one target — a trace, a span, a session or a case
@@ -96,14 +100,10 @@ async fn list_reviews(
     responses((status = 200, body = TargetReviews), (status = 400, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn reviews_of_target(
-    State(state): State<AppState>,
-    caller: Caller,
+    EvaluationRead(evaluations): EvaluationRead,
     Query(query): Query<AssessmentTargetQuery>,
 ) -> ApiResult<Json<TargetReviews>> {
-    caller.require(Role::Viewer)?;
-    Ok(Json(
-        evaluations(&state)?.reviews_of(&query.target()?).await?,
-    ))
+    Ok(Json(evaluations.reviews_of(&query.target()?).await?))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -119,19 +119,20 @@ pub struct ProposedCase {
 /// Without a question, a case target is read at `at` — the position a
 /// comparison row carries — for what the cohort asked and what the variant
 /// answered, and the proposal is `measured`. A trace holds no words to read.
+/// Project routes currently require supplied `written` or `observed` words;
+/// result-source resolution remains unavailable in that scope.
 #[utoipa::path(post, path = "/api/v1/evaluation-reviews", request_body = CaseProposal,
     responses((status = 201, body = ProposedCase), (status = 200, body = ProposedCase),
     (status = 400, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn propose_case(
-    State(state): State<AppState>,
+    evaluation: EvaluationWrite,
     caller: Caller,
     Json(proposal): Json<CaseProposal>,
 ) -> ApiResult<(StatusCode, Json<ProposedCase>)> {
-    let subject = caller.require(Role::Editor)?.log_subject().to_owned();
-    let (review, created) = evaluations(&state)?
-        .propose_case(&proposal, &subject, now())
-        .await?;
+    let subject = caller.identity().log_subject().to_owned();
+    let evaluations = evaluation.authorize().await?;
+    let (review, created) = evaluations.propose_case(&proposal, &subject, now()).await?;
     Ok((
         if created {
             StatusCode::CREATED
@@ -143,29 +144,26 @@ async fn propose_case(
 }
 
 /// Write an expected answer, approve or reject. Approving words somebody using
-/// the application said — `observed` content — takes the admin role.
+/// the application said — `observed` content — takes the admin role of the
+/// project on project routes, or the instance on legacy routes.
 #[utoipa::path(post, path = "/api/v1/evaluation-reviews/{id}/actions",
     params(("id" = String, Path), DatasetQuery), request_body = ReviewAction,
     responses((status = 200, body = ReviewItem), (status = 400, body = crate::error::ErrorBody),
     (status = 403, body = crate::error::ErrorBody), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn review_case(
-    State(state): State<AppState>,
+    evaluation: EvaluationWrite,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(ReviewPath { id }): Path<ReviewPath>,
     Query(query): Query<DatasetQuery>,
     Json(action): Json<ReviewAction>,
 ) -> ApiResult<Json<ReviewItem>> {
-    let subject = caller.require(Role::Editor)?.log_subject().to_owned();
-    evaluations(&state)?
-        .review_case(
-            &query.dataset,
-            &id,
-            &action,
-            &subject,
-            caller.require(Role::Admin).is_ok(),
-            now(),
-        )
+    let subject = caller.identity().log_subject().to_owned();
+    let (evaluations, admin) = evaluation
+        .authorize_with_admin(caller.require(Role::Admin).is_ok())
+        .await?;
+    evaluations
+        .review_case(&query.dataset, &id, &action, &subject, admin, now())
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("review {id} of {}", query.dataset)))
@@ -185,19 +183,18 @@ pub struct PublishedReviews {
 /// refused rather than given rows of a second shape. Publishing the same
 /// approved set again lands on the same version.
 #[utoipa::path(post, path = "/api/v1/evaluation-reviews/publish", params(DatasetQuery),
-    responses((status = 200, body = PublishedReviews), (status = 422, body = crate::error::ErrorBody),
+    responses((status = 200, body = PublishedReviews), (status = 409, body = crate::error::ErrorBody),
+    (status = 422, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn publish_reviews(
-    State(state): State<AppState>,
+    evaluation: EvaluationWrite,
+    dataset: DatasetWrite,
     caller: Caller,
     Query(query): Query<DatasetQuery>,
 ) -> ApiResult<Json<PublishedReviews>> {
-    let subject = caller.require(Role::Editor)?.log_subject().to_owned();
-    let evaluations = evaluations(&state)?;
-    let datasets = state
-        .datasets
-        .as_ref()
-        .ok_or(ApiError::DatasetRegistryDisabled)?;
+    let subject = caller.identity().log_subject().to_owned();
+    let evaluations = evaluation.authorize().await?;
+    let datasets = dataset.authorize().await?;
     let approved: Vec<ReviewItem> = evaluations
         .reviews(&query.dataset)
         .await?

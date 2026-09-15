@@ -12631,6 +12631,7 @@ export type PublishReviewsData = {
 };
 
 export type PublishReviewsErrors = {
+    409: ErrorBody;
     422: ErrorBody;
     501: ErrorBody;
 };
@@ -14079,6 +14080,622 @@ export type SetModelLabelResponses = {
 
 export type SetModelLabelResponse = SetModelLabelResponses[keyof SetModelLabelResponses];
 
+export type ProjectUploadBlobData = {
+    body: Array<number>;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-blobs';
+};
+
+export type ProjectUploadBlobErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectUploadBlobError = ProjectUploadBlobErrors[keyof ProjectUploadBlobErrors];
+
+export type ProjectUploadBlobResponses = {
+    /**
+     * These exact bytes were already stored
+     */
+    200: StoredBlob;
+    /**
+     * The bytes were stored
+     */
+    201: StoredBlob;
+};
+
+export type ProjectUploadBlobResponse = ProjectUploadBlobResponses[keyof ProjectUploadBlobResponses];
+
+export type ProjectGetBlobData = {
+    body?: never;
+    path: {
+        /**
+         * The image's SHA-256
+         */
+        image_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-blobs/{image_id}';
+};
+
+export type ProjectGetBlobErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetBlobError = ProjectGetBlobErrors[keyof ProjectGetBlobErrors];
+
+export type ProjectGetBlobResponses = {
+    /**
+     * The image bytes
+     */
+    200: unknown;
+};
+
+export type ProjectGetExportData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        project: string;
+        export: string;
+        /**
+         * One side of the split, for a trainer that wants its own file per split.
+         */
+        split?: null | Split;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-export';
+};
+
+export type ProjectGetExportErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetExportError = ProjectGetExportErrors[keyof ProjectGetExportErrors];
+
+export type ProjectGetExportResponses = {
+    200: ExportManifest;
+};
+
+export type ProjectGetExportResponse = ProjectGetExportResponses[keyof ProjectGetExportResponses];
+
+export type ProjectGetExportCocoData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        project: string;
+        export: string;
+        /**
+         * One side of the split, for a trainer that wants its own file per split.
+         */
+        split?: null | Split;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-export/coco';
+};
+
+export type ProjectGetExportCocoErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetExportCocoError = ProjectGetExportCocoErrors[keyof ProjectGetExportCocoErrors];
+
+export type ProjectGetExportCocoResponses = {
+    /**
+     * A COCO document
+     */
+    200: unknown;
+};
+
+export type ProjectListExportsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        name: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-exports';
+};
+
+export type ProjectListExportsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListExportsError = ProjectListExportsErrors[keyof ProjectListExportsErrors];
+
+export type ProjectListExportsResponses = {
+    200: ExportPage;
+};
+
+export type ProjectListExportsResponse = ProjectListExportsResponses[keyof ProjectListExportsResponses];
+
+export type ProjectBuildExportData = {
+    body: ExportRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-exports';
+};
+
+export type ProjectBuildExportErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectBuildExportError = ProjectBuildExportErrors[keyof ProjectBuildExportErrors];
+
+export type ProjectBuildExportResponses = {
+    /**
+     * This exact export already existed
+     */
+    200: BuiltExport;
+    /**
+     * A new export was stored
+     */
+    201: BuiltExport;
+};
+
+export type ProjectBuildExportResponse = ProjectBuildExportResponses[keyof ProjectBuildExportResponses];
+
+export type ProjectGetImageData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        project: string;
+        image_id: string;
+        /**
+         * Which revision's shapes to return. Omitted means the accepted one, then
+         * the newest — what a labeller reopening an image expects to see.
+         */
+        revision?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-image';
+};
+
+export type ProjectGetImageErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetImageError = ProjectGetImageErrors[keyof ProjectGetImageErrors];
+
+export type ProjectGetImageResponses = {
+    200: ImageDetail;
+};
+
+export type ProjectGetImageResponse = ProjectGetImageResponses[keyof ProjectGetImageResponses];
+
+export type ProjectListImagesData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        project: string;
+        review?: null | ReviewState;
+        split?: null | Split;
+        group_id?: string | null;
+        search?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-images';
+};
+
+export type ProjectListImagesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListImagesError = ProjectListImagesErrors[keyof ProjectListImagesErrors];
+
+export type ProjectListImagesResponses = {
+    200: ImagePage;
+};
+
+export type ProjectListImagesResponse = ProjectListImagesResponses[keyof ProjectListImagesResponses];
+
+export type ProjectRegisterImageData = {
+    body: RegisterImageRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-images';
+};
+
+export type ProjectRegisterImageErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRegisterImageError = ProjectRegisterImageErrors[keyof ProjectRegisterImageErrors];
+
+export type ProjectRegisterImageResponses = {
+    200: ImageHead;
+};
+
+export type ProjectRegisterImageResponse = ProjectRegisterImageResponses[keyof ProjectRegisterImageResponses];
+
+export type ProjectGetProjectData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        name: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-project';
+};
+
+export type ProjectGetProjectErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetProjectError = ProjectGetProjectErrors[keyof ProjectGetProjectErrors];
+
+export type ProjectGetProjectResponses = {
+    200: ProjectSummary;
+};
+
+export type ProjectGetProjectResponse = ProjectGetProjectResponses[keyof ProjectGetProjectResponses];
+
+export type ProjectListProjectsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-projects';
+};
+
+export type ProjectListProjectsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListProjectsError = ProjectListProjectsErrors[keyof ProjectListProjectsErrors];
+
+export type ProjectListProjectsResponses = {
+    200: ProjectPage;
+};
+
+export type ProjectListProjectsResponse = ProjectListProjectsResponses[keyof ProjectListProjectsResponses];
+
+export type ProjectSaveProjectData = {
+    body: SaveProjectRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-projects';
+};
+
+export type ProjectSaveProjectErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSaveProjectError = ProjectSaveProjectErrors[keyof ProjectSaveProjectErrors];
+
+export type ProjectSaveProjectResponses = {
+    200: AnnotationProject;
+};
+
+export type ProjectSaveProjectResponse = ProjectSaveProjectResponses[keyof ProjectSaveProjectResponses];
+
+export type ProjectReviewImageData = {
+    body: ReviewRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-reviews';
+};
+
+export type ProjectReviewImageErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectReviewImageError = ProjectReviewImageErrors[keyof ProjectReviewImageErrors];
+
+export type ProjectReviewImageResponses = {
+    200: ImageHead;
+};
+
+export type ProjectReviewImageResponse = ProjectReviewImageResponses[keyof ProjectReviewImageResponses];
+
+export type ProjectSaveRevisionData = {
+    body: SaveRevisionRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/annotation-revisions';
+};
+
+export type ProjectSaveRevisionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    413: ErrorBody;
+    /**
+     * The drawing was refused; `details` holds every problem
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSaveRevisionError = ProjectSaveRevisionErrors[keyof ProjectSaveRevisionErrors];
+
+export type ProjectSaveRevisionResponses = {
+    /**
+     * These exact shapes already existed
+     */
+    200: SavedRevision;
+    /**
+     * A new revision was stored
+     */
+    201: SavedRevision;
+};
+
+export type ProjectSaveRevisionResponse = ProjectSaveRevisionResponses[keyof ProjectSaveRevisionResponses];
+
 export type ProjectSearchBlockLibraryData = {
     body?: never;
     path: {
@@ -14176,6 +14793,10 @@ export type ProjectListPipelinesData = {
 };
 
 export type ProjectListPipelinesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
     /**
      * Current project authorization failed or is unavailable
      */
@@ -14309,6 +14930,10 @@ export type ProjectListRecipesData = {
 };
 
 export type ProjectListRecipesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
     /**
      * Current project authorization failed or is unavailable
      */
@@ -14489,6 +15114,10 @@ export type ProjectListDatasetsErrors = {
     /**
      * Current project authorization failed or is unavailable
      */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
     401: unknown;
     /**
      * Current project authorization failed or is unavailable
@@ -14565,6 +15194,1746 @@ export type ProjectPublishDatasetResponses = {
 };
 
 export type ProjectPublishDatasetResponse = ProjectPublishDatasetResponses[keyof ProjectPublishDatasetResponses];
+
+export type ProjectListAssessmentsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        kind: TargetKind;
+        trace_id?: string;
+        span_id?: string;
+        session_id?: string;
+        as_of?: number;
+        evaluation_id?: string;
+        case_id?: string;
+        repetition_id?: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-assessments';
+};
+
+export type ProjectListAssessmentsErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListAssessmentsError = ProjectListAssessmentsErrors[keyof ProjectListAssessmentsErrors];
+
+export type ProjectListAssessmentsResponses = {
+    200: AssessmentPage;
+};
+
+export type ProjectListAssessmentsResponse = ProjectListAssessmentsResponses[keyof ProjectListAssessmentsResponses];
+
+export type ProjectRecordAssessmentData = {
+    body: AssessmentRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-assessments';
+};
+
+export type ProjectRecordAssessmentErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRecordAssessmentError = ProjectRecordAssessmentErrors[keyof ProjectRecordAssessmentErrors];
+
+export type ProjectRecordAssessmentResponses = {
+    200: Assessment;
+};
+
+export type ProjectRecordAssessmentResponse = ProjectRecordAssessmentResponses[keyof ProjectRecordAssessmentResponses];
+
+export type ProjectGetAssessmentHistoryData = {
+    body?: never;
+    path: {
+        target_id: string;
+        standing_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Continue below this revision.
+         */
+        before?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-assessments/{target_id}/{standing_id}';
+};
+
+export type ProjectGetAssessmentHistoryErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetAssessmentHistoryError = ProjectGetAssessmentHistoryErrors[keyof ProjectGetAssessmentHistoryErrors];
+
+export type ProjectGetAssessmentHistoryResponses = {
+    200: AssessmentHistory;
+};
+
+export type ProjectGetAssessmentHistoryResponse = ProjectGetAssessmentHistoryResponses[keyof ProjectGetAssessmentHistoryResponses];
+
+export type ProjectDeriveCohortData = {
+    body: CohortRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-cohorts';
+};
+
+export type ProjectDeriveCohortErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectDeriveCohortError = ProjectDeriveCohortErrors[keyof ProjectDeriveCohortErrors];
+
+export type ProjectDeriveCohortResponses = {
+    200: DerivedCohort;
+};
+
+export type ProjectDeriveCohortResponse = ProjectDeriveCohortResponses[keyof ProjectDeriveCohortResponses];
+
+export type ProjectGetDerivedCohortData = {
+    body?: never;
+    path: {
+        /**
+         * The digest of a cohort's cases
+         */
+        cases: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-cohorts/{cases}';
+};
+
+export type ProjectGetDerivedCohortErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetDerivedCohortError = ProjectGetDerivedCohortErrors[keyof ProjectGetDerivedCohortErrors];
+
+export type ProjectGetDerivedCohortResponses = {
+    200: DerivedCohort;
+};
+
+export type ProjectGetDerivedCohortResponse = ProjectGetDerivedCohortResponses[keyof ProjectGetDerivedCohortResponses];
+
+export type ProjectListReviewsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-reviews';
+};
+
+export type ProjectListReviewsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListReviewsError = ProjectListReviewsErrors[keyof ProjectListReviewsErrors];
+
+export type ProjectListReviewsResponses = {
+    200: CaseReviewPage;
+};
+
+export type ProjectListReviewsResponse = ProjectListReviewsResponses[keyof ProjectListReviewsResponses];
+
+export type ProjectProposeCaseData = {
+    body: CaseProposal;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-reviews';
+};
+
+export type ProjectProposeCaseErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectProposeCaseError = ProjectProposeCaseErrors[keyof ProjectProposeCaseErrors];
+
+export type ProjectProposeCaseResponses = {
+    200: ProposedCase;
+    201: ProposedCase;
+};
+
+export type ProjectProposeCaseResponse = ProjectProposeCaseResponses[keyof ProjectProposeCaseResponses];
+
+export type ProjectReviewsOfTargetData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        kind: TargetKind;
+        trace_id?: string;
+        span_id?: string;
+        session_id?: string;
+        as_of?: number;
+        evaluation_id?: string;
+        case_id?: string;
+        repetition_id?: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-reviews/of-target';
+};
+
+export type ProjectReviewsOfTargetErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectReviewsOfTargetError = ProjectReviewsOfTargetErrors[keyof ProjectReviewsOfTargetErrors];
+
+export type ProjectReviewsOfTargetResponses = {
+    200: CaseReviewsOfTarget;
+};
+
+export type ProjectReviewsOfTargetResponse = ProjectReviewsOfTargetResponses[keyof ProjectReviewsOfTargetResponses];
+
+export type ProjectPublishReviewsData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-reviews/publish';
+};
+
+export type ProjectPublishReviewsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    409: ErrorBody;
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishReviewsError = ProjectPublishReviewsErrors[keyof ProjectPublishReviewsErrors];
+
+export type ProjectPublishReviewsResponses = {
+    200: PublishedReviews;
+};
+
+export type ProjectPublishReviewsResponse = ProjectPublishReviewsResponses[keyof ProjectPublishReviewsResponses];
+
+export type ProjectReviewCaseData = {
+    body: CaseReviewAction;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        id: string;
+        organization: string;
+        project: string;
+    };
+    query: {
+        /**
+         * The curation dataset the cases join.
+         */
+        dataset: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-reviews/{id}/actions';
+};
+
+export type ProjectReviewCaseErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectReviewCaseError = ProjectReviewCaseErrors[keyof ProjectReviewCaseErrors];
+
+export type ProjectReviewCaseResponses = {
+    200: CaseReviewItem;
+};
+
+export type ProjectReviewCaseResponse = ProjectReviewCaseResponses[keyof ProjectReviewCaseResponses];
+
+export type ProjectListRubricsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-rubrics';
+};
+
+export type ProjectListRubricsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListRubricsError = ProjectListRubricsErrors[keyof ProjectListRubricsErrors];
+
+export type ProjectListRubricsResponses = {
+    200: RubricPage;
+};
+
+export type ProjectListRubricsResponse = ProjectListRubricsResponses[keyof ProjectListRubricsResponses];
+
+export type ProjectPublishRubricData = {
+    body: Rubric;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-rubrics';
+};
+
+export type ProjectPublishRubricErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishRubricError = ProjectPublishRubricErrors[keyof ProjectPublishRubricErrors];
+
+export type ProjectPublishRubricResponses = {
+    200: RubricVersion;
+};
+
+export type ProjectPublishRubricResponse = ProjectPublishRubricResponses[keyof ProjectPublishRubricResponses];
+
+export type ProjectGetRubricData = {
+    body?: never;
+    path: {
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Absent means the current one. An assessment names a concrete version,
+         * so this is how a reader opens the form somebody actually answered.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-rubrics/{name}';
+};
+
+export type ProjectGetRubricErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetRubricError = ProjectGetRubricErrors[keyof ProjectGetRubricErrors];
+
+export type ProjectGetRubricResponses = {
+    200: RubricVersion;
+};
+
+export type ProjectGetRubricResponse = ProjectGetRubricResponses[keyof ProjectGetRubricResponses];
+
+export type ProjectListScorecardsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards';
+};
+
+export type ProjectListScorecardsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListScorecardsError = ProjectListScorecardsErrors[keyof ProjectListScorecardsErrors];
+
+export type ProjectListScorecardsResponses = {
+    200: ScorecardPage;
+};
+
+export type ProjectListScorecardsResponse = ProjectListScorecardsResponses[keyof ProjectListScorecardsResponses];
+
+export type ProjectPublishScorecardData = {
+    body: Scorecard;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards';
+};
+
+export type ProjectPublishScorecardErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishScorecardError = ProjectPublishScorecardErrors[keyof ProjectPublishScorecardErrors];
+
+export type ProjectPublishScorecardResponses = {
+    200: ScorecardVersion;
+};
+
+export type ProjectPublishScorecardResponse = ProjectPublishScorecardResponses[keyof ProjectPublishScorecardResponses];
+
+export type ProjectGetScorecardData = {
+    body?: never;
+    path: {
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Absent means the current one. A run names a concrete version, so this
+         * is how a reader opens the card a result was actually measured under.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards/{name}';
+};
+
+export type ProjectGetScorecardErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetScorecardError = ProjectGetScorecardErrors[keyof ProjectGetScorecardErrors];
+
+export type ProjectGetScorecardResponses = {
+    200: ScorecardVersion;
+};
+
+export type ProjectGetScorecardResponse = ProjectGetScorecardResponses[keyof ProjectGetScorecardResponses];
+
+export type ProjectDiffScorecardData = {
+    body?: never;
+    path: {
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query: {
+        /**
+         * The version read as before.
+         */
+        from: string;
+        /**
+         * The version read as after.
+         */
+        to: string;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards/{name}/diff';
+};
+
+export type ProjectDiffScorecardErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectDiffScorecardError = ProjectDiffScorecardErrors[keyof ProjectDiffScorecardErrors];
+
+export type ProjectDiffScorecardResponses = {
+    200: ScorecardDiff;
+};
+
+export type ProjectDiffScorecardResponse = ProjectDiffScorecardResponses[keyof ProjectDiffScorecardResponses];
+
+export type ProjectListScorecardVersionsData = {
+    body?: never;
+    path: {
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards/{name}/versions';
+};
+
+export type ProjectListScorecardVersionsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListScorecardVersionsError = ProjectListScorecardVersionsErrors[keyof ProjectListScorecardVersionsErrors];
+
+export type ProjectListScorecardVersionsResponses = {
+    200: ScorecardVersions;
+};
+
+export type ProjectListScorecardVersionsResponse = ProjectListScorecardVersionsResponses[keyof ProjectListScorecardVersionsResponses];
+
+export type ProjectListModelsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/models';
+};
+
+export type ProjectListModelsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListModelsError = ProjectListModelsErrors[keyof ProjectListModelsErrors];
+
+export type ProjectListModelsResponses = {
+    200: ModelPage;
+};
+
+export type ProjectListModelsResponse = ProjectListModelsResponses[keyof ProjectListModelsResponses];
+
+export type ProjectRegisterModelData = {
+    body: RegisterModelRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/models';
+};
+
+export type ProjectRegisterModelErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRegisterModelError = ProjectRegisterModelErrors[keyof ProjectRegisterModelErrors];
+
+export type ProjectRegisterModelResponses = {
+    /**
+     * This exact version already existed
+     */
+    200: RegisteredModel;
+    /**
+     * A new version was stored
+     */
+    201: RegisteredModel;
+};
+
+export type ProjectRegisterModelResponse = ProjectRegisterModelResponses[keyof ProjectRegisterModelResponses];
+
+export type ProjectGetModelData = {
+    body?: never;
+    path: {
+        /**
+         * The model name
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Omitted resolves `production`, then the newest version.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/models/{name}';
+};
+
+export type ProjectGetModelErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetModelError = ProjectGetModelErrors[keyof ProjectGetModelErrors];
+
+export type ProjectGetModelResponses = {
+    200: ModelDetail;
+};
+
+export type ProjectGetModelResponse = ProjectGetModelResponses[keyof ProjectGetModelResponses];
+
+export type ProjectSetModelLabelData = {
+    body: ModelLabelRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The model name
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/models/{name}/labels';
+};
+
+export type ProjectSetModelLabelErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The version may not be promoted
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSetModelLabelError = ProjectSetModelLabelErrors[keyof ProjectSetModelLabelErrors];
+
+export type ProjectSetModelLabelResponses = {
+    200: ModelHead;
+};
+
+export type ProjectSetModelLabelResponse = ProjectSetModelLabelResponses[keyof ProjectSetModelLabelResponses];
+
+export type ProjectListPromptsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Case-insensitive substring over the name, the description and the tags.
+         */
+        search?: string | null;
+        tag?: string | null;
+        /**
+         * Cursor: the last name on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts';
+};
+
+export type ProjectListPromptsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListPromptsError = ProjectListPromptsErrors[keyof ProjectListPromptsErrors];
+
+export type ProjectListPromptsResponses = {
+    200: PromptPage;
+};
+
+export type ProjectListPromptsResponse = ProjectListPromptsResponses[keyof ProjectListPromptsResponses];
+
+export type ProjectPublishPromptData = {
+    body: PublishRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts';
+};
+
+export type ProjectPublishPromptErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishPromptError = ProjectPublishPromptErrors[keyof ProjectPublishPromptErrors];
+
+export type ProjectPublishPromptResponses = {
+    /**
+     * This text was already stored
+     */
+    200: Published;
+    /**
+     * A new version was stored
+     */
+    201: Published;
+};
+
+export type ProjectPublishPromptResponse = ProjectPublishPromptResponses[keyof ProjectPublishPromptResponses];
+
+export type ProjectGetPromptData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt to fetch
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}';
+};
+
+export type ProjectGetPromptErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetPromptError = ProjectGetPromptErrors[keyof ProjectGetPromptErrors];
+
+export type ProjectGetPromptResponses = {
+    200: PromptDetail;
+};
+
+export type ProjectGetPromptResponse = ProjectGetPromptResponses[keyof ProjectGetPromptResponses];
+
+export type ProjectSetPromptLabelData = {
+    body: LabelRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * The label to move, e.g. production
+         */
+        label: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}/labels/{label}';
+};
+
+export type ProjectSetPromptLabelErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * No such prompt, or no such version
+     */
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSetPromptLabelError = ProjectSetPromptLabelErrors[keyof ProjectSetPromptLabelErrors];
+
+export type ProjectSetPromptLabelResponses = {
+    200: PromptHead;
+};
+
+export type ProjectSetPromptLabelResponse = ProjectSetPromptLabelResponses[keyof ProjectSetPromptLabelResponses];
+
+export type ProjectRecordOptimizationData = {
+    body: OptimizationRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The prompt that was optimised
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}/optimizations';
+};
+
+export type ProjectRecordOptimizationErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * The baseline version is not in the registry
+     */
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRecordOptimizationError = ProjectRecordOptimizationErrors[keyof ProjectRecordOptimizationErrors];
+
+export type ProjectRecordOptimizationResponses = {
+    201: OptimizationRecord;
+};
+
+export type ProjectRecordOptimizationResponse = ProjectRecordOptimizationResponses[keyof ProjectRecordOptimizationResponses];
+
+export type ProjectGetOptimizationData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * The optimisation to fetch
+         */
+        optimization_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}/optimizations/{optimization_id}';
+};
+
+export type ProjectGetOptimizationErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetOptimizationError = ProjectGetOptimizationErrors[keyof ProjectGetOptimizationErrors];
+
+export type ProjectGetOptimizationResponses = {
+    200: OptimizationRecord;
+};
+
+export type ProjectGetOptimizationResponse = ProjectGetOptimizationResponses[keyof ProjectGetOptimizationResponses];
+
+export type ProjectRebuildPromptData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The prompt to re-index
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}/rebuild';
+};
+
+export type ProjectRebuildPromptErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRebuildPromptError = ProjectRebuildPromptErrors[keyof ProjectRebuildPromptErrors];
+
+export type ProjectRebuildPromptResponses = {
+    200: PromptHead;
+};
+
+export type ProjectRebuildPromptResponse = ProjectRebuildPromptResponses[keyof ProjectRebuildPromptResponses];
+
+export type ProjectGetPromptVersionData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * sha256 of the prompt text
+         */
+        version_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/prompts/{name}/versions/{version_id}';
+};
+
+export type ProjectGetPromptVersionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetPromptVersionError = ProjectGetPromptVersionErrors[keyof ProjectGetPromptVersionErrors];
+
+export type ProjectGetPromptVersionResponses = {
+    200: PromptVersion;
+};
+
+export type ProjectGetPromptVersionResponse = ProjectGetPromptVersionResponses[keyof ProjectGetPromptVersionResponses];
+
+export type ProjectListTrainingRunsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        model?: string | null;
+        status?: null | TrainingStatus;
+        /**
+         * An exact `project@version`, or a bare project name to match every
+         * export of it.
+         */
+        dataset?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/training-runs';
+};
+
+export type ProjectListTrainingRunsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListTrainingRunsError = ProjectListTrainingRunsErrors[keyof ProjectListTrainingRunsErrors];
+
+export type ProjectListTrainingRunsResponses = {
+    200: TrainingRunPage;
+};
+
+export type ProjectListTrainingRunsResponse = ProjectListTrainingRunsResponses[keyof ProjectListTrainingRunsResponses];
+
+export type ProjectStartTrainingRunData = {
+    body: StartRunRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/training-runs';
+};
+
+export type ProjectStartTrainingRunErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * The run id already finished
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectStartTrainingRunError = ProjectStartTrainingRunErrors[keyof ProjectStartTrainingRunErrors];
+
+export type ProjectStartTrainingRunResponses = {
+    201: TrainingRun;
+};
+
+export type ProjectStartTrainingRunResponse = ProjectStartTrainingRunResponses[keyof ProjectStartTrainingRunResponses];
+
+export type ProjectGetTrainingRunData = {
+    body?: never;
+    path: {
+        /**
+         * The run id the trainer chose
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/training-runs/{run_id}';
+};
+
+export type ProjectGetTrainingRunErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetTrainingRunError = ProjectGetTrainingRunErrors[keyof ProjectGetTrainingRunErrors];
+
+export type ProjectGetTrainingRunResponses = {
+    200: TrainingRun;
+};
+
+export type ProjectGetTrainingRunResponse = ProjectGetTrainingRunResponses[keyof ProjectGetTrainingRunResponses];
+
+export type ProjectFinishTrainingRunData = {
+    body: FinishRunRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The run id
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/training-runs/{run_id}/finish';
+};
+
+export type ProjectFinishTrainingRunErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectFinishTrainingRunError = ProjectFinishTrainingRunErrors[keyof ProjectFinishTrainingRunErrors];
+
+export type ProjectFinishTrainingRunResponses = {
+    200: TrainingRunSummary;
+};
+
+export type ProjectFinishTrainingRunResponse = ProjectFinishTrainingRunResponses[keyof ProjectFinishTrainingRunResponses];
+
+export type ProjectRecordTrainingProgressData = {
+    body: ProgressRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The run id
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/training-runs/{run_id}/progress';
+};
+
+export type ProjectRecordTrainingProgressErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run has finished
+     */
+    409: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRecordTrainingProgressError = ProjectRecordTrainingProgressErrors[keyof ProjectRecordTrainingProgressErrors];
+
+export type ProjectRecordTrainingProgressResponses = {
+    200: TrainingRunSummary;
+};
+
+export type ProjectRecordTrainingProgressResponse = ProjectRecordTrainingProgressResponses[keyof ProjectRecordTrainingProgressResponses];
+
+export type ProjectListWorkflowDefinitionsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-definitions';
+};
+
+export type ProjectListWorkflowDefinitionsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    500: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectListWorkflowDefinitionsError = ProjectListWorkflowDefinitionsErrors[keyof ProjectListWorkflowDefinitionsErrors];
+
+export type ProjectListWorkflowDefinitionsResponses = {
+    200: Array<SavedWorkflow>;
+};
+
+export type ProjectListWorkflowDefinitionsResponse = ProjectListWorkflowDefinitionsResponses[keyof ProjectListWorkflowDefinitionsResponses];
+
+export type ProjectRegisterWorkflowData = {
+    body: WorkflowSpec;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-definitions';
+};
+
+export type ProjectRegisterWorkflowErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    422: ErrorBody;
+    500: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectRegisterWorkflowError = ProjectRegisterWorkflowErrors[keyof ProjectRegisterWorkflowErrors];
+
+export type ProjectRegisterWorkflowResponses = {
+    200: SavedWorkflow;
+};
+
+export type ProjectRegisterWorkflowResponse = ProjectRegisterWorkflowResponses[keyof ProjectRegisterWorkflowResponses];
+
+export type ProjectGetWorkflowDefinitionData = {
+    body?: never;
+    path: {
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        revision?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-definitions/{name}';
+};
+
+export type ProjectGetWorkflowDefinitionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    500: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectGetWorkflowDefinitionError = ProjectGetWorkflowDefinitionErrors[keyof ProjectGetWorkflowDefinitionErrors];
+
+export type ProjectGetWorkflowDefinitionResponses = {
+    200: SavedWorkflow;
+};
+
+export type ProjectGetWorkflowDefinitionResponse = ProjectGetWorkflowDefinitionResponses[keyof ProjectGetWorkflowDefinitionResponses];
 
 export type ListPromptsData = {
     body?: never;

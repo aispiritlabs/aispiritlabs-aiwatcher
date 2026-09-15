@@ -110,8 +110,10 @@ pub(crate) fn line_withdrawal(id: &str) -> String {
 /// Reviews are authored, grow with people rather than traffic, and stay out of
 /// the sweep's way beside the other authored prefixes. The dataset name is a
 /// person's text, so it is hashed.
+pub(crate) const REVIEWS: &str = "evaluation-reviews/";
+pub(crate) const REVIEW_TARGETS: &str = "evaluation-review-targets/";
 pub(crate) fn reviews(dataset: &str) -> String {
-    format!("evaluation-reviews/{}/", hash(dataset.as_bytes()))
+    format!("{REVIEWS}{}/", hash(dataset.as_bytes()))
 }
 pub(crate) fn review(dataset: &str, id: &str) -> String {
     format!("{}{id}/", reviews(dataset))
@@ -123,7 +125,7 @@ pub(crate) fn review_revision(dataset: &str, id: &str, revision: u32) -> String 
 /// an index written after the revision it points at, so a case's judgements
 /// can say what is already under review without reading every dataset's queue.
 pub(crate) fn review_targets(target_address: &str) -> String {
-    format!("evaluation-review-targets/{target_address}/")
+    format!("{REVIEW_TARGETS}{target_address}/")
 }
 pub(crate) fn review_target(target_address: &str, dataset: &str) -> String {
     format!(
@@ -190,8 +192,9 @@ pub(crate) fn external_reply(declaration: &str, question: &str) -> String {
     format!("evaluation-scorers/replies/{declaration}/{question}.json")
 }
 /// Where a derived cohort's cases came from, under the digest of those cases.
+pub(crate) const COHORTS: &str = "evaluation-cohorts/";
 pub(crate) fn derived_cohort(cases: &str) -> String {
-    format!("evaluation-cohorts/{cases}.json")
+    format!("{COHORTS}{cases}.json")
 }
 pub(crate) fn scoring_run(id: &str) -> String {
     format!("{SCORING_RUNS}{id}.json")

@@ -56,6 +56,16 @@ impl Registry {
         }
     }
 
+    /// Bind all annotation storage, including blobs, to one IAM project.
+    /// This does not authorize the caller or migrate data. The annotation
+    /// project's name remains a separate domain identifier within this scope.
+    pub fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        Ok(Self {
+            backend: self.backend.for_project(scope)?,
+            images: self.images.clone(),
+        })
+    }
+
     /// Where an import job gets bytes from, when this deployment has one.
     ///
     /// `None` is a working state and not a broken one: a pipeline that stored
@@ -176,6 +186,17 @@ impl Registry {
     /// When the project does not exist or the image does not validate.
     pub async fn register_image(&self, request: RegisterImageRequest) -> Result<ImageHead> {
         let project = self.project(&request.project).await?;
+        if self.backend.is_scoped()
+            && let Some(blob_id) = request.uri.strip_prefix(images::BLOB_SCHEME)
+        {
+            if blob_id != request.image_id {
+                return Err(Error::Invalid(
+                    "blob URI does not match the registered image id".into(),
+                ));
+            }
+            // A content address is not permission to share another IAM project's bytes.
+            self.blob(blob_id).await?;
+        }
         images::register(&self.backend, &project, request).await
     }
 

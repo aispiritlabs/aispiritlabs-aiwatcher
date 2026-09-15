@@ -6,17 +6,17 @@
 //! one writes, and which end of it is better. It is authored, so it is
 //! versioned by its content and a run names the concrete version.
 
-use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
     Scorecard, ScorecardDiff, ScorecardPage, ScorecardVersion, ScorecardVersions,
 };
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::evaluation_scope::{EvaluationRead, EvaluationWrite};
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -33,31 +33,38 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/evaluation-scorecards",
-            get(list_scorecards).post(publish_scorecard),
-        )
-        .route("/api/v1/evaluation-scorecards/{name}", get(get_scorecard))
-        .route(
-            "/api/v1/evaluation-scorecards/{name}/versions",
-            get(list_scorecard_versions),
-        )
-        .route(
-            "/api/v1/evaluation-scorecards/{name}/diff",
-            get(diff_scorecard),
-        )
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
 }
 
-fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
-    state
-        .evaluations
-        .as_deref()
-        .ok_or(ApiError::EvaluationDisabled)
+fn resource_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/evaluation-scorecards",
+            get(list_scorecards).post(publish_scorecard),
+        )
+        .route("/evaluation-scorecards/{name}", get(get_scorecard))
+        .route(
+            "/evaluation-scorecards/{name}/versions",
+            get(list_scorecard_versions),
+        )
+        .route("/evaluation-scorecards/{name}/diff", get(diff_scorecard))
+}
+
+#[derive(serde::Deserialize)]
+struct NamedPath {
+    name: String,
 }
 
 fn now() -> i64 {
@@ -76,13 +83,14 @@ fn now() -> i64 {
     (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn publish_scorecard(
-    State(state): State<AppState>,
+    write: EvaluationWrite,
     caller: Caller,
     Json(scorecard): Json<Scorecard>,
 ) -> ApiResult<Json<ScorecardVersion>> {
-    let identity = caller.require(Role::Editor)?;
+    let registry = write.authorize().await?;
+    let identity = &caller.0;
     Ok(Json(
-        registry(&state)?
+        registry
             .publish_scorecard(&scorecard, &identity.subject, now())
             .await?,
     ))
@@ -96,12 +104,10 @@ async fn publish_scorecard(
     responses((status = 200, body = ScorecardPage), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn list_scorecards(
-    State(state): State<AppState>,
-    caller: Caller,
+    EvaluationRead(registry): EvaluationRead,
 ) -> ApiResult<Json<ScorecardPage>> {
-    caller.require(Role::Viewer)?;
     Ok(Json(ScorecardPage {
-        scorecards: registry(&state)?.scorecards().await?,
+        scorecards: registry.scorecards().await?,
     }))
 }
 
@@ -119,13 +125,11 @@ struct VersionQuery {
     responses((status = 200, body = ScorecardVersion), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_scorecard(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    EvaluationRead(registry): EvaluationRead,
+    Path(NamedPath { name }): Path<NamedPath>,
     Query(query): Query<VersionQuery>,
 ) -> ApiResult<Json<ScorecardVersion>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
+    registry
         .scorecard(&name, query.version.as_deref())
         .await?
         .map(Json)
@@ -139,12 +143,10 @@ async fn get_scorecard(
     responses((status = 200, body = ScorecardVersions), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn list_scorecard_versions(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    EvaluationRead(registry): EvaluationRead,
+    Path(NamedPath { name }): Path<NamedPath>,
 ) -> ApiResult<Json<ScorecardVersions>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
+    registry
         .scorecard_versions(&name)
         .await?
         .map(Json)
@@ -169,13 +171,11 @@ struct DiffQuery {
     responses((status = 200, body = ScorecardDiff), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn diff_scorecard(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    EvaluationRead(registry): EvaluationRead,
+    Path(NamedPath { name }): Path<NamedPath>,
     Query(query): Query<DiffQuery>,
 ) -> ApiResult<Json<ScorecardDiff>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
+    registry
         .scorecard_diff(&name, &query.from, &query.to)
         .await?
         .map(Json)

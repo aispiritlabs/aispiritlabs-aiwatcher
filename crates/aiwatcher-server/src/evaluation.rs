@@ -1,6 +1,7 @@
 //! Operator-approved evidence, source owner adapters and the retention worker.
 mod annotations;
 mod conversations;
+mod project_cohorts;
 use aiwatcher_core::storage::ObjectStore;
 use aiwatcher_evaluation::{
     CohortFiles, CohortRequest, CollectionReport, DatasetKind, Evaluation, EvaluationError,
@@ -490,6 +491,13 @@ impl LocalSource {
 
 #[async_trait]
 impl SourceAuthority for LocalSource {
+    fn for_project_cohorts(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<Arc<dyn SourceAuthority>> {
+        project_cohorts::bind(self, scope)
+    }
+
     async fn resolve(
         &self,
         manifest: &EvaluationManifest,
@@ -859,6 +867,7 @@ fn prompt_error(error: aiwatcher_prompts::RegistryError) -> EvaluationError {
         | RegistryError::TooLarge { .. } => unavailable(EvidenceState::CorruptArtifact),
         RegistryError::Store(error) => EvaluationError::Storage(error),
         RegistryError::Invalid(_)
+        | RegistryError::InvalidScope(_)
         | RegistryError::InvalidIdentifier { .. }
         | RegistryError::NotAdmitted { .. }
         | RegistryError::UnknownOptimization { .. } => unavailable(EvidenceState::Forbidden),

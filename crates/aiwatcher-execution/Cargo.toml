@@ -33,6 +33,7 @@ duckdb = ["dep:duckdb"]
 [dependencies]
 aiwatcher-bus.workspace = true
 aiwatcher-core.workspace = true
+aiwatcher-iam.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-jobs.workspace = true
 async-trait.workspace = true

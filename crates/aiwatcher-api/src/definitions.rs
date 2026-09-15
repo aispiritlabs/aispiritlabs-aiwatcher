@@ -2,17 +2,17 @@
 
 use crate::{
     auth::Caller,
+    definition_scope::{DefinitionRead, DefinitionWrite},
     error::{ApiError, ApiResult},
     state::AppState,
 };
-use aiwatcher_execution::definition::{DefinitionRegistry, SavedWorkflow, WorkflowSpec};
+use aiwatcher_execution::definition::{SavedWorkflow, WorkflowSpec};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     routing::{get, post},
 };
 use serde::Deserialize;
-use std::sync::Arc;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -21,25 +21,26 @@ struct Api;
 
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+fn resource_router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/workflow-definitions",
+            "/workflow-definitions",
             post(register_workflow).get(list_workflow_definitions),
         )
-        .route(
-            "/api/v1/workflow-definitions/{name}",
-            get(get_workflow_definition),
-        )
-}
-
-pub(crate) fn registry(state: &AppState) -> ApiResult<&Arc<DefinitionRegistry>> {
-    state
-        .workflow_definitions
-        .as_ref()
-        .ok_or(ApiError::WorkflowDefinitionsDisabled)
+        .route("/workflow-definitions/{name}", get(get_workflow_definition))
 }
 
 #[utoipa::path(post, path = "/api/v1/workflow-definitions", request_body = WorkflowSpec,
@@ -49,13 +50,12 @@ pub(crate) fn registry(state: &AppState) -> ApiResult<&Arc<DefinitionRegistry>> 
         (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn register_workflow(
     State(state): State<AppState>,
+    write: DefinitionWrite,
     caller: Caller,
     Json(body): Json<WorkflowSpec>,
 ) -> ApiResult<Json<SavedWorkflow>> {
-    let requested_by = caller
-        .require(aiwatcher_auth::Role::Editor)?
-        .log_subject()
-        .to_owned();
+    let registry = write.authorize().await?;
+    let requested_by = caller.identity().log_subject().to_owned();
     let plan = body.compile().map_err(|error| ApiError::PlanRefused {
         summary: "workflow definition is invalid".to_owned(),
         problems: error.problems().to_vec(),
@@ -71,7 +71,7 @@ async fn register_workflow(
             problems: refused,
         });
     }
-    let saved = registry(&state)?
+    let saved = registry
         .save(body, requested_by, time::OffsetDateTime::now_utc())
         .await?;
     Ok(Json(saved))
@@ -82,9 +82,14 @@ async fn register_workflow(
         (status = 501, body = crate::error::ErrorBody), (status = 502, body = crate::error::ErrorBody),
         (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn list_workflow_definitions(
-    State(state): State<AppState>,
+    DefinitionRead(registry): DefinitionRead,
 ) -> ApiResult<Json<Vec<SavedWorkflow>>> {
-    Ok(Json(registry(&state)?.list().await?))
+    Ok(Json(registry.list().await?))
+}
+
+#[derive(Deserialize)]
+struct NamedPath {
+    name: String,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -98,11 +103,11 @@ struct RevisionQuery {
         (status = 500, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody),
         (status = 502, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn get_workflow_definition(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
+    DefinitionRead(registry): DefinitionRead,
+    Path(NamedPath { name }): Path<NamedPath>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<SavedWorkflow>> {
-    registry(&state)?
+    registry
         .get(&name, query.revision.as_deref())
         .await?
         .map(Json)

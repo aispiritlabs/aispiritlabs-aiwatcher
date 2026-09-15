@@ -471,3 +471,75 @@ async fn iam_expiry_and_audit_pagination_are_evaluated_on_each_request() {
 
 #[path = "project_datasets.rs"]
 mod project_datasets;
+
+async fn project(f: &IamFixture, cookie: &str, org: &str) -> String {
+    let (status, body) = f
+        .request(
+            "POST",
+            &format!("{ROOT}/{org}/commands"),
+            Some(cookie),
+            json!({"type":"create_project","name":"Test"}),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["ProjectCreated"]["scope"]["project"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+fn base(org: &str, project: &str) -> String {
+    format!("/api/v1/orgs/{org}/projects/{project}")
+}
+async fn command(f: &IamFixture, owner: &str, org: &str, command: Value) -> Value {
+    let (status, body) = f
+        .request(
+            "POST",
+            &format!("{ROOT}/{org}/commands"),
+            Some(owner),
+            command,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+async fn grant(
+    f: &IamFixture,
+    owner: &str,
+    org: &str,
+    project: &str,
+    role: &str,
+    window: Value,
+) -> Value {
+    let principal = json!({"provider":f.issuer,"subject":"member"});
+    command(
+        f,
+        owner,
+        org,
+        json!({"type":"set_member","principal":principal,"role":"member"}),
+    )
+    .await;
+    command(f, owner, org, json!({"type":"grant","project":project,"grantee":{"kind":"user","value":principal},"role":role,"window":window})).await["GrantCreated"]["id"].clone()
+}
+
+#[path = "project_prompts.rs"]
+mod project_prompts;
+
+#[path = "project_training.rs"]
+mod project_training;
+
+#[path = "project_annotations.rs"]
+mod project_annotations;
+
+#[path = "project_evaluation.rs"]
+mod project_evaluation;
+
+#[path = "project_definitions.rs"]
+mod project_definitions;
+
+#[path = "project_reviews.rs"]
+mod project_reviews;
+
+#[path = "project_cohorts.rs"]
+mod project_cohorts;

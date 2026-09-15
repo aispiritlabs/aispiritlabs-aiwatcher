@@ -5,18 +5,18 @@
 //! to Evaluation and are served from its store: a judgement about a case is
 //! meaningless beside a result somebody else holds.
 
-use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
     Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentTargetQuery,
     Rubric, RubricPage, RubricVersion,
 };
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::evaluation_scope::{EvaluationRead, EvaluationWrite};
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -34,31 +34,47 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/evaluation-rubrics",
+            "/evaluation-rubrics",
             get(list_rubrics).post(publish_rubric),
         )
-        .route("/api/v1/evaluation-rubrics/{name}", get(get_rubric))
+        .route("/evaluation-rubrics/{name}", get(get_rubric))
         .route(
-            "/api/v1/evaluation-assessments",
+            "/evaluation-assessments",
             get(list_assessments).post(record_assessment),
         )
         .route(
-            "/api/v1/evaluation-assessments/{target_id}/{standing_id}",
+            "/evaluation-assessments/{target_id}/{standing_id}",
             get(get_assessment_history),
         )
 }
 
-fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
-    state
-        .evaluations
-        .as_deref()
-        .ok_or(ApiError::EvaluationDisabled)
+#[derive(serde::Deserialize)]
+struct AssessmentPath {
+    target_id: String,
+    standing_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct NamedPath {
+    name: String,
 }
 
 fn now() -> i64 {
@@ -72,13 +88,14 @@ fn now() -> i64 {
     (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn publish_rubric(
-    State(state): State<AppState>,
+    write: EvaluationWrite,
     caller: Caller,
     Json(rubric): Json<Rubric>,
 ) -> ApiResult<Json<RubricVersion>> {
-    let identity = caller.require(Role::Editor)?;
+    let registry = write.authorize().await?;
+    let identity = &caller.0;
     Ok(Json(
-        registry(&state)?
+        registry
             .publish_rubric(&rubric, &identity.subject, now())
             .await?,
     ))
@@ -88,13 +105,9 @@ async fn publish_rubric(
 #[utoipa::path(get, path = "/api/v1/evaluation-rubrics",
     responses((status = 200, body = RubricPage), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
-async fn list_rubrics(
-    State(state): State<AppState>,
-    caller: Caller,
-) -> ApiResult<Json<RubricPage>> {
-    caller.require(Role::Viewer)?;
+async fn list_rubrics(EvaluationRead(registry): EvaluationRead) -> ApiResult<Json<RubricPage>> {
     Ok(Json(RubricPage {
-        rubrics: registry(&state)?.rubrics().await?,
+        rubrics: registry.rubrics().await?,
     }))
 }
 
@@ -112,13 +125,11 @@ struct VersionQuery {
     responses((status = 200, body = RubricVersion), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_rubric(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
+    EvaluationRead(registry): EvaluationRead,
+    Path(NamedPath { name }): Path<NamedPath>,
     Query(query): Query<VersionQuery>,
 ) -> ApiResult<Json<RubricVersion>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
+    registry
         .rubric(&name, query.version.as_deref())
         .await?
         .map(Json)
@@ -139,15 +150,14 @@ async fn get_rubric(
     (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn record_assessment(
-    State(state): State<AppState>,
+    write: EvaluationWrite,
     caller: Caller,
     Json(request): Json<AssessmentRequest>,
 ) -> ApiResult<Json<Assessment>> {
-    let identity = caller.require(Role::Editor)?;
+    let registry = write.authorize().await?;
+    let identity = &caller.0;
     Ok(Json(
-        registry(&state)?
-            .assess(&request, &identity.subject, now())
-            .await?,
+        registry.assess(&request, &identity.subject, now()).await?,
     ))
 }
 
@@ -156,12 +166,10 @@ async fn record_assessment(
     responses((status = 200, body = AssessmentPage), (status = 400, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn list_assessments(
-    State(state): State<AppState>,
-    caller: Caller,
+    EvaluationRead(registry): EvaluationRead,
     Query(query): Query<AssessmentTargetQuery>,
 ) -> ApiResult<Json<AssessmentPage>> {
-    caller.require(Role::Viewer)?;
-    Ok(Json(registry(&state)?.assessments(&query.target()?).await?))
+    Ok(Json(registry.assessments(&query.target()?).await?))
 }
 
 #[derive(serde::Deserialize, utoipa::IntoParams)]
@@ -181,14 +189,15 @@ struct HistoryQuery {
     responses((status = 200, body = AssessmentHistory), (status = 400, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_assessment_history(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path((target_id, standing_id)): Path<(String, String)>,
+    EvaluationRead(registry): EvaluationRead,
+    Path(AssessmentPath {
+        target_id,
+        standing_id,
+    }): Path<AssessmentPath>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<AssessmentHistory>> {
-    caller.require(Role::Viewer)?;
     Ok(Json(
-        registry(&state)?
+        registry
             .assessment_history(&target_id, &standing_id, query.before, query.limit)
             .await?,
     ))

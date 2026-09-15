@@ -25,6 +25,15 @@ pub const PUBLICATION_GRACE_SECONDS: i64 = 3600;
 /// Unknown sources fail closed. No fetch of arbitrary producer URLs is implied.
 #[async_trait]
 pub trait SourceAuthority: Send + Sync + std::fmt::Debug {
+    /// Derivation from project-owned datasets only. No default reuse of an
+    /// instance resolver: adapters must explicitly bind their native owners.
+    fn for_project_cohorts(
+        &self,
+        _scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<Arc<dyn SourceAuthority>> {
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    }
+
     async fn resolve(&self, manifest: &EvaluationManifest, subject: &str)
     -> Result<SourceEvidence>;
 
@@ -163,6 +172,7 @@ pub struct Registry {
     authority: Arc<dyn SourceAuthority>,
     config: RegistryConfig,
     content_access: bool,
+    authored_scope: Option<aiwatcher_iam::ProjectScope>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -287,11 +297,48 @@ impl Registry {
             "limits must be positive; page size must not exceed 200",
         )?;
         Ok(Self {
-            store: Store(store, None),
+            store: Store(Arc::new(crate::scope::ProjectStore::legacy(store)), None),
             authority,
             config,
             content_access: false,
+            authored_scope: None,
         })
+    }
+
+    /// Bind authored forms, scorecards, assessments and case reviews to one IAM project.
+    /// This is storage isolation, not authorization or data migration. Other
+    /// evidence operations and source resolution fail closed on this registry.
+    pub fn for_project_authored(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        if let Some(current) = self.authored_scope {
+            require(
+                current == scope,
+                "scope",
+                "registry is already bound to another project",
+            )?;
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            store: Store(
+                Arc::new(crate::scope::ProjectStore::scoped(
+                    self.store.0.clone(),
+                    scope,
+                )),
+                None,
+            ),
+            authority: Arc::new(crate::scope::NoSources),
+            config: self.config.clone(),
+            content_access: false,
+            authored_scope: Some(scope),
+        })
+    }
+
+    /// Bind cohort metadata and an explicitly scoped native-dataset resolver.
+    /// This grants no execution or evidence-publication capability and performs
+    /// no IAM authorization; the transport checks current project access.
+    pub fn for_project_cohorts(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        let mut registry = self.for_project_authored(scope)?;
+        registry.authority = self.authority.for_project_cohorts(scope)?;
+        Ok(registry)
     }
 
     /// Grant content access only after the transport has authenticated the
@@ -738,6 +785,18 @@ impl Registry {
         now: i64,
     ) -> Result<(crate::ReviewItem, bool)> {
         use crate::review::Words;
+        if self.authored_scope.is_some() {
+            require(
+                proposal.question.is_some(),
+                "question",
+                "project reviews require supplied words until evidence sources are scoped",
+            )?;
+            require(
+                proposal.content != Some(crate::ReviewContent::Measured),
+                "content",
+                "measured words require a verified result source; use written or observed",
+            )?;
+        }
         // Landing on a review under way reads nothing: the words it has stand.
         if let Some(existing) =
             crate::review::existing(&self.store, &proposal.dataset, &proposal.target).await?
@@ -2542,6 +2601,11 @@ impl Registry {
         published_by: &str,
         now: i64,
     ) -> Result<crate::ScorecardVersion> {
+        require(
+            self.authored_scope.is_none() || !scorecard.asks_a_scorer_service(),
+            "scorecard.scorers",
+            "project scorecards cannot yet resolve an external scorer catalog",
+        )?;
         let rubrics = self.rubrics_for(scorecard).await?;
         // What each external metric is, pinned from the catalog now — so the
         // card's version names the framework release and the model, and a

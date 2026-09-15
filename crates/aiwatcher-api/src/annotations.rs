@@ -29,6 +29,7 @@ use aiwatcher_annotations::{
 
 use aiwatcher_annotations::integrations::fetch::ImageSource;
 
+use crate::annotation_scope::{AnnotationRead, AnnotationWrite};
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -68,36 +69,59 @@ struct Api;
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    let legacy = Api::openapi();
+    let mut local = legacy.clone();
+    // Remote fetching and import workers need their own running-job boundary.
+    local.paths.paths.remove("/api/v1/annotation-imports");
+    local.paths.paths.remove("/api/v1/annotation-sources");
+    let mut api = crate::project_scope::openapi(local);
+    api.merge(legacy);
+    api
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .nest(
+            "/api/v1",
+            resource_router()
+                .route("/annotation-imports", post(import_images))
+                .route("/annotation-sources", get(list_sources)),
+        )
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            resource_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
+        )
+}
+
+fn resource_router() -> Router<AppState> {
+    Router::new()
         .route(
-            "/api/v1/annotation-projects",
+            "/annotation-projects",
             get(list_projects).post(save_project),
         )
-        .route("/api/v1/annotation-project", get(get_project))
+        .route("/annotation-project", get(get_project))
+        .route("/annotation-images", get(list_images).post(register_image))
+        .route("/annotation-image", get(get_image))
+        .route("/annotation-revisions", post(save_revision))
+        .route("/annotation-reviews", post(review_image))
+        .route("/annotation-exports", get(list_exports).post(build_export))
+        .route("/annotation-export", get(get_export))
+        .route("/annotation-export/coco", get(get_export_coco))
         .route(
-            "/api/v1/annotation-images",
-            get(list_images).post(register_image),
-        )
-        .route("/api/v1/annotation-image", get(get_image))
-        .route("/api/v1/annotation-imports", post(import_images))
-        .route("/api/v1/annotation-revisions", post(save_revision))
-        .route("/api/v1/annotation-reviews", post(review_image))
-        .route(
-            "/api/v1/annotation-exports",
-            get(list_exports).post(build_export),
-        )
-        .route("/api/v1/annotation-export", get(get_export))
-        .route("/api/v1/annotation-export/coco", get(get_export_coco))
-        .route(
-            "/api/v1/annotation-blobs",
+            "/annotation-blobs",
             post(upload_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
-        .route("/api/v1/annotation-blobs/{image_id}", get(get_blob))
-        .route("/api/v1/annotation-sources", get(list_sources))
+        .route("/annotation-blobs/{image_id}", get(get_blob))
+}
+
+#[derive(Deserialize)]
+struct BlobPath {
+    image_id: String,
 }
 
 fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
@@ -188,8 +212,8 @@ pub struct SourcesQuery {
     ),
     tag = "annotations",
 )]
-async fn list_projects(State(state): State<AppState>) -> ApiResult<Json<ProjectPage>> {
-    Ok(Json(registry(&state)?.projects().await?))
+async fn list_projects(AnnotationRead(registry): AnnotationRead) -> ApiResult<Json<ProjectPage>> {
+    Ok(Json(registry.projects().await?))
 }
 
 /// One project, with the counts that answer "is there enough data yet".
@@ -205,10 +229,10 @@ async fn list_projects(State(state): State<AppState>) -> ApiResult<Json<ProjectP
     tag = "annotations",
 )]
 async fn get_project(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ProjectQuery>,
 ) -> ApiResult<Json<ProjectSummary>> {
-    Ok(Json(registry(&state)?.project_summary(&query.name).await?))
+    Ok(Json(registry.project_summary(&query.name).await?))
 }
 
 /// Create a project, or replace its description, split policy and label schema.
@@ -230,12 +254,11 @@ async fn get_project(
     tag = "annotations",
 )]
 async fn save_project(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: AnnotationWrite,
     Json(request): Json<SaveProjectRequest>,
 ) -> ApiResult<Json<AnnotationProject>> {
-    may_author(&caller)?;
-    Ok(Json(registry(&state)?.save_project(request).await?))
+    let registry = write.authorize().await?;
+    Ok(Json(registry.save_project(request).await?))
 }
 
 // ── Images ───────────────────────────────────────────────────────────────────
@@ -253,7 +276,7 @@ async fn save_project(
     tag = "annotations",
 )]
 async fn list_images(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ImagesQuery>,
 ) -> ApiResult<Json<ImagePage>> {
     let filter = ImageFilter {
@@ -263,7 +286,7 @@ async fn list_images(
         search: query.search,
     };
     Ok(Json(
-        registry(&state)?
+        registry
             .images(
                 &query.project,
                 &filter,
@@ -293,12 +316,11 @@ async fn list_images(
     tag = "annotations",
 )]
 async fn register_image(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: AnnotationWrite,
     Json(request): Json<RegisterImageRequest>,
 ) -> ApiResult<Json<ImageHead>> {
-    may_author(&caller)?;
-    Ok(Json(registry(&state)?.register_image(request).await?))
+    let registry = write.authorize().await?;
+    Ok(Json(registry.register_image(request).await?))
 }
 
 /// Register many images at once, from rows a Flow PHP pipeline produced.
@@ -425,11 +447,11 @@ async fn hydrate(
     tag = "annotations",
 )]
 async fn get_image(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ImageQuery>,
 ) -> ApiResult<Json<ImageDetail>> {
     Ok(Json(
-        registry(&state)?
+        registry
             .image(&query.project, &query.image_id, query.revision.as_deref())
             .await?,
     ))
@@ -459,14 +481,12 @@ async fn get_image(
     tag = "annotations",
 )]
 async fn save_revision(
-    State(state): State<AppState>,
+    write: AnnotationWrite,
     caller: Caller,
     Json(request): Json<SaveRevisionRequest>,
 ) -> ApiResult<(StatusCode, Json<SavedRevision>)> {
-    may_author(&caller)?;
-    let saved = registry(&state)?
-        .save_revision(request, &author(&caller))
-        .await?;
+    let registry = write.authorize().await?;
+    let saved = registry.save_revision(request, &author(&caller)).await?;
     let status = if saved.created {
         StatusCode::CREATED
     } else {
@@ -490,14 +510,12 @@ async fn save_revision(
     tag = "annotations",
 )]
 async fn review_image(
-    State(state): State<AppState>,
+    write: AnnotationWrite,
     caller: Caller,
     Json(request): Json<ReviewRequest>,
 ) -> ApiResult<Json<ImageHead>> {
-    may_author(&caller)?;
-    Ok(Json(
-        registry(&state)?.review(request, &author(&caller)).await?,
-    ))
+    let registry = write.authorize().await?;
+    Ok(Json(registry.review(request, &author(&caller)).await?))
 }
 
 // ── Exports ──────────────────────────────────────────────────────────────────
@@ -514,10 +532,10 @@ async fn review_image(
     tag = "annotations",
 )]
 async fn list_exports(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ProjectQuery>,
 ) -> ApiResult<Json<ExportPage>> {
-    Ok(Json(registry(&state)?.exports(&query.name).await?))
+    Ok(Json(registry.exports(&query.name).await?))
 }
 
 /// Freeze the project as it stands into an immutable, content-addressed
@@ -541,12 +559,11 @@ async fn list_exports(
     tag = "annotations",
 )]
 async fn build_export(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: AnnotationWrite,
     Json(request): Json<ExportRequest>,
 ) -> ApiResult<(StatusCode, Json<BuiltExport>)> {
-    may_author(&caller)?;
-    let built = registry(&state)?.export(request).await?;
+    let registry = write.authorize().await?;
+    let built = registry.export(request).await?;
     let status = if built.created {
         StatusCode::CREATED
     } else {
@@ -570,11 +587,11 @@ async fn build_export(
     tag = "annotations",
 )]
 async fn get_export(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ExportQuery>,
 ) -> ApiResult<Json<ExportManifest>> {
     Ok(Json(
-        registry(&state)?
+        registry
             .export_manifest(&query.project, &query.export)
             .await?,
     ))
@@ -599,11 +616,11 @@ async fn get_export(
     tag = "annotations",
 )]
 async fn get_export_coco(
-    State(state): State<AppState>,
+    AnnotationRead(registry): AnnotationRead,
     Query(query): Query<ExportQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     Ok(Json(
-        registry(&state)?
+        registry
             .coco(&query.project, &query.export, query.split)
             .await?,
     ))
@@ -631,19 +648,16 @@ async fn get_export_coco(
     tag = "annotations",
 )]
 async fn upload_blob(
-    State(state): State<AppState>,
-    caller: Caller,
+    write: AnnotationWrite,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> ApiResult<(StatusCode, Json<StoredBlob>)> {
-    may_author(&caller)?;
+    let registry = write.authorize().await?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let stored = registry(&state)?
-        .put_blob(body.to_vec(), content_type)
-        .await?;
+    let stored = registry.put_blob(body.to_vec(), content_type).await?;
     let status = if stored.created {
         StatusCode::CREATED
     } else {
@@ -655,7 +669,8 @@ async fn upload_blob(
 /// The bytes of an uploaded image.
 ///
 /// Immutable by construction — the key *is* the digest — so it is cached for a
-/// year. An annotation canvas re-fetching a 2 MB plan on every pan would be the
+/// year on legacy routes. Project routes override this with no-store so
+/// revoked access is checked on the next read. An annotation canvas re-fetching a 2 MB plan on every pan would be the
 /// slowest part of the tool.
 #[utoipa::path(
     get,
@@ -670,10 +685,10 @@ async fn upload_blob(
     tag = "annotations",
 )]
 async fn get_blob(
-    State(state): State<AppState>,
-    Path(image_id): Path<String>,
+    AnnotationRead(registry): AnnotationRead,
+    Path(BlobPath { image_id }): Path<BlobPath>,
 ) -> ApiResult<Response> {
-    let (body, content_type) = registry(&state)?.blob(&image_id).await?;
+    let (body, content_type) = registry.blob(&image_id).await?;
     let mut response = body.into_response();
     let headers = response.headers_mut();
     if let Ok(value) = content_type.parse() {
