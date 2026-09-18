@@ -298,3 +298,54 @@ should be added.
   not.
 * The disposable PostgreSQL container was removed after the run. Nothing of this
   stream is left running.
+
+---
+
+## 8. Integration — what the integrator changed, and what it found
+
+Written after the four streams were merged onto `main` (`f388a1f`). The reports
+of B, C and D are beside this one, with the operator's procedure in
+`docs/iam-migration-runbook.md`; the boundary all three of A, B and C implement
+is now [ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md).
+
+Three reconciliations, each a place two streams met:
+
+1. **One `StoreError::OutOfScope`, not two.** A refused an execution the
+   workflow store is not bound to (structured); B refused a record, reference or
+   key from another storage scope (a sentence). They answer the same question
+   the same way, so one variant carrying a sentence survived and
+   `ScopeBinding::refuse` composes its own.
+2. **404 for every scope refusal.** B named the inherited 503 as a promise to
+   come back for a boundary that never moves and suggested 502; 502 reads as an
+   upstream failure, which is not what happened. A's 404 stands and now covers
+   B's half too.
+3. **C's request to A was recorded, not performed.** C needs
+   `ProjectAuthority::authorize` to admit `JudgeEvaluation` and
+   `ExternalEvaluation`, and `ScoreExecutor::execute`'s first guard narrowed to
+   `artifacts` alone. Both are safe only after A's gate, which is not closed —
+   so the contract is written down and the guard stays shut.
+
+What the merge found that no stream could see alone: **`scripts/check-rust-boundaries.py`
+failed** on the merged tree, because D's new `aiwatcher-migration` crate was not
+declared in `scripts/rust-boundaries.json`. A workspace crate is unreviewed
+until somebody states what it may depend on, and no per-crate gate asks that
+question. Registered with its real dependencies.
+
+Also trimmed: six module headers that crossed `lint-comments.py`'s 25-line
+limit, one from each stream including this one. They were invisible per-stream
+because the linter walks `git ls-files`, and a new file is untracked until it is
+committed. Four remain over the limit and are named in that linter's output; one
+of them (`aiwatcher-projector/src/pipeline.rs`) predates all of this work.
+
+Verification of the merged tree, from the canonical checkout on `main`:
+`cargo test --workspace --all-targets` — **1784 passed, 0 failed, 7 ignored**;
+`cargo clippy --workspace --all-targets --all-features -- -Dwarnings`,
+`cargo fmt --all --check`, `git diff --check`, `check-rust-boundaries.py` and
+`check-evaluation-contract.py` clean; `contracts/openapi.json` regenerated and
+identical, so the panel's client was not touched.
+
+Recovery refs, should any of this need to be unpicked:
+`iam-01/snapshot` (the tree all four started from),
+`iam-01/pre-integration-worktree` (the shared checkout's working tree at the
+moment `main` moved), and the four stream branches `iam-01/stream-a`,
+`claude/iam-parallel-B`, `iam-stream-d`.
