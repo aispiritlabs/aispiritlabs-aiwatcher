@@ -171,8 +171,9 @@ pub(crate) fn recording(digest: &str) -> String {
     format!("{RECORDINGS}{digest}.json")
 }
 /// A judge's settings, under the digest a context pins them by.
+pub(crate) const JUDGE_SETTINGS: &str = "evaluation-judges/settings/";
 pub(crate) fn judge_settings(digest: &str) -> String {
-    format!("evaluation-judges/settings/{digest}.json")
+    format!("{JUDGE_SETTINGS}{digest}.json")
 }
 /// A frozen set of human judgements, under its own content address.
 pub(crate) const CALIBRATIONS: &str = "evaluation-judges/calibrations/";
@@ -182,15 +183,17 @@ pub(crate) fn calibration(version: &str) -> String {
 /// What a judge said to one exact question, within the declared run that
 /// asked it. Named by the run and by the digest of the question, so a retry
 /// finds the answer it was already given and another run asks for itself.
+pub(crate) const JUDGE_REPLIES: &str = "evaluation-judges/replies/";
 pub(crate) fn judge_reply(declaration: &str, question: &str) -> String {
-    format!("evaluation-judges/replies/{declaration}/{question}.json")
+    format!("{JUDGE_REPLIES}{declaration}/{question}.json")
 }
 /// The scorer service's catalog, as the work role last read it. Overwritten:
 /// it is what the service says now, and a card pins what it said then.
 pub(crate) const SCORER_CATALOG: &str = "evaluation-scorers/catalog.json";
 /// What a scorer service answered one exact question within one declared run.
+pub(crate) const EXTERNAL_REPLIES: &str = "evaluation-scorers/replies/";
 pub(crate) fn external_reply(declaration: &str, question: &str) -> String {
-    format!("evaluation-scorers/replies/{declaration}/{question}.json")
+    format!("{EXTERNAL_REPLIES}{declaration}/{question}.json")
 }
 /// Where a derived cohort's cases came from, under the digest of those cases.
 pub(crate) const COHORTS: &str = "evaluation-cohorts/";

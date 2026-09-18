@@ -1138,16 +1138,29 @@ impl Registry {
             })?;
         if self.authored_scope.is_some() {
             require(
-                context.judge.is_none()
-                    && context.external_calibration.is_none()
-                    && !card.scorecard.asks_a_scorer_service()
-                    && card.scorecard.judges().is_empty()
-                    && matches!(
-                        context.dataset.kind,
-                        crate::DatasetKind::Curation | crate::DatasetKind::Annotations
-                    ),
+                matches!(
+                    context.dataset.kind,
+                    crate::DatasetKind::Curation | crate::DatasetKind::Annotations
+                ),
+                "context.dataset",
+                "project admission supports native curation and annotation cohorts only",
+            )?;
+            // The archive is outside this path in both directions: a cohort of
+            // its own, and a judge or a scorer service calibrated on evidence
+            // frozen from it. Derived rather than authored, so this refuses a
+            // hand-written context as surely as a derived one.
+            require(
+                !context
+                    .judge
+                    .as_ref()
+                    .is_some_and(|judge| judge.reads_archive)
+                    && !context
+                        .external_calibration
+                        .as_ref()
+                        .is_some_and(|pin| pin.reads_archive),
                 "context",
-                "project admission supports native cohorts and built-in scorers only",
+                "a project measurement may not send the conversation archive's words to a \
+                 provider; the archive keeps its own seal, retention and erasure",
             )?;
         }
         let rubrics = self.rubrics_for(&card.scorecard).await?;
@@ -2693,11 +2706,6 @@ impl Registry {
         published_by: &str,
         now: i64,
     ) -> Result<crate::ScorecardVersion> {
-        require(
-            self.authored_scope.is_none() || !scorecard.asks_a_scorer_service(),
-            "scorecard.scorers",
-            "project scorecards cannot yet resolve an external scorer catalog",
-        )?;
         let rubrics = self.rubrics_for(scorecard).await?;
         // What each external metric is, pinned from the catalog now — so the
         // card's version names the framework release and the model, and a
@@ -2725,6 +2733,16 @@ impl Registry {
         recorded_by: &str,
         now: i64,
     ) -> Result<crate::RecordedCatalog> {
+        // What the service says it runs is the deployment's own fact, read by
+        // the one role that holds a socket to it. A project reads that record
+        // to pin a card against it and never writes one: a project that could
+        // would decide what every other project's cards are published against.
+        require(
+            self.authored_scope.is_none(),
+            "catalog",
+            "the scorer service's catalog is recorded once for the deployment, by the role that \
+             reads it, and never by a project",
+        )?;
         catalog.validate()?;
         let recorded = crate::RecordedCatalog {
             catalog: catalog.clone(),
@@ -3177,70 +3195,123 @@ impl Registry {
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
         run.check(&card.scorecard)?;
+        let taken = match &run.judge {
+            Some(judge) => Some(
+                self.declared_calibration(
+                    &judge.calibration,
+                    run,
+                    &card.scorecard.judges(),
+                    "run.judge.calibration",
+                    "a judge is calibrated on answers people already judged, not on the ones it \
+                     is about to",
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        let external_taken = match &run.external_calibration {
+            Some(named) => Some(
+                self.declared_calibration(
+                    named,
+                    run,
+                    &card.scorecard.external_calibrations(),
+                    "run.external_calibration",
+                    "a metric is calibrated on answers people already judged, not on the ones it \
+                     is about to",
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        // Before anything is kept: a refused project declaration must leave no
+        // judge settings behind, and the project check needs the sets a judged
+        // manifest is derived from.
         if self.authored_scope.is_some() {
-            self.check_project_declaration(run, &card.scorecard, declared_by)
-                .await?;
+            self.check_project_declaration(
+                run,
+                &card.scorecard,
+                declared_by,
+                taken.as_ref().map(|taken| &taken.calibration),
+                external_taken.as_ref().map(|taken| &taken.calibration),
+            )
+            .await?;
         }
         if let Some(judge) = &run.judge {
-            let taken = self
-                .calibration(&judge.calibration.version)
-                .await?
-                .filter(|taken| taken.calibration.name == judge.calibration.name)
-                .ok_or_else(|| EvaluationError::Invalid {
-                    field: "run.judge.calibration".into(),
-                    reason: "names no calibration set this registry took".into(),
-                })?;
-            require(
-                taken.calibration.result.name != run.evaluation_id,
-                "run.judge.calibration",
-                "is taken from this run's own result; a judge is calibrated on answers people \
-                 already judged, not on the ones it is about to",
-            )?;
-            covers(&taken.calibration, &card.scorecard.judges())?;
             // The settings' bytes, where admission reads them by the digest the
             // context will pin — before the declaration that names them.
             crate::judge::keep_settings(&self.store, &judge.settings).await?;
         }
-        if let Some(named) = &run.external_calibration {
-            let taken = self
-                .calibration(&named.version)
-                .await?
-                .filter(|taken| taken.calibration.name == named.name)
-                .ok_or_else(|| EvaluationError::Invalid {
-                    field: "run.external_calibration".into(),
-                    reason: "names no calibration set this registry took".into(),
-                })?;
-            require(
-                taken.calibration.result.name != run.evaluation_id,
-                "run.external_calibration",
-                "is taken from this run's own result; a metric is calibrated on answers people \
-                 already judged, not on the ones it is about to",
-            )?;
-            covers(&taken.calibration, &card.scorecard.external_calibrations())?;
-        }
         crate::scoring::declare(&self.store, run, declared_by, now).await
+    }
+
+    /// The set a run names, read from this registry alone and held to the
+    /// rubrics the card asks. A neighbouring or global set of the same version
+    /// is not this project's, because this store never opens one.
+    async fn declared_calibration(
+        &self,
+        named: &crate::VersionReference,
+        run: &crate::ScoringRun,
+        asked: &[&crate::VersionReference],
+        field: &str,
+        reason: &str,
+    ) -> Result<crate::CalibrationVersion> {
+        let taken = self
+            .calibration(&named.version)
+            .await?
+            .filter(|taken| taken.calibration.name == named.name)
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: field.into(),
+                reason: "names no calibration set this registry took".into(),
+            })?;
+        require(
+            taken.calibration.result.name != run.evaluation_id,
+            field,
+            &format!("is taken from this run's own result; {reason}"),
+        )?;
+        covers(&taken.calibration, asked)?;
+        Ok(taken)
     }
 
     // A declaration is not admission or permission to execute. Until those
     // owners are scoped, only saved answers and native cohorts are supported.
+    //
+    // A judge and a card's framework metrics are supported on top of that: the
+    // rubric, the card, the people's judgements, the set they were frozen into
+    // and the settings a context pins all belong to this project, and only the
+    // service each one asks — a model behind a judge profile, the scorer
+    // service's own release — is the deployment's.
     async fn check_project_declaration(
         &self,
         run: &crate::ScoringRun,
         card: &crate::Scorecard,
         subject: &str,
+        taken: Option<&crate::CalibrationSet>,
+        external_taken: Option<&crate::CalibrationSet>,
     ) -> Result<()> {
         require(
-            run.judge.is_none()
-                && run.external_calibration.is_none()
-                && !card.asks_a_scorer_service()
-                && matches!(
-                    run.variant.dataset.kind,
-                    crate::DatasetKind::Curation | crate::DatasetKind::Annotations
-                ),
-            "run",
-            "project declarations support native cohorts and built-in scorers only; judge, \
-             external scorer and other dataset authorities are not yet scoped",
+            matches!(
+                run.variant.dataset.kind,
+                crate::DatasetKind::Curation | crate::DatasetKind::Annotations
+            ),
+            "run.variant.dataset",
+            "project declarations measure a native curation or annotation cohort only; other \
+             dataset authorities are not yet scoped",
         )?;
+        // Fail closed rather than by arithmetic: a conversation cohort is
+        // already refused above, and a set frozen from conversation evidence
+        // would send the archive's words to a provider under a project nobody
+        // gave the archive's own seal, retention and erasure rules to.
+        for (set, field) in [
+            (taken, "run.judge.calibration"),
+            (external_taken, "run.external_calibration"),
+        ] {
+            require(
+                !set.is_some_and(|set| set.from_archive),
+                field,
+                "is frozen from conversation evidence, which a project measurement may not send \
+                 to a provider; the archive keeps its own seal, retention and erasure",
+            )?;
+        }
         let crate::Answers::Recording(recording) = &run.answers else {
             return Err(EvaluationError::Invalid {
                 field: "run.answers".into(),
@@ -3267,7 +3338,7 @@ impl Registry {
             "the project's owner no longer derives the pinned cohort",
         )?;
         let rubrics = self.rubrics_for(card).await?;
-        Evaluation::prepare(run.manifest(card, &rubrics, None, None, None)?)?;
+        Evaluation::prepare(run.manifest(card, &rubrics, taken, external_taken, None)?)?;
         Ok(())
     }
 
@@ -3297,14 +3368,6 @@ impl Registry {
             .scorecard(&pinned.name, Some(&pinned.version))
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
-        if self.authored_scope.is_some() {
-            self.check_project_declaration(
-                &declaration.run,
-                &card.scorecard,
-                &declaration.declared_by,
-            )
-            .await?;
-        }
         let rubrics = self.rubrics_for(&card.scorecard).await?;
         let calibration = match &declaration.run.judge {
             Some(judge) => Some(
@@ -3324,6 +3387,16 @@ impl Registry {
             ),
             None => None,
         };
+        if self.authored_scope.is_some() {
+            self.check_project_declaration(
+                &declaration.run,
+                &card.scorecard,
+                &declaration.declared_by,
+                calibration.as_ref(),
+                external_calibration.as_ref(),
+            )
+            .await?;
+        }
         let manifest = declaration.run.manifest(
             &card.scorecard,
             &rubrics,

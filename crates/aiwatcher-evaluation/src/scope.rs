@@ -23,6 +23,40 @@ fn refused() -> PortError {
     }
 }
 
+/// What an authored project registry opens: the families people write.
+const AUTHORED: [&str; 7] = [
+    crate::store::RUBRICS,
+    crate::store::ASSESSMENTS,
+    crate::store::SCORECARDS,
+    crate::store::REVIEWS,
+    crate::store::REVIEW_TARGETS,
+    crate::store::COHORTS,
+    crate::store::RECORDINGS,
+];
+
+/// What an evidence registry opens on top of them: a measurement's own
+/// families. A judge's pinned settings and the replies it gave belong to the
+/// declaration that asked, so they are the project's and never the instance's
+/// — a reply kept beside one project's declaration must not answer another's.
+const MEASURED: [&str; 6] = [
+    "evaluations/",
+    crate::store::CALIBRATIONS,
+    crate::store::SCORING_RUNS,
+    crate::store::JUDGE_SETTINGS,
+    crate::store::JUDGE_REPLIES,
+    crate::store::EXTERNAL_REPLIES,
+];
+
+/// The one key a scoped registry reads outside its own prefix, and only reads.
+///
+/// The scorer service's catalog is the deployment's description of what it
+/// runs — adapter names, framework releases, the model a graded metric asks,
+/// and each metric's unit and direction. It holds no project's data, no
+/// address and no credential, and a card published in a project pins what it
+/// said. A project may never write, list or delete it: what the service says
+/// is the work role's to record, once, for the whole deployment.
+const DEPLOYMENT_READS: [&str; 1] = [crate::store::SCORER_CATALOG];
+
 #[derive(Debug)]
 pub(crate) struct ProjectStore {
     inner: Arc<dyn ObjectStore>,
@@ -69,29 +103,25 @@ impl ProjectStore {
             return Err(refused());
         }
         if let Some(prefix) = &self.prefix {
-            let evidence_key = self.evidence
-                && (relative.starts_with("evaluations/")
-                    || relative.starts_with(crate::store::CALIBRATIONS)
-                    || relative.starts_with(crate::store::SCORING_RUNS));
-            if !evidence_key
-                && ![
-                    crate::store::RUBRICS,
-                    crate::store::ASSESSMENTS,
-                    crate::store::SCORECARDS,
-                    crate::store::REVIEWS,
-                    crate::store::REVIEW_TARGETS,
-                    crate::store::COHORTS,
-                    crate::store::RECORDINGS,
-                ]
-                .iter()
-                .any(|family| relative.starts_with(family))
-            {
+            let evidence_key =
+                self.evidence && MEASURED.iter().any(|family| relative.starts_with(family));
+            if !evidence_key && !AUTHORED.iter().any(|family| relative.starts_with(family)) {
                 return Err(refused());
             }
             Ok(format!("{prefix}{relative}"))
         } else {
             Ok(relative.to_owned())
         }
+    }
+
+    /// The deployment's own key, when this read is one of the few a project
+    /// makes outside its prefix. Reads only: every other operation goes
+    /// through [`Self::key`], so nothing here can write or erase one.
+    fn read_key(&self, relative: &str) -> PortResult<String> {
+        if self.prefix.is_some() && DEPLOYMENT_READS.contains(&relative) {
+            return Ok(relative.to_owned());
+        }
+        self.key(relative, false)
     }
 }
 
@@ -104,7 +134,7 @@ impl ObjectStore for ProjectStore {
         self.inner.create(&self.key(key, false)?, body).await
     }
     async fn get(&self, key: &str) -> PortResult<Option<Vec<u8>>> {
-        self.inner.get(&self.key(key, false)?).await
+        self.inner.get(&self.read_key(key)?).await
     }
     async fn list(&self, prefix: &str) -> PortResult<Vec<ObjectEntry>> {
         let full = self.key(prefix, true)?;

@@ -244,21 +244,29 @@ async fn project_calibration_survives_reopen_without_widening_the_judge_store() 
             .await
             .is_err()
     );
-    // Calibration access must not admit judge replies or scoring declarations.
+    // An authored registry opens neither a judge's replies nor a declaration,
+    // and an evidence registry's replies are its project's: absent, never a
+    // neighbour's or the instance's.
+    let call = aiwatcher_evaluation::JudgeCall {
+        model: "judge".into(),
+        messages: vec![],
+        temperature: 0.0,
+        seed: None,
+        max_tokens: 10,
+        schema: json!({}),
+    };
     assert!(
-        ar.remembered_reply(
-            "run",
-            &aiwatcher_evaluation::JudgeCall {
-                model: "judge".into(),
-                messages: vec![],
-                temperature: 0.0,
-                seed: None,
-                max_tokens: 10,
-                schema: json!({})
-            }
-        )
-        .await
-        .is_err()
+        root.for_project_authored(a)
+            .unwrap()
+            .remembered_reply("declared-run", &call)
+            .await
+            .is_err()
+    );
+    assert!(
+        ar.remembered_reply("declared-run", &call)
+            .await
+            .unwrap()
+            .is_none()
     );
     assert!(ar.scoring_run("run").await.is_err());
     let reopened = registry_for(

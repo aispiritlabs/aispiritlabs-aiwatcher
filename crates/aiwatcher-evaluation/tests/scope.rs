@@ -272,6 +272,7 @@ async fn authored_scope_refuses_key_escape_external_catalog_and_instance_sources
     let store = Arc::new(FileObjectStore::open(&dir).await.unwrap());
     let legacy = registry(store.clone());
     let a = legacy.for_project_authored(scope()).unwrap();
+    let b = legacy.for_project_authored(scope()).unwrap();
     for r in [&a, &legacy] {
         for invalid in ["../head", "x/../../y", "..\\head", "/absolute"] {
             assert!(r.rubric("form", Some(invalid)).await.is_err());
@@ -291,7 +292,24 @@ async fn authored_scope_refuses_key_escape_external_catalog_and_instance_sources
     }
     let request=serde_json::from_value(json!({"dataset":{"kind":"curation","name":"data","version":"a".repeat(64)},"split":"test","limit":1})).unwrap();
     assert!(a.derive_cohort(&request, "person", 100).await.is_err());
-    assert!(a.scorer_catalog().await.is_err());
+    // What the scorer service says it runs is the deployment's own record: a
+    // project reads it to pin a card, and may never write one of its own.
+    assert!(a.scorer_catalog().await.unwrap().is_none());
+    let catalog: aiwatcher_evaluation::ScorerCatalog = serde_json::from_value(json!({
+        "contract":1, "adapters":[{"name":"example", "version":"1.0.0", "metrics":[{
+            "metric":"quality", "unit":"ratio", "direction":"higher", "aggregation":"mean",
+            "reads":["answer"]
+        }]}]
+    }))
+    .unwrap();
+    let refused = a
+        .record_scorer_catalog(&catalog, "project-editor", 100)
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("never by a project"),
+        "{refused}"
+    );
     let external: Scorecard = serde_json::from_value(
         json!({"name":"external", "scorers":[{"metric":"quality","scorer":{
             "kind":"external", "adapter":"example", "metric":"quality", "parameters":{}
@@ -303,12 +321,43 @@ async fn authored_scope_refuses_key_escape_external_catalog_and_instance_sources
         .await
         .unwrap_err();
     assert!(
-        refused.to_string().contains("external scorer catalog"),
+        refused
+            .to_string()
+            .contains("no scorer service has described"),
         "{refused}"
     );
     assert!(
         store.list("").await.unwrap().is_empty(),
         "refused operations write nothing"
+    );
+    // Recorded for the deployment, the same project card publishes against it.
+    legacy
+        .record_scorer_catalog(&catalog, "work-1", 101)
+        .await
+        .unwrap();
+    let published = a.publish_scorecard(&external, "person", 102).await.unwrap();
+    let declared = published.scorecard.scorers[0]
+        .scorer
+        .external()
+        .unwrap()
+        .declared
+        .expect("the catalog's own description, pinned into the version");
+    assert_eq!(declared.version, "1.0.0");
+    assert_eq!(declared.unit, "ratio");
+    assert_eq!(
+        declared.direction,
+        aiwatcher_evaluation::MetricDirection::Higher
+    );
+    assert_eq!(
+        declared.aggregation,
+        aiwatcher_evaluation::Aggregation::Mean
+    );
+    assert!(
+        b.scorecard("external", Some(&published.version))
+            .await
+            .unwrap()
+            .is_none(),
+        "one deployment catalog, one card per project"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }

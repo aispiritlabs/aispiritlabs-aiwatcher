@@ -343,9 +343,11 @@ async fn project_declarations_recheck_native_bytes_and_refuse_unscoped_answer_au
             version: "a".repeat(64),
         },
     });
+    // A judged run is supported now, and its calibration set is this project's:
+    // an address no local set has is refused by name, never resolved next door.
     assert!(
         matches!(registry.declare_scoring_run(&judged, "person", 1).await,
-        Err(EvaluationError::Invalid { field, .. }) if field == "run")
+        Err(EvaluationError::Invalid { field, .. }) if field == "run.judge.calibration")
     );
     // Even the judge settings must not be persisted by a refused declaration.
     assert!(

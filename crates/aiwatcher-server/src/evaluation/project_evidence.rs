@@ -77,15 +77,36 @@ impl SourceAuthority for ProjectEvidence {
     ) -> Result<SourceEvidence> {
         // Built-in scoring is admitted against the project's card by Registry;
         // the variant's bytes still pass every ordinary owner/bundle check.
-        // Admission grants no execution authority. Judges and external scoring
-        // remain closed until their own project execution boundary exists.
-        if manifest.context.judge.is_some()
-            || manifest.context.external_calibration.is_some()
-            || (manifest.context.scored_here()
-                && !matches!(
-                    manifest.context.dataset.kind,
-                    DatasetKind::Curation | DatasetKind::Annotations
-                ))
+        // Admission grants no execution authority.
+        //
+        // A judge and a card's calibrated framework metrics are admitted here
+        // too, and only for a measurement this deployment makes over a native
+        // cohort: a producer's judge still has no adapter anywhere (ADR_0030),
+        // and the registry has already held the rubric, the card, the frozen
+        // human judgements and the pinned settings to this project.
+        let measured_here = manifest.context.scored_here()
+            && matches!(
+                manifest.context.dataset.kind,
+                DatasetKind::Curation | DatasetKind::Annotations
+            );
+        let asks_a_model =
+            manifest.context.judge.is_some() || manifest.context.external_calibration.is_some();
+        // What a provider is sent leaves this deployment, so the archive's own
+        // seal, retention and erasure end at it. Refused here as well as in the
+        // registry: this adapter is what a hand-written context reaches.
+        let reads_archive = manifest
+            .context
+            .judge
+            .as_ref()
+            .is_some_and(|judge| judge.reads_archive)
+            || manifest
+                .context
+                .external_calibration
+                .as_ref()
+                .is_some_and(|pin| pin.reads_archive);
+        if (asks_a_model && !measured_here)
+            || reads_archive
+            || (manifest.context.scored_here() && !measured_here)
             || !matches!(
                 manifest.context.dataset.kind,
                 DatasetKind::External | DatasetKind::Curation | DatasetKind::Annotations
