@@ -26,7 +26,7 @@ export function ProfilePage() {
           <CardContent className="space-y-3 text-sm">
             <div className="flex flex-wrap gap-2">{(identity.groups ?? []).map((group) => <Badge key={group}>{group}</Badge>)}</div>
             {(identity.groups ?? []).length === 0 && <p>No groups were provided for this session.</p>}
-            <p className="text-muted-foreground">Read-only SSO groups. Project teams and timed project access are not available on this instance yet.</p>
+            <p className="text-muted-foreground">Read-only SSO groups, and the whole of your instance role. They are never project teams: membership, teams and timed access are aiwatcher&rsquo;s own, under Organizations &amp; projects.</p>
           </CardContent>
         </Card>
       </> : <p role="status">Loading account…</p>}

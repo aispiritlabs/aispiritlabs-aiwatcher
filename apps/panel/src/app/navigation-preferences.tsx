@@ -19,6 +19,7 @@ export function isPanelHref(href: string): boolean {
     return url.origin === 'https://panel.invalid' && (
       START_PAGES.some((page) => page.to === url.pathname)
       || url.pathname === '/account'
+      || url.pathname === '/account/access'
       || /^\/(runs|prompts)\/[^/]+$/.test(url.pathname)
     );
   } catch { return false; }
@@ -49,7 +50,7 @@ export function readNavigationPreferences(raw: string | null, legacySidebar: str
 
 export function navigationArea(pathname: string): string {
   if (pathname === '/') return 'Your work';
-  if (pathname === '/account') return 'Account';
+  if (pathname === '/account' || pathname.startsWith('/account/')) return 'Account';
   if (pathname.startsWith('/runs/')) return 'Observability';
   const section = sectionOf(pathname);
   return (section && areaOf(section, pathname)?.label) || 'Unknown page';

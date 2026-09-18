@@ -16,6 +16,13 @@ export function RootLayout() {
   return <NavigationProvider><ShellLayout /></NavigationProvider>;
 }
 
+/** The account area is not in the navigation, so its pages name themselves. */
+function accountTitle(pathname: string): string | undefined {
+  if (pathname === '/account') return 'Profile & account';
+  if (pathname === '/account/access') return 'Organizations & projects';
+  return undefined;
+}
+
 function ShellLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const matchedSection = sectionOf(pathname);
@@ -23,7 +30,7 @@ function ShellLayout() {
   React.useEffect(() => {
     const area = matchedSection && areaOf(matchedSection, pathname);
     const page = area && (area.views.find((view) => view.to === pathname)?.label ?? area.label);
-    document.title = `${pathname === '/' ? 'Your work' : pathname === '/account' ? 'Profile & account' : page || 'Page'} · aiwatcher`;
+    document.title = `${pathname === '/' ? 'Your work' : accountTitle(pathname) ?? page ?? 'Page'} · aiwatcher`;
   }, [pathname, matchedSection]);
   const { preferences, shell, update } = useNavigationPreferences();
   const collapsed = preferences.collapsed;

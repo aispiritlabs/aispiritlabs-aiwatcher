@@ -186,6 +186,22 @@ followed by a full `tsc` project check.
   autosaving every vertex drag would mint one per mouse move. The canvas
   implements no validation — the registry's 422 carries every problem, and a
   second rule set in TypeScript would drift from the first.
+- `/account` is the one area outside `navigation.ts`, and it gained a second
+  view: **Organizations & projects**, which is where a permission is tested and
+  a lesson is shared. Three rules hold it. There is **no organization switcher
+  in the header** — a selector that scoped the whole panel would announce a
+  multi-tenancy the data plane cannot keep, so the selection lives in this
+  page's URL and means "the thing I am administering". **An access answer is
+  never cached**: `staleTime: 0`, because `ProjectAccess` carries `evaluated_at`
+  and is a decision rather than a capability, and a revoked grant must not go on
+  being true because react-query still had it. And the **History card is the
+  audit, labelled as history** — the API answers `projects` and `access` about
+  the caller alone and lists no organization's members, teams or grants, so the
+  only honest roster is what the server recorded itself doing. Folding those
+  entries into current state in the browser would be a second copy of the
+  policy, wrong the first time a grant expired. What *is* derived from a server
+  answer is which cards to draw: the audit is owner-and-admin only, so its 403
+  is the server saying this caller does not administer the organization.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.

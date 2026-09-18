@@ -1,4 +1,4 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { ProfilePage } from '@/features/account/screens/profile/page';
+import { AccountLayout } from '@/features/account/screens/layout';
 
-export const Route = createFileRoute('/account')({ component: ProfilePage });
+export const Route = createFileRoute('/account')({ component: AccountLayout });

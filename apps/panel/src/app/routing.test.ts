@@ -26,6 +26,7 @@ describe('feature route integration', () => {
     '/data-curation/recipe',
     '/datasets',
     '/account',
+    '/account/access',
     '/learning',
     '/evaluation',
     '/experiments',
@@ -55,6 +56,14 @@ describe('feature route integration', () => {
   ])('keeps the redirect from %s to %s', async (from, to) => {
     const router = await open(from);
     expect(router.state.location.pathname).toBe(to);
+  });
+
+  it('keeps the organization and project being administered in the URL', async () => {
+    const router = await open('/account/access?organization=org-1&project=project-1');
+    expect(router.state.matches.at(-1)?.search).toEqual({
+      organization: 'org-1',
+      project: 'project-1',
+    });
   });
 
   it('opens a neutral workspace at the root', async () => {
