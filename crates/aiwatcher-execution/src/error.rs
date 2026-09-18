@@ -158,6 +158,18 @@ pub enum StoreError {
     #[error("{0}")]
     Backend(String),
 
+    /// A stored record, a reference or a key that belongs to a different
+    /// storage scope than the one asking for it.
+    ///
+    /// Its own variant rather than [`Self::Backend`] because the two answers
+    /// differ on the only question a caller asks about a refusal: a store that
+    /// was briefly unreachable is worth coming back for, and a manifest
+    /// pointing out of this namespace will point out of it identically
+    /// forever. Read as a bad moment, a swapped record would be retried rather
+    /// than reported.
+    #[error("{0}")]
+    OutOfScope(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -177,7 +189,10 @@ impl StoreError {
     #[must_use]
     pub const fn says_the_same_next_time(&self) -> bool {
         match self {
-            Self::PayloadTooLarge { .. } | Self::SingleProcessOnly | Self::Encoding(_) => true,
+            Self::PayloadTooLarge { .. }
+            | Self::SingleProcessOnly
+            | Self::Encoding(_)
+            | Self::OutOfScope(_) => true,
             Self::VersionConflict { .. } | Self::Backend(_) | Self::Io(_) => false,
         }
     }
