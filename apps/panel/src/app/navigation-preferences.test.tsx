@@ -187,6 +187,21 @@ describe('shell rollout and navigation', () => {
     expect(JSON.parse(storage.get(key)!).pins).toEqual([]);
   });
 
+  it('brings a focused navigation link into view, because the rows scroll sideways on a phone', async () => {
+    // Found by tabbing through Data's areas at 375 px in a real browser: focus
+    // landed on Conversations at x=373..505 with the row still at scrollLeft 0,
+    // so the focus ring was entirely off the right edge. jsdom cannot scroll,
+    // so what is pinned here is that the handler is still wired — dropping it
+    // is the way this comes back.
+    const into = vi.fn();
+    vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(into);
+    await setup('/datasets');
+    const rows = screen.getAllByRole('navigation');
+    const link = within(rows[rows.length - 1] as HTMLElement).getAllByRole('link').at(-1) as HTMLElement;
+    act(() => link.focus());
+    expect(into).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+  });
+
   it('counts completed area transitions once and omits blocked navigation and raw object context', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { router } = await setup('/datasets?name=private-dataset');

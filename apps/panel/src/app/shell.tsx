@@ -72,7 +72,7 @@ function ShellLayout() {
       </header>
 
       {shell === 'classic' && <nav aria-label="Work areas" className="flex gap-1 overflow-x-auto border-b border-border px-4">
-        {SECTIONS.map((group) => <Link key={group.id} to={group.home} aria-current={matchedSection?.id === group.id ? 'page' : undefined}
+        {SECTIONS.map((group) => <Link key={group.id} to={group.home} onFocus={reveal} aria-current={matchedSection?.id === group.id ? 'page' : undefined}
           className={cn('shrink-0 border-b-2 px-3 py-3 text-sm', matchedSection?.id === group.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground')}>
           {group.label}
         </Link>)}
@@ -99,6 +99,21 @@ function ShellLayout() {
       </div>
     </div>
   );
+}
+
+/**
+ * Keyboard focus has to land somewhere the reader can see.
+ *
+ * Every navigation row that can outgrow a phone is an `overflow-x-auto`
+ * scroller, and Chrome does **not** reliably scroll a focused link inside one
+ * into view: tabbing through Data's areas at 375 px put focus on Conversations
+ * at x=373..505 with the row still at scrollLeft 0, so the focus ring was
+ * entirely off the right edge and the only clue to where focus had gone was a
+ * two-pixel sliver. `inline: 'nearest'` moves the row the minimum it takes, and
+ * `block: 'nearest'` keeps it from scrolling the page as a side effect.
+ */
+function reveal(event: React.FocusEvent<HTMLElement>) {
+  event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /**
@@ -237,13 +252,14 @@ function NarrowNav({ section, pathname, showGroups }: { section: NavSection; pat
   return (
     <div className="flex flex-col gap-1 md:hidden">
       {showGroups && <nav aria-label="Work areas" className="flex gap-1 overflow-x-auto">
-        {SECTIONS.map((group) => <Link key={group.id} to={group.home} aria-current={section.id === group.id ? 'page' : undefined} className="shrink-0 rounded px-2 py-2 text-sm [&.active]:bg-accent">{group.label}</Link>)}
+        {SECTIONS.map((group) => <Link key={group.id} to={group.home} onFocus={reveal} aria-current={section.id === group.id ? 'page' : undefined} className="shrink-0 rounded px-2 py-2 text-sm [&.active]:bg-accent">{group.label}</Link>)}
       </nav>}
       <nav className="-mx-4 flex items-center gap-1 overflow-x-auto px-4">
         {section.areas.map((area) => (
           <Link
             key={area.to}
             to={area.to}
+            onFocus={reveal}
             className={cn(
               'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm transition-colors',
               active?.to === area.to
@@ -262,6 +278,7 @@ function NarrowNav({ section, pathname, showGroups }: { section: NavSection; pat
             <Link
               key={view.to}
               to={view.to}
+              onFocus={reveal}
               search={carry(active.carries)}
               className="-mb-px shrink-0 whitespace-nowrap border-b-2 border-transparent px-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors [&.active]:border-primary [&.active]:text-foreground"
             >
