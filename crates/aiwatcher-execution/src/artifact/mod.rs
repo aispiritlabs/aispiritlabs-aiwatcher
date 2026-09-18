@@ -3,32 +3,29 @@
 //!
 //! **The catalog stores no bytes.** An [`ArtifactRef`] is a pointer with a
 //! digest; the bytes belong to the `ObjectStore` port the registries already
-//! write through. A catalog holding content would be a second copy of something
-//! addressed by its content.
+//! write through — a catalog holding content would be a second copy of
+//! something addressed by its content.
 //!
 //! Two adapters, one port: [`memory`] for tests and a development run that
 //! keeps no lineage across a restart, [`object`] for everything else, under the
 //! `artifacts/` prefix beside the bytes it describes. What that prefix looks
 //! like — global or one project's — is [`layout`], shared with the writer of
-//! the bytes so that a manifest and the object it describes cannot end up
-//! under two different rules.
+//! the bytes so a manifest and its object cannot land under two rules.
 //!
 //! **A catalog may be bound to one project.** [`object::ObjectArtifactCatalog::for_project`]
 //! moves every family it writes below
-//! `artifacts/scopes/<organization>/<project>/registry/`, beside those bytes,
-//! and refuses every reference that is not this namespace's own — on the way
-//! in and on the way back out, because a record somebody swapped underneath is
-//! the one that would otherwise answer with somebody else's. The binding is
-//! storage isolation and **not** authorization: the scope has to come from
-//! trusted durable execution ownership, and the current grant and lease are
+//! `artifacts/scopes/<organization>/<project>/registry/`, and refuses every
+//! reference that is not this namespace's own, in and out — a record somebody
+//! swapped underneath is the one that would otherwise answer with somebody
+//! else's. It is storage isolation and **not** authorization: the scope comes
+//! from trusted durable execution ownership, and the grant and the lease are
 //! the caller's to check before it asks anything, the cache included.
 //!
-//! **Deleting the index loses nothing authoritative.** Dropping the cache must
-//! cost a rerun and never a result, so a hit is recorded in the workflow
-//! history as [`WorkflowEvent::StepCacheHit`](crate::WorkflowEvent) with its
-//! key and artifact ids — the run stays explainable without the index. And
-//! invalidation *marks* an entry rather than deleting the artifacts it names:
-//! an old execution that used them is a record of what happened.
+//! **Deleting the index loses nothing authoritative.** Dropping the cache costs
+//! a rerun and never a result, so a hit is recorded in the workflow history as
+//! [`WorkflowEvent::StepCacheHit`](crate::WorkflowEvent) with its key and
+//! artifact ids. Invalidation *marks* an entry rather than deleting what it
+//! names: an old execution that used them is a record of what happened.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

@@ -3,10 +3,9 @@
 //! Two callers need the same answer and live in two crates: the catalog here
 //! writes the manifest, the lineage pointer and the cache entry, and
 //! `aiwatcher-server`'s `Artifacts` writes the bytes those describe and the
-//! receipt beside them. They shared a rule and each spelled it out, which is
-//! the arrangement that ends with a manifest under one prefix and its bytes
-//! under another — a catalog row nobody can open, and the one failure that
-//! looks exactly like a working one.
+//! receipt beside them. Each spelling the rule out is the arrangement that ends
+//! with a manifest under one prefix and its bytes under another — a catalog row
+//! nobody can open.
 //!
 //! ```text
 //! artifacts/<kind>/<aa>/<sha256>/data           the bytes            (the writer)

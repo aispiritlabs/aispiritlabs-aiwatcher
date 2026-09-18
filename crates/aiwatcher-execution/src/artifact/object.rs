@@ -14,47 +14,28 @@
 //! artifacts/lineage/<execution>/<sha256>.json   what one run produced
 //! ```
 //!
-//! ## Why the lineage entry is a second write
+//! **The lineage entry is a second write** because an object store lists by
+//! prefix and nothing else: "everything this execution produced" is a question
+//! the manifest cannot answer without walking the bucket. A pointer, so the
+//! manifest stays the one description of an artifact.
 //!
-//! An object store lists by prefix and nothing else. "Everything this execution
-//! produced" is a question the manifest cannot answer without walking every
-//! artifact in the bucket, so it gets a prefix of its own — a pointer, not a
-//! copy, so the manifest stays the one description of an artifact.
-//!
-//! ## Why an unreadable entry is a miss
-//!
-//! Every read here answers `None` rather than an error when the stored JSON is
-//! from a build this one cannot read. The cache is an *index*: a rerun is the
-//! cost of dropping it, and a note about a previous run must never
-//! be the thing that stops the next one.
-//!
-//! ## Why a *readable* entry that describes something else is not
-//!
-//! The two are different failures and deserve different answers. A record this
-//! build cannot parse says nothing; a record it can parse, that names another
-//! key, another execution or another namespace, says something false. Answering
-//! the second as a miss would rerun the work and answering it as a hit would
-//! hand back somebody else's — so it is refused by name, which is the receipt's
-//! own rule one family over, and a silently shorter list is exactly the outcome
-//! that rule exists to prevent.
-//!
-//! ## One project, or the deployment
+//! **An unreadable entry is a miss, and a *readable* one describing something
+//! else is not.** The cache is an index and a rerun is the cost of dropping it;
+//! but a record that names another key, execution or namespace says something
+//! false, and a hit would hand back somebody else's. Refused by name — the
+//! receipt's own rule, one family over.
 //!
 //! [`ObjectArtifactCatalog::for_project`] binds every family below
-//! `artifacts/scopes/<organization>/<project>/registry/`, which is where that
-//! project's bytes already are. Identical bytes, an identical cache key and an
-//! identical execution id in two projects then share no manifest, no
-//! provenance, no cache answer and no invalidation: they are different keys,
-//! and the digest they have in common is unchanged. A bound catalog accepts
-//! only its own namespace's references, and the deployment-wide one accepts
-//! everything it historically did **except** a reference that reaches into a
-//! project — knowing a URI is not access to it, in either direction.
+//! `artifacts/scopes/<organization>/<project>/registry/`, beside that project's
+//! bytes (ADR_0033). Identical bytes, cache key and execution id in two projects
+//! share no manifest, provenance, cache answer or invalidation. A bound catalog
+//! accepts only its own namespace's references; the deployment-wide one accepts
+//! everything it historically did **except** one reaching into a project.
 //!
-//! **This is storage isolation and not authorization.** Nothing here reads a
-//! grant or a lease. A caller binds a scope it took from trusted durable
-//! execution ownership, and checks the current grant *before* it asks — a cache
-//! lookup included, since a hit is an answer about somebody's data whether or
-//! not the work runs afterwards.
+//! **Storage isolation, not authorization.** A caller binds a scope taken from
+//! trusted durable execution ownership and checks the grant *before* it asks —
+//! the cache lookup included, since a hit is an answer about somebody's data
+//! whether or not work follows.
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;

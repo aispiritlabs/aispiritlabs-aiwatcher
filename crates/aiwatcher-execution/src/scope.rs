@@ -1,45 +1,28 @@
 //! Which project an execution belongs to, who started it, and the one rule
-//! every workflow store applies about both.
-//!
-//! An execution used to be one thing: a stream, a projection, a claim table row
-//! and an outbox row, all reachable by id from whichever process held the
-//! store. That is correct while there is one tenant and wrong the moment there
-//! are two — a reactor polling for work, a launcher reading claimable rows, a
-//! timer tick and the outbox publisher would each pick a project's execution up
-//! and carry it out under no authority at all.
-//!
-//! So an execution now has an **owner**, and the owner is durable:
+//! every workflow store applies about both. ADR_0033.
 //!
 //! * [`ExecutionOwnership`] is written **in the transaction that creates the
-//!   execution** and never again ([`WorkflowStore::append`]'s own rule). Not an
-//!   object beside the run, not a row written before the start and not one
-//!   written after it: either the run and its owner both exist or neither does.
+//!   execution** and never again. Either the run and its owner both exist or
+//!   neither does.
 //! * It is **immutable**. A later command, a replay, a retry and a repeated
-//!   start all assert it and none of them may repoint it. A start naming a
-//!   different owner is [`StoreError::OwnershipConflict`], not a second owner.
-//! * It does not come from the plan, its parameters, `requested_by`, the
-//!   declaration's author, a worker's name or anything a claimant says about
-//!   itself. It comes from [`ProjectStart`], which only trusted server wiring
-//!   constructs from an authenticated principal and a resolved scope.
+//!   start all assert it and none may repoint it; a start naming a different
+//!   owner is [`StoreError::OwnershipConflict`], not a second owner.
+//! * It comes from [`ProjectStart`], which only trusted server wiring builds
+//!   from an authenticated principal and a resolved scope — never from the
+//!   plan, its parameters, `requested_by`, a declaration's author, a worker's
+//!   name or anything a claimant says about itself.
+//! * A **global** execution has no record. Every stream this build has written
+//!   is one, so absence *is* the unscoped side and [`ScopeBinding`] reads it
+//!   that way.
 //!
-//! A **global** execution has no record at all. That is deliberate: every
-//! stream this build has ever written is one, and inventing an owner for them
-//! would be a migration this stage explicitly does not perform. Absence *is*
-//! the unscoped side, and [`ScopeBinding`] reads it that way.
+//! The binding goes on the **store** rather than on each call, so the unscoped
+//! handle enforces the same rule from the other side: the reactor, the worker,
+//! the launcher, the timer tick, the outbox publisher and the retention sweep
+//! this binary already runs cannot reach a project's work by accident.
 //!
-//! The binding goes on the **store**, not on each call, for the reason
-//! `Artifacts::for_project` binds a byte store and `DefinitionRegistry::for_project`
-//! binds a registry: one door, checked once, and the unscoped reader enforcing
-//! the same rule from the other side. A store bound to a project sees that
-//! project's executions and nothing else; the unscoped store sees the ones
-//! nobody owns and refuses the rest, so the reactor, the worker, the launcher,
-//! the timer tick, the outbox publisher and the retention sweep this binary
-//! already runs cannot reach a project's work by accident.
-//!
-//! What this is **not**: an authorization decision. Nothing here asks IAM
-//! anything. It says which executions a store may touch at all, which is the
-//! floor a dispatcher stands on when it later asks whether this principal still
-//! holds a grant.
+//! It is **not** authorization. Nothing here asks IAM anything; it says which
+//! executions a store may touch at all, which is the floor a dispatcher stands
+//! on when it asks whether the principal still holds a grant.
 
 use aiwatcher_iam::{Principal, ProjectScope};
 use serde::{Deserialize, Serialize};
@@ -301,7 +284,8 @@ impl ScopeBinding {
         execution: &ExecutionId,
         recorded: Option<&ExecutionOwnership>,
     ) -> Result<T> {
-        let holder = recorded.map_or_else(|| ExecutionScope::Global.label(), ExecutionOwnership::label);
+        let holder =
+            recorded.map_or_else(|| ExecutionScope::Global.label(), ExecutionOwnership::label);
         Err(StoreError::OutOfScope(format!(
             "{execution} belongs to {holder} and this workflow store is bound to {}; \
              a project's execution is never handled by another scope's path",
@@ -534,10 +518,7 @@ mod tests {
         let refused = bound
             .appending(&execution(), Some(&owner(one, "alice")), None, false)
             .expect_err("an adoption");
-        assert!(
-            matches!(refused, StoreError::OutOfScope(_)),
-            "{refused}"
-        );
+        assert!(matches!(refused, StoreError::OutOfScope(_)), "{refused}");
     }
 
     #[test]
@@ -549,10 +530,7 @@ mod tests {
         let refused = global
             .appending(&execution(), None, Some(&owned), false)
             .expect_err("a global append to an owned run");
-        assert!(
-            matches!(refused, StoreError::OutOfScope(_)),
-            "{refused}"
-        );
+        assert!(matches!(refused, StoreError::OutOfScope(_)), "{refused}");
 
         let refused = global
             .appending(&execution(), Some(&owned), None, true)
@@ -570,10 +548,7 @@ mod tests {
         let refused = bound
             .appending(&execution(), Some(&owner(other, "alice")), None, true)
             .expect_err("somebody else's scope");
-        assert!(
-            matches!(refused, StoreError::OutOfScope(_)),
-            "{refused}"
-        );
+        assert!(matches!(refused, StoreError::OutOfScope(_)), "{refused}");
     }
 
     #[test]

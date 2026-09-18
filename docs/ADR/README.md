@@ -4,7 +4,7 @@ One file per decision that would be expensive to reverse, written when the
 decision is made rather than reconstructed afterwards. The value is in the
 **Consequences** section: what this costs, and what would make it wrong.
 
-Thirty-one of them is a lot to read cold. [`docs/decisions/`](../decisions/)
+Thirty-two of them is a lot to read cold. [`docs/decisions/`](../decisions/)
 groups them into four readings — the log, the registries, execution,
 deployment — with one line each and, unlike the table below, which ones later
 ADRs amended or partly took back. Those are reading guides; **these files are
@@ -43,6 +43,7 @@ the record**, and they are what code comments cite.
 | [0029](ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt |
 | [0030](ADR_0030_EVALUATION_EVIDENCE.md) | Evaluation owns pinned variants and durable evidence; contract first, persistence next |
 | [0031](ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints |
+| [0033](ADR_0033_PROJECT_SCOPED_STORAGE.md) | A project's data is reached through a bound store, and an execution carries a durable owner |
 
 Use [template.md](template.md) for a new one, and add a line to the reading it
 belongs to in [`docs/decisions/`](../decisions/).

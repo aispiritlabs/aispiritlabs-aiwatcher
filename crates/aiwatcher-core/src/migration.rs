@@ -3,11 +3,9 @@
 //!
 //! Every registry here owns its key layout — the prompt registry's
 //! `{name}/versions/{id}.json`, the annotation registry's hashed project
-//! segments, the training registry's digested run ids — and each of those
-//! layouts is a decision with a reason behind it. A copier that re-derived
-//! them would be a second implementation of every one of those decisions,
-//! free to drift from the first, and the day it drifted it would write bytes
-//! under a key nothing reads.
+//! segments, the training registry's digested run ids. A copier that re-derived
+//! them would be a second implementation of each, free to drift, and the day it
+//! drifted it would write bytes under a key nothing reads.
 //!
 //! So the owner answers, in this vocabulary: which objects it holds, which key
 //! each of them takes in a bound scope, in what order they may be written, what
@@ -19,14 +17,12 @@
 //! * **The owner names both keys.** `target_key` comes from the owner's own
 //!   scope binding, never from the tool's string arithmetic.
 //! * **Every key under the source prefix is accounted for.** An object this
-//!   adapter does not recognise is neither migrated nor ignored: it is absent
-//!   from [`Inventory::objects`] and from [`Inventory::skipped`], and the tool
-//!   reads that as a schema it must refuse rather than walk past.
+//!   adapter does not recognise is absent from both [`Inventory::objects`] and
+//!   [`Inventory::skipped`], and the tool reads that as a schema it must refuse.
 //! * **A reference is inventoried, never rewritten.** [`ReferenceKind`] says
-//!   whether the owner can resolve it inside this same inventory, whether it
-//!   belongs to another registry, or whether it is text this adapter does not
-//!   interpret. A migration that rewrote one would be changing history to make
-//!   its own copy look consistent.
+//!   whether the owner resolves it here, whether another registry owns it, or
+//!   whether it is text this adapter does not interpret. Rewriting one would be
+//!   changing history to make a copy look consistent.
 
 use std::collections::BTreeMap;
 

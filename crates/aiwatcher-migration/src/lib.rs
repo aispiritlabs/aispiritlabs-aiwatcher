@@ -2,41 +2,32 @@
 //!
 //! Everything in the authored object store was written before projects
 //! existed, under keys with no owner in them. IAM-01 gives each registry a
-//! scoped namespace — `<prefix>/scopes/<organization>/<project>/registry/` —
-//! and the legacy routes keep serving legacy data until somebody moves it.
-//! This crate is what an operator runs to move it, and what they read before
-//! deciding to.
-//!
-//! Four ideas carry it.
+//! scoped namespace — `<prefix>/scopes/<organization>/<project>/registry/`
+//! (ADR_0033) — and the legacy routes keep serving legacy data until somebody
+//! moves it. This is what an operator runs to move it, and reads before
+//! deciding to. The procedure is `docs/iam-migration-runbook.md`.
 //!
 //! **The owner supplies the keys.** Each registry answers in
-//! [`aiwatcher_core::migration`]'s vocabulary: what it holds, where each
-//! object goes in a bound scope, in what order they may be written, and what
-//! each one points at. This crate composes those answers. It computes no
-//! object key, so there is no second implementation of a key layout to drift
-//! from the first.
+//! [`aiwatcher_core::migration`]'s vocabulary: what it holds, where each object
+//! goes in a bound scope, in what order, and what each one points at. This
+//! crate composes those answers and computes no object key, so there is no
+//! second implementation of a layout to drift from the first.
 //!
 //! **A manifest is a pure function of the snapshot.** [`plan::plan`] reads and
-//! hashes; [`manifest::Manifest::manifest_id`] is the digest of everything it
+//! hashes; [`manifest::Manifest::manifest_id`] is the digest of what it
 //! concluded. What the *target* holds is a [`manifest::Survey`], kept out of
-//! that identity on purpose — a half-finished copy changes the target and must
-//! not change the plan, or no resume could bind to it.
+//! that identity: a half-finished copy changes the target and must not change
+//! the plan, or no resume could bind to it.
 //!
 //! **Nothing is trusted out of the manifest file.** [`execute::execute`] plans
-//! again from the live store and refuses unless it reaches the same id. That
-//! one step revalidates every key, detects a source that moved, and detects an
+//! again from the live store and refuses unless it reaches the same id — one
+//! step that revalidates every key, detects a source that moved and detects an
 //! object nobody's adapter recognises.
 //!
-//! **Absence is an answer.** A registry with no adapter is reported as
-//! unsupported, a registry that must not be copied as blocked, and a prefix
-//! nobody owns as unknown — never as a count of zero. A run that copies every
-//! object it planned is [`manifest::Receipt::complete`]; only a run with no
-//! blocker at all is [`manifest::Receipt::cutover_ready`].
-//!
-//! What this crate does **not** do: stop a deployment, change a route, delete
-//! a source, create an organization, a team, a membership or a grant, read an
-//! identity provider's groups, rewrite a stored byte, or decide that a cutover
-//! has happened.
+//! **Absence is an answer**, never a count of zero: a registry with no adapter
+//! is unsupported, one that must not be copied is blocked, a prefix nobody owns
+//! is unknown. Only a run with no blocker at all is
+//! [`manifest::Receipt::cutover_ready`].
 
 pub mod authority;
 pub mod execute;

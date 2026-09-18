@@ -225,18 +225,12 @@ async fn one_idempotency_key_in_two_projects_is_two_runs_with_two_owners() {
         .load(&theirs)
         .await
         .expect_err("another project's execution");
-    assert!(
-        matches!(refused, StoreError::OutOfScope(_)),
-        "{refused}"
-    );
+    assert!(matches!(refused, StoreError::OutOfScope(_)), "{refused}");
     let refused = their_store
         .load(&mine)
         .await
         .expect_err("another project's execution");
-    assert!(
-        matches!(refused, StoreError::OutOfScope(_)),
-        "{refused}"
-    );
+    assert!(matches!(refused, StoreError::OutOfScope(_)), "{refused}");
 }
 
 #[tokio::test]

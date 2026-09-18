@@ -8,7 +8,8 @@
     "projector": ["bus", "core", "trace"],
     "api": ["annotations", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "projector", "prompts", "training", "iam"],
     "server": ["annotations", "api", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "jobs", "projector", "prompts", "runner", "trace", "training", "iam"],
-    "cli": ["api", "auth", "bus", "core", "execution", "server"]
+    "cli": ["api", "auth", "bus", "core", "execution", "server"],
+    "migration": ["annotations", "core", "datasets", "iam", "prompts", "training"]
   },
   "test_only": {
     "annotations": ["prompts"], "conversations": ["prompts"],

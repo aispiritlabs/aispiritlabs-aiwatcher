@@ -387,21 +387,18 @@ fn store_error(error: aiwatcher_core::ports::PortError) -> ActivityError {
 /// So they are constructed together, from one scope, and this is the door that
 /// hands out both. [`Self::bind`] checks the two prefixes agree afterwards
 /// rather than trusting that it passed the same scope twice. Each half can
-/// still be bound on its own — that is what the existing storage tests do — so
-/// this is the shape a caller is given rather than a wall around the parts.
+/// still be bound on its own, so this is the shape a caller is given rather
+/// than a wall around the parts.
 ///
 /// # What this is not
 ///
-/// **It authorizes nothing.** No grant, no lease, no principal is read here,
-/// and possessing one of these is not permission to use it. A caller must take
-/// the scope from trusted durable execution ownership — never from a plan, a
-/// request parameter, a worker's name or a definition's author — and check the
-/// current grant *before* it asks this pair anything, a cache lookup included:
-/// a hit is an answer about a project's data whether or not any work follows.
-///
-/// Nothing in this process constructs one on a production path. The reactors
-/// wired in [`crate::execution::spawn`] are deployment-wide and stay that way
-/// until execution ownership, claims and streams are isolated too.
+/// **It authorizes nothing.** No grant, lease or principal is read here, and
+/// holding one of these is not permission to use it. A caller takes the scope
+/// from trusted durable execution ownership — never a plan, a parameter, a
+/// worker's name or a definition's author — and checks the grant *before* it
+/// asks this pair anything, a cache lookup included: a hit is an answer about a
+/// project's data whether or not any work follows. Nothing constructs one on a
+/// production path.
 #[derive(Clone, Debug)]
 pub struct ProjectArtifacts {
     artifacts: Artifacts,

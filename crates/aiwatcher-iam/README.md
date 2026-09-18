@@ -5,8 +5,12 @@ It authorizes mutations of **its own IAM metadata**. The server now exposes an
 optional IAM API with a transactional audit trail. The dataset, prompt,
 training/model, annotation, authored evaluation, workflow definition and case
 review registries and native cohort derivation now have project-scoped HTTP
-adapters, described below. Legacy data, logs, other artifacts, streams, query services and execution
-workers are not yet isolated.
+adapters, described below. An execution now carries a durable owner and its
+store binds to one project, its artifacts and their catalog are isolated, a
+project may declare judged and framework measurements, and four registries can
+be migrated into a project by hand (see the last section). Logs, query services,
+live streams, schedules and the execution workers themselves are not yet
+isolated, and no dispatcher opens a project execution.
 No organization/project selector should be activated on the strength of this
 crate alone.
 
@@ -1169,3 +1173,113 @@ integers, independent project/organization/global copies and receipts, rebinding
 canonical-reference rejection before I/O, the worker port, corrupt bytes/receipts
 and independent deletion. Existing server tests also pass. No new HTTP contract,
 IAM grant behavior, UI, migration or deployed E2E is claimed by this stage.
+
+## Execution, artifacts, judged measurements and migration: four streams, merged
+
+Four parallel streams took the four remaining halves of IAM-01 at once, from one
+snapshot. The boundary they share is [ADR_0033](../../docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md);
+each stream's own report is in `docs/iam-parallel-{A,B,C,D}-report.md`, and the
+operator's procedure is `docs/iam-migration-runbook.md`. **Project `/start` is
+still closed, no production caller constructs a bound store, and no selector
+should be activated on the strength of this.**
+
+### Durable execution ownership
+
+An execution now carries `ExecutionOwnership { scope, principal, definition }` —
+this crate's `ProjectScope`, the exact `Principal { provider, subject }`, and
+what was started. It is written in the transaction that creates the execution
+and never again: not a row before the start, which claims an id nothing backs,
+and not one after it, which leaves a window in which the run exists and is
+nobody's. It is immutable, and a repeated start naming a different principal is
+refused **before** the inbox — answering it `Duplicate` would tell that caller
+the run was theirs.
+
+It comes from `ProjectStart`, which only trusted server wiring builds from an
+authenticated principal and a resolved scope. It never comes from the plan, its
+parameters, `requested_by`, a declaration's author, a worker's name or anything
+a claimant says about itself. `ProjectStart` has no `Deserialize`: a type that
+can arrive over the wire is a type somebody can send.
+
+A **global** execution has no record, and absence is the unscoped side. Every
+stream this build has written is one, so nothing is backfilled and no existing
+deployment changes. An id nobody has used is nobody's *yet* and a project may
+start a run under it; an execution that exists with no owner is a global run and
+adopting one is refused.
+
+### The scope binds the store
+
+`WorkflowStore::for_project(scope)`, `ObjectArtifactCatalog::for_project`,
+`Artifacts::for_project` and `Registry::for_project_evidence` return the same
+backing store narrowed to one project; `scope()` says which side a handle is on;
+rebinding to a second project is refused and to the same one is idempotent.
+
+The property that matters is the other direction: **the unscoped handle enforces
+the same rule.** A per-execution operation on another scope's execution is
+refused before the backend is touched, and a query across executions — timers
+due, the outbox, the claim table, the stranded count, the launcher's read,
+retention — answers for one side only. The reactor, the worker routes, the pod
+launcher, the timer tick, the outbox publisher and the retention sweep needed no
+change: the store they hold does not see a project's work.
+
+`StoreError::OutOfScope` is one variant for both halves — an execution, and a
+record, reference or key — because both answer the same question the same way.
+The API renders it, `OwnershipConflict` and `NotInThisScope` as **404**: 503
+promises a retry for a boundary that never moves, 502 claims something upstream
+failed, and a run somebody may not reach is a run they do not have.
+
+Two things are instance-wide and are refused by name on a bound store:
+processor checkpoints and schedule slots. A project has no unattended run.
+
+### Identity, without moving what exists
+
+`RunIdentity::of` takes the scope. Global derivations are byte-identical to what
+they always were, so every historical stream stays addressable. A project folds
+`<organization>/<project>` in: one idempotency key in two projects is two
+independent runs, a project's key never addresses a global history, a key stays
+idempotent inside its project, and two workers that both find one slot due still
+derive one id.
+
+### What a dispatcher must do, when one is built
+
+1. Read the scope and the principal from `store.ownership(&execution)` on the
+   bound store — never from the plan, a parameter, a worker's name or a
+   declaration's author.
+2. Check the current grant when it takes the work **and before it publishes**,
+   and treat an IAM failure as `Transient` — never as consent.
+3. Check that grant **before the cache lookup**. A hit is an answer about a
+   project's data whether or not any work follows, and the reactor's lookup runs
+   before anything else.
+4. Build both halves of artifact storage together (`ProjectArtifacts::bind`).
+   A scoped byte store paired with the global catalog describes a project's
+   outputs in the deployment-wide index, where a cache lookup for anybody
+   answers with them.
+5. Never register a project executor in the global `ExecutorRegistry` before
+   all of the above.
+
+`ProjectAuthority` admits `RuntimeBinding::ScoreEvaluation` only. Judged and
+framework measurements compile to `JudgeEvaluation` and `ExternalEvaluation`,
+and `ScoreExecutor::execute` refuses a project registry when a judge, a scorer
+**or** global `artifacts` is set. Widening the first and narrowing the second to
+`artifacts` alone is what opens those two paths — after the gate above, not
+before it. That contract is recorded and deliberately not yet acted on.
+
+### Migration
+
+`aiwatcher-migrate` moves four registries — prompts, datasets, training,
+annotations — into one explicitly named project. The owner supplies the keys,
+the manifest is a pure function of the snapshot, and `execute` plans again from
+the live store and refuses unless it reaches the same `manifest_id`. A write
+requires the **admin** project role, because an ingest token is an editor by
+construction and a token in an agent's environment must not be enough to land
+somebody's registry somewhere.
+
+Conversations are **blocked**: content is sealed with the object's own key path
+as the HKDF `info` and the AEAD associated data (ADR_0021), so the same
+ciphertext under a project key does not open. Eleven further prefixes are named
+unsupported *with their object counts*, never as zero — including `artifacts`,
+`workflows`, `schedules` and the seven `evaluation*` families, each waiting on
+the owner whose layout has just moved.
+
+**Mapping data into a project grants nobody access to it.** Membership and
+grants are a separate decision, and nothing in the tool maps a group name or an
+email address to anything.
