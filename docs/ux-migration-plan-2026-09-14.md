@@ -25,7 +25,7 @@ Inspiracje W&B: oddzielenie kontekstu globalnego, projektu i obiektu; wspólne f
 | IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz rejestry zasobów z zakresem organizacja/projekt (datasety, curation, prompty, treningi, modele, anotacje z plikami obrazów oraz formularze, oceny, karty ewaluacji, definicje workflow oraz review przypadków z publikacją do datasetu i kohorty z natywnych datasetów/anotacji oraz nagrania odpowiedzi, pliki pakietów dowodów i wyniki producentów z approvals oraz retencją). Wykonanie ma trwałego właściciela (scope + principal + plan) zapisywanego razem z nim, a zakres wiąże magazyn, więc globalny reactor, worker, launcher, timer, outbox i retencja odmawiają projektowego wykonania (ADR_0033). Projektowy katalog artefaktów, lineage i cache oraz projektowe pomiary sędziowskie i zewnętrzne są izolowane. Jest manifest migracji i wznawialny wykonawca dla czterech rejestrów (`aiwatcher-migrate`), z rozmowami blokowanymi i jedenastoma prefiksami nazwanymi jako nieobsługiwane. Brak dispatchera i projektowego `/start`; query, strumienie, zadania, log zdarzeń i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
 | IAM-02 | Zaproszenia i dostęp warsztatowy | Niewdrożone; zależą od IAM-01. |
 | FLOW-01 | Pełne przejścia i lineage | Pozostają dedykowane strony agentów, powiązania wersji prompt/model/dataset, porównania przedziałów i wspólne filtry. |
-| LEARN-01 | Learning | Wdrożono `/learning`: stan niedostępnych warsztatów oraz 9 slotów laboratoriów bez fikcyjnej treści, wyników i aktywnych operacji. Listy/szczegóły rzeczywistych warsztatów i provisioning pozostają. |
+| LEARN-01 | Learning | Wdrożono `/learning` nad kontrolą dostępu: **warsztat to projekt, uczestnik to grant, zapis to zrealizowane zaproszenie**. Lista warsztatów organizacji, strona warsztatu z uczestnikami i fazą okna każdego grantu czytaną osobno, zapis przez zaproszenie i dziewięć slotów laboratoriów. Bez pojęcia „warsztatu" w backendzie i bez nowej trasy. Treść instrukcji, testy, ewaluacje, wyniki i postęp nie mają kontraktu i są oznaczone jako niedostępne; silnik treści i ocen pozostaje. |
 
 ## Docelowa architektura informacji
 
@@ -708,8 +708,8 @@ Dwie obserwacje z kodu skracają tę drogę bardziej, niż wynikałoby z planu:
 | 1 | Panel: minimalny IAM | Ręczne testowanie uprawnień bez curla | Czysty frontend. Backend gotowy i naprawdę sprawdza granty; wygenerowany klient ma 82 wpisy, których dziś nikt nie woła |
 | — | **Tu testujesz** | Dwa konta, projekt = lekcja, okno grantu = udostępnienie | Sprawdzane: widoczność cudzych projektów, `edit_until` → Viewer, `read_until` → odcięcie, odebranie grantu, suma grantów z dwóch źródeł |
 | 2 | Zaproszenia | Zapraszanie spoza już-zalogowanych | Jednorazowy, wygasający token `(scope, role, window)`, realizowany po SSO w jednej transakcji z nadaniem grantu |
-| 3 | Nowy shell UX | Krok 2 z „Kolejności wdrażania" | **Nie zależy od IAM — może iść równolegle od kroku 0** |
-| 4 | Learning UI | Warsztaty, uczestnicy, 9 slotów laboratoriów | Obszar `learning` istnieje w `navigation.ts` z placeholderem mówiącym, że zapisy i dostęp czasowy są niedostępne. Silnik treści i ocen osobno |
+| 3 | Nowy shell UX | Krok 2 z „Kolejności wdrażania" | **Zrobione** jako przegląd, nie przebudowa: UX-09 dowiozło całość. Zostają System (brak kontraktu), Administracja jako obszar (świadomie nie), „ostatnie" na starcie, agenci i harmonogramy. Naprawiono fokus w nawigacji mobilnej |
+| 4 | Learning UI | Warsztaty, uczestnicy, 9 slotów laboratoriów | **Zrobione** nad grantami: warsztat = projekt, uczestnik = grant, zapis = zaproszenie. Silnik treści i ocen osobno |
 | 5 | IAM-02 | Obserwowalność projektu | Na końcu, świadomie |
 
 **Czego ta ścieżka nie obejmuje, i trzeba to powiedzieć przed startem.** Uprawnienia będą przetestowane na **danych autorskich** — prompty, datasety, anotacje, treningi, ewaluacje, definicje workflow, review, kohorty, bundle, approvale, deklaracje. **Nie** na obserwowalności: przebiegi, spany, metryki i żywy strumień pozostają instancyjne do IAM-02. Udostępniona lekcja ma więc materiały, a nie ma historii wykonań ani podglądu na żywo. Selektor organizacji/projektu z kroku 1 jest **narzędziem testowym**, nie ogłoszeniem multi-tenancy.
@@ -983,3 +983,128 @@ dwóch przeglądarkach; kroków 3–5; żadnego E2E, klastra ani workerów.
 > commituj po ścieżkach, jeden krótki konwencjonalny nagłówek, bez trailera
 > współautora. Po każdym kroku zdaj raport i **jawnie wypisz, czego nie
 > uruchomiłeś**.
+
+## Kontynuacja — shell sprawdzony i Learning nad grantami (kroki 3 i 4)
+
+Data: 18.09.2026. **Krok 3 przeszedł jako przegląd, nie jako przebudowa; krok 4
+jest zrobiony i obejrzany na żywym serwerze dwiema prawdziwymi sesjami OIDC.
+IAM-02 (krok 5) nietknięte.** Ta sama gałąź `iam-01/local-sso-and-panel`.
+
+### Krok 3 — co shell naprawdę ma, i czego naprawdę nie ma
+
+Nic tu nie budowano od nowa, bo UX-09 dowiozło całość: dwa układy,
+`VITE_AIWATCHER_SHELL`, preferowany start, przypięcia, liczniki przejść i
+dwanaście regresji w `navigation-preferences.test.tsx`. Przegląd „Kryteriów
+odbioru" wobec „Docelowej architektury informacji" zostawia cztery braki i
+**jedną znalezioną usterkę**:
+
+- **Obszar System nie istnieje i nie ma z czego go zbudować.** Runtimes,
+  integracje i konfiguracja instancji nie mają ani jednej trasy w
+  `contracts/openapi.json` (226 ścieżek). To, co pokazałby, jest już mówione tam,
+  gdzie ma znaczenie — 501 z nazwą zmiennej w promptach, datasetach i hubach —
+  więc nie jest to ekran do dorysowania, tylko kontrakt do napisania. Placeholder
+  z wymyśloną listą runtime'ów byłby dokładnie tym, czego zakazuje reguła
+  `AreaPlaceholder`.
+- **Obszar Administracja istnieje, ale świadomie nie jest obszarem.** Siedzi pod
+  `/account/access`, poza `navigation.ts`, bo wejście do sidebara robiłoby z
+  zarządzania grantami miejsce pracy zamiast miejsca, do którego idzie się
+  celowo. To decyzja z kroku 1, nie luka — ale **audyt IAM ma tylko odczyt
+  mutacji**; nie ma eksportu ani retencji, i to jest luka.
+- **„Ostatnie" na stronie startowej nie ma.** Są przypięcia i preferowany start,
+  nie ma historii ostatnio otwartych obiektów. Wymagałoby albo lokalnego zapisu
+  (kolejny schemat w `local-views`), albo kontraktu po stronie serwera; żadnego
+  z nich nie ma, i nie zgadywano który.
+- **Agenci i harmonogramy nie mają własnych miejsc.** „Aplikacje: agenci" to
+  wciąż wymiar w Explore, nie strona obiektu (FLOW-01), a harmonogram siedzi w
+  `data-curation`, nie w obszarze Workflow. Oba są zgodne z dzisiejszym API i oba
+  są przeprowadzką, nie brakiem danych.
+- **Usterka, znaleziona klawiaturą przy 375 px i naprawiona.** Rzędy nawigacji
+  mobilnej to `overflow-x-auto`, a Chrome **nie** przewija do widoku linku, na
+  którym stanął fokus: na `/datasets` fokus lądował na „Conversations" przy
+  x=373..505 przy `scrollLeft` 0 — pierścień fokusu całkowicie poza ekranem, a
+  jedyną wskazówką był dwupikselowy skrawek. To łamało wprost jedno z kryteriów
+  odbioru („żadna globalna kontrolka nie znika poza viewportem"). Naprawa to
+  `onFocus` w czterech rzędach `shell.tsx` ze `scrollIntoView({ block: 'nearest',
+  inline: 'nearest' })`; regresja w `navigation-preferences.test.tsx` pilnuje
+  samego podpięcia, bo jsdom nie przewija. Usterka była **wcześniejsza** —
+  powtarza się na `/datasets` tak samo jak na `/learning`.
+
+Selektor organizacji/projektu w górnym pasku **pozostaje nieaktywny** i nie
+został dodany.
+
+### Krok 4 — Learning, bez pojęcia „warsztatu" w backendzie
+
+Jedno zdanie jest całym projektem tego obszaru: **warsztat to projekt, uczestnik
+to grant, a zapis to zrealizowane zaproszenie.** Nie dopisano ani jednej trasy,
+nie zmieniono kontraktu HTTP, `just openapi` nie było wołane, `src/api/generated`
+nietknięte, żaden crate Rusta nietknięty.
+
+- **Lista warsztatów.** Dwa odczyty, które odpowiadają na różne pytania:
+  `projects` to granty wołającego (z werdyktem serwera na każdym), roster to
+  wszystkie projekty organizacji i dostaje go tylko jej administrator. Pierwsza
+  sekcja nazywa się **„Open to you now"**, bo `Policy::projects` zostawia wyłącznie
+  projekty z grantem **w mocy teraz**. Druga to **„Also in this organization"** —
+  i tak właśnie brzmi, bo trafiają tam trzy różne rzeczy naraz: warsztat, który
+  się administruje bez grantu, taki, który jeszcze się nie zaczął, i taki, który
+  się skończył. Kto nie czyta rosteru, dostaje zdanie mówiące, czego ta lista nie
+  pokazuje — bo nie ma trasy odpowiadającej „na co jestem zapisany", jest tylko
+  „do czego mam teraz dostęp".
+- **Strona warsztatu.** Twoje miejsce (werdykt serwera, każde źródło osobno, z
+  `evaluated_at` i zdaniem, że to migawka), uczestnicy z `grants`, zapis przez
+  zaproszenie i dziewięć slotów laboratoriów.
+- **Faza czytana z okna, nigdy sumowana.** `phaseOf` czyta daty **jednego**
+  grantu: `not open yet`, `open`, `read-only`, `closed` — dokładnie cztery
+  przypadki `GrantWindow::role_at`, z przedziałami półotwartymi. Viewer po
+  `edit_until` zostaje `open`, bo dla niego nic się nie zmieniło, a ogłaszanie mu
+  przejścia, którego nie było, byłoby gorsze niż milczenie. Efektywna rola to
+  maksimum po żywych grantach, serwer bierze ją per żądanie i odpowiada wyłącznie
+  o wołającym — więc panel nie sumuje wierszy, nie ukrywa wygasłych i nie
+  warunkuje żadnej kontrolki tym, co wyliczył. Granty jednej osoby są grupowane w
+  jeden wiersz, bo „stały grant plus warsztatowy" to przypadek, wokół którego cały
+  ten projekt się kręci.
+- **Laboratoria zostają puste.** Treść instrukcji, testy, ewaluacja i wynik nie
+  mają żadnego kontraktu w tej instancji — każdy z dziewięciu slotów mówi
+  `no contract` i nic nie udaje. Poprawione zostało zdanie placeholdera, które
+  przestało być prawdziwe: dostęp czasowy **jest** dostępny i jest nim okno
+  grantu.
+- **Refaktor, którego wymusiła granica architektury.** `features/account/iam.ts`
+  → `shared/lib/iam.ts`, a karta zaproszeń i karta realizacji tokenu →
+  `shared/components/`, sparametryzowane wyłącznie na tytule i zdaniu wstępu.
+  Drugi komplet hooków pod Learning byłby drugim kompletem kluczy cache dla tych
+  samych odpowiedzi: zaproszenie wystawione na jednej stronie zostawiałoby nieświeżą
+  listę na drugiej.
+- **Jedna poprawka zachowania przy okazji.** `GET …/access` odpowiada 404, gdy
+  wołający nie ma żywego grantu — to **odpowiedź**, nie awaria, i zwykły stan
+  administratora patrzącego na warsztat, którego nie prowadzi. Było rysowane na
+  czerwono przez `answerOf`; jest `answerOrNone` i zdanie po ludzku, w Learning i
+  na `/account/access`.
+
+Walidacja:
+
+- Panel: **56 plików, 441 testów**, w tym **19 nowych regresji** — osiem
+  scenariuszy czytania okna i grupowania uczestników, dziewięć scenariuszy strony
+  (rozdział dwóch list, dwa granty jednej osoby, editor kontra viewer po
+  `edit_until`, 404 jako odpowiedź, brak kontrolki dla kogoś bez prawa, token
+  pokazany raz i nigdy nie odczytany ponownie, dziewięć pustych slotów, warsztat
+  w URL, brak dostawcy tożsamości), zdanie dla uczestnika bez rosteru i regresja
+  fokusu w nawigacji mobilnej. Ta ostatnia **sprawdzona, że łapie** — po usunięciu
+  `onFocus` z rzędu obszarów test pada.
+- `npm run build`: granice architektury, Vite i pełne `tsc` — powodzenie.
+  Pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB.
+- `git diff --check`: czysto. Backend, kontrakt i migracje SQL nietknięte.
+- Żywy serwer (`just authentik-up`, `just postgres-up`, `just run-sso-iam`,
+  `just panel`) z trzema warsztatami w trzech fazach i dwiema sesjami OIDC:
+  headless Chromium przy **1440 px i 375 px**, w motywie jasnym i ciemnym, jako
+  prowadzący i jako uczestnik — **bez poziomego przewijania strony**, bez błędów
+  JavaScript, a po naprawie **każdy z 79 przystanków Tab przy 375 px mieści się w
+  viewporcie**. Obejrzano zrzuty wszystkich czterech faz okna.
+
+Czego **nie** uruchomiono: `npm run lint` (nie działa w tym repozytorium i nie
+działało wcześniej — `apps/panel` nie ma eslinta ani jego konfiguracji; osobna
+usterka); żadnych testów Rusta, bo żaden crate nie był tknięty; kroku 5 (IAM-02);
+E2E, klastra, workerów, S3/RustFS; dostarczania zaproszeń pocztą. W przeglądarce
+jedynym „błędem" w konsoli są odpowiedzi serwera, które są odpowiedziami: 404 z
+`access` dla kogoś bez żywego grantu i 403 z `roster`/`grants` dla kogoś, kto nie
+administruje organizacją — obie narysowane zdaniem, nie czerwienią.
+
+**Cała migracja pozostaje w toku.**

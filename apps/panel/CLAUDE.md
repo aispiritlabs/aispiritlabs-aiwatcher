@@ -186,6 +186,30 @@ followed by a full `tsc` project check.
   autosaving every vertex drag would mint one per mouse move. The canvas
   implements no validation — the registry's 422 carries every problem, and a
   second rule set in TypeScript would drift from the first.
+- `learning` is the one area built entirely on a control plane rather than on a
+  store of its own, and one sentence is its whole design: **a workshop is a
+  project, a participant is a grant on it, and enrolling is redeeming an
+  invitation.** Nothing in the backend has the word "workshop" in it and nothing
+  here asks it to — a lesson that runs Monday to Friday and stays readable
+  afterwards is a `GrantWindow`, so this area writes no rule of its own and adds
+  no route. Three things follow. **A phase is read from one grant, never summed
+  into a person's access**: the effective role is the maximum over live grants,
+  the server takes that decision per request and only about the caller, so
+  `lib/enrollment.ts` reads a single row's dates and the page says in words that
+  a closed workshop grant does not mean somebody lost access. The caller's own
+  half is never derived at all — `ProjectAccess` carries the server's verdict
+  for the project and one per source, and where a verdict exists it is the
+  verdict that is drawn. **"Live" is what the first list means**: `projects`
+  keeps only the projects a grant reaches *now*, so a place opening next Monday
+  is absent and one that closed has left, which is why the second section is
+  "Also in this organization" rather than "the ones you administer" and why a
+  reader who cannot see the roster is told what the list cannot show them. And
+  **the nine lab slots stay empty**: the brief, the tests, the evaluation and
+  the mark have no contract anywhere in this instance, and a plausible one would
+  read as working software. The invitation and redeem cards are `shared/`,
+  parameterised on their framing alone, because an administrator inviting
+  somebody to a project and an instructor enrolling them in a workshop are the
+  same offer.
 - `/account` is the one area outside `navigation.ts`, and it gained a second
   view: **Organizations & projects**, which is where a permission is tested and
   a lesson is shared. Three rules hold it. There is **no organization switcher
@@ -316,6 +340,14 @@ followed by a full `tsc` project check.
 - **Never validate a drawing in two places.** The annotation registry refuses an
   invalid revision and reports *every* problem at once as `details` on a 422;
   the panel renders exactly those lines and implements no rules of its own.
+- **Never sum a window into somebody else's access.** A grant's dates may be
+  read one row at a time — that is what a workshop's timetable is — but the
+  effective role is a maximum over every live grant, the server takes it per
+  request, and there is no route that asks it about anybody but the caller. So
+  Learning draws a phase per grant and never a verdict per person, hides no
+  lapsed row, and gates no control on what it worked out. A page that added the
+  rows up would be a second copy of `GrantWindow::role_at` with less to go on
+  than the first.
 - **Never decide in the browser whether a case got worse.** The pinned context
   declares which way each metric is better, so `regressed` is a fact about a
   declaration and `mixed` is a state a single verdict would hide. The panel
