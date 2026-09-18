@@ -17,6 +17,14 @@ just run-sso        # aiwatcher on :8080 as a relying party
 just panel          # the dev server on :5173, which is where you sign in
 ```
 
+For organizations, projects and grants there is a fourth, in place of the
+second — the IAM control plane is oidc-only and keeps its own database:
+
+```bash
+just postgres-up    # :5433
+just run-sso-iam    # the same server, plus /api/v1/iam on aiwatcher_iam
+```
+
 `just authentik-up` used to end at a setup form somebody had to fill in by
 hand. It no longer does: the compose file sets `AUTHENTIK_BOOTSTRAP_PASSWORD`,
 `AUTHENTIK_BOOTSTRAP_TOKEN` and `AUTHENTIK_BOOTSTRAP_EMAIL`, which authentik

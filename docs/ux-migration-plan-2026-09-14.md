@@ -739,3 +739,95 @@ Dwie obserwacje z kodu skracają tę drogę bardziej, niż wynikałoby z planu:
 > Pracuj na osobnej gałęzi z `main`, commituj po ścieżkach, jeden krótki konwencjonalny nagłówek, bez trailera współautora.
 >
 > **Testy na koniec każdego kroku.** Panel: `cd apps/panel && npm run test`, `npm run lint`, `npm run build` (to `check:architecture` + `vite build` + pełne `tsc -b`) — i sprawdź panel klawiaturą, przy 375 px i na szerokim ekranie, w motywie jasnym i ciemnym; żadna globalna kontrolka nie może wyjść poza viewport. Rust, jeśli tknąłeś którykolwiek crate: `cargo test --workspace --all-targets`, `cargo clippy --workspace --all-targets --all-features -- -Dwarnings`, `cargo fmt --all --check`, `git diff --check`, `python3 scripts/check-rust-boundaries.py`, `python3 scripts/lint-comments.py`. PostgreSQL wyłącznie na osobnej, jednorazowej bazie. **Jawnie wypisz, czego nie uruchomiłeś** — a w kroku 0 także to, co uruchomiłeś ręcznie i czego żaden test nie pilnuje.
+
+## Kontynuacja — logowanie lokalne i panel IAM (kroki 0 i 1)
+
+Data: 18.09.2026. **Kroki 0 i 1 z „Kolejności do pierwszego testu permissionów"
+wykonane i zweryfikowane na żywym serwerze. Zaproszenia (krok 2), nowy shell
+(krok 3), Learning (krok 4) i IAM-02 (krok 5) nietknięte. Cała migracja nadal
+w toku.** Gałąź `iam-01/local-sso-and-panel`, dwa commity, niepushowane.
+
+**Krok 0 — SSO lokalnie, po raz pierwszy uruchomione.** Cały przepływ OIDC
+działa: `just authentik-up`, `just run-sso`, logowanie w panelu na :5173,
+`/account` pokazuje tożsamość i grupy IdP tylko do odczytu. Dokładne kroki są
+w [docs/local-sso.md](local-sso.md) — pisane dla następnej osoby, nie jako
+sprawozdanie. Cztery rzeczy, których plan nie mógł przewidzieć, bo wychodzą
+dopiero przy pierwszym uruchomieniu:
+
+- **Pierwsze uruchomienie nie musi być klikaniem.** `AUTHENTIK_BOOTSTRAP_PASSWORD`,
+  `_TOKEN` i `_EMAIL` w compose są czytane raz, przy pierwszym starcie na pustej
+  bazie, przez własny `blueprints/system/bootstrap.yaml` authentika. Dzięki temu
+  `just authentik-secret` czyta sekret klienta przez API zamiast przepisywania go
+  z panelu admina, a `just authentik-seed` zakłada dwie osoby, których wymaga
+  test grantu: `teacher` (w `aiwatcher-admins`, czyli instancyjny admin) i
+  `student` (bez grup, czyli viewer).
+- **Health wyprzedza blueprinty.** `/-/health/ready/` odpowiada 200, zanim worker
+  zastosuje blueprinty; żądanie z tokenem bootstrapowym w tej szczelinie dostaje
+  `Token invalid/expired`. To nie jest błąd konfiguracji i kosztowało jedno
+  fałszywe śledztwo.
+- **Issuer i tak trzeba sprawdzić dyskretnie.** Dokument discovery pod
+  `…/application/o/aiwatcher/.well-known/openid-configuration` jest jedynym
+  dowodem, że slug jest aplikacji, a nie providera.
+- **Dwie osoby nie mieszczą się w jednym profilu przeglądarki.**
+  `scripts/sso-session.py` przechodzi cały authorization code + PKCE przez API
+  egzekutora flow authentika i oddaje ciasteczko sesji aiwatchera. Pułapka jest
+  jedna: egzekutor chce query stronę flow jako **jeden** parametr `query`;
+  przekazane wprost `next=` gubi się, a flow kończy na stronie użytkownika
+  authentika zamiast wrócić na callback — bez żadnego błędu, bo nic nie zawiodło.
+
+Do tego `just run-sso-iam`: ten sam serwer z płaszczyzną kontroli IAM na
+**własnej** bazie `aiwatcher_iam` (nie magazynu workflow), bo IAM jest
+oidc-only i odmawia startu na innym trybie zamiast schodzić do pamięci.
+
+**Krok 1b — wykonany przed panelem, skryptem.** `scripts/iam-permission-check.py`
+zadaje serwerowi szesnaście pytań dwiema prawdziwymi sesjami OIDC i **wszystkie
+trzymają**: że viewer nie założy organizacji; że nie-członek nie potrafi nawet
+nazwać cudzej organizacji (404, nie 403); że założenie projektu nadaje twórcy
+jawny grant i że to jedyny grant, który ktoś dostaje bez nadania; że **właściciel
+organizacji nie ma dostępu do cudzego projektu**; że grant od jutra nie daje nic
+dziś; że po `edit_until` rola spada do Viewer i czytanie zostaje; że po
+`read_until` projekt znika; że dwa żywe źródła sumują się do maksimum i odebranie
+jednego zostawia drugie — na następnym żądaniu; że komenda bez `X-AIWatcher-IAM`
+jest odmawiana; i że komenda nazywająca własnego aktora jest odrzucana (422 —
+ciało odmawia nieznanych pól, więc nigdy nie dociera do handlera).
+
+**Krok 1 — panel.** `/account` stało się obszarem z dwoma widokami: dotychczasowy
+**Profile** i nowy **Organizations & projects**. Jest tam selektor organizacji i
+projektu (w URL), świeża decyzja o dostępie z każdym źródłem i jego oknem,
+formularz udostępnienia z `valid_from` / `edit_until` / `read_until`, komendy
+członkostwa i zespołów, oraz historia z audytu z akcją odebrania grantu.
+Weryfikacja na żywo: konto zalogowane w przeglądarce dostało grant `editor` z
+oknem od teacher-a przez skrypt i **zobaczyło lekcję po stronie odbiorcy** — z
+rolą, oknem i zdaniem, że to migawka, a nie klucz.
+
+Trzy rzeczy, które ten krok ustalił i które wchodzą do `apps/panel/CLAUDE.md`:
+
+- **Nie ma przełącznika organizacji w nagłówku.** Selektor zakresujący cały panel
+  byłby ogłoszeniem multi-tenancy, którego płaszczyzna danych nie utrzyma; wybór
+  siedzi w URL tej jednej strony i znaczy „rzecz, którą administruję".
+- **Odpowiedź o dostępie nie jest cache'owana** (`staleTime: 0`). `ProjectAccess`
+  niesie `evaluated_at` i jest decyzją, nie zdolnością — odebrany grant nie może
+  dalej być prawdziwy dlatego, że react-query go jeszcze trzymał.
+- **Historia to audyt i jest tak podpisana.** I to jest znalezisko kroku 1:
+  **API nie ma trasy czytającej członków organizacji, jej zespoły ani granty
+  projektu.** `projects` i `access` odpowiadają o *wołającym*, co jest właściwym
+  kształtem dla sprawdzenia uprawnienia i niewłaściwym dla listy administratora.
+  Panel więc nie odtwarza stanu z historii — złożenie go w przeglądarce byłoby
+  drugą implementacją polityki, błędną przy pierwszym wygasłym grancie. Stąd też
+  bierze się id grantu do odebrania. To jest brakujący kontrakt dla kroku 2:
+  zaproszenia i tak go potrzebują, więc rosną razem.
+
+Co uruchomiono: panel `npm run build` (czyli `check:architecture` + vite + pełne
+`tsc -b`) i `npm run test` — **422 testy, 0 niepowodzeń**; `prettier` na nowych
+plikach; strona sprawdzona klawiaturą, przy 375 px (bez poziomego przewijania —
+to wymusiło skracanie 64-znakowych subjectów) i w obu motywach. Kontrakt HTTP
+**nietknięty**, `just openapi` nie wołane, `src/api/generated` nietknięte, żaden
+crate Rusta nietknięty.
+
+Czego **nie** uruchomiono i co trzeba powiedzieć wprost: ręcznego przejścia kroku
+1b **w panelu jako dwie osoby** — jedna przeglądarka to jedna sesja authentika, a
+drugiej nie zakładano; zaproszeń, nowego shella, Learning UI i IAM-02; żadnego
+E2E, klastra, workerów, S3/RustFS. `npm run lint` w tym repozytorium **nie
+działa i nie działało wcześniej** — `apps/panel` nie ma konfiguracji eslint ani
+samego eslinta w zależnościach, a CI go nie woła (woła `build` i `test`). To
+osobna usterka, nie skutek tej zmiany.
