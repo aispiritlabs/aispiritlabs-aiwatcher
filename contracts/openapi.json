@@ -4122,14 +4122,130 @@
             }
           },
           {
-            "name": "agent_id",
+            "name": "as_of",
             "in": "query",
-            "description": "Narrow to runs that ran this agent, whatever the dimension is. Lets the\ntree stay scoped when someone arrives from an agent-filtered view.",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now, which is every ordinary read. A caller comparing two\nperiods pins each end, so the older half is the period it names rather\nthan one that slides as the page is read — [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "description": "Narrow the runs before they are grouped, whatever the dimension is.\n\nThese are the runs list's own axes, under the runs list's own names, so\none filter means one thing across every read (`crate::selection`). A\ntree rooted on tools, narrowed to one workflow, is the question that\nmade this more than `agent_id`.",
             "required": false,
             "schema": {
               "type": [
                 "string",
                 "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
               ]
             }
           },
@@ -10231,7 +10347,7 @@
           {
             "name": "window_seconds",
             "in": "query",
-            "description": "Only runs that started within this many seconds of now.",
+            "description": "Only runs that started within this many seconds of the window's end.",
             "required": false,
             "schema": {
               "type": [
@@ -10239,6 +10355,31 @@
                 "null"
               ],
               "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now. A caller comparing two periods pins each end, which is\nalso what moves the timeline's x-axis: the axis runs to the window's\nend, so an older half drawn against `now` would be a chart of mostly\nempty buckets. See [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "description": "The runs these numbers are about — the runs list's own axes, under its\nown names, so one filter means one thing across every read\n(`crate::selection`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -10253,9 +10394,8 @@
             }
           },
           {
-            "name": "model",
+            "name": "runtime",
             "in": "query",
-            "description": "Narrows LLM calls, tokens and LLM latency only; run, tool and step\ncounters still cover all runs selected by the other filters.",
             "required": false,
             "schema": {
               "type": [
@@ -10265,8 +10405,81 @@
             }
           },
           {
-            "name": "conversation_id",
+            "name": "workflow",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Selects the runs that called this model, **and** narrows the counters\nthat are about a call: LLM calls, tokens, cost and LLM latency. Run,\ntool and step counters still cover every call in those runs, because a\ntool call has no model.\n\nSelecting the runs is new (FLOW-01) and is the one behaviour change in\nthis filter. Before it, \"Runs: 412\" beside a model-filtered token chart\ncounted every run in the window, so two numbers on one screen were\nabout two populations with a paragraph of small print between them.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "The same, for the tool half: selects the runs that invoked it and\nnarrows the tool counters to it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "description": "The same, for the registered prompt a call named (ADR_0011).",
             "required": false,
             "schema": {
               "type": [
@@ -20174,6 +20387,18 @@
             }
           },
           {
+            "name": "prompt",
+            "in": "query",
+            "description": "Runs in which a call named this registered prompt.\n\nThe prompt's *name*, never its text and never its version id: the text\nis off the log on purpose (ADR_0011) and a version is what the prompt's\nown page lists. Matched against the run's spans, as `model` and `tool`\nare.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "status",
             "in": "query",
             "required": false,
@@ -20514,6 +20739,18 @@
           {
             "name": "operation",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "description": "Spans that named this registered prompt. Its name, never its version:\nthe registry is keyed by name, and a version is what the prompt's own\npage lists.",
             "required": false,
             "schema": {
               "type": [
@@ -26482,7 +26719,8 @@
           "variant",
           "trace",
           "model",
-          "tool"
+          "tool",
+          "prompt"
         ]
       },
       "DimensionPage": {
@@ -39735,6 +39973,19 @@
               {
                 "$ref": "#/components/schemas/SpanId"
               }
+            ]
+          },
+          "prompt_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The registered prompt the call named, as a reference and never its text\n(ADR_0011).\n\nLifted like the four above so this list can say what a call ran on and\nlink it: a row that names a model, a duration and an outcome, and\nleaves the thing that decided what the model was asked to be found by\nopening the run, is a row that stops one step short. The pair is\ndeliberate — the id identifies the text, the registry is keyed by the\nname, and a producer may send either."
+          },
+          "prompt_version": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "run_id": {

@@ -2276,7 +2276,8 @@ export const DimensionKind = {
     VARIANT: 'variant',
     TRACE: 'trace',
     MODEL: 'model',
-    TOOL: 'tool'
+    TOOL: 'tool',
+    PROMPT: 'prompt'
 } as const;
 
 /**
@@ -9256,6 +9257,19 @@ export type SpanRow = {
     operation?: string | null;
     parent_span_id?: null | SpanId;
     /**
+     * The registered prompt the call named, as a reference and never its text
+     * (ADR_0011).
+     *
+     * Lifted like the four above so this list can say what a call ran on and
+     * link it: a row that names a model, a duration and an outcome, and
+     * leaves the thing that decided what the model was asked to be found by
+     * opening the run, is a row that stops one step short. The pair is
+     * deliberate — the id identifies the text, the registry is keyed by the
+     * name, and a producer may send either.
+     */
+    prompt_name?: string | null;
+    prompt_version?: string | null;
+    /**
      * From the map key: a `CompletedSpan` carries no run id of its own.
      */
     run_id: string;
@@ -12260,10 +12274,31 @@ export type ListDimensionData = {
          */
         window_seconds?: number | null;
         /**
-         * Narrow to runs that ran this agent, whatever the dimension is. Lets the
-         * tree stay scoped when someone arrives from an agent-filtered view.
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now, which is every ordinary read. A caller comparing two
+         * periods pins each end, so the older half is the period it names rather
+         * than one that slides as the page is read — [`crate::window::bounds`].
          */
+        as_of?: number | null;
+        /**
+         * Narrow the runs before they are grouped, whatever the dimension is.
+         *
+         * These are the runs list's own axes, under the runs list's own names, so
+         * one filter means one thing across every read (`crate::selection`). A
+         * tree rooted on tools, narrowed to one workflow, is the question that
+         * made this more than `agent_id`.
+         */
+        conversation_id?: string | null;
         agent_id?: string | null;
+        runtime?: string | null;
+        workflow?: string | null;
+        variant_id?: string | null;
+        trace_id?: string | null;
+        model?: string | null;
+        tool?: string | null;
+        prompt?: string | null;
+        status?: null | RunStatus;
         /**
          * Substring match on the key. The one control that turns a long list into
          * the row someone is looking for.
@@ -14700,16 +14735,51 @@ export type GetMetricsData = {
     path?: never;
     query?: {
         /**
-         * Only runs that started within this many seconds of now.
+         * Only runs that started within this many seconds of the window's end.
          */
         window_seconds?: number | null;
-        agent_id?: string | null;
         /**
-         * Narrows LLM calls, tokens and LLM latency only; run, tool and step
-         * counters still cover all runs selected by the other filters.
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now. A caller comparing two periods pins each end, which is
+         * also what moves the timeline's x-axis: the axis runs to the window's
+         * end, so an older half drawn against `now` would be a chart of mostly
+         * empty buckets. See [`crate::window::bounds`].
+         */
+        as_of?: number | null;
+        /**
+         * The runs these numbers are about — the runs list's own axes, under its
+         * own names, so one filter means one thing across every read
+         * (`crate::selection`).
+         */
+        conversation_id?: string | null;
+        agent_id?: string | null;
+        runtime?: string | null;
+        workflow?: string | null;
+        variant_id?: string | null;
+        trace_id?: string | null;
+        status?: null | RunStatus;
+        /**
+         * Selects the runs that called this model, **and** narrows the counters
+         * that are about a call: LLM calls, tokens, cost and LLM latency. Run,
+         * tool and step counters still cover every call in those runs, because a
+         * tool call has no model.
+         *
+         * Selecting the runs is new (FLOW-01) and is the one behaviour change in
+         * this filter. Before it, "Runs: 412" beside a model-filtered token chart
+         * counted every run in the window, so two numbers on one screen were
+         * about two populations with a paragraph of small print between them.
          */
         model?: string | null;
-        conversation_id?: string | null;
+        /**
+         * The same, for the tool half: selects the runs that invoked it and
+         * narrows the tool counters to it.
+         */
+        tool?: string | null;
+        /**
+         * The same, for the registered prompt a call named (ADR_0011).
+         */
+        prompt?: string | null;
         /**
          * Buckets in the timeline. Clamped to 6..=200.
          */
@@ -19107,6 +19177,15 @@ export type ListRunsData = {
          * Runs that invoked this tool.
          */
         tool?: string | null;
+        /**
+         * Runs in which a call named this registered prompt.
+         *
+         * The prompt's *name*, never its text and never its version id: the text
+         * is off the log on purpose (ADR_0011) and a version is what the prompt's
+         * own page lists. Matched against the run's spans, as `model` and `tool`
+         * are.
+         */
+        prompt?: string | null;
         status?: null | RunStatus;
         /**
          * Cursor: return runs older than this one. Keyset pagination, because an
@@ -19242,6 +19321,12 @@ export type ListSpansData = {
         tool?: string | null;
         step_type?: string | null;
         operation?: string | null;
+        /**
+         * Spans that named this registered prompt. Its name, never its version:
+         * the registry is keyed by name, and a version is what the prompt's own
+         * page lists.
+         */
+        prompt?: string | null;
         status?: null | SpanOutcome;
         /**
          * The filter that turns this list into a hunt for a problem: everything
