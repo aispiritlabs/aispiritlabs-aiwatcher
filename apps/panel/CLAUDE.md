@@ -299,6 +299,24 @@ followed by a full `tsc` project check.
 - An area that exists in the navigation before it exists in the backend renders
   `AreaPlaceholder`, which names what is missing. Never mock data to fill a
   screen — a plausible fake reads as working software.
+- `system` is the one area that describes the **deployment** rather than
+  anything it holds, and every word on it is the server's: `GET
+  /api/v1/system` answers each capability's state, the variables that decide
+  it, the values that are not secrets and one sentence on what this instance
+  does without it. Three things follow. It **derives nothing** — a page that
+  worked out "no object store, so Prompts is off" would be a second copy of
+  `AppState`'s conditions in TypeScript, and the day they disagreed this screen
+  would be the confident one. A row with a variable and **no value** is the
+  contract working: that a thing is configured is not a secret and its value
+  often is, so an address or a credential is reported as its variable's name,
+  and the issuer is the server's own exception rather than this screen's. And
+  it **writes nothing**: changing a setting is an environment variable and a
+  restart, so a form here would promise a change nothing durable explains. Its
+  read needs the `admin` role and its 403 is drawn as a sentence — an inventory
+  of the deployment is an operator's question, so being told no is an answer
+  rather than a failure. The link stays in the sidebar for everybody, because a
+  link that vanished by role makes "is there a System area" a question the
+  panel cannot answer.
 - `src/shared/components/ui/primitives.tsx` holds the shadcn-style primitives in
   use (button, badge, card, stat, id chip). Radix is still not a dependency, and
   the line that said it would arrive with the first dialog is settled the other

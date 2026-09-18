@@ -1237,3 +1237,92 @@ drzewie); żywego serwera z SSO i przeglądarki; klastra, workerów, S3/RustFS;
 `npm run lint` (nadal nie istnieje — PORZ-01). `npm run test` w panelu ma jedną
 porażkę, **nie z tej pracy**: `commands.test.ts` wymaga schematu dla `/system`,
 którego SYS-01 jeszcze nie dopisało.
+
+---
+
+## SYS-01 — obszar System: co ta instancja ma skonfigurowane
+
+Data: 18.09.2026. Strumień SYS-01 z
+[podziału na strumienie](parallel-streams-2026-09-18.md) zamknięty. Plan mówił
+„System nie ma kontraktu i nie ma z czego go zbudować"; pierwsza połowa była
+prawdą, druga nie. Fakty siedziały w `crates/aiwatcher-api/src/state.rs` prawie
+w komplecie — brakowało **jednej** rzeczy i jednej trasy nad nimi.
+
+### Co powstało
+
+- **`GET /api/v1/system`**, moduł `crates/aiwatcher-api/src/system.rs` — facada
+  jak każda inna w tym crate. **28 zdolności**, każda z: stanem
+  (`configured` / `not_configured`), zmiennymi, które o niej decydują,
+  wartościami, które nie są sekretem, i jednym zdaniem o tym, co ta instancja
+  robi bez niej. Pogrupowane w pięć: `identity`, `observability`, `storage`,
+  `runtime`, `integration`.
+- **Rola: `admin`**, i to jest decyzja, nie domyślność. To inwentarz wdrożenia —
+  które magazyny są podpięte, do kogo ta instancja wychodzi na zewnątrz, komu
+  ufa jako dostawcy tożsamości — więc przydaje się operatorowi i przydaje się
+  atakującemu, a czytającemu przebieg nie przydaje się wcale. Siedzi tam, gdzie
+  rerun i czytanie treści rozmowy.
+- **Obszar `system` w panelu** (`apps/panel/src/features/system/`): szósta
+  sekcja w `navigation.ts`, jedna strona, `Cache-Control: no-store` po stronie
+  trasy. 403 rysowane zdaniem, nie awarią — odmowa jest tu odpowiedzią.
+
+### Jedyna rzecz, której w `AppState` nie było
+
+`AIWATCHER_POD_RUNTIME`. Reguła tego strumienia brzmiała „zdolność, o której
+`AppState` nic nie mówi, nie pojawia się na liście", a runtime podów był w
+`aiwatcher-server::config` i nigdzie wyżej. Rozwiązaniem nie było zgadywanie ani
+drugi enum: `PodRuntime` przeniósł się do `aiwatcher_execution::pods`, obok
+`PodTemplates` — czyli tam, gdzie reszta tego, czym jest pod, już była — a
+konfiguracja re-eksportuje go i nadal sama parsuje zmienną i nazywa ją w
+odmowie. `AppState` dostał jedno pole.
+
+### Czego ta trasa nie mówi, i dlaczego to była cała trudność
+
+**Fakt „skonfigurowane" nie jest sekretem, wartość bywa.** Nigdy nie wychodzi
+żadne poświadczenie i nigdy żaden **adres**: URL bazy, endpoint object store'u,
+host sędziego czy runtime'u notebooków to rekonesans dla kogoś, kto już jest w
+środku. Raportowana jest **nazwa zmiennej**, bo to i tak jest to, czego czytelnik
+potrzebuje. Jeden wyjątek, świadomy: **issuer**, bo „na którego authentika to
+wskazuje" jest inaczej nieodpowiadalne bez powłoki na podzie, a `/auth/config`
+podaje go publicznie, zanim ktokolwiek się zaloguje.
+
+Regresje, obie sprawdzone, że **łapią** (wstrzyknięty wyciek: cały szablon poda
+zamiast jego nazwy — obie padły, nazywając zmienną):
+
+- `crates/aiwatcher-server/tests/system.rs` — konfiguruje wdrożenie z
+  **rozpoznawalną wartością w każdej wrażliwej zmiennej** (27 igieł: sekrety
+  OIDC i sesji, tokeny ingestu, klucz poświadczeń poda, klucze S3, klucze
+  archiwum rozmów, Kaggle, Hugging Face, sędzia, scorery, notebooki, query,
+  runner, connection stringi PostgreSQL i brokera, adres API poda), przepuszcza
+  je przez `aiwatcher_server::build` — to samo okablowanie, którego używa
+  binarka — i pada, jeśli którakolwiek wróci. Do tego **kontrola pozytywna**:
+  odpowiedź musi nadal nazywać te zmienne i nieść issuera, żeby trasa, która
+  przestała odpowiadać, nie przeszła milczeniem.
+- `crates/aiwatcher-api/tests/http.rs` — statyczna połowa tej samej reguły
+  (żadne ustawienie nie drukuje wartości obok zmiennej z listy zakazanej),
+  rola, stany wobec konfiguracji i nazwa szablonu poda bez jego treści.
+
+### Czego nie zbudowano, świadomie
+
+Żadnego zapisu — zmiana ustawienia to zmienna środowiskowa i restart, i tak ma
+zostać. Żadnego zdrowia usług zewnętrznych: „czy skonfigurowany serwis
+odpowiada teraz" to inne pytanie, z inną częstotliwością i innym trybem awarii,
+a inwentarz świecący na czerwono, bo ktoś inny się restartuje, czytałby się jak
+awaria tej instancji. I żadnego zgadywania: `AIWATCHER_QUERY_URL` decyduje o
+tym, czy silnik zapytań w ogóle odpowiada, ale trzyma go rola `work`, więc
+trasa mówi tylko, **dla którego silnika** plan musi być napisany.
+
+Weryfikacja: `cargo test -p aiwatcher-api -p aiwatcher-server -p aiwatcher-execution`,
+clippy i `cargo fmt` na dotkniętych crate'ach; panel `npm run test` (467) i
+`npm run build`; żywy serwer na :18080 z podpiętym archiwum rozmów, szablonami
+podów, tablicą cen, sędzią, scorerami i hubami — 28 wierszy, `cache-control:
+no-store`, zero adresów i zero poświadczeń w ciele; headless Chromium przy
+**1440 px i 375 px**, w motywie jasnym i ciemnym, **bez poziomego przewijania
+strony** i z każdym z 87–88 przystanków Tab w viewporcie.
+
+Czego **nie** uruchomiono: `npm run lint` (PORZ-01); PostgreSQL, IAM i brokera —
+ich connection stringi są w teście jako igły, ale nie są okablowane, bo
+wymagałyby bazy i cargo feature'a; klastra, workerów i S3/RustFS. W drzewie
+roboczym pracują równolegle inne strumienie i ich niezacommitowane zmiany są
+obecne; jedna porażka w `cargo test -p aiwatcher-api --lib`
+(`every_module_facade_reaches_the_document`) jest **nie z tej pracy** — LEARN-02
+dopisało `labs` do `document()`, a jeszcze nie do listy modułów w tym teście.
