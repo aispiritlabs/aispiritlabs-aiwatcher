@@ -92,6 +92,9 @@ pub fn identity_from<'a>(
         // A person behind the outpost, so nothing to claim on. Claiming is a
         // machine's job and takes a lease something has to renew.
         queues: Vec::new(),
+        // A header is a claim in this mode, so a project read out of one would
+        // be a project anything that reaches port 8080 could assert.
+        project: None,
         // No expiry of our own. The proxy decides when the session ends, and
         // the next request simply does not carry the headers.
         expires_at: None,

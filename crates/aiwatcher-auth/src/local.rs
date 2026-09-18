@@ -96,6 +96,9 @@ impl LocalAuth {
             // mode that added a token and took claiming away would mean
             // adopting the credential broke that machine.
             queues: Vec::new(),
+            // One machine, one tenant (ADR_0027). Global for the reason the
+            // anonymous identity is.
+            project: None,
             attempt: None,
             credential: Credential::Local,
         }

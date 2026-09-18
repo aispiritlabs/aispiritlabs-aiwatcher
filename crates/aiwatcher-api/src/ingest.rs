@@ -14,6 +14,7 @@ use aiwatcher_core::{Checkpoint, EventEnvelope};
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::project_scope::on_the_log as project_scope;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -62,6 +63,14 @@ pub struct IngestResponse {
 /// Every event is recorded as published by that identity — the token's name or
 /// the person's subject — whatever the body says, which is what lets a reader
 /// tell one publisher's word from another's.
+///
+/// The same rule decides **which project** an event belongs to, and here it is
+/// load-bearing rather than descriptive. The credential's scope is written onto
+/// every envelope in the batch, including when the credential has none, so a
+/// producer that named a project is ignored and one that named somebody else's
+/// has written nothing into it. Absence means the global log, which is what
+/// every token without a project does and what every event before this field
+/// existed is (ADR_0033 pt. 3).
 #[utoipa::path(
     post,
     path = "/api/v1/events",
@@ -78,10 +87,9 @@ async fn ingest(
     caller: Caller,
     Json(request): Json<IngestRequest>,
 ) -> ApiResult<(StatusCode, Json<IngestResponse>)> {
-    let publisher = caller
-        .require(aiwatcher_auth::Role::Editor)?
-        .log_subject()
-        .to_owned();
+    let identity = caller.require(aiwatcher_auth::Role::Editor)?;
+    let publisher = identity.log_subject().to_owned();
+    let project = identity.project.map(project_scope);
     let Some(sink) = state.sink.as_ref() else {
         return Err(ApiError::IngestDisabled);
     };
@@ -98,6 +106,13 @@ async fn ingest(
         .into_iter()
         .map(|envelope| EventEnvelope {
             published_by: Some(publisher.clone()),
+            // Assigned, never merged: `project` is overwritten with the
+            // credential's whatever arrived, so a body naming one is discarded
+            // rather than honoured. Writing `envelope.project.or(project)`
+            // here — or checking it only when the credential has a scope —
+            // would turn an envelope field into a way of publishing into
+            // somebody else's project.
+            project,
             ..envelope
         })
         .collect();

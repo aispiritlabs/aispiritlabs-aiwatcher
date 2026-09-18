@@ -172,6 +172,22 @@ pub struct Identity {
     /// something has to renew, and a browser is not that something.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queues: Vec<String>,
+    /// The project this caller's events are published into, for an ingest
+    /// token that names one and for nothing else.
+    ///
+    /// Beside [`Self::queues`] because it is the same kind of thing: a
+    /// narrowing a shared secret carries, never a role and never from the
+    /// group mapping. The one route that reads it is `POST /api/v1/events`,
+    /// which stamps it onto every envelope in the batch **whatever the body
+    /// said** — a producer that could name its own project could name
+    /// somebody else's.
+    ///
+    /// Absent on every session, every bearer and every proxy identity, which
+    /// publish globally as they always have. Which projects a *person* may
+    /// read is a grant, asked of IAM fresh on each operation, and is no part
+    /// of an identity — see `crates/aiwatcher-iam/README.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_iam::ProjectScope>,
     /// The one attempt this caller may act on, for an attempt credential and
     /// for nothing else.
     ///
@@ -201,6 +217,10 @@ impl Identity {
             // no worker can claim anything, which is not what "none" means
             // anywhere else in this crate.
             queues: Vec::new(),
+            // No provider, one tenant: `AIWATCHER_AUTH_MODE=none` publishes to
+            // the global log, and a mode that is explicitly local does not
+            // become a project's by having a scope to leave empty.
+            project: None,
             attempt: None,
             credential: Credential::Anonymous,
         }

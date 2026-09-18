@@ -96,6 +96,57 @@ pub struct ProjectScope {
     pub project: ProjectId,
 }
 
+impl ProjectScope {
+    /// The one text form: `<organization-uuid>/<project-uuid>`.
+    ///
+    /// Two uuids, so building it by concatenation is safe — neither half can
+    /// hold the separator, and no pair of scopes produces one string. The
+    /// spelling `aiwatcher_execution::ExecutionScope::key` and
+    /// `aiwatcher_core::ProjectScope::key` write, which is what lets a scope
+    /// configured as text, stamped onto an event and folded into a row be
+    /// recognised as the same scope in all three.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.organization.0, self.project.0)
+    }
+
+    /// Read [`Self::key`] back.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] naming the text, when it is not two uuids separated
+    /// by a slash.
+    pub fn parse(text: &str) -> Result<Self> {
+        let invalid = || {
+            Error::Invalid(format!(
+                "{text:?} is not a project scope; write it as \
+                 <organization-uuid>/<project-uuid>"
+            ))
+        };
+        let (organization, project) = text.trim().split_once('/').ok_or_else(invalid)?;
+        Ok(Self {
+            organization: OrganizationId(
+                Uuid::parse_str(organization.trim()).map_err(|_| invalid())?,
+            ),
+            project: ProjectId(Uuid::parse_str(project.trim()).map_err(|_| invalid())?),
+        })
+    }
+}
+
+impl std::fmt::Display for ProjectScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.key())
+    }
+}
+
+impl std::str::FromStr for ProjectScope {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        Self::parse(text)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "openapi", schema(as = IamProject))]

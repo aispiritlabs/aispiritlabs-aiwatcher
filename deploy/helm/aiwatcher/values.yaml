@@ -195,6 +195,15 @@ auth:
   # editor role and never admin: a secret in an agent's environment must not be
   # able to ask an orchestrator to run something.
   #
+  # A token may name the worker queues it claims on and the project it
+  # publishes into, both before the `=`:
+  #
+  #   name[queue other]@<organization-uuid>/<project-uuid>=secret
+  #
+  # Both only ever narrow. Naming no project publishes to the global log, which
+  # is what every token without one does. A project a deployment cannot read is
+  # refused at start-up rather than quietly taken for part of the name.
+  #
   #   kubectl create secret generic aiwatcher-ingest   #     --from-literal=AIWATCHER_AUTH_INGEST_TOKENS="planner=$(openssl rand -hex 32)"
   ingestTokenSecret:
     name: ""

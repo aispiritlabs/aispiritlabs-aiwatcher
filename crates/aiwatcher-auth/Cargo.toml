@@ -9,7 +9,10 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
-aiwatcher-iam.workspace = true
+# `openapi` because `Identity` is in the contract and now names a project.
+# Without it this crate builds only when something else in the graph turns the
+# feature on, which is a crate that compiles by luck.
+aiwatcher-iam = { workspace = true, features = ["openapi"] }
 base64.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true

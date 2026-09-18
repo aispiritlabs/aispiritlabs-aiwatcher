@@ -10,6 +10,18 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct ScopedRoute;
 
+/// The control plane's scope, as the event log carries it.
+///
+/// Two types for one idea, and the crate boundary is the whole reason:
+/// `aiwatcher-core` takes no dependency on a store and `aiwatcher-iam` is one
+/// (`scripts/rust-boundaries.json`), so the log's form holds two uuids and
+/// knows nothing about organizations, teams or grants. This crate sees both and
+/// is the one place they meet — which is also where they are held to agreeing,
+/// by `the_two_scopes_spell_one_project_the_same_way` below.
+pub(crate) fn on_the_log(scope: ProjectScope) -> aiwatcher_core::ProjectScope {
+    aiwatcher_core::ProjectScope::new(scope.organization.0, scope.project.0)
+}
+
 pub(crate) struct ProjectAuthorization {
     store: Arc<dyn IamStore>,
     principal: Principal,
@@ -154,4 +166,31 @@ pub(crate) fn openapi(mut api: utoipa::openapi::OpenApi) -> utoipa::openapi::Ope
         );
     }
     api
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_two_scopes_spell_one_project_the_same_way() {
+        let scope = ProjectScope {
+            organization: aiwatcher_iam::OrganizationId(uuid::Uuid::now_v7()),
+            project: aiwatcher_iam::ProjectId(uuid::Uuid::now_v7()),
+        };
+
+        // Two types the crate boundary keeps apart, one key. A fold that groups
+        // rows by the log's spelling and a grant check that looks a project up
+        // by the control plane's must be asking about the same project, and
+        // this is the only place that can say so.
+        assert_eq!(on_the_log(scope).key(), scope.key());
+        assert_eq!(
+            aiwatcher_core::ProjectScope::parse(&scope.key()),
+            Ok(on_the_log(scope))
+        );
+        assert_eq!(
+            ProjectScope::parse(&on_the_log(scope).key()).expect("reads back"),
+            scope
+        );
+    }
 }
