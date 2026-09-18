@@ -66,6 +66,12 @@ impl Backend {
         self.scope.is_some()
     }
 
+    /// Where this namespace starts. Read by the migration inventory, which
+    /// needs the prefix it is listing and must not assemble one of its own.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     /// Guard raw keys and listing prefixes, including legacy access paths.
     fn check_key(&self, key: &str) -> Result<()> {
         if !key.starts_with(&format!("{}/", self.prefix))
