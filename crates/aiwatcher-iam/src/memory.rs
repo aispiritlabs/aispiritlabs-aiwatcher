@@ -133,6 +133,26 @@ impl IamStore for MemoryIamStore {
             .projects(actor, self.clock.now())
     }
 
+    async fn roster(&self, organization: OrganizationId, actor: &Principal) -> Result<Roster> {
+        self.organizations
+            .read()
+            .await
+            .get(&organization)
+            .ok_or(Error::NotFound)?
+            .state
+            .roster(actor)
+    }
+
+    async fn project_grants(&self, scope: ProjectScope, actor: &Principal) -> Result<Vec<Grant>> {
+        self.organizations
+            .read()
+            .await
+            .get(&scope.organization)
+            .ok_or(Error::NotFound)?
+            .state
+            .project_grants(scope, actor, self.clock.now())
+    }
+
     async fn access(&self, scope: ProjectScope, actor: &Principal) -> Result<ProjectAccess> {
         self.organizations
             .read()

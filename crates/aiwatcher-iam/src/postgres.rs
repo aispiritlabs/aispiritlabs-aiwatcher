@@ -166,6 +166,16 @@ impl IamStore for PostgresIamStore {
             .projects(actor, self.clock.now())
     }
 
+    async fn roster(&self, organization: OrganizationId, actor: &Principal) -> Result<Roster> {
+        self.load(organization).await?.roster(actor)
+    }
+
+    async fn project_grants(&self, scope: ProjectScope, actor: &Principal) -> Result<Vec<Grant>> {
+        self.load(scope.organization)
+            .await?
+            .project_grants(scope, actor, self.clock.now())
+    }
+
     async fn access(&self, scope: ProjectScope, actor: &Principal) -> Result<ProjectAccess> {
         self.load(scope.organization)
             .await?

@@ -194,14 +194,15 @@ followed by a full `tsc` project check.
   page's URL and means "the thing I am administering". **An access answer is
   never cached**: `staleTime: 0`, because `ProjectAccess` carries `evaluated_at`
   and is a decision rather than a capability, and a revoked grant must not go on
-  being true because react-query still had it. And the **History card is the
-  audit, labelled as history** — the API answers `projects` and `access` about
-  the caller alone and lists no organization's members, teams or grants, so the
-  only honest roster is what the server recorded itself doing. Folding those
-  entries into current state in the browser would be a second copy of the
-  policy, wrong the first time a grant expired. What *is* derived from a server
-  answer is which cards to draw: the audit is owner-and-admin only, so its 403
-  is the server saying this caller does not administer the organization.
+  being true because react-query still had it. And **the four reads answer two
+  different questions and are never mixed**: `projects` and `access` are about
+  the caller, `roster` and a project's `grants` are about the organization, so a
+  role in the roster is what somebody was *given* and only an access answer says
+  what anybody may do now. The grants list shows lapsed rows exactly as issued —
+  filtering by the clock in the browser would hide the row somebody opened it to
+  find, and would be a second copy of the policy besides. What *is* derived from
+  a server answer is which cards to draw: the roster is owner-and-admin only, so
+  its 403 is the server saying this caller does not administer the organization.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.

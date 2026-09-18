@@ -159,6 +159,121 @@ pub async fn provider_subject_boundary(store: &dyn IamStore, _: &TestClock) {
     );
 }
 
+pub async fn a_roster_answers_administrators_and_a_project_s_grants_answer_its_admin(
+    store: &dyn IamStore,
+    clock: &TestClock,
+) {
+    let (alice, bob, carol, dave) = (
+        user("owner"),
+        user("admin"),
+        user("member"),
+        user("stranger"),
+    );
+    let org = store.create_organization(&alice, "Roster").await.unwrap();
+    member(store, org.id, &alice, &bob, OrganizationRole::Admin).await;
+    member(store, org.id, &alice, &carol, OrganizationRole::Member).await;
+    let group = team(store, org.id, &alice).await;
+    join_team(store, &group, &alice, &carol, true).await;
+    let lesson = project(store, org.id, &alice).await;
+    let other = project(store, org.id, &bob).await;
+
+    // An administrator sees everybody and every project, including the ones no
+    // grant of theirs reaches — which is the reason this read exists.
+    let roster = store.roster(org.id, &bob).await.unwrap();
+    assert_eq!(roster.organization, org);
+    assert_eq!(roster.members.len(), 3);
+    assert_eq!(roster.projects.len(), 2);
+    assert!(store.projects(org.id, &bob).await.unwrap().len() < roster.projects.len());
+    assert_eq!(roster.teams.len(), 1);
+    assert_eq!(roster.teams[0].members, vec![carol.clone()]);
+    assert_eq!(
+        roster
+            .members
+            .iter()
+            .find(|entry| entry.principal == carol)
+            .map(|entry| entry.role),
+        Some(OrganizationRole::Member),
+    );
+
+    // A member is not an administrator, and a stranger is not even that.
+    assert!(matches!(
+        store.roster(org.id, &carol).await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        store.roster(org.id, &dave).await,
+        Err(Error::NotFound)
+    ));
+
+    // A project's grants answer whoever may issue one there: its own admin, or
+    // an administrator of the organization. Carol holds a lapsed grant and a
+    // live one, and both come back — a list filtered by the clock would hide
+    // the row somebody opened this to find.
+    clock.set(2_000);
+    grant(
+        store,
+        &lesson,
+        &alice,
+        Grantee::User(carol.clone()),
+        ProjectRole::Editor,
+        GrantWindow {
+            valid_from: 1_000,
+            edit_until: Some(1_500),
+            read_until: Some(1_600),
+        },
+    )
+    .await;
+    grant(
+        store,
+        &lesson,
+        &alice,
+        Grantee::Team(group.id),
+        ProjectRole::Viewer,
+        GrantWindow::permanent(1_000),
+    )
+    .await;
+    let grants = store.project_grants(lesson.scope, &alice).await.unwrap();
+    assert_eq!(
+        grants.len(),
+        3,
+        "the creator's own grant, and the two above"
+    );
+    assert!(grants.iter().all(|grant| grant.scope == lesson.scope));
+    assert_eq!(
+        store
+            .project_grants(lesson.scope, &bob)
+            .await
+            .unwrap()
+            .len(),
+        3,
+        "an organization admin may read a project no grant of theirs reaches",
+    );
+    assert!(matches!(
+        store.project_grants(lesson.scope, &carol).await,
+        Err(Error::Forbidden),
+    ));
+    assert!(matches!(
+        store.project_grants(lesson.scope, &dave).await,
+        Err(Error::NotFound)
+    ));
+
+    // The scope is the pair, so a project id from this organization pointed at
+    // another one is absent rather than readable.
+    let elsewhere = store.create_organization(&dave, "Elsewhere").await.unwrap();
+    assert!(matches!(
+        store
+            .project_grants(
+                ProjectScope {
+                    organization: elsewhere.id,
+                    project: other.scope.project,
+                },
+                &dave,
+            )
+            .await,
+        Err(Error::NotFound),
+    ));
+}
+
 pub async fn membership_is_not_project_access(store: &dyn IamStore, _: &TestClock) {
     let (alice, bob, carol) = (user("owner"), user("second-owner"), user("admin"));
     let org = store

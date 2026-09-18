@@ -4474,6 +4474,14 @@ export type IamGrantee = {
     value: TeamId;
 };
 
+/**
+ * One person's standing in the organization, which is not access to anything.
+ */
+export type IamMembership = {
+    principal: IamPrincipal;
+    role: IamOrganizationRole;
+};
+
 export type IamOrganization = {
     id: OrganizationId;
     name: string;
@@ -4521,10 +4529,35 @@ export type IamProjectScope = {
     project: ProjectId;
 };
 
+/**
+ * What an administrator has to see to administer: who is in the organization,
+ * which teams exist, and every project in it.
+ *
+ * Deliberately not [`ProjectAccess`]: that answers about the caller, and an
+ * organization administrator may grant on a project they hold no grant on and
+ * therefore cannot list any other way. It carries no decision — a role here is
+ * what somebody was given, never what they may do now, which only
+ * [`IamStore::access`] answers and only for one person at a time.
+ */
+export type IamRoster = {
+    members: Array<IamMembership>;
+    organization: IamOrganization;
+    projects: Array<IamProject>;
+    teams: Array<IamTeamMembers>;
+};
+
 export type IamTeam = {
     id: TeamId;
     name: string;
     organization: OrganizationId;
+};
+
+/**
+ * A team and the people a grant to it reaches.
+ */
+export type IamTeamMembers = {
+    members: Array<IamPrincipal>;
+    team: IamTeam;
 };
 
 /**
@@ -13977,6 +14010,53 @@ export type AccessResponses = {
 };
 
 export type AccessResponse = AccessResponses[keyof AccessResponses];
+
+export type ProjectGrantsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+        project: ProjectId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/projects/{project}/grants';
+};
+
+export type ProjectGrantsErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type ProjectGrantsResponses = {
+    200: Array<IamGrant>;
+};
+
+export type ProjectGrantsResponse = ProjectGrantsResponses[keyof ProjectGrantsResponses];
+
+export type RosterData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/roster';
+};
+
+export type RosterErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type RosterResponses = {
+    200: IamRoster;
+};
+
+export type RosterResponse = RosterResponses[keyof RosterResponses];
 
 export type LiveWebsocketData = {
     body?: never;

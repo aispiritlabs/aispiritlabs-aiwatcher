@@ -76,6 +76,13 @@ pub trait IamStore: Debug + Send + Sync {
         organization: OrganizationId,
         actor: &Principal,
     ) -> Result<Vec<ProjectAccess>>;
+    /// Who is in the organization, for an owner or admin of it. Never a
+    /// decision: a role here is what somebody was given, not what they may do.
+    async fn roster(&self, organization: OrganizationId, actor: &Principal) -> Result<Roster>;
+    /// Every grant on one project, for whoever may issue one there. Windows
+    /// come back as issued; filtering by the clock is `access`'s job, per
+    /// person.
+    async fn project_grants(&self, scope: ProjectScope, actor: &Principal) -> Result<Vec<Grant>>;
     /// Fresh policy decision; not a durable capability. Streams, jobs and
     /// later writes must recheck rather than treating it as a session grant.
     async fn access(&self, scope: ProjectScope, actor: &Principal) -> Result<ProjectAccess>;

@@ -206,6 +206,42 @@ impl ProjectAccess {
     }
 }
 
+/// One person's standing in the organization, which is not access to anything.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamMembership))]
+pub struct Membership {
+    pub principal: Principal,
+    pub role: OrganizationRole,
+}
+
+/// A team and the people a grant to it reaches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamTeamMembers))]
+pub struct TeamMembers {
+    pub team: Team,
+    pub members: Vec<Principal>,
+}
+
+/// What an administrator has to see to administer: who is in the organization,
+/// which teams exist, and every project in it.
+///
+/// Deliberately not [`ProjectAccess`]: that answers about the caller, and an
+/// organization administrator may grant on a project they hold no grant on and
+/// therefore cannot list any other way. It carries no decision — a role here is
+/// what somebody was given, never what they may do now, which only
+/// [`IamStore::access`] answers and only for one person at a time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamRoster))]
+pub struct Roster {
+    pub organization: Organization,
+    pub members: Vec<Membership>,
+    pub teams: Vec<TeamMembers>,
+    pub projects: Vec<Project>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

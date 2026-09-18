@@ -174,6 +174,67 @@ impl OrganizationState {
             .ok_or(Error::NotFound)
     }
 
+    /// Who is here, for somebody who administers it.
+    ///
+    /// The same authority as the audit, and for the same reason: both say what
+    /// an organization holds rather than what the reader may reach, and a
+    /// member who may reach one project has no business reading the rest of the
+    /// membership.
+    pub fn roster(&self, actor: &Principal) -> Result<Roster> {
+        if self.member_role(actor)? < OrganizationRole::Admin {
+            return Err(Error::Forbidden);
+        }
+        Ok(Roster {
+            organization: self.organization.clone(),
+            members: self
+                .members
+                .iter()
+                .map(|member| Membership {
+                    principal: member.principal.clone(),
+                    role: member.role,
+                })
+                .collect(),
+            teams: self
+                .teams
+                .iter()
+                .map(|record| TeamMembers {
+                    team: record.team.clone(),
+                    members: record.members.clone(),
+                })
+                .collect(),
+            projects: self.projects.clone(),
+        })
+    }
+
+    /// Every grant on one project, live or not, for whoever may issue one.
+    ///
+    /// Read by exactly the authority that may write here — an organization
+    /// admin or this project's own admin — because "who else may reach this"
+    /// and "who may I add" are one question, and the second is already this
+    /// authority's.
+    ///
+    /// The windows come back as they were issued; nothing here is filtered by
+    /// the clock. What a grant does *now* is [`Self::access`]'s answer, taken
+    /// per person, and a list that quietly dropped a lapsed row would hide the
+    /// thing an administrator opened it to see.
+    pub fn project_grants(
+        &self,
+        scope: ProjectScope,
+        actor: &Principal,
+        now: i64,
+    ) -> Result<Vec<Grant>> {
+        if scope.organization != self.organization.id {
+            return Err(Error::NotFound);
+        }
+        let scope = self.manage_project(actor, scope.project, now)?;
+        Ok(self
+            .grants
+            .iter()
+            .filter(|grant| grant.scope == scope)
+            .cloned()
+            .collect())
+    }
+
     pub fn projects(&self, actor: &Principal, now: i64) -> Result<Vec<ProjectAccess>> {
         self.member_role(actor)?;
         self.projects

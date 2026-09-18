@@ -17,15 +17,14 @@ import { ApiFailure } from '@/shared/lib/result';
 /**
  * What this organization's administrators have done, newest first.
  *
- * It is here because it is the only answer to "who did I give this to, and
- * what is the id I would revoke": the API answers `projects` and `access` about
- * the caller alone, and has no route that lists an organization's members, its
- * teams, or a project's grants. This is **a mutation history, not the current
- * state** — a grant that has since expired or been revoked still appears, with
- * the window it was issued with, because that is what happened.
+ * **A history of mutations, not the current state.** A grant that has since
+ * been revoked still appears here, with the window it was issued with, because
+ * that is what happened — and a revocation appears beside it. Who may reach a
+ * project *now* is the grants list on the project, and what any one person may
+ * do is an access decision the server takes fresh.
  *
- * Nothing here works out whether a grant is still live. The place to ask that
- * is the project's own access answer, which the server takes fresh.
+ * It keeps the Revoke action because a grant is named here the moment it is
+ * issued, which is occasionally faster than finding it again in the list.
  */
 export function History({ organization }: { organization: string }) {
   const entries = useAudit(organization);
@@ -40,9 +39,9 @@ export function History({ organization }: { organization: string }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          Successful administrative changes, as the server recorded them in the same transaction.
-          Not a list of who currently has access — there is no route that answers that, and working
-          one out here would be a second copy of the policy.
+          Successful administrative changes, as the server recorded them in the same transaction —
+          including the ones that were later undone. Who has access now is the project&rsquo;s own
+          grants list.
         </p>
         {entries.isPending ? <Spinner /> : null}
         {forbidden ? (

@@ -1,19 +1,21 @@
 import { getRouteApi } from '@tanstack/react-router';
 import * as React from 'react';
 
-import type { IamProjectAccess } from '@/api/generated';
+import type { IamPrincipal, IamProject, IamProjectAccess } from '@/api/generated';
 import {
   edgeOf,
   short,
-  useAudit,
   useCreateOrganization,
   useOrganizations,
   useProjectAccess,
   useProjects,
+  useRoster,
 } from '@/features/account/iam';
 import { GrantForm } from '@/features/account/screens/access/grant-form';
 import { History } from '@/features/account/screens/access/history';
 import { OrganizationAdmin } from '@/features/account/screens/access/organization-admin';
+import { People } from '@/features/account/screens/access/people';
+import { ProjectGrants } from '@/features/account/screens/access/project-grants';
 import {
   Badge,
   Button,
@@ -57,13 +59,14 @@ export function AccessPage() {
   const projects = useProjects(search.organization);
   const access = useProjectAccess(search.organization, search.project);
   // Whether this caller administers the organization is the server's answer,
-  // not a guess: the audit is owner-and-admin only, so its 403 is that answer.
+  // not a guess: the roster is owner-and-admin only, so its 403 is that answer.
   // A project admin who is merely a member still issues grants — that form is
   // outside this, which is why it is not gated on the same thing.
-  const audit = useAudit(search.organization);
+  const roster = useRoster(search.organization);
   const createOrganization = useCreateOrganization();
   const mayCreateOrganization = useCan('admin');
   const [name, setName] = React.useState('');
+  const [grantee, setGrantee] = React.useState<IamPrincipal | null>(null);
 
   const issuer = session.data?.issuer ?? undefined;
 
@@ -170,25 +173,26 @@ export function AccessPage() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Projects you hold a grant on</CardTitle>
+              <CardTitle>Projects</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
-                Membership is not on this list; grants are. An owner sees a project only if somebody
-                granted it to them — including the one they created, which grants them explicitly.
+                A role badge is a grant of yours. An administrator also sees the projects no grant
+                of theirs reaches — those carry no badge, because there is nothing to report about
+                access somebody does not have.
               </p>
               {projects.isPending ? <Spinner /> : null}
               {projects.isError ? (
                 <Refusal error={projects.error} fallback="projects could not be read" />
               ) : null}
-              {projects.data?.length === 0 ? (
+              {projects.data?.length === 0 && !roster.data?.projects.length ? (
                 <EmptyState
                   title="No project here reaches you"
                   hint="Create one, or ask an administrator of this organization for a grant."
                 />
               ) : null}
               <div className="flex flex-wrap gap-2">
-                {projects.data?.map((entry) => (
+                {listProjects(projects.data, roster.data?.projects).map((entry) => (
                   <button
                     key={entry.project.scope.project}
                     type="button"
@@ -200,10 +204,17 @@ export function AccessPage() {
                   >
                     <span className="font-medium">{entry.project.name}</span>
                     <span className="flex items-center gap-2">
-                      <Badge tone="primary">{entry.role}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {entry.grants.length} live source{entry.grants.length === 1 ? '' : 's'}
-                      </span>
+                      {entry.access ? (
+                        <>
+                          <Badge tone="primary">{entry.access.role}</Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {entry.access.grants.length} live source
+                            {entry.access.grants.length === 1 ? '' : 's'}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">no grant of yours</span>
+                      )}
                     </span>
                   </button>
                 ))}
@@ -218,11 +229,13 @@ export function AccessPage() {
                 pending={access.isPending}
                 error={access.isError ? access.error : null}
               />
-              {access.data?.role === 'admin' || audit.isSuccess ? (
+              <ProjectGrants organization={search.organization} project={search.project} />
+              {access.data?.role === 'admin' || roster.isSuccess ? (
                 <GrantForm
                   organization={search.organization}
                   project={search.project}
                   issuer={issuer}
+                  grantee={grantee}
                 />
               ) : access.data ? (
                 <p className="text-xs text-muted-foreground">
@@ -234,7 +247,8 @@ export function AccessPage() {
             </>
           ) : null}
 
-          {audit.isSuccess ? (
+          {roster.data ? <People roster={roster.data} onGrantTo={setGrantee} /> : null}
+          {roster.isSuccess ? (
             <OrganizationAdmin organization={search.organization} issuer={issuer} />
           ) : null}
           <History organization={search.organization} />
@@ -242,6 +256,29 @@ export function AccessPage() {
       ) : null}
     </div>
   );
+}
+
+/**
+ * The projects to draw, from the two reads that answer different questions.
+ *
+ * `projects` is what the caller holds a grant on; a roster's `projects` is
+ * every project in the organization and only an administrator gets one. The
+ * union keeps the order of the first — what somebody can open comes before what
+ * they merely administer.
+ */
+function listProjects(
+  held: IamProjectAccess[] | undefined,
+  all: IamProject[] | undefined,
+): { project: IamProject; access: IamProjectAccess | undefined }[] {
+  const mine = held ?? [];
+  const rows: { project: IamProject; access: IamProjectAccess | undefined }[] = mine.map(
+    (access) => ({ project: access.project, access }),
+  );
+  const known = new Set(mine.map((access) => access.project.scope.project));
+  for (const project of all ?? []) {
+    if (!known.has(project.scope.project)) rows.push({ project, access: undefined });
+  }
+  return rows;
 }
 
 function Heading() {

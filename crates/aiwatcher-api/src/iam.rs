@@ -5,8 +5,8 @@
 use crate::{ApiError, AppState, Caller, error::ApiResult};
 use aiwatcher_auth::Role;
 use aiwatcher_iam::{
-    AuditEntry, Change, Command, IamStore, Organization, OrganizationId, Principal, ProjectAccess,
-    ProjectId, ProjectScope,
+    AuditEntry, Change, Command, Grant, IamStore, Organization, OrganizationId, Principal,
+    ProjectAccess, ProjectId, ProjectScope, Roster,
 };
 use axum::{
     Json, Router,
@@ -18,7 +18,16 @@ use serde::Deserialize;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
-#[openapi(paths(organizations, create_organization, apply, projects, access, audit))]
+#[openapi(paths(
+    organizations,
+    create_organization,
+    apply,
+    projects,
+    access,
+    roster,
+    project_grants,
+    audit
+))]
 struct Api;
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
@@ -42,6 +51,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/iam/organizations/{organization}/projects/{project}/access",
             get(access),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/roster",
+            get(roster),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/projects/{project}/grants",
+            get(project_grants),
         )
         .route("/api/v1/iam/organizations/{organization}/audit", get(audit))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -148,6 +165,51 @@ async fn access(
     Ok(Json(
         store
             .access(
+                ProjectScope {
+                    organization,
+                    project,
+                },
+                &actor,
+            )
+            .await?,
+    ))
+}
+
+/// Who is in this organization, for an owner or admin of it.
+///
+/// The one read here that is not about the caller. `projects` and `access`
+/// answer "what may I reach", which is the right shape for a permission check
+/// and no use to somebody administering one: an organization admin may grant on
+/// a project they hold no grant on, and without this could not name it.
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/roster", tag = "iam",
+    params(("organization" = OrganizationId, Path)),
+    responses((status = 200, body = Roster), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn roster(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(organization): Path<OrganizationId>,
+) -> ApiResult<Json<Roster>> {
+    let (store, actor) = context(&state, &caller)?;
+    Ok(Json(store.roster(organization, &actor).await?))
+}
+
+/// Every grant on one project, for whoever may issue one there.
+///
+/// The windows are as issued and nothing is filtered by the clock — what a
+/// grant does *now* is the access route's answer, per person, and a list that
+/// dropped a lapsed row would hide the thing somebody opened it to see.
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/projects/{project}/grants", tag = "iam",
+    params(("organization" = OrganizationId, Path), ("project" = ProjectId, Path)),
+    responses((status = 200, body = Vec<Grant>), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn project_grants(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, project)): Path<(OrganizationId, ProjectId)>,
+) -> ApiResult<Json<Vec<Grant>>> {
+    let (store, actor) = context(&state, &caller)?;
+    Ok(Json(
+        store
+            .project_grants(
                 ProjectScope {
                     organization,
                     project,

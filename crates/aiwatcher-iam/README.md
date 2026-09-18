@@ -72,6 +72,16 @@ workshop enrollment or provisioning is implemented here. Delegating project
 admin is administrative authority to issue grants, including permanent ones;
 workshop participants should receive editor/viewer grants, not admin authority.
 
+Two reads answer about the organization rather than about the caller, and the
+split is deliberate. `roster` is what an administrator needs in order to
+administer — the membership, the teams and **every** project, including ones no
+grant of theirs reaches, which `projects` by construction cannot list. A project's
+`grants` answers "who else may reach this", to exactly the authority that may
+change it. Neither is a decision: a role in a roster is what somebody was given,
+the windows come back as issued and nothing is filtered by the clock, and what
+any one person may do now remains `access`'s answer alone. A caller that treated
+a roster row as permission would be reading a record as a capability.
+
 `ProjectAccess` is a snapshot with `evaluated_at`, not a bearer capability or a
 permission to cache access for the SSO session. Every new operation needs a
 fresh decision. Long-lived streams and jobs will need revocation/expiry checks
@@ -147,6 +157,8 @@ than silently discarding audit semantics.
 | `POST /organizations/{organization}/commands` | Apply a typed membership/team/project/grant command using current IAM roles. |
 | `GET /organizations/{organization}/projects` | Only projects with an effective grant for this caller. |
 | `GET /organizations/{organization}/projects/{project}/access` | Fresh grant decision and its sources, including expiry. |
+| `GET /organizations/{organization}/roster` | Members, teams and every project. Organization owner/admin only. |
+| `GET /organizations/{organization}/projects/{project}/grants` | Every grant on one project, as issued. Organization admin or that project's admin. |
 | `GET /organizations/{organization}/audit?after=0&limit=50` | Successful mutations, organization owner/admin only. |
 
 All mutations require `X-AIWatcher-IAM: 1` in addition to JSON and authentication.

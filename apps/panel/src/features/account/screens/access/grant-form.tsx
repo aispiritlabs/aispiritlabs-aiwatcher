@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { IamCommand, IamProjectRole } from '@/api/generated';
+import type { IamCommand, IamPrincipal, IamProjectRole } from '@/api/generated';
 import { localInputValue, unixFrom, useCommand } from '@/features/account/iam';
 import {
   Button,
@@ -33,10 +33,13 @@ export function GrantForm({
   organization,
   project,
   issuer,
+  grantee,
 }: {
   organization: string;
   project: string;
   issuer: string | undefined;
+  /** Somebody picked out of the roster, so a subject is never retyped. */
+  grantee: IamPrincipal | null;
 }) {
   const command = useCommand(organization);
   const [kind, setKind] = React.useState<'user' | 'team'>('user');
@@ -53,6 +56,16 @@ export function GrantForm({
   React.useEffect(() => {
     setProvider((held) => (held === '' && issuer ? issuer : held));
   }, [issuer]);
+
+  // Picking somebody out of the roster fills both halves of the pair, because
+  // a principal is compared exactly and a retyped 64-character subject is a
+  // grant that silently matches nobody.
+  React.useEffect(() => {
+    if (!grantee) return;
+    setKind('user');
+    setProvider(grantee.provider);
+    setSubject(grantee.subject);
+  }, [grantee]);
 
   const issued =
     command.data && typeof command.data === 'object' && 'GrantCreated' in command.data

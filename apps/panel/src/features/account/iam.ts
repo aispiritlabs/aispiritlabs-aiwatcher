@@ -6,36 +6,39 @@ import {
   audit as readAudit,
   createOrganization as postOrganization,
   organizations as readOrganizations,
+  projectGrants as readProjectGrants,
   projects as readProjects,
+  roster as readRoster,
 } from '@/api/generated';
 import type {
   AuditEntry,
   IamChange,
   IamCommand,
+  IamGrant,
   IamOrganization,
   IamProjectAccess,
+  IamRoster,
 } from '@/api/generated';
 import { answerOf } from '@/shared/lib/result';
 
 /**
- * The control plane, as the six calls it actually has.
+ * The control plane, as the eight calls it has.
  *
- * Two things about this API shape decide how the Access view is built, and
- * both are worth knowing before reading it.
- *
- * **Nothing here lists an organization's members, its teams, or a project's
- * grants.** `projects` and `access` answer about *the caller*, which is the
- * right shape for a permission check and the wrong one for an administrator's
- * roster. So the history below is the audit — what the server recorded itself
- * doing — and it is labelled as history rather than drawn as state. Folding
- * those entries into a roster in the browser would be a second implementation
- * of the policy that already exists in Rust, and it would be wrong the first
- * time a grant expired.
+ * Two of them answer about the **caller** — `projects` and `access`, which is
+ * the right shape for a permission check — and two about the **organization**:
+ * `roster`, for an administrator who may grant on a project no grant of theirs
+ * reaches, and `project_grants`, for whoever may issue one there. Keeping them
+ * apart is the point: a role in a roster is what somebody was given, and only
+ * an access answer says what anybody may do now.
  *
  * **An access answer is a decision, not a capability.** `evaluated_at` says
  * when it was taken; the README says every operation needs a fresh one. So
- * these two reads are never cached: a grant revoked in another tab must not go
- * on being true here because react-query still had it.
+ * none of these reads is cached: a grant revoked in another tab must not go on
+ * being true here because react-query still had it.
+ *
+ * The audit stays what it is — a history of mutations. Now that the roster and
+ * a project's grants are readable, nothing here has to reconstruct state from
+ * it, which was the one thing a browser must never do with a policy.
  */
 
 const ORGANIZATIONS = ['iam', 'organizations'] as const;
@@ -43,6 +46,9 @@ const projectsKey = (organization: string) => ['iam', 'projects', organization] 
 const accessKey = (organization: string, project: string) =>
   ['iam', 'access', organization, project] as const;
 const auditKey = (organization: string) => ['iam', 'audit', organization] as const;
+const rosterKey = (organization: string) => ['iam', 'roster', organization] as const;
+const grantsKey = (organization: string, project: string) =>
+  ['iam', 'grants', organization, project] as const;
 
 /**
  * Required on every mutation, and harmless on a read.
@@ -94,6 +100,54 @@ export function useProjectAccess(
           path: { organization: organization as string, project: project as string },
         }),
         'the instance did not answer this project',
+      ),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+/**
+ * Who is in the organization: members, teams and every project in it.
+ *
+ * Owner and admin only — a 403 is the server's answer about the reader, and
+ * the page reads it as "you do not administer this" rather than as a failure.
+ */
+export function useRoster(organization: string | undefined): UseQueryResult<IamRoster> {
+  return useQuery({
+    queryKey: rosterKey(organization ?? ''),
+    enabled: Boolean(organization),
+    queryFn: async () =>
+      answerOf(
+        await readRoster({ path: { organization: organization as string } }),
+        'the instance did not answer the roster',
+      ),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+/**
+ * Every grant on one project, as issued.
+ *
+ * Nothing is filtered by the clock here and nothing should be: a grant that has
+ * lapsed is exactly what somebody opens this list to find. What each one does
+ * *now* is an access answer, taken per person.
+ */
+export function useProjectGrants(
+  organization: string | undefined,
+  project: string | undefined,
+): UseQueryResult<IamGrant[]> {
+  return useQuery({
+    queryKey: grantsKey(organization ?? '', project ?? ''),
+    enabled: Boolean(organization && project),
+    queryFn: async () =>
+      answerOf(
+        await readProjectGrants({
+          path: { organization: organization as string, project: project as string },
+        }),
+        'the instance did not answer this project\u2019s grants',
       ),
     retry: false,
     staleTime: 0,
@@ -158,7 +212,9 @@ export function useCommand(organization: string | undefined) {
       if (!organization) return;
       void client.invalidateQueries({ queryKey: projectsKey(organization) });
       void client.invalidateQueries({ queryKey: auditKey(organization) });
+      void client.invalidateQueries({ queryKey: rosterKey(organization) });
       void client.invalidateQueries({ queryKey: ['iam', 'access', organization] });
+      void client.invalidateQueries({ queryKey: ['iam', 'grants', organization] });
     },
   });
 }

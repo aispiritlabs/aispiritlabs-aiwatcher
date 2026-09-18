@@ -77,6 +77,20 @@ impl IamStore for Flaky {
     ) -> aiwatcher_iam::Result<Vec<aiwatcher_iam::ProjectAccess>> {
         self.inner.projects(organization, actor).await
     }
+    async fn roster(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> aiwatcher_iam::Result<aiwatcher_iam::Roster> {
+        self.inner.roster(organization, actor).await
+    }
+    async fn project_grants(
+        &self,
+        scope: ProjectScope,
+        actor: &Principal,
+    ) -> aiwatcher_iam::Result<Vec<aiwatcher_iam::Grant>> {
+        self.inner.project_grants(scope, actor).await
+    }
     async fn access(
         &self,
         scope: ProjectScope,
