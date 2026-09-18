@@ -22,6 +22,7 @@ use crate::checkpoint::Checkpoint;
 use crate::context::{ObservabilityContext, ResolveTarget, SeedContext};
 use crate::error::CoreError;
 use crate::ids::{CausationId, CorrelationId, MessageId, SpanId, TraceId};
+use crate::scope::ProjectScope;
 use crate::stream::{GlobalPosition, StreamName, StreamPosition};
 
 /// The envelope version this build writes and the highest it can read.
@@ -189,6 +190,29 @@ pub struct EventEnvelope {
     #[schema(ignore)]
     pub published_by: Option<String>,
 
+    /// Which project this event belongs to. Absent is the global side, which
+    /// is every event this build has written so far (ADR_0033 pt. 3).
+    ///
+    /// **The ingest route always overwrites it with the credential's scope**,
+    /// including with absence, so a value a producer sent is discarded rather
+    /// than honoured — a field the wire could set would be a way of writing
+    /// into somebody else's project.
+    ///
+    /// Unlike [`Self::published_by`] it *is* serialised, and that difference is
+    /// the whole design. A publisher is read by the same process that wrote it,
+    /// so it never has to leave memory; a scope is read by the **projector**,
+    /// which consumes the bus rather than the route. Skipping it would make
+    /// every project's events read as global the moment they went through a
+    /// broker.
+    ///
+    /// What follows from that: on a deployment whose producers publish
+    /// **straight to the broker**, this is the producer's word, exactly as
+    /// `published_by` is nobody's there (ADR_0001, amended). The route is the
+    /// boundary; a broker becomes one when it authenticates producers and the
+    /// adapter carries what it learnt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectScope>,
+
     /// Producer-side counter within the run, one per client (`source.client`),
     /// from nought. Gaps here mean lost events — a batch the producer dropped,
     /// or one a log never kept — and they are visible whether or not the log
@@ -264,6 +288,7 @@ impl EventEnvelope {
             agent_id: None,
             variant_id: None,
             published_by: None,
+            project: None,
             sequence: None,
             run_sequence: None,
             run_counted_from: None,
@@ -436,6 +461,7 @@ impl EventEnvelope {
                 agent_id: self.agent_id,
                 variant_id: self.variant_id,
                 published_by: self.published_by,
+                project: self.project,
                 sequence: self.sequence,
                 run_sequence: self.run_sequence,
                 run_counted_from: self.run_counted_from,
@@ -492,6 +518,11 @@ pub struct RecordedMetadata {
     /// every record written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_by: Option<String>,
+    /// See [`EventEnvelope::project`]: which project the credential that
+    /// published this event writes into. Absent is the global side, which is
+    /// every record written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
     /// See [`EventEnvelope::run_sequence`]. Absent from every record written
@@ -787,6 +818,80 @@ mod tests {
         let recorded = wire.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
 
         assert_eq!(recorded.metadata.variant_id.as_deref(), Some("4f1c"));
+    }
+
+    #[test]
+    fn a_project_survives_the_wire_because_the_projector_reads_the_bus() {
+        let scope = crate::ProjectScope::new(
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-000000000001").expect("uuid"),
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-000000000002").expect("uuid"),
+        );
+        let wire = EventEnvelope {
+            project: Some(scope),
+            ..envelope(EventType::RunStarted)
+        };
+
+        // Not `published_by`'s rule: a publisher is read by the process that
+        // wrote it, a scope by the projector consuming the broker. Skipping it
+        // would read every project's events as global behind a broker.
+        let encoded = serde_json::to_value(&wire).expect("encodes");
+        assert_eq!(
+            encoded
+                .get("project")
+                .and_then(|value| value.get("project")),
+            Some(&serde_json::json!("0198c0de-0000-7000-8000-000000000002"))
+        );
+        let read_back: EventEnvelope = serde_json::from_value(encoded).expect("reads back");
+        assert_eq!(read_back.project, Some(scope));
+
+        let recorded = read_back.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
+        assert_eq!(recorded.metadata.project, Some(scope));
+    }
+
+    #[test]
+    fn an_envelope_with_no_project_reads_as_every_historical_one_does() {
+        let wire: EventEnvelope = serde_json::from_value(serde_json::json!({
+            "event_type": "run.started",
+            "occurred_at": "2026-08-27T18:20:11Z",
+            "run_id": "run-1",
+            "source": { "service": "support-bot", "sdk": "python" },
+        }))
+        .expect("an envelope written before the field existed");
+
+        assert_eq!(wire.project, None, "absence is the global side");
+        let recorded = wire.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
+        assert_eq!(recorded.metadata.project, None);
+        assert!(
+            serde_json::to_value(&recorded.metadata)
+                .expect("encodes")
+                .get("project")
+                .is_none(),
+            "and a global record gains no field, so nothing stored moves"
+        );
+    }
+
+    #[test]
+    fn a_project_moves_no_derived_id_by_a_single_byte() {
+        let global = envelope(EventType::LlmCompleted);
+        let scoped = EventEnvelope {
+            project: Some(crate::ProjectScope::new(
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+            )),
+            ..global.clone()
+        };
+        let at = datetime!(2026-08-27 18:20:12 UTC);
+
+        let global = global.record(1, 1, at, None);
+        let scoped = scoped.record(1, 1, at, None);
+
+        // ADR_0001: the derivations are pure functions of `run_id` and the span
+        // key. A project folds into an *execution* id (ADR_0033 pt. 5), which is
+        // a different identifier; a trace's stays addressable for ever.
+        assert_eq!(global.metadata.trace_id, scoped.metadata.trace_id);
+        assert_eq!(global.metadata.span_id, scoped.metadata.span_id);
+        assert_eq!(global.metadata.span_key, scoped.metadata.span_key);
+        assert_eq!(global.metadata.stream_name, scoped.metadata.stream_name);
     }
 
     #[test]

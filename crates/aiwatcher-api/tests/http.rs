@@ -43,6 +43,13 @@ const WORKER_SECRET: &str = "fedcba9876543210fedcba9876543210";
 const OTHER_WORKER_TOKEN: &str = "planner[plans]=0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const OTHER_WORKER_SECRET: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const INGEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
+/// Two producers' tokens, each bound to one project (ADR_0033). What they
+/// publish belongs to that project whatever their bodies say, and neither can
+/// reach the other's.
+const PROJECT_A: &str = "0198c0de-0000-7000-8000-00000000000a/0198c0de-0000-7000-8000-0000000000aa";
+const PROJECT_B: &str = "0198c0de-0000-7000-8000-00000000000b/0198c0de-0000-7000-8000-0000000000bb";
+const PROJECT_A_SECRET: &str = "aaaa0123456789abcdef0123456789ab";
+const PROJECT_B_SECRET: &str = "bbbb0123456789abcdef0123456789ab";
 /// What a launched pod's credentials are minted under, as both roles of a
 /// split deployment would be given it.
 const POD_CREDENTIAL_SECRET: &str = "a pod credential secret for these tests";
@@ -194,6 +201,12 @@ impl Fixture {
                 OTHER_WORKER_TOKEN
                     .parse::<IngestToken>()
                     .expect("long enough to be accepted"),
+                format!("project-a@{PROJECT_A}={PROJECT_A_SECRET}")
+                    .parse::<IngestToken>()
+                    .expect("a token bound to one project"),
+                format!("project-b@{PROJECT_B}={PROJECT_B_SECRET}")
+                    .parse::<IngestToken>()
+                    .expect("a token bound to another"),
             ],
             attempts: Some(AttemptCredentials::new(Some(POD_CREDENTIAL_SECRET)).expect("a secret")),
             ..AuthConfig::default()
@@ -2414,6 +2427,77 @@ async fn every_event_is_recorded_as_published_by_the_credential_that_sent_it() {
             ("run-agent", Some("agents")),
             ("run-worker", Some("houses")),
             ("run-person", Some("alice")),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn every_event_belongs_to_the_project_of_the_credential_that_sent_it() {
+    // The whole of E1, as one batch each. A producer names a project in its
+    // body; the route writes the credential's instead — including absence, so
+    // a token with no project publishes globally as every token does today.
+    use aiwatcher_bus::MessageSource;
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let batch = |run_id: &str, claimed: &str| {
+        json!({
+            "events": [{
+                "event_type": "run.started",
+                "occurred_at": "2026-08-27T18:20:11Z",
+                "run_id": run_id,
+                // What a producer hopes for. Syntactically a project — the
+                // schema has the field — and never honoured.
+                "project": {
+                    "organization": "0198c0de-0000-7000-8000-00000000000b",
+                    "project": claimed,
+                },
+                "source": { "service": "planner", "sdk": "python" },
+                "data": {}
+            }]
+        })
+    };
+    // Every one of them asks to write into project B's half.
+    let claimed = "0198c0de-0000-7000-8000-0000000000bb";
+    for (secret, run_id) in [
+        (PROJECT_A_SECRET, "run-a"),
+        (PROJECT_B_SECRET, "run-b"),
+        (INGEST_SECRET, "run-global"),
+    ] {
+        let (status, body) = fixture
+            .send_with_token(
+                "POST",
+                "/api/v1/events",
+                secret,
+                Some(batch(run_id, claimed)),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{run_id}: {body}");
+    }
+
+    let events = fixture
+        .bus
+        .read(&Checkpoint::beginning(), 10)
+        .await
+        .expect("events");
+    let landed: Vec<(&str, Option<String>)> = events
+        .iter()
+        .map(|event| {
+            (
+                event.metadata.run_id.as_str(),
+                event.metadata.project.map(|scope| scope.key()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        landed,
+        [
+            // Token A asked for B and wrote its own: this is the difference
+            // between an envelope field and a way of publishing into somebody
+            // else's project.
+            ("run-a", Some(PROJECT_A.to_owned())),
+            ("run-b", Some(PROJECT_B.to_owned())),
+            // And a token with no project overwrites the body with absence
+            // rather than leaving what arrived — the global side.
+            ("run-global", None),
         ]
     );
 }

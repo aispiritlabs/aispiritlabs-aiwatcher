@@ -579,4 +579,55 @@ mod tests {
             Some(Checkpoint::from_global_position(6))
         );
     }
+
+    /// A page keeps which project each event belonged to, so a gap refilled
+    /// from the journal is refilled into the side it came from.
+    ///
+    /// Nothing in this module names a project: `PeriodFold::kept` trims the
+    /// payload and keeps the metadata whole. That is exactly why it is worth a
+    /// test — a trim that started copying named fields instead would drop it
+    /// silently, and a refilled gap would count a project's runs as global.
+    #[tokio::test]
+    async fn a_page_keeps_which_project_each_event_belonged_to() {
+        let scope = aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-0000000000aa").expect("uuid"),
+        );
+        let bus = Arc::new(InMemoryBus::new());
+        let mut scoped = envelope("r1", EventType::RunStarted, 1, true);
+        scoped.project = Some(scope);
+        bus.append(vec![
+            scoped,
+            envelope("r2", EventType::RunStarted, 2, true),
+        ])
+        .await
+        .unwrap();
+        let objects = Arc::new(MemoryObjectStore::default());
+        let store = PeriodStore::new(objects);
+        let journal = Arc::new(Journal::new(
+            Arc::clone(&bus),
+            Arc::clone(&bus),
+            store.clone(),
+            "projector-journal",
+            7,
+            StartFrom::Beginning,
+        ));
+        let shutdown = CancellationToken::new();
+        let running = tokio::spawn(Arc::clone(&journal).run(shutdown.clone()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while bus.load("projector-journal").await.unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the journal kept nothing");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        shutdown.cancel();
+        running.await.unwrap().unwrap();
+
+        let pages = store.pages(1, 2).await.unwrap();
+        let projects: Vec<Option<aiwatcher_core::ProjectScope>> = pages
+            .iter()
+            .flat_map(|page| page.events.iter())
+            .map(|event| event.metadata.project)
+            .collect();
+        assert_eq!(projects, [Some(scope), None]);
+    }
 }

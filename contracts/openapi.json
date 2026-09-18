@@ -7361,7 +7361,7 @@
           "ingest"
         ],
         "summary": "Publish events over HTTP.",
-        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.\n\nWriter, not viewer: this is the one read-model route that puts something in\nthe durable log, and an agent that publishes here is a machine identity —\nan authentik service account holding a token for this audience, or a\nbearer the operator issued. Reading runs and writing them are different\npermissions in every deployment that has more than one team.\n\nEvery event is recorded as published by that identity — the token's name or\nthe person's subject — whatever the body says, which is what lets a reader\ntell one publisher's word from another's.",
+        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.\n\nWriter, not viewer: this is the one read-model route that puts something in\nthe durable log, and an agent that publishes here is a machine identity —\nan authentik service account holding a token for this audience, or a\nbearer the operator issued. Reading runs and writing them are different\npermissions in every deployment that has more than one team.\n\nEvery event is recorded as published by that identity — the token's name or\nthe person's subject — whatever the body says, which is what lets a reader\ntell one publisher's word from another's.\n\nThe same rule decides **which project** an event belongs to, and here it is\nload-bearing rather than descriptive. The credential's scope is written onto\nevery envelope in the batch, including when the credential has none, so a\nproducer that named a project is ignored and one that named somebody else's\nhas written nothing into it. Absence means the global log, which is what\nevery token without a project does and what every event before this field\nexisted is (ADR_0033 pt. 3).",
         "operationId": "ingest",
         "requestBody": {
           "content": {
@@ -27224,6 +27224,17 @@
             "type": "integer",
             "format": "int64"
           },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project these runs belong to, from the runs themselves. Absent is\nthe global side, and a row never mixes the two: the fold groups by\n`(project, key)`, so a figure here is one project's."
+              }
+            ]
+          },
           "running": {
             "type": "integer",
             "format": "int64",
@@ -28237,6 +28248,17 @@
               },
               {
                 "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this event belongs to. Absent is the global side, which\nis every event this build has written so far (ADR_0033 pt. 3).\n\n**The ingest route always overwrites it with the credential's scope**,\nincluding with absence, so a value a producer sent is discarded rather\nthan honoured — a field the wire could set would be a way of writing\ninto somebody else's project.\n\nUnlike [`Self::published_by`] it *is* serialised, and that difference is\nthe whole design. A publisher is read by the same process that wrote it,\nso it never has to leave memory; a scope is read by the **projector**,\nwhich consumes the bus rather than the route. Skipping it would make\nevery project's events read as global the moment they went through a\nbroker.\n\nWhat follows from that: on a deployment whose producers publish\n**straight to the broker**, this is the producer's word, exactly as\n`published_by` is nobody's there (ADR_0001, amended). The route is the\nboundary; a broker becomes one when it authenticates producers and the\nadapter carries what it learnt."
               }
             ]
           },
@@ -32386,6 +32408,17 @@
               "null"
             ]
           },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IamProjectScope",
+                "description": "The project this caller's events are published into, for an ingest\ntoken that names one and for nothing else.\n\nBeside [`Self::queues`] because it is the same kind of thing: a\nnarrowing a shared secret carries, never a role and never from the\ngroup mapping. The one route that reads it is `POST /api/v1/events`,\nwhich stamps it onto every envelope in the batch **whatever the body\nsaid** — a producer that could name its own project could name\nsomebody else's.\n\nAbsent on every session, every bearer and every proxy identity, which\npublish globally as they always have. Which projects a *person* may\nread is a grant, asked of IAM fresh on each operation, and is no part\nof an identity — see `crates/aiwatcher-iam/README.md`."
+              }
+            ]
+          },
           "queues": {
             "type": "array",
             "items": {
@@ -35911,6 +35944,22 @@
           }
         }
       },
+      "ProjectScope": {
+        "type": "object",
+        "description": "One project of one organization, as the log carries it.\n\n`Copy`, because it travels beside every event and a clone per row would be\ntwo allocations for thirty-two bytes.",
+        "required": [
+          "organization",
+          "project"
+        ],
+        "properties": {
+          "organization": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        }
+      },
       "ProjectSummary": {
         "allOf": [
           {
@@ -37041,6 +37090,17 @@
               },
               {
                 "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "See [`EventEnvelope::project`]: which project the credential that\npublished this event writes into. Absent is the global side, which is\nevery record written before this field existed."
               }
             ]
           },
@@ -38395,6 +38455,17 @@
           "output_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this run belongs to (ADR_0033), from the **first** event\nfolded into it — including when that first event carried none, which is\nthe global side and every run this build has held.\n\nSet once and never moved. A run id is a producer's text, so two\ncredentials can publish into one; first-seen-wins means a second cannot\ntake a run into its project, which is the rule ADR_0033 states for an\nexecution's owner in the form a fold can keep. Nothing here refuses the\nsecond — a fold has nobody to refuse to — so what it does is leave the\nrun where it was.\n\nThis row is a **fact**, not a decision: it says whose a run is, and\nsays nothing about who may read it. That is a grant, asked of IAM per\nrequest, and it is IAM-02/E3's."
+              }
+            ]
           },
           "published_by": {
             "type": [
@@ -40622,6 +40693,17 @@
               },
               {
                 "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this span belongs to (ADR_0033), lifted out of the\nattributes the assembler wrote from the event that opened it. Absent is\nthe global side, which is every span written before projects existed.\n\nRead from the span rather than joined to the run, so a span carries its\nproject wherever it is read — here, and in VictoriaTraces, where the\nsame two attributes ride out and nothing is tenanted by them."
               }
             ]
           },

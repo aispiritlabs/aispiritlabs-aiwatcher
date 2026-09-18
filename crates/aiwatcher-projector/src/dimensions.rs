@@ -22,6 +22,13 @@
 //! that has no key for the chosen dimension is counted in `ungrouped_runs`
 //! rather than dropped — a tree that silently holds fewer runs than the runs
 //! list is a tree nobody trusts.
+//!
+//! **One fold, with the project in the row** (ADR_0033, IAM-02 E2). A row is
+//! `(project, key)` rather than `key`, so two projects that both ran an agent
+//! called `researcher` get a row each and neither's counts are somebody else's
+//! — which a fold per tenant would also achieve, at the price of the premise
+//! that one instance serves many projects. Absence is the global side and
+//! groups with itself, so every existing row is the row it always was.
 
 use std::collections::HashMap;
 
@@ -144,6 +151,11 @@ impl DimensionFilter {
 #[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct DimensionSummary {
     pub key: String,
+    /// Which project these runs belong to, from the runs themselves. Absent is
+    /// the global side, and a row never mixes the two: the fold groups by
+    /// `(project, key)`, so a figure here is one project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     pub runs: u64,
     pub succeeded: u64,
     pub failed: u64,
@@ -191,6 +203,7 @@ impl DimensionSummary {
     fn new(key: String, run: &RunSummary) -> Self {
         Self {
             key,
+            project: run.project,
             runs: 0,
             succeeded: 0,
             failed: 0,
@@ -236,6 +249,22 @@ impl DimensionSummary {
                 self.agents.push(agent.clone());
             }
         }
+    }
+
+    /// The cursor value for this row: its project and its key.
+    ///
+    /// Never parsed, only compared against each row's own — the shape
+    /// [`crate::spans::SpanRow::cursor`] already uses — so it needs only to be
+    /// injective, which it is: a scope key is either empty or two uuids joined
+    /// by a slash, and neither can hold a `|`. A cursor from before projects
+    /// existed matches no row, and an unrecognised cursor has always meant the
+    /// page starts from the top.
+    fn cursor(&self) -> String {
+        format!(
+            "{}|{}",
+            aiwatcher_core::ProjectScope::key_of(self.project),
+            self.key
+        )
     }
 }
 
@@ -299,7 +328,10 @@ pub fn compute(
     filter: &DimensionFilter,
     now: OffsetDateTime,
 ) -> DimensionPage {
-    let mut grouped: HashMap<String, DimensionSummary> = HashMap::new();
+    // Keyed by the project *and* the dimension's key: two projects that both
+    // ran an agent of one name are two rows, so no figure in either is the
+    // other's. Global runs key on the empty scope and group as they always did.
+    let mut grouped: HashMap<(String, String), DimensionSummary> = HashMap::new();
     let mut ungrouped_runs = 0u64;
     let window = crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
     let selection = filter.selection();
@@ -332,7 +364,10 @@ pub fn compute(
                 continue;
             }
             grouped
-                .entry(key.clone())
+                .entry((
+                    aiwatcher_core::ProjectScope::key_of(run.project),
+                    key.clone(),
+                ))
                 .or_insert_with(|| DimensionSummary::new(key, run))
                 .absorb(run);
         }
@@ -346,11 +381,13 @@ pub fn compute(
     rows.sort_by(|a, b| {
         b.last_activity_at
             .cmp(&a.last_activity_at)
-            .then_with(|| a.key.cmp(&b.key))
+            // The cursor rather than the key, so the order stays total now
+            // that two rows can share one key.
+            .then_with(|| a.cursor().cmp(&b.cursor()))
     });
 
     if let Some(cursor) = &filter.after
-        && let Some(index) = rows.iter().position(|row| &row.key == cursor)
+        && let Some(index) = rows.iter().position(|row| &row.cursor() == cursor)
     {
         rows.drain(0..=index);
     }
@@ -358,7 +395,7 @@ pub fn compute(
     let remaining = rows.len();
     rows.truncate(filter.limit.unwrap_or(100).clamp(1, 500));
     let next_cursor = (remaining > rows.len())
-        .then(|| rows.last().map(|row| row.key.clone()))
+        .then(|| rows.last().map(DimensionSummary::cursor))
         .flatten();
 
     DimensionPage {
@@ -395,6 +432,7 @@ mod tests {
             variant_id: None,
             evaluation_id: None,
             published_by: None,
+            project: None,
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
@@ -465,6 +503,86 @@ mod tests {
         let executor = page.rows.iter().find(|row| row.key == "executor").unwrap();
         assert_eq!(executor.runs, 1);
         assert_eq!(page.ungrouped_runs, 0);
+    }
+
+    fn scope(last: u8) -> aiwatcher_core::ProjectScope {
+        aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+            uuid::Uuid::parse_str(&format!("0198c0de-0000-7000-8000-0000000000{last:02x}"))
+                .expect("uuid"),
+        )
+    }
+
+    #[test]
+    fn two_projects_running_one_agent_are_two_rows_and_neither_holds_the_other_s_runs() {
+        // The whole of E2 in one fold: the project is *in the row*, not a fold
+        // of its own. One declaration made in two projects has one variant ID
+        // and two projects may name an agent alike, so a key alone would sum
+        // their traffic into a figure belonging to neither.
+        let mut mine = run("run-1", RunStatus::Succeeded, now());
+        mine.project = Some(scope(0xaa));
+        let mut yours = run("run-2", RunStatus::Failed, now());
+        yours.project = Some(scope(0xbb));
+        let global = run("run-3", RunStatus::Succeeded, now());
+
+        let page = compute(
+            &[mine, yours, global],
+            &HashMap::new(),
+            DimensionKind::Agent,
+            &DimensionFilter::default(),
+            now(),
+        );
+
+        assert_eq!(page.total, 3, "one `researcher` row per side");
+        let rows: Vec<(Option<aiwatcher_core::ProjectScope>, u64, u64)> = page
+            .rows
+            .iter()
+            .map(|row| {
+                assert_eq!(row.key, "researcher");
+                (row.project, row.runs, row.failed)
+            })
+            .collect();
+        assert!(rows.contains(&(Some(scope(0xaa)), 1, 0)), "{rows:?}");
+        assert!(rows.contains(&(Some(scope(0xbb)), 1, 1)), "{rows:?}");
+        // …and the global row is exactly the row it was before projects
+        // existed: one run, its own, and no project on it.
+        assert!(rows.contains(&(None, 1, 0)), "{rows:?}");
+    }
+
+    #[test]
+    fn a_page_boundary_between_two_projects_sharing_a_key_skips_no_row() {
+        // The cursor is a position in a total order, so it has to name the row
+        // rather than its key: with two rows called `researcher`, a key cursor
+        // would land on whichever came first and drop or repeat the other.
+        let mut mine = run("run-1", RunStatus::Succeeded, now());
+        mine.project = Some(scope(0xaa));
+        let mut yours = run("run-2", RunStatus::Succeeded, now());
+        yours.project = Some(scope(0xbb));
+        let runs = [mine, yours, run("run-3", RunStatus::Succeeded, now())];
+
+        let mut seen = Vec::new();
+        let mut after = None;
+        for _ in 0..3 {
+            let page = compute(
+                &runs,
+                &HashMap::new(),
+                DimensionKind::Agent,
+                &DimensionFilter {
+                    limit: Some(1),
+                    after: after.clone(),
+                    ..DimensionFilter::default()
+                },
+                now(),
+            );
+            seen.extend(page.rows.iter().map(|row| row.project));
+            after = page.next_cursor;
+        }
+
+        assert_eq!(seen.len(), 3, "every row, once: {seen:?}");
+        assert_eq!(after, None, "and the last page says so");
+        for project in [Some(scope(0xaa)), Some(scope(0xbb)), None] {
+            assert!(seen.contains(&project), "{seen:?}");
+        }
     }
 
     #[test]

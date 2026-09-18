@@ -82,6 +82,10 @@ impl AttemptScope {
             roles: vec![Role::Editor],
             expires_at: Some(expires_at),
             queues: vec![self.queue.clone()],
+            // A pod publishes into the log its attempt's run belongs to, and a
+            // project execution has no start path yet (ADR_0033). Global,
+            // and said here rather than left to be inferred from `None`.
+            project: None,
             attempt: Some(self.clone()),
             credential: Credential::Attempt,
         }

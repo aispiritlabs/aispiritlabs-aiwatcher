@@ -214,6 +214,20 @@ pub mod aiwatcher {
         pub const ID: &str = "aiwatcher.variant.id";
     }
 
+    /// Which project a span belongs to (ADR_0033), from the credential that
+    /// published the event that **opened** it — never repointed by what closed
+    /// it, so a span's project is its run's.
+    ///
+    /// Two attributes rather than one key, because a trace store is where this
+    /// is read by somebody who wants to filter on an organization: the scope
+    /// rides out as an ordinary attribute and neither VictoriaTraces nor Perses
+    /// is tenanted by it. Absent on a global span, which is every span this
+    /// build has written.
+    pub mod project {
+        pub const ORGANIZATION: &str = "aiwatcher.project.organization";
+        pub const ID: &str = "aiwatcher.project.id";
+    }
+
     /// Which version of a registered model served a call — the training
     /// registry's version, beside `gen_ai.request.model`'s name. What a
     /// variant pinning a model is held to.

@@ -967,6 +967,20 @@ round leaves a reference to bytes nobody wrote. It applies to:
   the application's word again, counted as self-witnessed and said to be so —
   and where a deployment names its witnesses (`AIWATCHER_WITNESSES`), only those
   credentials witness at all.
+- **Never read which project an event belongs to from the producer, and never
+  skip it off the wire.** `project` is the ingest route's word like
+  `published_by` — `POST /api/v1/events` overwrites it on every envelope with
+  the credential's scope, including with absence, so a body naming a project is
+  discarded rather than honoured (ADR_0001 amended, ADR_0033). It parts from
+  `published_by` in one way that decides the design: it **is** serialised,
+  because its reader is the projector consuming the bus rather than the process
+  that wrote it, and skipping it would read every project's events as global
+  behind a broker. An ingest token names its project in its label
+  (`name[queue]@<organization-uuid>/<project-uuid>=secret`), which **narrows**
+  like the queues and never raises: the role stays hard-coded `Editor`. Absence
+  is the global side, which is every event this build has written, and a
+  producer publishing straight to the broker is its own word for its project —
+  named here rather than left to be discovered.
 - **Never list a client's count as a run.** `client.counted` says how many runs
   a client opened and its `run_id` names the client: it folds into the
   measured-runs counts and into lost runs, never into the runs list, a span or a

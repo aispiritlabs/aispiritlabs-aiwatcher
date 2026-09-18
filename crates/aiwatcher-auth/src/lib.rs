@@ -303,6 +303,16 @@ pub struct IngestToken {
     /// so a secret that leaks out of an agent's environment can publish
     /// events and cannot pick up somebody's work.
     pub queues: Vec<String>,
+    /// The project every event this token publishes belongs to. `None`
+    /// publishes globally, which is what every token configured before this
+    /// field existed does.
+    ///
+    /// A **narrowing**, like the queues and never like a role: the token still
+    /// holds [`Role::Editor`] and nothing more, so naming a project cannot make
+    /// a secret in an agent's environment able to ask an orchestrator to run
+    /// something. What it does is bound the blast radius of that secret leaking
+    /// to one project's log — less than it was, and not nothing.
+    pub project: Option<aiwatcher_iam::ProjectScope>,
 }
 
 impl std::fmt::Debug for IngestToken {
@@ -310,6 +320,7 @@ impl std::fmt::Debug for IngestToken {
         f.debug_struct("IngestToken")
             .field("label", &self.label)
             .field("queues", &self.queues)
+            .field("project", &self.project.map(|scope| scope.key()))
             .finish_non_exhaustive()
     }
 }
@@ -317,21 +328,26 @@ impl std::fmt::Debug for IngestToken {
 impl std::str::FromStr for IngestToken {
     type Err = AuthError;
 
-    /// `name=secret`, `name[queue other]=secret`, or a bare secret that takes
-    /// the label `ingest`.
+    /// `name=secret`, `name[queue other]=secret`,
+    /// `name[queue]@<organization-uuid>/<project-uuid>=secret`, or a bare
+    /// secret that takes the label `ingest`.
     ///
-    /// The queues sit in the *label* rather than after the secret, and that is
-    /// not a stylistic choice: the secret is split off with `split_once`, so it
-    /// stays opaque and may contain an `=` — which a base64 one does. A third
-    /// field after it would silently truncate those. Inside the brackets the
-    /// separator is whitespace, because the entries of
+    /// The queues and the project sit in the *label* rather than after the
+    /// secret, and that is not a stylistic choice: the secret is split off with
+    /// `split_once`, so it stays opaque and may contain an `=` — which a base64
+    /// one does. A third field after it would silently truncate those. Inside
+    /// the brackets the separator is whitespace, because the entries of
     /// `AIWATCHER_AUTH_INGEST_TOKENS` are separated by commas and a queue name
     /// has no spaces in it.
+    ///
+    /// The project is a suffix on the whole label, so every token string
+    /// written before it existed parses to exactly what it always did.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let (label, secret) = match raw.split_once('=') {
             Some((label, secret)) => (label.trim(), secret.trim()),
             None => ("ingest", raw.trim()),
         };
+        let (label, project) = split_project(label)?;
         let (label, queues) = split_queues(label)?;
 
         // A guessable shared secret is a worse hole than no authentication,
@@ -347,6 +363,7 @@ impl std::str::FromStr for IngestToken {
             label: label.to_owned(),
             secret: secret.to_owned(),
             queues,
+            project,
         })
     }
 }
@@ -376,10 +393,34 @@ impl IngestToken {
             // only ever narrows: empty is a producer, and a producer claims
             // nothing.
             queues: self.queues.clone(),
+            // The second such thing, and a narrowing for the same reason:
+            // `None` publishes to the global log, exactly as every token
+            // configured today does.
+            project: self.project,
             attempt: None,
             credential: Credential::Token,
         }
     }
+}
+
+/// `name` or `name@<organization-uuid>/<project-uuid>`, split into the two.
+///
+/// Refused rather than read as part of the label, for the reason an unclosed
+/// queue list is: a token whose project was quietly taken for a name would
+/// publish globally, and the deployment that meant to bound it would learn so
+/// from an audit rather than from a start-up refusal.
+fn split_project(label: &str) -> Result<(&str, Option<aiwatcher_iam::ProjectScope>), AuthError> {
+    let Some((name, scope)) = label.split_once('@') else {
+        return Ok((label, None));
+    };
+    let name = name.trim_end();
+    let scope = aiwatcher_iam::ProjectScope::parse(scope).map_err(|error| {
+        AuthError::Configuration(format!(
+            "the token {name:?} names a project this deployment cannot read: {error}; \
+             write it as `name[queue]@<organization-uuid>/<project-uuid>=secret`"
+        ))
+    })?;
+    Ok((name, Some(scope)))
 }
 
 /// `name` or `name[queue other]`, split into the two.
@@ -818,6 +859,10 @@ impl Authenticator {
             // queue of that name — a queue is what a worker's own secret
             // says, and this identity did not present one.
             queues: Vec::new(),
+            // Never from the group mapping either, and never from the token: a
+            // person's projects are grants, asked of IAM fresh per operation,
+            // and a session that carried one would be caching a decision.
+            project: None,
             expires_at: claims.exp,
             attempt: None,
             credential,
@@ -1282,6 +1327,97 @@ mod tests {
             producer.queues.is_empty(),
             "a producer's token claims nothing"
         );
+    }
+
+    #[test]
+    fn a_token_may_name_the_project_it_publishes_into_and_most_name_none() {
+        let scoped: IngestToken =
+            "houses[houses]@0198c0de-0000-7000-8000-000000000001/0198c0de-0000-7000-8000-000000000002=0123456789abcdef0123456789"
+                .parse()
+                .expect("valid");
+        assert_eq!(scoped.label, "houses", "the label stays the bare name");
+        assert_eq!(scoped.queues, ["houses"]);
+        assert_eq!(
+            scoped.project.expect("a project").key(),
+            "0198c0de-0000-7000-8000-000000000001/0198c0de-0000-7000-8000-000000000002"
+        );
+        assert_eq!(scoped.secret, "0123456789abcdef0123456789");
+
+        // A suffix on the whole label, so everything written before it existed
+        // parses to exactly what it always did.
+        let global: IngestToken = "agents=0123456789abcdef0123456789".parse().expect("valid");
+        assert_eq!(global.project, None, "and publishes globally, as today");
+        let bare: IngestToken = "0123456789abcdef0123456789".parse().expect("valid");
+        assert_eq!((bare.label.as_str(), bare.project), ("ingest", None));
+    }
+
+    #[test]
+    fn a_project_a_deployment_cannot_read_is_refused_at_start_up() {
+        // The failure it would otherwise produce is a token that authenticates,
+        // publishes to the global log for ever, and says why nowhere — found in
+        // an audit rather than by the person who configured it.
+        for broken in [
+            "agents@not-a-uuid/0198c0de-0000-7000-8000-000000000002=0123456789abcdef0123456789",
+            "agents@0198c0de-0000-7000-8000-000000000001=0123456789abcdef0123456789",
+            "agents@=0123456789abcdef0123456789",
+            // The other order, which reads as a project called `[houses]`.
+            "agents@0198c0de-0000-7000-8000-000000000001/0198c0de-0000-7000-8000-000000000002[houses]=0123456789abcdef0123456789",
+        ] {
+            let error = broken.parse::<IngestToken>().expect_err(broken).to_string();
+            assert!(
+                error.contains("<organization-uuid>/<project-uuid>"),
+                "{broken}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn naming_a_project_narrows_a_token_and_does_not_raise_it() {
+        // The guardrail, amended the way the queue amended it: the role is
+        // still hard-coded, and what a project does is bound where a leaked
+        // secret can write.
+        let scoped: IngestToken =
+            "agents@0198c0de-0000-7000-8000-000000000001/0198c0de-0000-7000-8000-000000000002=0123456789abcdef0123456789"
+                .parse()
+                .expect("valid");
+        let identity = scoped.identity();
+
+        assert_eq!(identity.role(), Role::Editor, "a project is not a role");
+        assert!(!identity.can(Role::Admin));
+        assert!(!identity.may_claim("houses"), "and it claims nothing");
+        assert_eq!(identity.project, scoped.project);
+
+        // Every other credential publishes globally, as it always has. A
+        // person's projects are grants asked of IAM per operation, never a
+        // field on an identity that outlives the question.
+        let headers = ProxyHeaders::default();
+        let proxy = proxy::identity_from(&headers, &RoleMapping::default(), |name| {
+            (name == headers.username).then_some("teacher")
+        })
+        .expect("a proxy identity");
+        let local = local::LocalAuth::new(
+            local::LocalAuth::generate().expect("generates"),
+            Role::Admin,
+        )
+        .expect("accepts")
+        .identity();
+        for elsewhere in [Identity::anonymous(), proxy, local] {
+            assert_eq!(elsewhere.project, None, "{:?}", elsewhere.credential);
+        }
+    }
+
+    #[test]
+    fn an_ingest_token_never_prints_its_secret_and_does_print_its_project() {
+        let token: IngestToken =
+            "agents@0198c0de-0000-7000-8000-000000000001/0198c0de-0000-7000-8000-000000000002=0123456789abcdef0123456789"
+                .parse()
+                .expect("valid");
+        let rendered = format!("{token:?}");
+        assert!(
+            rendered.contains("0198c0de-0000-7000-8000-000000000002"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("0123456789abcdef"), "{rendered}");
     }
 
     #[test]

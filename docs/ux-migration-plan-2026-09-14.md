@@ -1326,3 +1326,15 @@ roboczym pracują równolegle inne strumienie i ich niezacommitowane zmiany są
 obecne; jedna porażka w `cargo test -p aiwatcher-api --lib`
 (`every_module_facade_reaches_the_document`) jest **nie z tej pracy** — LEARN-02
 dopisało `labs` do `document()`, a jeszcze nie do listy modułów w tym teście.
+
+## IAM-02/A dowieziony — projekt na kopercie i fold, który go zna (18.09.2026)
+
+E1 i E2 z [planu data plane](iam-02-data-plane.md) są zrobione: koperta niesie
+opcjonalny `ProjectScope`, trasa ingestu nadpisuje go zakresem poświadczenia, a
+jeden fold — przebiegi, wymiary, spany, okresy, `asked`, `measured`, journal —
+trzyma klucz zakresu w wierszu. Brak znaczy stronę globalną, więc nic z
+dotychczasowych danych się nie ruszyło, a identyfikatory globalne nie drgnęły co
+do bajtu. Pomiar pamięci: 176 MB bez projektu, 183 MB z pięćdziesięcioma; limit
+512 MB zostaje. Szczegóły i to, czego etap **nie** robi, są w sekcji 8 tamtego
+planu. Następny jest IAM-02/B — odczyty i żywy strumień po grantach, czyli
+bramka M1.

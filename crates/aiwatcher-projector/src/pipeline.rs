@@ -358,13 +358,26 @@ where
             tracing::warn!(%error, "live publish failed; the client will resync on reconnect");
         }
 
+        // The project rides as an ordinary attribute, so the series grows by
+        // one per project that has written anything and no existing series
+        // moves — absence is the global side and carries no label at all.
+        // Neither VictoriaMetrics nor Perses is tenanted by it; that is E6's,
+        // and this is the fact they would need.
+        let mut attributes = vec![attr(own::event::TYPE, event.event_type.as_str())];
+        if let Some(scope) = &event.metadata.project {
+            attributes.push(attr(
+                own::project::ORGANIZATION,
+                scope.organization.to_string(),
+            ));
+            attributes.push(attr(own::project::ID, scope.project.to_string()));
+        }
         pending.metrics.push(MetricSample {
             name: own::metrics::EVENTS_INGESTED.to_owned(),
             kind: MetricKind::Counter,
             value: 1.0,
             unit: None,
             at: OffsetDateTime::now_utc(),
-            attributes: vec![attr(own::event::TYPE, event.event_type.as_str())],
+            attributes,
         });
     }
 

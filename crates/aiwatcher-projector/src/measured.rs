@@ -74,6 +74,10 @@ pub struct KeptCount {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeptMeasurement {
     pub evaluation_id: String,
+    /// Which project's runs these are (ADR_0033). Absent is the global side,
+    /// and every count written before projects existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     /// Where it stands in the order measurements were last heard from.
     pub heard: u64,
     pub counts: Vec<KeptCount>,
@@ -120,13 +124,24 @@ impl Count {
 #[derive(Debug, Default)]
 struct Measurement {
     heard: u64,
+    /// Kept beside the key so [`MeasuredState::kept`] writes the scope back
+    /// out rather than re-reading it from a string it split.
+    project: Option<aiwatcher_core::ProjectScope>,
     counts: BTreeMap<(String, Option<u32>), Count>,
 }
+
+/// What a measurement's counts are kept under: its project and its ID.
+///
+/// A published result's ID is a content address, so one declaration made in
+/// two projects has one ID — and a single key would have summed their runs
+/// into a figure belonging to neither. The scope key is `""` on the global
+/// side, which is where every count this build has read sits.
+type Measured = (String, String);
 
 /// Every measurement's counts, as the log was read.
 #[derive(Debug, Default)]
 pub struct MeasuredState {
-    measurements: BTreeMap<String, Measurement>,
+    measurements: BTreeMap<Measured, Measurement>,
     /// A clock of this fold's own: which measurement was heard from last.
     heard: u64,
 }
@@ -159,7 +174,11 @@ impl MeasuredState {
             _ => return,
         };
         self.heard += 1;
-        if !self.measurements.contains_key(evaluation_id)
+        let measured: Measured = (
+            aiwatcher_core::ProjectScope::key_of(event.metadata.project),
+            evaluation_id.to_owned(),
+        );
+        if !self.measurements.contains_key(&measured)
             && self.measurements.len() >= MOST_MEASUREMENTS
             && let Some(oldest) = self
                 .measurements
@@ -169,10 +188,9 @@ impl MeasuredState {
         {
             self.measurements.remove(&oldest);
         }
-        let measurement = self
-            .measurements
-            .entry(evaluation_id.to_owned())
-            .or_default();
+        let project = event.metadata.project;
+        let measurement = self.measurements.entry(measured).or_default();
+        measurement.project = project;
         measurement.heard = self.heard;
         let key = (client.to_owned(), attempt);
         if !measurement.counts.contains_key(&key) && measurement.counts.len() >= MOST_COUNTS {
@@ -192,8 +210,9 @@ impl MeasuredState {
     pub fn kept(&self) -> Vec<KeptMeasurement> {
         self.measurements
             .iter()
-            .map(|(evaluation_id, measurement)| KeptMeasurement {
+            .map(|((_, evaluation_id), measurement)| KeptMeasurement {
                 evaluation_id: evaluation_id.clone(),
+                project: measurement.project,
                 heard: measurement.heard,
                 counts: measurement
                     .counts
@@ -221,6 +240,7 @@ impl MeasuredState {
             state.heard = state.heard.max(measurement.heard);
             let mut restored = Measurement {
                 heard: measurement.heard,
+                project: measurement.project,
                 counts: BTreeMap::new(),
             };
             for kept_count in measurement.counts.into_iter().take(MOST_COUNTS) {
@@ -242,18 +262,31 @@ impl MeasuredState {
                     .counts
                     .insert((kept_count.client, kept_count.attempt), count);
             }
-            state
-                .measurements
-                .insert(measurement.evaluation_id, restored);
+            state.measurements.insert(
+                (
+                    aiwatcher_core::ProjectScope::key_of(measurement.project),
+                    measurement.evaluation_id,
+                ),
+                restored,
+            );
         }
         state
     }
 
-    /// What each client said of the runs it opened for one measurement.
+    /// What each client said of the runs it opened for one measurement of one
+    /// project — `None` for the global side, which is every measurement a
+    /// production caller asks about today (ADR_0033).
     #[must_use]
-    pub fn of(&self, evaluation_id: &str) -> Vec<MeasuredRuns> {
+    pub fn of(
+        &self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        evaluation_id: &str,
+    ) -> Vec<MeasuredRuns> {
         self.measurements
-            .get(evaluation_id)
+            .get(&(
+                aiwatcher_core::ProjectScope::key_of(project),
+                evaluation_id.to_owned(),
+            ))
             .into_iter()
             .flat_map(|measurement| &measurement.counts)
             .filter(|(_, count)| !count.overflowed)
@@ -332,7 +365,7 @@ mod tests {
         }
 
         assert_eq!(
-            state.of("e1"),
+            state.of(None, "e1"),
             [
                 MeasuredRuns {
                     client: "other".to_owned(),
@@ -355,8 +388,8 @@ mod tests {
             ],
             "numbers 1, 3 and 4 of the first attempt never arrived, and a redelivery is one"
         );
-        assert_eq!(state.of("e2")[0].opened, 4);
-        assert!(state.of("nothing").is_empty());
+        assert_eq!(state.of(None, "e2")[0].opened, 4);
+        assert!(state.of(None, "nothing").is_empty());
 
         let kept = state.kept();
         assert_eq!(
@@ -367,7 +400,7 @@ mod tests {
         let restored = MeasuredState::from_kept(
             serde_json::from_slice(&serde_json::to_vec(&kept).expect("writes")).expect("reads"),
         );
-        assert_eq!(restored.of("e1"), state.of("e1"));
-        assert_eq!(restored.of("e2"), state.of("e2"));
+        assert_eq!(restored.of(None, "e1"), state.of(None, "e1"));
+        assert_eq!(restored.of(None, "e2"), state.of(None, "e2"));
     }
 }

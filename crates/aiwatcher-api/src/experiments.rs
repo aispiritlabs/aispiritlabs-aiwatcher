@@ -154,7 +154,12 @@ async fn get_experiment(
     // the read model holds, and every period ever written is not that.
     let observed = match (&state.observations, query.window_seconds) {
         (Some(fold), Some(window)) if window > 0 => fold
-            .observe(&variants, now() - window, state.model_prices.as_deref())
+            .observe(
+                None,
+                &variants,
+                now() - window,
+                state.model_prices.as_deref(),
+            )
             .await
             .map_err(aiwatcher_evaluation::EvaluationError::Storage)?,
         _ => {

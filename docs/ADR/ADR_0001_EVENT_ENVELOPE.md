@@ -471,3 +471,50 @@ unsaid, since its last count.
 A tool call carries `code_sha256` beside a function the gateway answers with
 from two more places: the `Aiwatcher-Tool-Code` header of a URL tool's reply, and
 the `code` a host hands `ToolWitness`.
+
+## Amendment 2026-09-18: which project an event belongs to
+
+`project` joins the envelope and `RecordedMetadata` as an optional
+`ProjectScope` — an organization's uuid and a project's, and nothing else about
+either. **Absence is the global side**, which is every event this build has
+written, so no stored record moves and no historical read changes (ADR_0033
+pt. 3). It changes no derived ID: `TraceId::derive` and `SpanId::derive` stay
+pure functions of `run_id` and the span key, and a project folds instead into an
+*execution* id, which is a different identifier with a different job (ADR_0033
+pt. 5).
+
+**It is the ingest route's word, and it is serialised.** That pair is the whole
+design, and the second half is where it parts from `published_by`. A publisher
+is read by the same process that wrote it, so it never leaves memory
+(`#[serde(skip)]`); a scope is read by the **projector**, which consumes the bus
+rather than the route, so skipping it would make every project's events read as
+global the moment they passed through a broker. Being on the wire, it is a field
+a producer can send — so `POST /api/v1/events` **overwrites it on every envelope
+in the batch with the credential's scope, including with absence**. A body
+naming a project is discarded rather than honoured, and a token bound to one
+project cannot write into another. A field that was merged rather than assigned,
+or checked only when the credential had a scope, would be a way of publishing
+into somebody else's project.
+
+The credential is an ingest token, which gains the scope in its label —
+`name[queue]@<organization-uuid>/<project-uuid>=secret`, a suffix, so every
+token string written before this parses to exactly what it always did. It is a
+**narrowing** beside the queues and never a role: the token still holds
+`Editor` and nothing more (ADR_0013), so naming a project cannot make a secret
+in an agent's environment able to ask an orchestrator to run something. What it
+does is bound where that secret can write. Every other credential — a session, a
+bearer, a proxy header, a pod's attempt credential, the local token, the
+anonymous identity — publishes globally, as each always has. Which projects a
+*person* may read is a grant, asked of IAM fresh on each operation, and is no
+part of an identity.
+
+The SDKs are unchanged and send no such field.
+
+**What would make this wrong.** The rule is only as strong as the route: a
+deployment whose producers publish **straight to the broker** carries the
+producer's own word for its project, exactly as no record there names a
+publisher. A broker becomes a boundary when it authenticates producers and the
+adapter carries what it learnt — the same sentence this ADR already writes about
+`published_by`, and the same work. Until then, a deployment that bounds projects
+by credential is one whose producers reach the log through `POST
+/api/v1/events`.

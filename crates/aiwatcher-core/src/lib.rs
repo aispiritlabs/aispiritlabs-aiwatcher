@@ -25,6 +25,7 @@ pub mod migration;
 pub mod ports;
 pub mod prices;
 pub mod prompts;
+pub mod scope;
 pub mod storage;
 pub mod stream;
 pub mod topology;
@@ -45,5 +46,6 @@ pub use prompts::{
     PromptName, PromptRef, PromptSummary, PromptVersion, PromptVersionId, PromptVersionSummary,
     RejectionReason, Score, Verdict, VersionOrigin,
 };
+pub use scope::{ProjectScope, ScopeError};
 pub use storage::{ObjectEntry, ObjectStore};
 pub use stream::{GlobalPosition, StreamName, StreamPosition};

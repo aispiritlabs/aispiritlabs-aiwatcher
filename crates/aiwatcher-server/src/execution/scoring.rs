@@ -1269,7 +1269,7 @@ impl ActivityExecutor for TracesExecutor {
                         })
                         .unwrap_or_else(|| declared.declared_at.saturating_mul(1_000));
                     let from_ms = start_ms.saturating_sub(before.saturating_mul(1_000));
-                    let read = index.since(from_ms).await.map_err(|error| {
+                    let read = index.since(None, from_ms).await.map_err(|error| {
                         if error.is_retryable() {
                             ActivityError::transient(error.to_string())
                         } else {
@@ -1354,11 +1354,15 @@ impl ActivityExecutor for TracesExecutor {
         // Of the runs not on the log, which a client counted and lost and which
         // no client opened for this result — from the asked index, which keeps
         // the counts across a restart, and from the read model without one.
+        // `None`: the global side. A project's measurement would take its
+        // scope from the execution's durable owner (ADR_0033), and no
+        // production caller constructs a bound store yet — so naming the
+        // global side here is the honest answer rather than a placeholder.
         let counts = match &self.asked {
-            Some(asked) => asked.measured_runs(&declared.run.evaluation_id).await,
+            Some(asked) => asked.measured_runs(None, &declared.run.evaluation_id).await,
             None => {
                 self.read_model
-                    .measured_runs(&declared.run.evaluation_id)
+                    .measured_runs(None, &declared.run.evaluation_id)
                     .await
             }
         };
