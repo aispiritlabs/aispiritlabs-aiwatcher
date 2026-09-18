@@ -145,7 +145,7 @@ impl Evaluation {
             "exceeds 256 KiB",
         )?;
         let variant_id = digest(&manifest.variant)?;
-        let context_id = digest(&(SCHEMA_VERSION, &manifest.context))?;
+        let context_id = manifest.context.id()?;
         Ok(PreparedEvaluation::new(manifest, variant_id, context_id))
     }
 }

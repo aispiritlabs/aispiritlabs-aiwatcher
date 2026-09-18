@@ -4,8 +4,8 @@
 log](OBSERVABILITY.md) is bounded by that log's retention, and some things must
 not be. The version of a prompt a run used has to be readable after that run has
 been evicted; so does the corpus a model was trained on, and the licence that
-permitted it. So five registries — prompts, annotations, datasets, conversations
-and training — live in an object store instead, sharing one rule: **identity is
+permitted it. So six registries — prompts, annotations, datasets, conversations,
+training and labs — live in an object store instead, sharing one rule: **identity is
 content**, and a head that indexes an object is written *after* the object.
 
 | ADR | Decided | Where it stands |
@@ -21,6 +21,7 @@ content**, and a head that indexes an object is written *after* the object.
 | [0023](../ADR/ADR_0023_MODEL_PACKAGE.md) | A serving runtime is handed a declared package, and a checkpoint URI is not one | Accepted. Every artifact carries its `sha256`, because an address is not an identity |
 
 | [0030](../ADR/ADR_0030_EVALUATION_EVIDENCE.md) | Evaluation owns pinned variants and durable evidence | Contract, durable registry and legacy read bridge implemented for synthetic evidence; native source adapters and orphan collection remain |
+| [0034](../ADR/ADR_0034_WORKSHOP_LABS.md) | A lab is an authored brief bound to a pinned measurement | Accepted. The sixth registry, and the one that was mostly **not** built: three of the four things a lab needs were already here under evaluation's names |
 
 ## The three rules that repeat
 

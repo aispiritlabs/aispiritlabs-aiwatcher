@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use aiwatcher_core::ArtifactRef;
 use serde::{Deserialize, Serialize};
 
-use crate::{DatasetReference, Result, VersionReference, reference::artifact, require, text};
+use crate::{
+    DatasetReference, Result, SCHEMA_VERSION, VersionReference, digest, reference::artifact,
+    require, text,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +118,21 @@ pub struct EvaluationContext {
 }
 
 impl EvaluationContext {
+    /// The content address of this context: the key every result measured on
+    /// these cases by this card shares, whoever produced it.
+    ///
+    /// Identity of what was measured and how, never a verdict about it — and
+    /// never a promise that any result exists. It is answerable before one
+    /// does, which is what lets a lab pin its measurement and name the id its
+    /// submissions will publish under ([ADR_0034](../../../docs/ADR/ADR_0034_WORKSHOP_LABS.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Encoding`] when the context cannot be canonicalised.
+    pub fn id(&self) -> Result<String> {
+        digest(&(SCHEMA_VERSION, self))
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         self.dataset.validate("context.dataset")?;
         artifact(&self.case_manifest, "context.case_manifest")?;

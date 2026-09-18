@@ -12,6 +12,7 @@
 #   aiwatcher-training   training runs and the model versions they produce
 #   aiwatcher-evaluation pinned variants and evaluation evidence contracts
 #   aiwatcher-conversations  the encrypted conversation archive and its exports
+#   aiwatcher-labs       a workshop lab: an authored brief and the tests it pins
 #   aiwatcher-execution  the plan, the pure decider, and the workflow store
 #   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
 #   aiwatcher-iam        organization membership, project grants and access policy
@@ -49,6 +50,7 @@ aiwatcher-annotations = { path = "crates/aiwatcher-annotations", version = "0.1.
 aiwatcher-training = { path = "crates/aiwatcher-training", version = "0.1.0" }
 aiwatcher-evaluation = { path = "crates/aiwatcher-evaluation", version = "0.1.0" }
 aiwatcher-conversations = { path = "crates/aiwatcher-conversations", version = "0.1.0" }
+aiwatcher-labs = { path = "crates/aiwatcher-labs", version = "0.1.0" }
 aiwatcher-execution = { path = "crates/aiwatcher-execution", version = "0.1.0" }
 aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
 aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }

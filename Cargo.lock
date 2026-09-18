@@ -328,6 +328,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-labs"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-evaluation",
+ "aiwatcher-iam",
+ "aiwatcher-prompts",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-migration"
 version = "0.1.0"
 dependencies = [
