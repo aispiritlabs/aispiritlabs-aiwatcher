@@ -223,6 +223,8 @@ impl Fixture {
         let definitions = registry_enabled.then(|| Arc::new(MemoryObjectStore::new()));
         let state = AppState {
             iam: None,
+            iam_audit_exports: None,
+            iam_audit_worker: None,
             evaluations: None,
             evaluation_bundles: None,
             observations: None,

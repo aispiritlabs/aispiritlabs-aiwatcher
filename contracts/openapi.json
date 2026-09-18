@@ -9416,6 +9416,370 @@
         }
       }
     },
+    "/api/v1/iam/organizations/{organization}/audit/bounds": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "audit_bounds",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamAuditBounds"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/audit/exports": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "audit_exports",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IamAuditExport"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Queue a frozen copy of this organization's trail.",
+        "description": "The range is pinned here rather than by the worker, so a grant issued while\nthe job runs belongs to the next export. The response is the queued job: the\nbytes arrive shard by shard, and `GET .../exports/{job}` is what says how far\nit has got.",
+        "operationId": "create_audit_export",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IamAuditExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamAuditExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/audit/exports/{job}": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "operationId": "audit_export",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamAuditExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Stop an export that has not finished. A finished one is 409: what it\nproduced is a record, and there is nothing left for a cancellation to\nprevent.",
+        "operationId": "cancel_audit_export",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamAuditExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/audit/exports/{job}/rows": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "The frozen entries, a page at a time.",
+        "operationId": "audit_export_rows",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamAuditExportRowsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/v1/iam/organizations/{organization}/commands": {
       "post": {
         "tags": [
@@ -31000,6 +31364,257 @@
             ],
             "format": "int64",
             "description": "How long the run waits before [`Self::on_timeout`] decides for it.\n`None` waits as long as it takes, which is the default.",
+            "minimum": 0
+          }
+        }
+      },
+      "IamAuditBounds": {
+        "type": "object",
+        "description": "What an organization's audit trail holds now.\n\nOne read that answers both halves of the question a paginated audit cannot:\nhow much is there, and — when a sweep has been through — where it begins and\nwhy. `watermark` absent means the trail is whole.",
+        "required": [
+          "organization",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "first_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The lowest sequence still stored, or `None` when nothing is."
+          },
+          "last_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The highest, and what an export pins its range to."
+          },
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IamAuditWatermark"
+              }
+            ]
+          }
+        }
+      },
+      "IamAuditExport": {
+        "type": "object",
+        "description": "A resumable export, as it sits in the object store.\n\nThis *is* the manifest. A conversation corpus earns a `name@version` and an\nindex because a training run names one; nothing names an audit export, so a\nsecond record listing the first would be a second thing to keep in step for\nno reader.",
+        "required": [
+          "job_id",
+          "organization",
+          "request",
+          "request_digest",
+          "state",
+          "after_sequence",
+          "through_sequence",
+          "requested_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "after_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The exclusive lower bound, from the request."
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "claimed_by": {
+            "type": "string",
+            "description": "The worker holding this job: a pod name in a cluster. Not an owner — a\nlease."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/IamAuditExportCounts"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest sequence already accounted for by a written shard. The\nresume point, and the only field the ordering rule is about."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "request": {
+            "$ref": "#/components/schemas/IamAuditExportRequest"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "requested_by": {
+            "$ref": "#/components/schemas/IamPrincipal",
+            "description": "Who asked, and who every page is read as. Stored because it is re-asked,\nnot because it was once allowed."
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "through_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The inclusive upper bound, pinned when the job was created."
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The immutable reference, once there is one."
+          }
+        }
+      },
+      "IamAuditExportCounts": {
+        "type": "object",
+        "required": [
+          "entries",
+          "missing"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "description": "Entries written into a shard.",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "description": "Sequences in the pinned range that the trail no longer held.\n\nSet once, when the job completes, from the range and what was written —\nsequences are contiguous within an organization, so the arithmetic is\nexact rather than a tally somebody has to keep in step.",
+            "minimum": 0
+          }
+        }
+      },
+      "IamAuditExportRequest": {
+        "type": "object",
+        "description": "What was asked for. With the pinned range below, the identity of an export.",
+        "properties": {
+          "after_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries after this sequence, exclusive. Zero is \"everything the trail\nstill holds\", which is the common case."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this was taken. Recorded on the job, never interpreted — an export\nof an audit trail is usually somebody answering a question in writing,\nand the question is worth keeping beside the answer."
+          }
+        },
+        "additionalProperties": false
+      },
+      "IamAuditExportRowsPage": {
+        "type": "object",
+        "description": "One page of a finished export's entries.",
+        "required": [
+          "entries",
+          "total"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "IamAuditWatermark": {
+        "type": "object",
+        "description": "Where an organization's audit trail begins, and why it does not begin at 1.\n\nWritten in the same transaction as the delete it describes, so there is no\nmoment at which rows are gone and nothing says so. A store that has never\npruned an organization has no watermark for it, which reads as \"the trail is\nwhole\".",
+        "required": [
+          "organization",
+          "pruned_through_sequence",
+          "pruned_before",
+          "ttl_days",
+          "pruned_at",
+          "removed_total"
+        ],
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationId"
+          },
+          "policy_id": {
+            "type": "string",
+            "description": "The retention in force when it did, recorded because the configuration\nmay have changed since."
+          },
+          "pruned_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pruned_before": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cutoff of the sweep that last moved this: entries older than this\nmoment are the ones that went."
+          },
+          "pruned_through_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest sequence removed so far. Everything a reader can still page\nbegins after it.\n\nDerived from the rows actually deleted rather than from the cutoff, so a\nsystem clock that stepped backwards — leaving one old entry above a\nnewer one — narrows this rather than claiming to have removed something\nstill there. The next sweep takes what it left."
+          },
+          "removed_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Across every sweep, not only the last one."
+          },
+          "ttl_days": {
+            "type": "integer",
+            "format": "int32",
             "minimum": 0
           }
         }

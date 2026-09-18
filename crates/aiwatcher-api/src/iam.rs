@@ -5,9 +5,10 @@
 use crate::{ApiError, AppState, Caller, error::ApiResult};
 use aiwatcher_auth::Role;
 use aiwatcher_iam::{
-    AuditEntry, Change, Command, Grant, IamStore, Invitation, InvitationId, InvitationOffer,
-    IssuedInvitation, Organization, OrganizationId, Principal, ProjectAccess, ProjectId,
-    ProjectScope, Redeemed, Roster,
+    AuditBounds, AuditEntry, AuditExportJob, AuditExportRequest, AuditExportRowsPage, AuditExports,
+    Change, Command, Grant, IamStore, Invitation, InvitationId, InvitationOffer, IssuedInvitation,
+    Organization, OrganizationId, Principal, ProjectAccess, ProjectId, ProjectScope, Redeemed,
+    Roster,
 };
 use axum::{
     Json, Router,
@@ -31,7 +32,13 @@ use utoipa::OpenApi;
     invitations,
     revoke_invitation,
     redeem,
-    audit
+    audit,
+    audit_bounds,
+    create_audit_export,
+    audit_exports,
+    audit_export,
+    cancel_audit_export,
+    audit_export_rows
 ))]
 struct Api;
 #[must_use]
@@ -81,10 +88,47 @@ pub fn router() -> Router<AppState> {
         // token and knows no id to put in a path.
         .route("/api/v1/iam/invitations/redeem", post(redeem))
         .route("/api/v1/iam/organizations/{organization}/audit", get(audit))
+        // Where the trail begins and how much of it there is — the read a
+        // paginated page cannot answer, and the one that says why a history
+        // starts at 4 312.
+        .route(
+            "/api/v1/iam/organizations/{organization}/audit/bounds",
+            get(audit_bounds),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/audit/exports",
+            get(audit_exports).post(create_audit_export),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/audit/exports/{job}",
+            get(audit_export).delete(cancel_audit_export),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/audit/exports/{job}/rows",
+            get(audit_export_rows),
+        )
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CACHE_CONTROL,
             axum::http::HeaderValue::from_static("no-store"),
         ))
+}
+
+/// The store, the principal, and the object store an export's bytes live in.
+///
+/// Three things rather than two, and the third is what makes the difference
+/// between "this deployment has no IAM" and "it has one but nowhere to put a
+/// frozen copy". Both answer 501, and `AIWATCHER_PROMPT_STORE` is what the
+/// second one is missing.
+fn export_context<'a>(
+    state: &'a AppState,
+    caller: &Caller,
+) -> ApiResult<(&'a dyn IamStore, &'a AuditExports, Principal)> {
+    let (store, principal) = context(state, caller)?;
+    let exports = state
+        .iam_audit_exports
+        .as_deref()
+        .ok_or(ApiError::IamAuditExportsDisabled)?;
+    Ok((store, exports, principal))
 }
 
 pub(crate) fn context<'a>(
@@ -361,6 +405,114 @@ async fn audit(
     Ok(Json(
         store
             .audit(organization, &actor, query.after, query.limit)
+            .await?,
+    ))
+}
+
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/audit/bounds", tag = "iam",
+    params(("organization" = OrganizationId, Path)),
+    responses((status = 200, body = AuditBounds), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn audit_bounds(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(organization): Path<OrganizationId>,
+) -> ApiResult<Json<AuditBounds>> {
+    let (store, actor) = context(&state, &caller)?;
+    Ok(Json(store.audit_bounds(organization, &actor).await?))
+}
+
+/// Queue a frozen copy of this organization's trail.
+///
+/// The range is pinned here rather than by the worker, so a grant issued while
+/// the job runs belongs to the next export. The response is the queued job: the
+/// bytes arrive shard by shard, and `GET .../exports/{job}` is what says how far
+/// it has got.
+#[utoipa::path(post, path = "/api/v1/iam/organizations/{organization}/audit/exports", tag = "iam",
+    request_body = AuditExportRequest,
+    params(("organization" = OrganizationId, Path), ("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
+    responses((status = 202, body = AuditExportJob), (status = 400), (status = 401), (status = 403), (status = 404), (status = 409), (status = 501), (status = 503)))]
+async fn create_audit_export(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(organization): Path<OrganizationId>,
+    headers: HeaderMap,
+    Json(body): Json<AuditExportRequest>,
+) -> ApiResult<(StatusCode, Json<AuditExportJob>)> {
+    let (store, exports, actor) = export_context(&state, &caller)?;
+    mutation(&headers)?;
+    let job = exports.create(store, organization, &actor, body).await?;
+    state.notify_iam_audit_worker();
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/audit/exports", tag = "iam",
+    params(("organization" = OrganizationId, Path)),
+    responses((status = 200, body = Vec<AuditExportJob>), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn audit_exports(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(organization): Path<OrganizationId>,
+) -> ApiResult<Json<Vec<AuditExportJob>>> {
+    let (store, exports, actor) = export_context(&state, &caller)?;
+    Ok(Json(exports.jobs(store, organization, &actor).await?))
+}
+
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/audit/exports/{job}", tag = "iam",
+    params(("organization" = OrganizationId, Path), ("job" = String, Path)),
+    responses((status = 200, body = AuditExportJob), (status = 400), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn audit_export(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, job)): Path<(OrganizationId, String)>,
+) -> ApiResult<Json<AuditExportJob>> {
+    let (store, exports, actor) = export_context(&state, &caller)?;
+    Ok(Json(exports.job(store, organization, &actor, &job).await?))
+}
+
+/// Stop an export that has not finished. A finished one is 409: what it
+/// produced is a record, and there is nothing left for a cancellation to
+/// prevent.
+#[utoipa::path(delete, path = "/api/v1/iam/organizations/{organization}/audit/exports/{job}", tag = "iam",
+    params(("organization" = OrganizationId, Path), ("job" = String, Path), ("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
+    responses((status = 200, body = AuditExportJob), (status = 400), (status = 401), (status = 403), (status = 404), (status = 409), (status = 501), (status = 503)))]
+async fn cancel_audit_export(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, job)): Path<(OrganizationId, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Json<AuditExportJob>> {
+    let (store, exports, actor) = export_context(&state, &caller)?;
+    mutation(&headers)?;
+    Ok(Json(
+        exports.cancel(store, organization, &actor, &job).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct RowsQuery {
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "rows_default_limit")]
+    pub limit: usize,
+}
+fn rows_default_limit() -> usize {
+    100
+}
+
+/// The frozen entries, a page at a time.
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/audit/exports/{job}/rows", tag = "iam",
+    params(("organization" = OrganizationId, Path), ("job" = String, Path), RowsQuery),
+    responses((status = 200, body = AuditExportRowsPage), (status = 400), (status = 401), (status = 403), (status = 404), (status = 409), (status = 501), (status = 503)))]
+async fn audit_export_rows(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, job)): Path<(OrganizationId, String)>,
+    Query(query): Query<RowsQuery>,
+) -> ApiResult<Json<AuditExportRowsPage>> {
+    let (store, exports, actor) = export_context(&state, &caller)?;
+    Ok(Json(
+        exports
+            .rows(store, organization, &actor, &job, query.offset, query.limit)
             .await?,
     ))
 }

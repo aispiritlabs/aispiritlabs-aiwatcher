@@ -290,6 +290,12 @@ pub struct AppState {
     pub auth: Option<Arc<Authenticator>>,
     /// Optional IAM metadata control plane; does not scope existing data routes.
     pub iam: Option<Arc<dyn aiwatcher_iam::IamStore>>,
+    /// Where a frozen copy of an organization's audit trail goes. Needs both an
+    /// IAM store to read and an object store to write, so it is absent whenever
+    /// either is.
+    pub iam_audit_exports: Option<Arc<aiwatcher_iam::AuditExports>>,
+    /// Wakes the audit export worker, in a process that runs one.
+    pub iam_audit_worker: Option<Arc<tokio::sync::Notify>>,
     pub health: HealthState,
 }
 
@@ -302,6 +308,13 @@ impl AppState {
     /// run one will pick it up.
     pub fn notify_export_worker(&self) {
         if let Some(worker) = &self.export_worker {
+            worker.notify_one();
+        }
+    }
+
+    /// Wake the audit export worker, if this process runs one.
+    pub fn notify_iam_audit_worker(&self) {
+        if let Some(worker) = &self.iam_audit_worker {
             worker.notify_one();
         }
     }

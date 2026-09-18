@@ -19,6 +19,10 @@ pub enum ApiError {
     IamUnavailable,
     #[error("an organization must retain at least one owner")]
     IamLastOwner,
+    #[error("{0}")]
+    IamConflictMessage(String),
+    #[error("the IAM audit export store refused the operation")]
+    IamStorageRefused,
     #[error("that invitation has expired")]
     IamInvitationExpired,
     #[error("that invitation has already been redeemed")]
@@ -44,6 +48,16 @@ pub enum ApiError {
 
     #[error("this instance has no dataset registry configured (AIWATCHER_PROMPT_STORE)")]
     DatasetRegistryDisabled,
+
+    /// The IAM control plane is configured and there is nowhere to put a frozen
+    /// copy of its audit trail. Named apart from the prompt registry's 501
+    /// because the two are fixed by different variables and a reader of the
+    /// message should not have to guess which.
+    #[error(
+        "this instance has an IAM control plane but no object store to export its audit trail \
+         into (AIWATCHER_PROMPT_STORE)"
+    )]
+    IamAuditExportsDisabled,
 
     #[error("this instance has no workflow definition registry (AIWATCHER_PROMPT_STORE)")]
     WorkflowDefinitionsDisabled,
@@ -309,6 +323,13 @@ impl ApiError {
     fn parts(&self) -> (StatusCode, &'static str) {
         match self {
             Self::IamDisabled => (StatusCode::NOT_IMPLEMENTED, "iam_disabled"),
+            Self::IamAuditExportsDisabled => {
+                (StatusCode::NOT_IMPLEMENTED, "iam_audit_exports_disabled")
+            }
+            Self::IamConflictMessage(_) => (StatusCode::CONFLICT, "iam_conflict"),
+            // The store understood the read and refused it, which is not this
+            // instance being unavailable and not the caller being wrong.
+            Self::IamStorageRefused => (StatusCode::BAD_GATEWAY, "iam_storage_refused"),
             Self::IamForbidden => (StatusCode::FORBIDDEN, "iam_forbidden"),
             Self::IamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "iam_unavailable"),
             Self::IamLastOwner => (StatusCode::CONFLICT, "iam_last_owner"),
@@ -831,6 +852,17 @@ impl From<aiwatcher_iam::Error> for ApiError {
             Error::Expired => Self::IamInvitationExpired,
             Error::Redeemed => Self::IamInvitationRedeemed,
             Error::Invalid(message) => Self::BadRequest(message),
+            Error::Conflict(message) => Self::IamConflictMessage(message),
+            // `PortError` already says whether it is worth coming back for, so
+            // this reads it rather than flattening both answers into one code.
+            Error::Storage(ref port) if port.is_retryable() => {
+                tracing::error!(%error, "the IAM audit export store is unreachable");
+                Self::IamUnavailable
+            }
+            Error::Storage(_) => {
+                tracing::error!(%error, "the IAM audit export store refused the operation");
+                Self::IamStorageRefused
+            }
             Error::Backend(_) | Error::Incompatible(_) => {
                 tracing::error!(%error, "IAM storage operation failed");
                 Self::IamUnavailable

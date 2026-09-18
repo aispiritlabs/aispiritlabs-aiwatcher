@@ -25,4 +25,6 @@ contract!(
     revocation_cannot_be_undone_by_rejoining,
     role_administration_and_last_owner,
     invalid_commands_have_no_effect,
+    audit_bounds_answer_administrators_and_nobody_else,
+    retention_keeps_the_newest_entry_and_records_where_the_trail_begins,
 );
