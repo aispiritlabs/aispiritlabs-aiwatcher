@@ -21,7 +21,6 @@
 //! the work role, where the judge's address and credential are.
 
 use aiwatcher_auth::Role;
-use aiwatcher_core::ArtifactRef;
 use aiwatcher_evaluation::{
     CalibrationRequest, CalibrationVersion, DeclaredRun, RecordedCatalog, ScoringRun,
     ScoringRunView,
@@ -35,12 +34,13 @@ use aiwatcher_execution::plan::{
 use aiwatcher_execution::{RunIdentity, StartRun};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use utoipa::OpenApi;
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::evidence_scope::{EvidenceRead, EvidenceWrite};
 use crate::state::AppState;
 
 /// How long one scoring step may run before the reactor stops waiting.
@@ -87,44 +87,57 @@ pub struct ScoringAccepted {
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
+#[openapi(paths(start_scoring_run, get_scorer_catalog))]
+struct Api;
+
+#[derive(OpenApi)]
 #[openapi(paths(
-    stage_recording,
-    declare_scoring_run,
-    get_scoring_run,
-    start_scoring_run,
     take_calibration,
     get_calibration,
-    get_scorer_catalog
+    declare_scoring_run,
+    get_scoring_run
 ))]
-struct Api;
+struct DeclarationApi;
+
+#[derive(serde::Deserialize)]
+struct DeclarationPath {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CalibrationPath {
+    version: String,
+}
 
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut api = Api::openapi();
     api.merge(crate::cohorts::openapi());
+    api.merge(crate::recordings::openapi());
+    api.merge(crate::project_scope::openapi(DeclarationApi::openapi()));
     api
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/evaluation-recordings/{name}",
-            put(stage_recording).layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
-        )
-        .route("/api/v1/evaluation-runs", post(declare_scoring_run))
-        .route("/api/v1/evaluation-runs/{id}", get(get_scoring_run))
-        .route(
             "/api/v1/evaluation-runs/{id}/start",
             post(start_scoring_run),
         )
-        .route("/api/v1/evaluation-calibrations", post(take_calibration))
-        .route(
-            "/api/v1/evaluation-calibrations/{version}",
-            get(get_calibration),
+        .nest("/api/v1", declaration_router())
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            declaration_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
         )
         .route("/api/v1/evaluation-scorers", get(get_scorer_catalog))
         .merge(crate::cohorts::router())
+        .merge(crate::recordings::router())
 }
 
 fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
@@ -132,32 +145,6 @@ fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
         .evaluations
         .as_deref()
         .ok_or(ApiError::EvaluationDisabled)
-}
-
-/// Keep the answers a run will measure, and hand back the reference.
-///
-/// The digest is of the bytes that arrived and never of anything the caller
-/// claimed, so a declaration naming it names these exact bytes — and a retry of
-/// the run reads what the first attempt read. Staging the same recording twice
-/// answers with the same reference.
-#[utoipa::path(put, path = "/api/v1/evaluation-recordings/{name}",
-    params(("name" = String, Path, description = "What a reader calls this recording")),
-    request_body = Vec<u8>,
-    responses((status = 200, body = ArtifactRef), (status = 400, body = crate::error::ErrorBody),
-    (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
-    tag = "evaluation")]
-async fn stage_recording(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(name): Path<String>,
-    body: axum::body::Bytes,
-) -> ApiResult<Json<ArtifactRef>> {
-    caller.require(Role::Editor)?;
-    Ok(Json(
-        registry(&state)?
-            .stage_recording(&name, body.to_vec())
-            .await?,
-    ))
 }
 
 /// Declare a measurement.
@@ -170,17 +157,19 @@ async fn stage_recording(
 ///
 /// The card is resolved here rather than at score time, so a version nobody
 /// published is a refusal now instead of a run that fails in a minute.
+/// Project declarations currently support saved recordings over native cohorts
+/// with built-in scorers only. They neither admit nor start a measurement.
 #[utoipa::path(post, path = "/api/v1/evaluation-runs", request_body = ScoringRun,
     responses((status = 200, body = ScoringRunView), (status = 400, body = crate::error::ErrorBody),
     (status = 403, body = crate::error::ErrorBody), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn declare_scoring_run(
-    State(state): State<AppState>,
+    evidence: EvidenceWrite,
     caller: Caller,
     Json(run): Json<ScoringRun>,
 ) -> ApiResult<Json<ScoringRunView>> {
-    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
-    let evaluations = registry(&state)?;
+    let requester = caller.identity().log_subject().to_owned();
+    let evaluations = evidence.authorize().await?;
     run.validate()?;
     evaluations
         .scorecard(&run.scorecard.name, Some(&run.scorecard.version))
@@ -194,7 +183,7 @@ async fn declare_scoring_run(
     let declared = evaluations
         .declare_scoring_run(&run, &requester, now())
         .await?;
-    view(evaluations, &declared.id).await.map(Json)
+    view(&evaluations, &declared.id).await.map(Json)
 }
 
 /// What a run measures, what it publishes, and whether it may yet.
@@ -203,12 +192,10 @@ async fn declare_scoring_run(
     responses((status = 200, body = ScoringRunView), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_scoring_run(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(id): Path<String>,
+    EvidenceRead(evaluations): EvidenceRead,
+    Path(DeclarationPath { id }): Path<DeclarationPath>,
 ) -> ApiResult<Json<ScoringRunView>> {
-    caller.require(Role::Viewer)?;
-    view(registry(&state)?, &id).await.map(Json)
+    view(&evaluations, &id).await.map(Json)
 }
 
 /// Start the declared measurement.
@@ -356,17 +343,17 @@ async fn start_scoring_run(
     (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn take_calibration(
-    State(state): State<AppState>,
+    evidence: EvidenceWrite,
     caller: Caller,
     Json(request): Json<CalibrationRequest>,
 ) -> ApiResult<Json<CalibrationVersion>> {
-    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
-    // People's judgements of conversation evidence are taken by an admin, who
-    // may read the cases they are about; anybody else is refused as that.
+    let requester = caller.identity().log_subject().to_owned();
+    // Legacy admin content access is kept by the extractor. Project evidence
+    // never acquires the instance's conversation capability.
     Ok(Json(
-        registry(&state)?
-            .clone()
-            .with_content_access(caller.require(Role::Admin).is_ok())
+        evidence
+            .authorize()
+            .await?
             .take_calibration(&request, &requester, now())
             .await?,
     ))
@@ -378,16 +365,22 @@ async fn take_calibration(
     responses((status = 200, body = CalibrationVersion), (status = 404, body = crate::error::ErrorBody),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_calibration(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(version): Path<String>,
+    EvidenceRead(registry): EvidenceRead,
+    Path(CalibrationPath { version }): Path<CalibrationPath>,
 ) -> ApiResult<Json<CalibrationVersion>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
+    registry
         .calibration(&version)
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("calibration set {version}")))
+}
+
+fn declaration_router() -> Router<AppState> {
+    Router::new()
+        .route("/evaluation-runs", post(declare_scoring_run))
+        .route("/evaluation-runs/{id}", get(get_scoring_run))
+        .route("/evaluation-calibrations", post(take_calibration))
+        .route("/evaluation-calibrations/{version}", get(get_calibration))
 }
 
 /// What the scorer service says it measures, as the work role last recorded it.

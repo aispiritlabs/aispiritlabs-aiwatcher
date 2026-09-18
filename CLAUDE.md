@@ -4,13 +4,13 @@ Guidance for Claude Code when working in this repository.
 
 ## What This Is
 
-Observability for AI agent runs. Python and TypeScript agents publish events to
-a durable log; a Rust backend consumes them, assembles OpenTelemetry traces,
+Observability for AI agent runs. Python, TypeScript and Go agents publish events
+to a durable log; a Rust backend consumes them, assembles OpenTelemetry traces,
 exports to VictoriaTraces and VictoriaMetrics, and serves a live view over
 SSE/WebSocket to a React panel.
 
 ```
-Python / TypeScript agents
+Python / TypeScript / Go agents
          │  events
          ▼
    durable log  (Laser, or the built-in write-ahead log)
@@ -34,6 +34,10 @@ Python / TypeScript agents
                                      back onto the log as facts about work
                    └─► serve | work  two roles, one binary; `work` is the only
                                      one that opens a socket to a query engine
+
+   organizations   ──► PostgreSQL    teams, projects and grants: the control
+                                     plane, not yet the whole data plane
+   one machine     ──► `aiwatcher up` one binary, one DuckDB file, one token
 ```
 
 ## Commands
@@ -90,8 +94,6 @@ just install-cluster   # apply, after asking on any non-local context
 just images            # build aiwatcher and aiwatcher-panel
 ```
 
-With a broker, for the Laser backend:
-
 With a database, for the workflow store:
 
 ```bash
@@ -111,6 +113,8 @@ run` and `just dev` are. `aiwatcher journal` is neither half: the observation
 journal alone, on `laser` and `s3`, a reader of the log that needs nothing the
 other roles need.
 
+With a broker, for the Laser backend:
+
 ```bash
 just iggy-up       # Apache Iggy in Docker, with the three flags it needs
 just run-laser     # server on the Laser backend
@@ -124,6 +128,14 @@ just authentik-up  # authentik in Docker: server, worker, PostgreSQL, Redis
 just run-sso       # the server as an OIDC relying party against it
 ```
 
+The IAM control plane rides on the same two: `AIWATCHER_IAM_POSTGRES_URL` — its
+own database, never the workflow store's — plus `AIWATCHER_AUTH_MODE=oidc` and
+the `aiwatcher-server/postgres` feature, and the start-up refuses anything else
+rather than falling back to memory. Its database suite is opt-in and named:
+`AIWATCHER_IAM_TEST_POSTGRES_URL=… cargo test -p aiwatcher-iam --features
+postgres --test postgres -- --ignored`, ignored rather than reported as passed
+when no database is there.
+
 With an object store, for the prompt registry:
 
 ```bash
@@ -132,13 +144,24 @@ just run-rustfs    # server with the registry in the object store
 just test-rustfs   # five integration tests against it — this is what verifies the SigV4 signer
 ```
 
-The Python SDK is a `uv` project of its own:
+The Python SDK is a `uv` project of its own; the Go SDK is a Go module of its
+own:
 
 ```bash
 just sdk-install   # uv sync --all-groups
 just sdk-check     # ruff format --check, ruff check, mypy --strict, pytest
 just agentic-install  # the workflow engine in sdk/agentic, likewise
 just agentic-check    # the same four checks, on the engine
+just sdk-go-check     # gofmt, go vet, go test -race, on sdk/go
+```
+
+One machine, no containers at all (ADR_0027):
+
+```bash
+just build         # the `aiwatcher` binary out of aiwatcher-cli
+aiwatcher up       # the server on the write-ahead log, a token if there is none
+aiwatcher runs     # …and every other verb, over the same REST API the panel uses
+just test-duckdb   # the local workflow store's own suite — a database, no container
 ```
 
 Run a single Rust test: `just test-one two_parallel`.
@@ -163,12 +186,14 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
+| `aiwatcher-iam` | Organizations, teams, projects and grants: the control plane an instance role does not reach into. A principal is the exact `(provider, subject)` pair; the effective project role is the maximum over every live direct and team grant, on half-open windows. `MemoryIamStore` and `PostgresIamStore` (behind `postgres`) run one policy inside their write lock, over one versioned JSONB aggregate per organization with an audit entry in the same transaction. Knows nothing about axum, and authorizes no resource of its own — `crates/aiwatcher-iam/README.md` is the record, and says which boundaries are scoped and which are not. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, what a variant was observed doing and the periods of it written as they close and rolled up into hours and days, which answer every window over it (`period_fold`; `journal`, a consumer of its own keeping what that fold reads past the log's retention and saying how close it is to a gap; and `periods`, the one module here that writes an object store), what witnesses saw asked (`asked`, an index a traces step reads past the read model and a restart) and what clients counted of a measurement's runs (`measured`, kept beside that index for the same reason), dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
+| `aiwatcher-cli` | The `aiwatcher` binary (ADR_0027): `up` runs the local stack, the read and write verbs speak the REST API the panel speaks, `token` and `profile` decide what a command shows and where it goes, `api` reaches a route with no verb, and `sql` opens the local store read-only. `key=value` anywhere on the line, and a bare `aiwatcher` starts the server rather than printing help, because that is the image's `ENTRYPOINT`. `tests/contract.rs` holds every path *and query parameter* to `contracts/openapi.json`. |
 
-Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescript`,
+Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescript`, `sdk/go`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
@@ -545,6 +570,50 @@ area.
    `strict` (parsed and admitted from the engine's own vocabulary, ADR_0008's shape
    in Python). One contract — the seven `/query` routes, one `catalog.json` — and a
    conformance suite asking every engine the same four questions.
+
+24. **A local install is one binary, one database and one token**
+   ([ADR_0027](docs/ADR/ADR_0027_LOCAL_INSTALL.md)). Everything above assumes a
+   cluster in the middle distance — a broker, PostgreSQL, RustFS, authentik, one
+   `just` recipe each — which is the right shape for a deployment and the wrong
+   one for the first hour. So `aiwatcher up` starts the server on the write-ahead
+   log, mints the token if there is none, and starts the query service when the
+   checkout has one. Three things follow, each in the shape this repository
+   already uses. The CLI's verbs are **HTTP calls against routes that already
+   exist**, so a command cannot disagree with the panel about what a run is —
+   and the remote case is free, through `profile`. `AIWATCHER_AUTH_MODE` gains a
+   fourth value, `local`: one token in a file only its owner can read, read by
+   both halves, authenticating as **admin** on the stated condition that
+   `LocalAuth::check_reachable` finds the listen address on loopback — its own
+   `Credential::Local` rather than a quiet exception inside the ingest token,
+   whose whole point is that it has none, and unrestricted in `may_claim`
+   because the mode it replaces ran anonymous and could claim anything. And
+   `duckdb` is a fourth `WorkflowStore` behind a cargo feature: one process as
+   `file` is, a database rather than a directory, with the rules still in Rust —
+   the adapter loads rows and asks `prunable`, `is_claimable`, `matches` and
+   `is_available` — passing the same properties the other three do with nothing
+   running. A bare `aiwatcher` starts the server rather than printing help,
+   because the image's `ENTRYPOINT` is this binary with no arguments.
+
+25. **Who may see a project is aiwatcher's question, not the provider's**
+   (`crates/aiwatcher-iam/README.md`; no ADR yet, and one is owed before the
+   cutover). The identity provider authenticates; **aiwatcher owns membership**,
+   and IdP groups are never copied into teams — a principal is the exact
+   `(provider, subject)` pair, and email, display name and instance role are no
+   part of it. Organizations hold teams, projects and grants in one transactional
+   aggregate; the effective project role is the maximum over every live direct and
+   team grant on half-open windows, so one source expiring never removes another.
+   An owner has **no implicit project grant**: creating a project atomically adds
+   an explicit, removable admin grant to its creator. The data plane is being
+   moved across one resource boundary at a time — datasets, prompts, training,
+   annotations, forms, workflow definitions, case reviews, cohorts, recordings,
+   bundles, producer approvals, calibrations, declarations, artifact bytes — each
+   an additive `/api/v1/orgs/{organization}/projects/{project}` family sharing the
+   legacy handlers, keyed under `<prefix>/scopes/<org>/<project>/registry/`, with
+   the legacy route still serving legacy data under instance authorization. What
+   is **not** done is written down as plainly as what is: logs, streams, query and
+   notebook runtimes, workers and their credentials, scheduled jobs and migration
+   of existing resources. Until those land, no organization or project selector
+   is activated, and this deployment is not described as multi-tenant safe.
 
 ## Conventions
 

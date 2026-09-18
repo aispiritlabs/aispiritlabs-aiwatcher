@@ -714,3 +714,458 @@ file-store reopen and raw metadata comparison, historical versions, split/limit
 pins, corrupt/deleted curation bytes, annotation export/blob checks and rejection
 of global source capabilities. They are not a full Authentik/PostgreSQL/S3 or
 worker end-to-end environment.
+
+
+## Ninth resource boundary: project recorded answers
+
+Two operations are available below
+`/api/v1/orgs/{organization}/projects/{project}`:
+
+| Resource suffix | Operations |
+| --- | --- |
+| `/evaluation-recordings/{name}` | PUT a JSON recorded-answer document and receive its artifact reference. |
+| `/evaluation-recordings/{digest}/content` | GET the exact staged JSON bytes after SHA-256 verification. |
+
+Viewer reads; editor/admin uploads. PUT requires `X-AIWatcher-IAM: 1` and
+rechecks current project write access after receiving the body (up to 100 MiB).
+Project responses use `Cache-Control: no-store`. Instance roles do not replace
+project grants. The legacy upload keeps its instance editor requirement; the
+additive legacy download requires instance viewer access and also disables cache.
+
+Raw documents are stored at
+`evaluation-scopes/<org>/<project>/registry/evaluation-recordings/<digest>.json`.
+The existing authored registry binds this family alongside forms, scorecards,
+assessments, reviews and cohort metadata without retaining an instance source
+resolver. Names are display metadata and may contain slashes; keys use the hash
+computed from the received bytes. Digests, byte sizes and
+`evaluation://recordings/<digest>` references retain their existing format. A
+reference must be interpreted in its originating project. Identical content in
+a different project requires a separate upload. Existing global recordings are
+not copied or used as fallback, including after disabling IAM.
+
+Download verifies the digest before returning original bytes, preserving JSON
+whitespace and numeric spelling. Malformed digests are rejected before storage
+access. Missing local bytes return 404; corrupt bytes return 503 without content.
+Library consumers use the same verification for parsed and raw recordings.
+
+A staged recording is caller-supplied content, not proof of a measured result.
+Case/run/trace/span IDs and usage are unchanged producer metadata, without source
+access verification. This stage adds no project scoring declarations, approvals,
+calibrations, published results or worker access. It does not enable the panel's
+project selectors, migrate data, or change deployment configuration. Upload
+admission does not cancel a storage operation already admitted before revocation;
+active worker cancellation and recording retention remain separate work. The
+migration inventory does not yet cover these recordings.
+
+Signed-session HTTP tests cover project/organization/legacy isolation, duplicate
+content, exact-byte download, role and mutation-header checks, timed/revoked
+access, slow uploads and disabled IAM. File-store tests reopen a project registry,
+check original bytes and artifact identity, reject malformed digests and scope
+rebinding, and refuse missing/corrupt local recordings without fallback. These
+are not full Authentik/PostgreSQL/S3 or worker end-to-end tests.
+
+
+## Tenth resource boundary: project approval bundle files
+
+Three operations are available below
+`/api/v1/orgs/{organization}/projects/{project}`:
+
+| Resource suffix | Operations |
+| --- | --- |
+| `/evaluation-approvals/{approval_id}/bundle/{name}` | PUT one file, including `model-artifacts/<file>`. |
+| `/evaluation-approvals/{approval_id}/bundle` | GET file names/sizes; DELETE all staged files for the pair. |
+
+Viewer lists; project admin uploads and deletes. Both mutations require
+`X-AIWatcher-IAM: 1`; upload checks the current admin grant again after receiving
+its body (up to 100 MiB). An expired admin grant cannot be replaced by an
+independent editor grant or an instance admin role. Project responses disable
+cache. The shared legacy handlers retain their instance viewer/admin policy.
+The scoped OpenAPI generator now includes DELETE authorization parameters and
+unique operation IDs as well as GET/POST/PUT.
+
+`ApprovalBundles::for_project` defaults to refusal. The server's `LocalSource`
+explicitly binds staged files to
+`evaluation-scopes/<org>/<project>/bundles/<approval_id>/`. It does not retain
+host-directory access or native dataset, annotation, conversation, prompt or model
+owners. It refuses rebinding to a different project. Existing wiring already
+supplies the configured bundle object store; no additional configuration is
+required. The adapter's library member read uses this same project boundary and
+never falls back to a global bundle or the host directory.
+
+File bytes, names and pair IDs retain their representations. Identical pair IDs
+in two projects identify independent staged bundles. PUT replaces only that
+project's named file; DELETE removes only that project's staged files for the
+pair and is idempotent once empty. A missing project bundle lists as empty,
+including when a global bundle with the same ID exists. DELETE does not withdraw
+an approval or delete a published result.
+
+Address validation precedes bundle access. Only a SHA-256 pair address and one
+allowed filename (or `model-artifacts/<file>`) are accepted. All list entries must
+belong to the exact pair prefix and contain valid member names before any entry
+is returned or deleted. This validation also protects legacy deletion from an
+adapter that returns foreign keys; it is a refusal of the entire bad listing,
+not partial deletion of its valid prefix.
+
+These are staged producer/operator bytes, not an approved or validated evidence
+package. Upload does not execute scorer code, fetch referenced URLs, verify the
+manifest's pins or grant model access. Project approvals, complete source
+resolution, results, calibrations, measurement declarations and execution remain
+separate work. The panel and SDK still use legacy routes, project selectors stay
+inactive, and no migration or deployment was performed. The migration inventory
+does not yet include bundles. Storage admission does not cancel an already
+admitted operation after revocation; multi-file deletion is not transactional
+and may need a retry after storage failure.
+
+HTTP tests exercise signed OIDC sessions, all three operations, project and
+organization boundaries, legacy isolation, required mutation headers including
+DELETE, timed/revoked grants and a delayed upload losing admin access while
+retaining editor access. Server tests use real files and reopen the project,
+compare original text/binary bytes, check same-ID independence and lack of global
+or disk fallback. A hostile listing test proves that no deletion starts when any
+returned key is foreign or malformed. These are not full
+Authentik/PostgreSQL/S3 or worker end-to-end tests.
+
+## Producer evidence resolver foundation
+
+`SourceAuthority::for_project_evidence` is a new, default-deny capability factory.
+The server adapter constructs a fresh resolver with project-bound datasets,
+annotations, prompts and training models, and with the project's staged bundle
+prefix. It retains neither the host directory nor the conversation archive.
+Rebinding is refused, including an already-bound native owner from another scope.
+Narrowing to cohort derivation cannot recover the full evidence capability.
+
+The resolver admits producer manifests over external staged cases, native curation
+versions and annotation exports. The existing verifier checks all artifact pins,
+model packages and staged model artifacts, native prompt/model versions, case
+order, inputs and expectations. URIs remain references, never fetch targets.
+Absent or corrupt local bytes do not fall back to global or neighbouring data.
+Conversation/assessment datasets, judges and `aiwatcher.scoring` contexts fail
+closed: they need additional scoped owners and execution policy. No IDs, hashes
+or stored representations change.
+
+The factory is a library capability, **not an approval or IAM check**. It does
+not authenticate its `subject` argument. The producer evidence routes below now
+invoke it after checking current access and bind approvals, results and retention
+to the same scope. Project selectors remain inactive. Existing project cohort and
+bundle routes retain their narrower capabilities. No migration or deployment was
+performed.
+
+Five server integration tests cover file-store reopening, project/organization
+and legacy isolation, independent presence of identical native versions, source
+corruption/deletion, scoped prompt and model ownership, model artifact corruption,
+every external bundle pin, rebinding and default-deny factories. They exercise
+actual source adapters but not an authenticated project approval/result route,
+Authentik, PostgreSQL, S3 or workers.
+
+## Eleventh resource boundary: project producer approvals and results
+
+Ten operations now share handlers with their legacy counterparts below
+`/api/v1/orgs/{organization}/projects/{project}`:
+
+| Resource suffix | Operations |
+| --- | --- |
+| `/evaluation-approvals` | GET approvals (including withdrawn), POST admit a producer manifest. |
+| `/evaluation-approvals/{approval_id}` | DELETE withdraw a pair permanently. |
+| `/evaluation-results` | GET paged catalogue, POST publish terminal evidence. |
+| `/evaluation-results/{evaluation_id}` | GET header, DELETE erase result content. |
+| `/evaluation-results/{evaluation_id}/cases` | GET a verified case page. |
+| `/evaluation-results/{evaluation_id}/comparison` | GET comparison with a named local baseline. |
+| `/evaluation-results/{evaluation_id}/comparison/cases` | GET paged case differences. |
+
+Viewer reads, editor publishes, project admin admits/withdraws/erases. Instance
+roles do not replace project grants. Mutations require `X-AIWatcher-IAM: 1` and
+recheck the required role after body extraction. An expired admin grant is not
+replaced by an independent editor grant. Responses disable cache. Missing or
+revoked project access is refused before registry reads; a subject in a body
+cannot supply access. Legacy routes preserve their original instance roles.
+
+`Registry::for_project_evidence` requires the explicit source factory above and
+binds claims, shards, headers, catalogue, approvals, withdrawal/erasure markers
+and retention reports to `evaluation-scopes/<org>/<project>/registry/evaluations/`.
+The scoped store preserves atomic create and validates listing keys. Identical
+IDs in separate projects require separate admission/publication. There is no
+fallback to global approvals, results, baselines or legacy telemetry. Original
+content addresses, receipts and immutable representations remain unchanged.
+Cohort-only/authored registries cannot acquire this capability by rebinding.
+
+The existing retention worker now discovers namespaces with evidence objects and
+runs the same sweep/collection rule per namespace, with separate durable reports.
+It does not depend on an active human grant, so revoking the last reader does not
+stop erasure. Discovery validates keys, extracts scopes without reading content,
+and is unavailable on a bound registry. This currently lists the configured
+store's `evaluation-scopes/` prefix each minute: cost grows with scoped object
+count. An indexed/paged scope catalogue is future scaling work. Collection is
+hourly per namespace, using the persisted report after restart. A failed discovery
+or binding is logged; a failed bound sweep is recorded in that project's report.
+
+The scope is **producer-measured** results only. Project scoring declarations,
+judges, conversation evidence, approval lines, gate routes,
+experiments and trace/usage observations remain unexposed. The stateless approval
+address calculation remains on its existing route. Trace/span/execution IDs in
+producer evidence are provenance assertions, not proof of access or generated
+answers; no global projection is joined here. No new runtime or worker capability
+is conferred. Reads check source validity as before; approval metadata alone is
+not a fresh verification of the source. Admission does not cancel an object-store
+operation already in flight and is not a transaction spanning IAM and storage.
+
+Four HTTP scenarios use signed OIDC sessions and the actual router with memory
+IAM/storage and an explicit test resolver. They cover all ten operations, project
+and organization isolation, grant windows/revocation, instance versus project
+roles, mutation headers, delayed uploads, missing auth/IAM/resolver, withdrawal
+and independent erasure. Two additional server scenarios use real adapters: a
+file store reopened with identical receipts/bytes and isolated approvals, plus
+the actual retention loop discovering and erasing expired project evidence while
+recording a separate report. This is not a full Authentik/PostgreSQL/S3 deployment.
+OpenAPI and the generated client include all ten operations. The panel/SDK still
+use legacy routes; selectors remain inactive and no data migration was performed.
+
+## Twelfth resource boundary: project calibration sets
+
+`POST /api/v1/orgs/{organization}/projects/{project}/evaluation-calibrations`
+freezes people's judgements of one readable producer result; `GET .../{version}`
+reads the immutable set. The same handlers retain the two legacy routes. Editor
+creates, viewer reads, mutations require `X-AIWatcher-IAM: 1` and recheck the
+current editor grant after body reception. Instance admin does not replace a
+project grant. Responses carry `no-store`.
+
+Both routes use the evidence registry: results, approvals, rubrics and standing
+assessments are resolved in one scope before a set can be created. A matching ID
+in a neighbouring or global registry supplies none of these. Storage adds only
+`evaluation-judges/calibrations/` beneath the project's existing registry prefix,
+not judge replies, judge configurations or scoring declarations. Authored-only
+registries still cannot open this family. The original digest, canonical set,
+first-write record and read-time verification are unchanged. No new version of
+the scoring algorithm is needed.
+
+The set holds judgement values and provenance, not questions or answers. It is
+immutable when people later revise assessments, and remains readable if the
+source result is withdrawn or erased; taking a new set rechecks source access.
+This preserves the existing calibration contract, not an erasure mechanism for
+judgement metadata. Conversation and server-measured/judged results remain outside
+this project resolver. Taking a set starts no judge and authorizes no execution.
+Publication can span many case pages; admission is not a shared IAM/storage
+transaction and revocation does not abort already admitted work.
+
+Two HTTP tests cover both routes, project/organization/global isolation of all
+three dependencies, immutable snapshots after an assessment changes, withdrawal,
+role windows, revocation, instance versus project roles, missing mutation header,
+delayed upload, unauthenticated reads, missing IAM and no-store responses. A real
+server-adapter test reopens filesystem storage, checks idempotency and content
+verification after corruption, deletion, cross-scope absence and refusal of the
+other judge/scoring families. OpenAPI and the generated panel client include both
+operations. This does not activate selectors, migrate data or enable project
+scoring runs. The limited declaration foundation below follows this stage;
+HTTP declaration authorization and execution remain later gates.
+
+## Project recording declarations: library foundation
+
+The project evidence registry now supports `declare_scoring_run`, `scoring_run`
+and `scoring_run_view` for **saved recordings over native curation/annotation
+cohorts and built-in scorers only**. There are no new HTTP routes in this stage.
+The caller must supply current IAM authorization; a subject string is provenance,
+not permission. Authored-only and cohort-only registries still cannot store or
+read declarations.
+
+Before writing, the registry resolves the pinned local scorecard, verifies the
+local recording bytes, requires an exactly matching local cohort derivation and
+re-derives its pins through the project-bound native owner. It prepares the full
+manifest before the immutable declaration is created. Missing or corrupt local
+objects never fall back to global, neighbouring-project or host data. A full
+view repeats these dependency checks; a raw declaration read verifies the
+content address but remains available when dependencies have disappeared.
+
+Objects use `evaluation-scopes/<org>/<project>/registry/evaluation-runs/`.
+Scope does not enter the content hash: identical declarations have the same ID
+but independently recorded first authors/timestamps. Reads and idempotent writes
+verify both the embedded ID and the hash of the stored intention (also on legacy
+reads), so a modified document is not accepted as a successful retry.
+
+Judge settings/replies, external scorers/calibration, archive answers, external
+cohorts and generated answers remain closed. The source resolver still refuses
+`aiwatcher.scoring` admission: a view reports `admitted: false`, and declaring
+cannot approve, publish or start the measurement. Code, generation settings,
+prompt/model/workflow references receive structural manifest validation only;
+verification of their bytes and owners remains the future scoped admission
+boundary. No executor is given a project or credential by this change. There is
+no new retention policy for declaration metadata, no transaction spanning IAM
+and object storage, and no cancellation of already admitted storage operations.
+
+Two tests use the production project resolver, including a filesystem store
+reopened after declaration. They cover local dependency presence, separate
+projects/organizations/global data, identical IDs with independent authors,
+corrupt or deleted recordings/datasets, modified declarations and retries,
+unsupported answer/judge authorities, narrowed registries and continued refusal
+of server-measured approval. They are library integration tests, not HTTP IAM
+or full Authentik/PostgreSQL/S3/worker E2E tests. The HTTP boundary below follows
+this foundation; judged declarations and execution authorization remain open.
+
+## Thirteenth resource boundary: project recording declarations
+
+`POST /api/v1/orgs/{organization}/projects/{project}/evaluation-runs` declares a
+recording-based measurement; `GET .../evaluation-runs/{id}` reads its full view.
+Both share the legacy handlers and the current-grant evidence extractors. Editor
+may declare, viewer may read. Mutations require `X-AIWatcher-IAM: 1`; the editor
+grant is checked again after receiving the JSON body. Instance-admin status does
+not substitute for project access. Project responses carry `Cache-Control:
+no-store`, and the author comes from the authenticated caller, not the body.
+
+The limited declaration contract above is unchanged. There is deliberately no
+project `/start` alias or scorer catalog. A project-only declaration cannot be
+started through the legacy route: that route looks in legacy storage. No worker,
+execution plan, approval or measured result is created by declaring. A current
+access check is admission to the operation, not an IAM/object-store transaction;
+revocation during later storage work does not cancel an already admitted request.
+
+Two HTTP tests cover project/organization/legacy isolation, independent first
+writers with identical content addresses, idempotency, no-store success/error
+responses, unsupported generation without a stored declaration, no scoped start,
+no global start fallback, viewer/editor windows and revocation, missing mutation
+headers, instance-admin separation, and a delayed upload that loses its editor
+grant before writing. They also exercise unauthenticated and disabled-IAM reads.
+The HTTP cohort authority is a test double; production owner/byte verification
+remains covered by the server tests from the library stage. OpenAPI and the
+panel's generated client include both operations, but the panel itself still
+uses legacy routes and project selectors remain inactive. Judged/external
+measurements, full variant admission and executor authorization are the next
+boundaries, not capabilities granted by these two routes.
+
+## Project admission for built-in recording measurements
+
+The evidence resolver now admits server-measured contexts for native curation
+and annotation cohorts with built-in scorers. The existing project approval
+routes require the project admin grant; instance-admin status is insufficient.
+This supersedes the previous blanket refusal of `aiwatcher.scoring` in the
+project resolver, not its refusals of judges, external scorers or archives.
+
+`Registry::approve` resolves the compiled scoring version, the local scorecard
+and its exact derived metrics before the adapter checks the variant. The adapter
+reads the project's staged manifest, code, generation settings, response schema,
+tools and workflow pins, the project prompt/model owners where named, and the
+native cohort owner. It skips only producer `suite.json` and `scorer.py`, whose
+owners are the local card and compiled scorer instead. Workflow declarations
+remain verified staged bytes; this does not equate them to an executable workflow
+or authorize their execution. Missing bytes never fall back to the host or a
+neighbour's registry.
+
+For these project-measured pairs, `Registry::admission` also rechecks the card,
+source, case count and bundle identity after finding a live approval. A full
+scoring view therefore checks more than an approval marker: corrupted/missing
+pins can fail the read rather than display `admitted: true`. No approval means
+not-yet, withdrawal stays final. This read is more expensive: it re-resolves the
+source, subject to the existing adapter budgets, with no cross-request cache.
+
+**Executor authorization is not implemented by an approval.** All three existing
+scoring execution paths share a preparation guard: a project-bound registry is
+refused as `FailureClass::Policy` before reading its declaration. This prevents
+passing `ScoreExecutor::new(project_registry)` from silently treating project
+admission as execution authority. It is fail-closed enforcement of an absent
+capability, not a claim that project execution now works. There is still no
+project `/start` route, scoped execution history/artifact/live boundary or durable
+principal authorization attached to an attempt. The legacy executors remain
+unchanged for legacy registries.
+
+A production-adapter filesystem test stages each variant dependency, verifies a
+global prompt cannot satisfy a project pin, admits locally, reopens the store,
+checks corruption of code/config/workflow after approval, refuses a different
+compiled scorer or metric direction and neighbouring/global admissions, then
+proves the executor returns Policy without publishing even for an admitted pair.
+It also checks withdrawal. Existing prompt/model/owner tests cover the shared
+variant resolver; HTTP tests continue to enforce project-admin approval grants.
+No deployment, UI selector, migration or execution route was enabled.
+
+To authorize execution safely, the next slice must persist a trusted principal
+and scope with the execution, scope its identity and history, authorize every
+read/command/artifact/live path, and enforce current grants when claiming and
+before publishing (including a policy for revocation while committing). Only
+then may the shared scoring preparation guard be replaced with that authority
+and a project start route be exposed.
+
+## Project recording executor: explicit authority, not yet a start path
+
+The library now provides `ScoreExecutor::for_project` and
+`scoring::project::ProjectAuthority`. The latter binds an IAM store, an exact
+provider/subject principal, project scope, execution ID and declaration ID.
+It is not serializable, not a request body, not a worker token and not an
+approval. A future dispatcher must obtain those values from trusted durable
+execution ownership, not the plan, parameters, worker name or declaration
+writer. **That durable ownership and dispatcher are not implemented here.**
+
+The constructor binds the registry to the authority's scope and refuses
+cross-project rebinding. Execution checks the bound IDs, step/key consistency,
+recording runtime and current project Editor-or-Admin grant before reading any
+declaration. It then uses the full project declaration view to verify local
+recording/native cohort/built-in scorer restrictions, and checks approval as
+before. It cannot acquire global artifacts, a judge or an external scorer by
+adding one of the legacy executor's builder options. Cases/traces executors and
+an ordinary `ScoreExecutor::new(project_registry)` remain refused.
+
+After scoring, immediately before entering `Committing` and publishing, IAM is
+asked again. A removed membership/grant or expired edit window yields Policy;
+an unavailable IAM backend yields Transient and no publication. The output is
+not cacheable: a prior result cannot substitute for current authorization.
+This does not solve the reactor's pre-execution cache lookup, which is another
+reason this executor is **not registered** in any production reactor.
+
+The commit boundary is explicit: the last IAM decision admits a write, not an
+atomic IAM/object-store transaction. A revocation while reading prevents
+publication; a revocation after that boundary does not interrupt an admitted
+commit. Further attempts must pass authorization again even when their prior
+publication is idempotently readable. This is not continuous revocation during
+CPU work or every source read, nor does it revoke already-returned bytes.
+
+Production-resolver integration tests use the real memory IAM policy and the
+filesystem object store. They cover exact principal namespace, binding mismatch,
+unsupported judging runtime, cross-project rebinding, project-only publication,
+non-cacheability, withdrawn approval, grant revocation/expiry during a paused
+read and revocation during a paused commit. An organization owner's initial
+explicit creator grant is removed in the fixtures: ownership itself must not
+keep the execution authorized after its remaining Editor grant is gone.
+
+This supersedes only the blanket executor refusal for an explicitly constructed,
+trusted per-execution authority. Global executor registration, HTTP start,
+workflow storage/claims, history, artifacts, streams, selectors and migration
+are unchanged. It is an executor boundary proven directly, not a managed-run
+or deployment E2E proof.
+
+## Project artifact bytes and attempt receipts: storage foundation
+
+`aiwatcher_server::execution::artifacts::Artifacts::for_project` binds rows,
+verbatim JSON tables, pod logs and attempt receipts to
+`artifacts/scopes/<organization>/<project>/registry/`. Content digests and bytes
+are unchanged; identical content in two projects has separate object URIs.
+Receipts hash the same idempotency key inside each namespace. Rebinding to a
+second scope is refused; binding to the current scope is idempotent.
+
+All byte reads and existence probes, including the `AttemptArtifacts` port,
+require the canonical data key for the reference's kind and lowercase SHA-256
+in the bound namespace. Foreign projects, global objects, other registries,
+receipt keys, traversal/encoded paths, and URI/digest or kind mismatches are
+refused before object-store access. **The unscoped reader enforces the same
+rule**, so knowledge of a project's URI cannot route around the new boundary
+through the existing global worker artifact service. References emitted by the
+existing writer remain valid; arbitrary `object://` pointers are no longer
+accepted as local artifact bytes. Bytes read from an admitted reference still
+have their digest verified.
+
+Receipt writes check the reference's namespace before storing. Reads check both
+the exact idempotency key and the artifact reference; a copied foreign receipt
+or one under another attempt's key is a Policy failure, not usable output.
+Unparseable receipt JSON remains a miss, as in the existing retry contract.
+The data-before-receipt write ordering stays with the executor; this does not
+add a byte reread or a transaction to every receipt write.
+
+**This is not authorization or a complete execution artifact boundary.** No
+production route/dispatcher constructs a project store yet. A caller must obtain
+scope from trusted durable execution ownership and check current grants/leases;
+`for_project` does neither. The catalog's metadata, lineage/cache, retention
+accounting, workflow history, claims, telemetry and streams are not isolated by
+this addition. Do not wire a scoped byte store to the global catalog/reactor or
+open project `/start`. The recording executor's existing prohibition on global
+artifact inputs remains unchanged. Durable principal/scope ownership and the
+rest of execution isolation are still prerequisites for that route.
+
+Five integration tests cover filesystem reopen, unchanged verbatim large
+integers, independent project/organization/global copies and receipts, rebinding,
+canonical-reference rejection before I/O, the worker port, corrupt bytes/receipts
+and independent deletion. Existing server tests also pass. No new HTTP contract,
+IAM grant behavior, UI, migration or deployed E2E is claimed by this stage.

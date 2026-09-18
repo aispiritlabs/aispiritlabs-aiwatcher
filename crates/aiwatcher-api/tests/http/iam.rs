@@ -543,3 +543,18 @@ mod project_reviews;
 
 #[path = "project_cohorts.rs"]
 mod project_cohorts;
+
+#[path = "project_recordings.rs"]
+mod project_recordings;
+
+#[path = "project_bundles.rs"]
+mod project_bundles;
+
+#[path = "project_evidence.rs"]
+mod project_evidence;
+
+#[path = "project_calibrations.rs"]
+mod project_calibrations;
+
+#[path = "project_declarations.rs"]
+mod project_declarations;

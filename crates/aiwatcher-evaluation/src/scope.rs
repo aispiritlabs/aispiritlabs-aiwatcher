@@ -27,21 +27,30 @@ fn refused() -> PortError {
 pub(crate) struct ProjectStore {
     inner: Arc<dyn ObjectStore>,
     prefix: Option<String>,
+    evidence: bool,
 }
 impl ProjectStore {
     pub(crate) fn legacy(inner: Arc<dyn ObjectStore>) -> Self {
         Self {
             inner,
             prefix: None,
+            evidence: false,
         }
     }
     pub(crate) fn scoped(inner: Arc<dyn ObjectStore>, scope: ProjectScope) -> Self {
         Self {
             inner,
+            evidence: false,
             prefix: Some(format!(
                 "evaluation-scopes/{}/{}/registry/",
                 scope.organization.0, scope.project.0
             )),
+        }
+    }
+    pub(crate) fn evidence(inner: Arc<dyn ObjectStore>, scope: ProjectScope) -> Self {
+        Self {
+            evidence: true,
+            ..Self::scoped(inner, scope)
         }
     }
     fn key(&self, relative: &str, listing: bool) -> PortResult<String> {
@@ -60,16 +69,22 @@ impl ProjectStore {
             return Err(refused());
         }
         if let Some(prefix) = &self.prefix {
-            if ![
-                crate::store::RUBRICS,
-                crate::store::ASSESSMENTS,
-                crate::store::SCORECARDS,
-                crate::store::REVIEWS,
-                crate::store::REVIEW_TARGETS,
-                crate::store::COHORTS,
-            ]
-            .iter()
-            .any(|family| relative.starts_with(family))
+            let evidence_key = self.evidence
+                && (relative.starts_with("evaluations/")
+                    || relative.starts_with(crate::store::CALIBRATIONS)
+                    || relative.starts_with(crate::store::SCORING_RUNS));
+            if !evidence_key
+                && ![
+                    crate::store::RUBRICS,
+                    crate::store::ASSESSMENTS,
+                    crate::store::SCORECARDS,
+                    crate::store::REVIEWS,
+                    crate::store::REVIEW_TARGETS,
+                    crate::store::COHORTS,
+                    crate::store::RECORDINGS,
+                ]
+                .iter()
+                .any(|family| relative.starts_with(family))
             {
                 return Err(refused());
             }

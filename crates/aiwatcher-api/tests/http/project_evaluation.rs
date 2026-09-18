@@ -319,9 +319,8 @@ async fn project_roles_and_mutation_headers_cover_all_authored_evaluation_operat
     assert_eq!(member_pin[2]["author"], "member");
     // Other evaluation route families have no scoped aliases in this slice.
     for (method, route) in [
-        ("POST", "evaluation-runs"),
+        ("POST", "evaluation-runs/run/start"),
         ("GET", "evaluation-scorers"),
-        ("POST", "evaluation-approvals"),
     ] {
         let response = f
             .fixture

@@ -312,3 +312,6 @@ async fn authored_scope_refuses_key_escape_external_catalog_and_instance_sources
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[path = "scope/recordings.rs"]
+mod recording_scope;

@@ -34,6 +34,16 @@ pub trait SourceAuthority: Send + Sync + std::fmt::Debug {
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     }
 
+    /// Resolve producer evidence using only this project's staged bytes and
+    /// native owners. This capability does not authorise a caller; the caller
+    /// must check the current project grant before invoking it.
+    fn for_project_evidence(
+        &self,
+        _scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<Arc<dyn SourceAuthority>> {
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    }
+
     async fn resolve(&self, manifest: &EvaluationManifest, subject: &str)
     -> Result<SourceEvidence>;
 
@@ -305,7 +315,8 @@ impl Registry {
         })
     }
 
-    /// Bind authored forms, scorecards, assessments and case reviews to one IAM project.
+    /// Bind authored forms, scorecards, assessments, case reviews and recordings
+    /// to one IAM project.
     /// This is storage isolation, not authorization or data migration. Other
     /// evidence operations and source resolution fail closed on this registry.
     pub fn for_project_authored(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
@@ -339,6 +350,67 @@ impl Registry {
         let mut registry = self.for_project_authored(scope)?;
         registry.authority = self.authority.for_project_cohorts(scope)?;
         Ok(registry)
+    }
+
+    /// Discover project evidence namespaces for privileged retention only.
+    /// This is not a user catalogue and supplies no IAM authorization. A bound
+    /// registry may not enumerate neighbours. Validate the full store listing
+    /// before returning any scope; no key from it is used to read content.
+    pub async fn project_evidence_scopes(&self) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        require(
+            self.authored_scope.is_none(),
+            "scope",
+            "a project cannot enumerate other projects",
+        )?;
+        let mut scopes = BTreeMap::new();
+        for entry in self.store.0.list("evaluation-scopes/").await? {
+            let path = entry
+                .key
+                .strip_prefix("evaluation-scopes/")
+                .ok_or(EvaluationError::Unavailable(EvidenceState::Forbidden))?;
+            let mut parts = path.splitn(3, '/');
+            let org = parts.next().unwrap_or_default();
+            let project = parts.next().unwrap_or_default();
+            let rest = parts.next().unwrap_or_default();
+            let scope: aiwatcher_iam::ProjectScope = serde_json::from_value(serde_json::json!({
+                "organization":org, "project":project
+            }))?;
+            if rest.starts_with("registry/evaluations/") {
+                scopes.insert((org.to_owned(), project.to_owned()), scope);
+            }
+        }
+        Ok(scopes.into_values().collect())
+    }
+
+    /// Bind producer evidence, approvals and maintenance to one project. The
+    /// caller supplies current IAM authorization; this factory only isolates
+    /// storage and requires an explicitly project-bound source resolver.
+    pub fn for_project_evidence(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Self> {
+        if let Some(current) = self.authored_scope {
+            require(
+                current == scope,
+                "scope",
+                "registry is already bound to another project",
+            )?;
+            let authority = self.authority.for_project_evidence(scope)?;
+            return Ok(Self {
+                authority,
+                ..self.clone()
+            });
+        }
+        Ok(Self {
+            store: Store(
+                Arc::new(crate::scope::ProjectStore::evidence(
+                    self.store.0.clone(),
+                    scope,
+                )),
+                None,
+            ),
+            authority: self.authority.for_project_evidence(scope)?,
+            config: self.config.clone(),
+            content_access: false,
+            authored_scope: Some(scope),
+        })
     }
 
     /// Grant content access only after the transport has authenticated the
@@ -1030,6 +1102,12 @@ impl Registry {
         }))
     }
 
+    /// The storage scope, not permission to execute a measurement in it.
+    #[must_use]
+    pub const fn project_scope(&self) -> Option<aiwatcher_iam::ProjectScope> {
+        self.authored_scope
+    }
+
     /// What no adapter can read back for evidence this deployment measured.
     ///
     /// Every other pin is admitted by re-reading its owner's bytes from the
@@ -1058,6 +1136,20 @@ impl Registry {
                 field: "context.suite".into(),
                 reason: "names no scorecard this registry published".into(),
             })?;
+        if self.authored_scope.is_some() {
+            require(
+                context.judge.is_none()
+                    && context.external_calibration.is_none()
+                    && !card.scorecard.asks_a_scorer_service()
+                    && card.scorecard.judges().is_empty()
+                    && matches!(
+                        context.dataset.kind,
+                        crate::DatasetKind::Curation | crate::DatasetKind::Annotations
+                    ),
+                "context",
+                "project admission supports native cohorts and built-in scorers only",
+            )?;
+        }
         let rubrics = self.rubrics_for(&card.scorecard).await?;
         require(
             card.scorecard.metrics(&rubrics)? == context.metrics,
@@ -3085,6 +3177,10 @@ impl Registry {
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
         run.check(&card.scorecard)?;
+        if self.authored_scope.is_some() {
+            self.check_project_declaration(run, &card.scorecard, declared_by)
+                .await?;
+        }
         if let Some(judge) = &run.judge {
             let taken = self
                 .calibration(&judge.calibration.version)
@@ -3125,9 +3221,61 @@ impl Registry {
         crate::scoring::declare(&self.store, run, declared_by, now).await
     }
 
+    // A declaration is not admission or permission to execute. Until those
+    // owners are scoped, only saved answers and native cohorts are supported.
+    async fn check_project_declaration(
+        &self,
+        run: &crate::ScoringRun,
+        card: &crate::Scorecard,
+        subject: &str,
+    ) -> Result<()> {
+        require(
+            run.judge.is_none()
+                && run.external_calibration.is_none()
+                && !card.asks_a_scorer_service()
+                && matches!(
+                    run.variant.dataset.kind,
+                    crate::DatasetKind::Curation | crate::DatasetKind::Annotations
+                ),
+            "run",
+            "project declarations support native cohorts and built-in scorers only; judge, \
+             external scorer and other dataset authorities are not yet scoped",
+        )?;
+        let crate::Answers::Recording(recording) = &run.answers else {
+            return Err(EvaluationError::Invalid {
+                field: "run.answers".into(),
+                reason: "project declarations require a project-local recording; generation \
+                         and archive execution are not yet scoped"
+                    .into(),
+            });
+        };
+        self.recording(recording).await?;
+        let derived = self
+            .derived_cohort(&run.cohort.case_manifest.digest)
+            .await?
+            .filter(|derived| derived.describes(&run.variant.dataset, &run.cohort))
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        // Metadata alone is not proof that the owner still holds these bytes.
+        // Re-derive without writing or trusting an artifact's URI.
+        let files = self
+            .authority
+            .derive_cohort(&derived.request, subject)
+            .await?;
+        require(
+            files.cohort(&derived.request.split) == run.cohort,
+            "run.cohort",
+            "the project's owner no longer derives the pinned cohort",
+        )?;
+        let rubrics = self.rubrics_for(card).await?;
+        Evaluation::prepare(run.manifest(card, &rubrics, None, None, None)?)?;
+        Ok(())
+    }
+
+    /// Read an immutable declaration, verifying its address before returning it.
+    ///
     /// # Errors
     ///
-    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    /// Invalid addresses, corrupt documents and unavailable storage are refused.
     pub async fn scoring_run(&self, id: &str) -> Result<Option<crate::DeclaredRun>> {
         text(id, "run")?;
         crate::scoring::declared(&self.store, id).await
@@ -3149,6 +3297,14 @@ impl Registry {
             .scorecard(&pinned.name, Some(&pinned.version))
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        if self.authored_scope.is_some() {
+            self.check_project_declaration(
+                &declaration.run,
+                &card.scorecard,
+                &declaration.declared_by,
+            )
+            .await?;
+        }
         let rubrics = self.rubrics_for(&card.scorecard).await?;
         let calibration = match &declaration.run.judge {
             Some(judge) => Some(
@@ -3219,6 +3375,10 @@ impl Registry {
 
     /// The same gate, answering with its own refusal rather than a boolean.
     ///
+    /// Project-local, server-measured pairs also re-resolve their card and
+    /// source after finding an approval. This can cost a full cohort read;
+    /// admission is evidence verification, never execution authorization.
+    ///
     /// # Errors
     ///
     /// [`EvaluationError::NotAdmitted`] naming the approval while nobody has
@@ -3227,7 +3387,28 @@ impl Registry {
     /// [`Registry::admits`].
     pub async fn admission(&self, manifest: &EvaluationManifest) -> Result<()> {
         let prepared = Evaluation::prepare(manifest.clone())?;
-        self.admitted(&prepared, true).await.map(drop)
+        let approval = self.admitted(&prepared, true).await?;
+        if self.authored_scope.is_some() && manifest.context.scored_here() {
+            self.protected(manifest)?;
+            self.admit_scoring(&manifest.context).await?;
+            if let Some(approval) = approval {
+                let source = self
+                    .authority
+                    .resolve(manifest, &approval.record.approved_by)
+                    .await?;
+                require(
+                    source.expected.len() as u64 == manifest.context.case_count,
+                    "source",
+                    "selected case count differs from the pinned manifest",
+                )?;
+                if !same_bundle(&approval.record, &source) {
+                    return Err(EvaluationError::AdmittedOtherBytes(
+                        approval.record.approval_id,
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Keep the answers a run will measure, and hand back the reference.
@@ -3242,6 +3423,16 @@ impl Registry {
         bytes: Vec<u8>,
     ) -> Result<aiwatcher_core::ArtifactRef> {
         crate::scoring::stage(&self.store, name, bytes).await
+    }
+
+    /// Read the exact staged bytes, verifying their content address in this registry.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid digests and missing or corrupt recordings. It never
+    /// resolves a producer URL or falls back to another project's storage.
+    pub async fn recording_bytes(&self, digest: &str) -> Result<Vec<u8>> {
+        crate::scoring::verified_recording_bytes(&self.store, digest).await
     }
 
     /// The answers a declaration named, re-verified against its digest.

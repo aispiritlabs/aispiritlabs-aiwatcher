@@ -93,6 +93,7 @@ pub(crate) fn openapi(mut api: utoipa::openapi::OpenApi) -> utoipa::openapi::Ope
             (&mut item.get, false),
             (&mut item.post, true),
             (&mut item.put, true),
+            (&mut item.delete, true),
         ] {
             let Some(operation) = operation else { continue };
             operation.operation_id = operation

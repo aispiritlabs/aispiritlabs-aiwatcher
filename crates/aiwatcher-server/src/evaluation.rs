@@ -2,6 +2,7 @@
 mod annotations;
 mod conversations;
 mod project_cohorts;
+mod project_evidence;
 use aiwatcher_core::storage::ObjectStore;
 use aiwatcher_evaluation::{
     CohortFiles, CohortRequest, CollectionReport, DatasetKind, Evaluation, EvaluationError,
@@ -23,6 +24,7 @@ use tokio::io::AsyncReadExt;
 pub struct LocalSource {
     directory: Option<String>,
     bundles: Option<Arc<dyn ObjectStore>>,
+    bundle_scope: Option<aiwatcher_iam::ProjectScope>,
     datasets: Option<Arc<aiwatcher_datasets::Registry>>,
     prompts: Option<Arc<aiwatcher_prompts::Registry>>,
     training: Option<Arc<aiwatcher_training::Registry>>,
@@ -35,6 +37,7 @@ impl LocalSource {
         Self {
             directory,
             bundles: None,
+            bundle_scope: None,
             datasets: None,
             prompts: None,
             training: None,
@@ -55,24 +58,46 @@ impl LocalSource {
         self
     }
 
+    /// Validate the address before any bundle read, listing or mutation.
+    fn bundle_prefix(&self, approval_id: &str) -> Result<String> {
+        if approval_id.len() != 64 || !approval_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(unavailable(EvidenceState::Forbidden));
+        }
+        Ok(match self.bundle_scope {
+            Some(scope) => format!(
+                "evaluation-scopes/{}/{}/bundles/{approval_id}/",
+                scope.organization.0, scope.project.0
+            ),
+            None => format!("{BUNDLES}{approval_id}/"),
+        })
+    }
+
     /// The prefix one pair's staged bytes live under, or a refusal.
     fn staging(&self, approval_id: &str) -> Result<String> {
-        if self.bundles.is_none() || approval_id.len() != 64 || !approval_id.is_ascii() {
+        if self.bundles.is_none() {
             return Err(unavailable(EvidenceState::Forbidden));
         }
-        if !approval_id.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(unavailable(EvidenceState::Forbidden));
-        }
-        Ok(format!("{BUNDLES}{approval_id}/"))
+        self.bundle_prefix(approval_id)
     }
 
     async fn entries(&self, prefix: &str) -> Result<Vec<aiwatcher_core::storage::ObjectEntry>> {
-        self.bundles
+        let entries = self
+            .bundles
             .as_ref()
             .ok_or_else(|| unavailable(EvidenceState::Forbidden))?
             .list(prefix)
             .await
-            .map_err(|_| unavailable(EvidenceState::Forbidden))
+            .map_err(|_| unavailable(EvidenceState::Forbidden))?;
+        // Validate the entire list before handing it to a reader or deleter.
+        // A broken store must not widen a project or pair boundary.
+        for entry in &entries {
+            let name = entry
+                .key
+                .strip_prefix(prefix)
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            member(name)?;
+        }
+        Ok(entries)
     }
 
     /// This pair's approved bundle, and the declaration that opens it.
@@ -83,10 +108,11 @@ impl LocalSource {
     /// declaration comes back with it because every caller reads it next and
     /// finding the bundle means reading it already.
     async fn bundle(&self, approval: &str) -> Result<(Bundle, Vec<u8>)> {
+        let prefix = self.bundle_prefix(approval)?;
         const MANIFEST: &str = "manifest.json";
         let limit = aiwatcher_evaluation::MAX_MANIFEST_BYTES;
         if let Some(store) = &self.bundles {
-            let staged = Bundle::Stored(store.clone(), format!("{BUNDLES}{approval}/"));
+            let staged = Bundle::Stored(store.clone(), prefix);
             match staged.bytes(MANIFEST, limit).await {
                 Ok(declaration) => return Ok((staged, declaration)),
                 // Nothing staged for this pair; the host's disk may hold it.
@@ -171,7 +197,7 @@ fn member(name: &str) -> Result<()> {
     let segment = name.strip_prefix(ARTIFACTS).map_or(name, |rest| rest);
     if segment.is_empty()
         || segment.contains('/')
-        || segment.contains('\\')
+        || segment.contains(['\\', '\0'])
         || segment.starts_with('.')
     {
         return Err(unavailable(EvidenceState::Forbidden));
@@ -305,6 +331,23 @@ struct Answer {
 /// pair reading at all until they are what was admitted.
 #[async_trait]
 impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<Arc<dyn aiwatcher_evaluation::ApprovalBundles>> {
+        if self.bundle_scope.is_some_and(|current| current != scope) {
+            return Err(unavailable(EvidenceState::Forbidden));
+        }
+        let store = self
+            .bundles
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+        // Staging confers no host-directory or native-owner capability.
+        let mut scoped = Self::new(None).with_bundles(store.clone());
+        scoped.bundle_scope = Some(scope);
+        Ok(Arc::new(scoped))
+    }
+
     async fn stage(&self, approval_id: &str, name: &str, bytes: Vec<u8>) -> Result<StagedFile> {
         let prefix = self.staging(approval_id)?;
         member(name)?;
@@ -354,6 +397,8 @@ impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
     }
 
     async fn member(&self, approval_id: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        member(name)?;
+        self.bundle_prefix(approval_id)?;
         let root = match self.bundle(approval_id).await {
             Ok((root, _)) => root,
             Err(EvaluationError::Unavailable(
@@ -491,6 +536,13 @@ impl LocalSource {
 
 #[async_trait]
 impl SourceAuthority for LocalSource {
+    fn for_project_evidence(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<Arc<dyn SourceAuthority>> {
+        project_evidence::bind(self, scope)
+    }
+
     fn for_project_cohorts(
         &self,
         scope: aiwatcher_iam::ProjectScope,
@@ -895,75 +947,77 @@ pub fn spawn(
     Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(RETENTION_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut collected_at = None;
-        let mut report = registry
-            .retention()
-            .await
-            .unwrap_or_default()
-            .unwrap_or_default();
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = interval.tick() => {
                     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-                    let due = collected_at
-                        .is_none_or(|last: i64| now - last >= COLLECTION_INTERVAL.as_secs() as i64);
-                    match pass(&registry, due, now).await {
-                        Ok((retired, collection)) => {
-                            if due {
-                                collected_at = Some(now);
-                            }
-                            // Collection is hourly, so the passes in between
-                            // carry its findings rather than blanking them: a
-                            // result with gaps must not vanish from the report
-                            // fifty-nine minutes out of sixty. What each pass
-                            // counts for itself stays its own.
-                            let found = collection.unwrap_or(CollectionReport {
-                                damaged: report.damaged.clone(),
-                                damaged_count: report.damaged_count,
-                                ..CollectionReport::default()
-                            });
-                            if due && found.damaged_count > 0 {
-                                tracing::warn!(
-                                    damaged = found.damaged_count,
-                                    "published evaluation results are missing bytes"
-                                );
-                            }
-                            report = aiwatcher_evaluation::RetentionReport {
-                                ran_at: now,
-                                retired,
-                                collected: found.removed,
-                                collected_at,
-                                damaged: found.damaged,
-                                damaged_count: found.damaged_count,
-                                ..Default::default()
-                            };
-                            if retired + report.collected > 0 {
-                                tracing::info!(
-                                    retired,
-                                    collected = report.collected,
-                                    "evaluation retention pass"
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            report.failures = report.failures.saturating_add(1);
-                            report.failed_at = Some(now);
-                            report.error = Some(error.to_string());
-                            tracing::error!(
-                                %error,
-                                failures = report.failures,
-                                "evaluation retention sweep failed"
-                            );
-                        }
+                    if let Err(error) = retention_pass(&registry, now).await {
+                        tracing::error!(%error, "evaluation retention failed");
                     }
-                    if let Err(error) = registry.record_sweep(&report).await {
-                        tracing::error!(%error, "cannot record the evaluation retention pass");
+                    match registry.project_evidence_scopes().await {
+                        Ok(scopes) => for scope in scopes {
+                            let result = match registry.for_project_evidence(scope) {
+                                Ok(project) => retention_pass(&Arc::new(project), now).await,
+                                Err(error) => Err(error),
+                            };
+                            if let Err(error) = result {
+                                tracing::error!(%error, ?scope, "project evaluation retention failed");
+                            }
+                        },
+                        Err(error) => tracing::error!(%error, "cannot discover project evaluation retention scopes"),
                     }
                 }
             }
         }
     }))
+}
+
+async fn retention_pass(registry: &Arc<aiwatcher_evaluation::Registry>, now: i64) -> Result<()> {
+    let mut report = registry.retention().await?.unwrap_or_default();
+    let due = report
+        .collected_at
+        .is_none_or(|at| now - at >= COLLECTION_INTERVAL.as_secs() as i64);
+    match pass(registry, due, now).await {
+        Ok((retired, collection)) => {
+            // Between hourly collections keep the last damage findings, not
+            // the counts of work done by the previous sweep.
+            let found = collection.unwrap_or(CollectionReport {
+                damaged: report.damaged.clone(),
+                damaged_count: report.damaged_count,
+                ..Default::default()
+            });
+            if due && found.damaged_count > 0 {
+                tracing::warn!(
+                    damaged = found.damaged_count,
+                    "published evaluation results are missing bytes"
+                );
+            }
+            if retired + found.removed > 0 {
+                tracing::info!(
+                    retired,
+                    collected = found.removed,
+                    "evaluation retention pass"
+                );
+            }
+            report = aiwatcher_evaluation::RetentionReport {
+                ran_at: now,
+                retired,
+                collected: found.removed,
+                collected_at: if due { Some(now) } else { report.collected_at },
+                damaged: found.damaged,
+                damaged_count: found.damaged_count,
+                ..Default::default()
+            };
+        }
+        Err(error) => {
+            report.failures = report.failures.saturating_add(1);
+            report.failed_at = Some(now);
+            report.error = Some(error.to_string());
+            tracing::error!(%error, failures = report.failures, "evaluation retention pass failed");
+        }
+    }
+    registry.record_sweep(&report).await
 }
 
 const RETENTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);

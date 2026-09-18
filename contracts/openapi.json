@@ -5226,13 +5226,84 @@
         }
       }
     },
+    "/api/v1/evaluation-recordings/{digest}/content": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Download a staged answer document after verifying its SHA-256 digest.\nReturns the original JSON bytes, preserving number spelling and whitespace.",
+        "operationId": "get_recording",
+        "parameters": [
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "SHA-256 of the original recording bytes",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedAnswers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-recordings/{name}": {
       "put": {
         "tags": [
           "evaluation"
         ],
-        "summary": "Keep the answers a run will measure, and hand back the reference.",
-        "description": "The digest is of the bytes that arrived and never of anything the caller\nclaimed, so a declaration naming it names these exact bytes — and a retry of\nthe run reads what the first attempt read. Staging the same recording twice\nanswers with the same reference.",
+        "summary": "Keep answers and return a reference to their exact bytes. The name is display\nmetadata, never a storage key. Retrying the same bytes preserves their digest.\nOn project routes the reference is interpreted only in that same project.",
         "operationId": "stage_recording",
         "parameters": [
           {
@@ -6375,7 +6446,7 @@
           "evaluation"
         ],
         "summary": "Declare a measurement.",
-        "description": "Writes nothing that runs. What comes back is the declaration with the\nmanifest a result of it publishes and the approval that admits that pair,\nbecause an operator has to admit it before it may publish and the metrics\nin that manifest are derived from the card — a second copy written out by\nhand is a second answer to what this run measures. Idempotent by content.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.",
+        "description": "Writes nothing that runs. What comes back is the declaration with the\nmanifest a result of it publishes and the approval that admits that pair,\nbecause an operator has to admit it before it may publish and the metrics\nin that manifest are derived from the card — a second copy written out by\nhand is a second answer to what this run measures. Idempotent by content.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.\nProject declarations currently support saved recordings over native cohorts\nwith built-in scorers only. They neither admit nor start a measurement.",
         "operationId": "declare_scoring_run",
         "requestBody": {
           "content": {
@@ -12303,6 +12374,551 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-approvals": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every pair this instance has admitted, withdrawn ones included: an approval\nthat vanished from the list would read as one nobody ever made.",
+        "operationId": "project_list_approvals",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Admit one pinned pair.",
+        "description": "The operator act that authorises publication, separated from publishing so\nthat every later repetition — from a worker, a schedule or CI — needs\nnothing on the server's host. `Admin`, not `Editor`: an ingest token is an\neditor by construction, and a producer that can admit its own evidence is\nnot an approval. Idempotent for the pair; a bundle that changed underneath\nan admitted pair conflicts rather than moving what earlier results mean.",
+        "operationId": "project_approve_source",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Approval"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "409": {
+            "description": "`admitted_other_bytes`: the pair is admitted already, over other bundle bytes; the message names the approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-approvals/{approval_id}": {
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Withdraw one. Every result measured under that pair stops being readable and\nno new one can be published; nothing already published has its retention\nmoved, in either direction. Final for this approval ID.",
+        "operationId": "project_withdraw_approval",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Approval"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-approvals/{approval_id}/bundle": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What is staged for one pair. Names and sizes: the digests are the\ndeclaration's, and a second copy of them here could only disagree.",
+        "operationId": "project_list_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StagedFile"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Remove every staged member of one pair.",
+        "description": "What it does not do is un-admit anything: an approval is withdrawn through\nits own route, and evidence already published under this pair keeps reading\nuntil the adapter is asked for bytes that are no longer there. Use it to\ncorrect a bundle before approving, or to clear one that was withdrawn.",
+        "operationId": "project_discard_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-approvals/{approval_id}/bundle/{name}": {
+      "put": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Stage one member of a bundle, by the name the declaration gives it.",
+        "description": "This is what lets a *new* pair be admitted with nobody on the server's\nhost. Admin, because approving is: an ingest token is an editor by\nconstruction, and bytes that decide what may be published are the operator's\nact rather than the producer's.\n\nIt admits nothing on its own. The approval that follows resolves the whole\nbundle and records its digest, so bytes staged after one do not widen it —\nthey stop that pair reading until they are what was admitted again.",
+        "operationId": "project_stage_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "One member: `manifest.json`, `scorer.py`, `model-artifacts/<file>`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/evaluation-assessments": {
       "get": {
         "tags": [
@@ -12666,6 +13282,188 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-calibrations": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Freeze what people judged of one result, as a judge's calibration set.",
+        "description": "Only a person's judgement, and only under the rubric versions named: a\njudgement made under other words answered another question. Addressed by\nits content, so taking the same judgements twice is the same set — and a\nperson changing their mind later is a later set, never this one re-read.",
+        "operationId": "project_take_calibration",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-calibrations/{version}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One calibration set, at the address a declaration names it by.",
+        "operationId": "project_get_calibration",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "description": "The calibration set's content address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/evaluation-cohorts": {
       "post": {
         "tags": [
@@ -12847,6 +13645,910 @@
             }
           },
           "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-recordings/{digest}/content": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Download a staged answer document after verifying its SHA-256 digest.\nReturns the original JSON bytes, preserving number spelling and whitespace.",
+        "operationId": "project_get_recording",
+        "parameters": [
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "SHA-256 of the original recording bytes",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedAnswers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-recordings/{name}": {
+      "put": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Keep answers and return a reference to their exact bytes. The name is display\nmetadata, never a storage key. Retrying the same bytes preserves their digest.\nOn project routes the reference is interpreted only in that same project.",
+        "operationId": "project_stage_recording",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "What a reader calls this recording",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-results": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Durable discovery is independent of telemetry retention. Newest first, and\nclients page with the opaque cursor rather than a timestamp assumption.\nConversation content requires Admin; other readers receive a forbidden state.",
+        "operationId": "project_list_results",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Published within this many seconds. The catalogue has a published\norder, so a period is a bound on it rather than a filter over a scan.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "context_id",
+            "in": "query",
+            "description": "Only results measured under this pinned context. Every row that comes\nback is a legitimate baseline for every other, which is what makes this\nthe candidate list for a comparison rather than a convenience filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DurablePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Publish terminal evidence. Retry the identical body and logical ID after a\ntimeout; a different body conflicts. No result content enters the event log.\nConversation evidence requires Admin, including publication.",
+        "description": "A pair nobody has admitted yet is a 409 `pair_not_admitted` naming the\napproval, as starting a scoring run is; a withdrawn pair stays a 403.",
+        "operationId": "project_publish_result",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEvaluation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "`evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source; `measured_here`: evidence aiwatcher scores is published by its run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "409": {
+            "description": "`pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-results/{evaluation_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "operationId": "project_get_result",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DurableEvaluation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Forget one published result.",
+        "description": "The third way evidence disappears, beside its approval being withdrawn and\nits retention running out — and the only one that is about a single\nmeasurement. It writes the same durable marker the retention sweep does, so\nthe ID stays permanently unreadable rather than falling back to telemetry.",
+        "operationId": "project_forget_result",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-results/{evaluation_id}/cases": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "operationId": "project_get_cases",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CasePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-results/{evaluation_id}/comparison": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One published result against another named one.",
+        "description": "Two headers, not two results: the metrics a comparison subtracts are in the\nmetadata each side was published with, so this costs what two summaries\ncost however many cases are behind them. Which two may be subtracted is the\nserver's answer — `comparability` with its reasons, the same three words the\nfolded half uses — and a delta is withheld rather than shown wrong. Case\nlevel regressions are not here: they are a full read of both sides.",
+        "operationId": "project_compare_results",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "Explicit. A baseline nobody chose is a baseline nobody checked.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceComparison"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-results/{evaluation_id}/comparison/cases": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Which cases moved between one published result and another named one.",
+        "description": "The comparison beside this one reads two headers; this reads both results,\nso it pages, it is narrowed here rather than in the browser, and one\nrequest walks a bounded number of cases. The verdict rides along, so a pair\nthis server will not subtract is refused in the same sentence the header\ncomparison uses rather than as an empty list — and an unverified pair keeps\nits rows, because the cases that failed are what somebody opens this for.",
+        "operationId": "project_compare_cases",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "Explicit. A baseline nobody chose is a baseline nobody checked.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Both sides' offsets and both versions. A page of a narrowed diff ends\nat the rows asked for or at the cases it was allowed to walk, so this\npromises another case rather than another match.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "only",
+            "in": "query",
+            "description": "The question being asked, not the verdict a case was given: `worse` is\nwhat a release gate reads and includes the cases that lost something\nand gained something else.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CaseFilter"
+                }
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDiffPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -13621,6 +15323,195 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RubricVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-runs": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Declare a measurement.",
+        "description": "Writes nothing that runs. What comes back is the declaration with the\nmanifest a result of it publishes and the approval that admits that pair,\nbecause an operator has to admit it before it may publish and the metrics\nin that manifest are derived from the card — a second copy written out by\nhand is a second answer to what this run measures. Idempotent by content.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.\nProject declarations currently support saved recordings over native cohorts\nwith built-in scorers only. They neither admit nor start a measurement.",
+        "operationId": "project_declare_scoring_run",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoringRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringRunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-runs/{id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What a run measures, what it publishes, and whether it may yet.",
+        "operationId": "project_get_scoring_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The declaration address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringRunView"
                 }
               }
             }
@@ -31977,6 +33868,67 @@
               "$ref": "#/components/schemas/RecordTurnRequest"
             },
             "description": "One exchange, as a producer flushes it. Not a transaction — see\n`Registry::record_batch`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecordedAnswer": {
+        "type": "object",
+        "description": "One saved answer, as the recording holds it.",
+        "required": [
+          "case_id",
+          "answer"
+        ],
+        "properties": {
+          "answer": {},
+          "case_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run the answer was made in, on this deployment's log: what a\ngenerated answer is held to the variant's prompt and model through."
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseUsage",
+                "description": "What making the answer took, carried into the case as it was measured."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecordedAnswers": {
+        "type": "object",
+        "description": "The shape of the artifact a scoring run reads.",
+        "required": [
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordedAnswer"
+            }
           }
         },
         "additionalProperties": false

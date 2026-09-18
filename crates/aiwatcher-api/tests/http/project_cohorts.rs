@@ -21,12 +21,22 @@ impl SourceAuthority for CohortSource {
             scope: Some(scope),
         }))
     }
+    fn for_project_evidence(
+        &self,
+        scope: ProjectScope,
+    ) -> aiwatcher_evaluation::Result<Arc<dyn SourceAuthority>> {
+        self.for_project_cohorts(scope)
+    }
     async fn resolve(
         &self,
         _: &aiwatcher_evaluation::EvaluationManifest,
         _: &str,
     ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::SourceEvidence> {
-        panic!("cohort operations never resolve a global evidence bundle")
+        // Declaring does not admit server-measured evidence. Production
+        // resolver coverage lives in the server's project_declarations tests.
+        Err(aiwatcher_evaluation::EvaluationError::Unavailable(
+            aiwatcher_evaluation::EvidenceState::Forbidden,
+        ))
     }
     async fn derive_cohort(
         &self,
@@ -58,7 +68,7 @@ impl SourceAuthority for CohortSource {
         })
     }
 }
-async fn fixture() -> IamFixture {
+pub(super) async fn fixture() -> IamFixture {
     let mut f = IamFixture::new().await;
     let datasets = Arc::new(DatasetRegistry::new(
         Arc::new(MemoryObjectStore::new()),
@@ -78,7 +88,7 @@ async fn fixture() -> IamFixture {
     ));
     f
 }
-async fn source(f: &IamFixture, cookie: &str, root: &str, words: &str) -> Value {
+pub(super) async fn source(f: &IamFixture, cookie: &str, root: &str, words: &str) -> Value {
     let (status, value) = f.request("POST", &format!("{root}/datasets"), Some(cookie),
         json!({"name":"golden/cases","pipeline":"fixture","source":"fixture","columns":["case_id","input","expected"],
             "items":[{"case_id":"one","input":{"question":words},"expected":{"answer":words}}]}), true).await;
@@ -88,7 +98,7 @@ async fn source(f: &IamFixture, cookie: &str, root: &str, words: &str) -> Value 
     );
     json!({"dataset":{"kind":"curation","name":"golden/cases","version":value["dataset"]["latest"]["version"]}, "split":"test"})
 }
-async fn derive(f: &IamFixture, cookie: &str, root: &str, request: Value) -> Value {
+pub(super) async fn derive(f: &IamFixture, cookie: &str, root: &str, request: Value) -> Value {
     let (status, result) = f
         .request(
             "POST",

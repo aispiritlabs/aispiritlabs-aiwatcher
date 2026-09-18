@@ -1403,18 +1403,28 @@ pub(crate) async fn declare(
         declared_at: now,
     };
     if !store.create(&key, &declared).await? {
-        return store
-            .read(&key)
-            .await?
-            .ok_or(crate::EvaluationError::Unavailable(
-                crate::EvidenceState::CorruptArtifact,
-            ));
+        return self::declared(store, &declared.id).await?.ok_or(
+            crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact),
+        );
     }
     Ok(declared)
 }
 
 pub(crate) async fn declared(store: &Store, id: &str) -> Result<Option<DeclaredRun>> {
-    store.read(&store::scoring_run(id)).await
+    require(
+        id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "run",
+        "is the SHA-256 address of a declaration",
+    )?;
+    let Some(declared): Option<DeclaredRun> = store.read(&store::scoring_run(id)).await? else {
+        return Ok(None);
+    };
+    if declared.id != id || declared.run.id().ok().as_deref() != Some(id) {
+        return Err(crate::EvaluationError::Unavailable(
+            crate::EvidenceState::CorruptArtifact,
+        ));
+    }
+    Ok(Some(declared))
 }
 
 /// Keep a recording, and hand back the reference a declaration names it by.
@@ -1486,14 +1496,19 @@ pub(crate) async fn recorded_spelled(
 }
 
 async fn recording_bytes(store: &Store, answers: &ArtifactRef) -> Result<Vec<u8>> {
-    let bytes = store
-        .0
-        .get(&store::recording(&answers.digest))
-        .await?
-        .ok_or(crate::EvaluationError::Unavailable(
-            crate::EvidenceState::MissingArtifact,
-        ))?;
-    if store::hash(&bytes) != answers.digest {
+    verified_recording_bytes(store, &answers.digest).await
+}
+
+pub(crate) async fn verified_recording_bytes(store: &Store, digest: &str) -> Result<Vec<u8>> {
+    require(
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "recording.digest",
+        "must be a SHA-256 digest",
+    )?;
+    let bytes = store.0.get(&store::recording(digest)).await?.ok_or(
+        crate::EvaluationError::Unavailable(crate::EvidenceState::MissingArtifact),
+    )?;
+    if store::hash(&bytes) != digest {
         return Err(crate::EvaluationError::Unavailable(
             crate::EvidenceState::CorruptArtifact,
         ));

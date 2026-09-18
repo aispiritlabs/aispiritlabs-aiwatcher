@@ -22,6 +22,17 @@ use crate::{Result, SCHEMA_VERSION, digest};
 /// for. Absent, a new pair still needs its bytes on the host's disk.
 #[async_trait]
 pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
+    /// Bind staging to one project. The default never reuses global storage.
+    /// This is a storage capability; transports must check current IAM grants.
+    fn for_project(
+        &self,
+        _scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<std::sync::Arc<dyn ApprovalBundles>> {
+        Err(crate::EvaluationError::Unavailable(
+            crate::EvidenceState::Forbidden,
+        ))
+    }
+
     /// Replace one member. Staging after an approval does not widen it: the
     /// recorded digest no longer matches, and every read of that pair is
     /// refused until the bytes are what was admitted.
