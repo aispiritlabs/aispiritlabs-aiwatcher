@@ -695,6 +695,78 @@ pub(crate) mod tests {
         );
     }
 
+    /// One declaration made in two projects has one variant ID, so a record's
+    /// key carries the scope — and the global side's key does not move.
+    #[tokio::test]
+    async fn two_projects_sharing_a_variant_id_write_two_records_and_the_global_key_stays_put() {
+        let scope = |last: u8| {
+            aiwatcher_core::ProjectScope::new(
+                uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+                uuid::Uuid::parse_str(&format!("0198c0de-0000-7000-8000-0000000000{last:02x}"))
+                    .expect("uuid"),
+            )
+        };
+        let objects = Arc::new(MemoryObjectStore::default());
+        let store = PeriodStore::new(Arc::clone(&objects) as Arc<dyn ObjectStore>);
+        let hour = 1_789_300_800;
+        let scoped = |last: u8, runs: u64| ObservedPeriod {
+            project: Some(scope(last)),
+            ..record("v1", hour, runs)
+        };
+
+        assert!(
+            store
+                .write(
+                    3_600,
+                    hour,
+                    &[record("v1", hour, 4), scoped(0xaa, 7), scoped(0xbb, 9)],
+                    1,
+                    &FoldAt::default()
+                )
+                .await
+                .unwrap()
+        );
+
+        // Three records under one marker, each answering for its own side.
+        for (project, runs) in [(None, 4), (Some(scope(0xaa)), 7), (Some(scope(0xbb)), 9)] {
+            let read = store
+                .period(3_600, hour, project, &["v1"])
+                .await
+                .unwrap()
+                .expect("written");
+            assert_eq!(
+                read.iter()
+                    .map(|record| (record.project, record.runs))
+                    .collect::<Vec<_>>(),
+                [(project, runs)],
+                "{project:?}"
+            );
+        }
+
+        // The global record is under exactly the key it was under before
+        // projects existed — `hex("v1")` — so a create-only write still lands
+        // on the first record and nothing stored moves.
+        let keys: Vec<String> = objects.0.read().await.keys().cloned().collect();
+        assert!(
+            keys.contains(&format!(
+                "variant-observations/periods/003600/{hour:012}/{}.json",
+                hex("v1")
+            )),
+            "{keys:?}"
+        );
+        assert_eq!(
+            keys.iter()
+                .filter(|key| key.contains("/scopes/"))
+                .count(),
+            2,
+            "and a project's sits under a segment of its own: {keys:?}"
+        );
+
+        // A rollup reads every side, not the global half.
+        let every = store.records(3_600, hour).await.unwrap();
+        assert_eq!(every.iter().map(|record| record.runs).sum::<u64>(), 20);
+    }
+
     #[tokio::test]
     async fn the_period_written_last_says_where_its_fold_was() {
         let store = PeriodStore::new(Arc::new(MemoryObjectStore::default()));
