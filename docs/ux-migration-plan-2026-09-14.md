@@ -831,3 +831,84 @@ E2E, klastra, workerów, S3/RustFS. `npm run lint` w tym repozytorium **nie
 działa i nie działało wcześniej** — `apps/panel` nie ma konfiguracji eslint ani
 samego eslinta w zależnościach, a CI go nie woła (woła `build` i `test`). To
 osobna usterka, nie skutek tej zmiany.
+
+## Kontynuacja — roster i zaproszenia (krok 2)
+
+Data: 18.09.2026. **Krok 2 wykonany: kontrakt HTTP rozszerzony o sześć tras,
+zaproszenia działają od wystawienia do zrealizowania, na żywym serwerze i w
+panelu. Nowy shell (krok 3), Learning (krok 4) i IAM-02 (krok 5) nietknięte.**
+Ta sama gałąź, dwa kolejne commity.
+
+**Najpierw odczyt rosteru, bo bez niego zaproszenia nie mają gdzie się pokazać.**
+Krok 1 skończył się znaleziskiem: API odpowiadało wyłącznie o wołającym, więc
+panel pokazywał historię zamiast stanu. Doszły dwie trasy i jedna zasada, która
+je rozdziela: `roster` i `grants` mówią o **organizacji**, `projects` i `access`
+o **wołającym**, i nigdy się nie mieszają — rola w rosterze to co ktoś dostał, a
+co komukolwiek wolno teraz, mówi wyłącznie świeża decyzja o dostępie. Lista
+grantów nie filtruje po zegarze: wygasły wiersz jest zwykle tym, po co ktoś ją
+otworzył. `roster` widzi też projekty, do których **sam nie ma grantu** — bo
+administrator organizacji może nadać dostęp do projektu, którego nie potrafi
+otworzyć, i bez tego nie umiałby go nawet nazwać.
+
+**Zaproszenie jest ofertą złożoną sekretowi.** Grant nazywa parę
+`(provider, subject)`, a subjectu obcego człowieka nikt nie zna, dopóki jego
+provider go nie wystawi — to jest cała przyczyna, dla której ten krok istnieje.
+Reguły i powód każdej:
+
+- **Token istnieje raz.** Mintuje go magazyn (244 bity z dwóch UUID v4), trzyma
+  wyłącznie `sha256`; jawny tekst jest w odpowiedzi, która ofertę stworzyła, i
+  nigdzie indziej. Wykradziony dokument daje skróty.
+- **`label` to wskazówka do dostarczenia, nigdy klucz tożsamości.** Nie jest z
+  nikim porównywany; realizuje ten, kto ma token. Sprawdzanie etykiety byłoby
+  uwierzytelnianiem niezweryfikowanym stringiem.
+- **Jednorazowo, ktokolwiek pyta.** Druga realizacja to 409 — i dla tego, kto
+  użył, i dla każdego innego.
+- **Dwa zegary, świadomie.** `expires_at` mówi, ile ktoś ma na przyjęcie; okno
+  grantu jest tym, co dostaje, gdy przyjmie. Oferta, która przepadła, to 410 dla
+  jej posiadacza — jedynej osoby, która może o nią zapytać.
+- **Realizacja nie nazywa organizacji.** Kto ma token, nie wie, do której należy,
+  a trasa, która kazałaby mu to powiedzieć, potwierdzałaby zgadywanie. Skrót
+  znajduje wiersz przez indeks GIN i ta sama instrukcja go blokuje, więc dwoje
+  ludzi ścigających się o jedną ofertę szereguje się, a drugie słyszy, że jest
+  zużyta.
+- **Wycofanie zrealizowanej oferty jest odmawiane, nie cichym cofnięciem.** To,
+  co powstało, jest grantem i odbiera się je `revoke_grant`.
+- **Oferty są sprzątane 30 dni po tym, jak przestały cokolwiek znaczyć.** Trwały
+  ślad jest we wpisie audytu, którego nie ma w agregacie i który nie jest
+  sprzątany.
+
+Zaproszenia siedzą w agregacie organizacji, nie w osobnej tabeli, więc realizacja
+to jedna blokada wiersza na ofertę i grant, który z niej powstaje. Pole jest
+addytywne i czytane jako nieobecne w dokumentach sprzed niego; starsze binarium
+spotkawszy nowszy dokument **odmawia** na `deny_unknown_fields`, zamiast po cichu
+zgubić oferty, których nie rozumie. Migracja 0003 dokłada wyłącznie indeks,
+którego potrzebuje wyszukanie po skrócie — i została zastosowana na żywej bazie,
+która miała już 1 i 2.
+
+W panelu: karta **Invite somebody to…** (rola, notatka, okno i osobna data
+wygaśnięcia oferty), token pokazany raz z wprost napisanym „nic tego nie pokaże
+ponownie", lista otwartych i zużytych ofert z wycofaniem, oraz **Redeem an
+invitation** — pole do wklejenia, nie link. Token w URL-u to sekret w historii
+przeglądarki, w nagłówku referer i w czacie, do którego go wklejono; jedno
+kliknięcie zamiast jednego wklejenia tego nie kupuje. Doszła też karta **People
+and teams** (prawdziwy roster, z „Grant to…", które wypełnia formularz, żeby
+64-znakowy subject nigdy nie był przepisywany ręcznie) i **Who may reach this
+project** z odbieraniem grantu.
+
+Walidacja: `scripts/iam-permission-check.py` urósł do **28 pytań i wszystkie
+trzymają** — dwanaście nowych o zaproszenia i o to, czego roster nie pokazuje.
+Jedno z nich najpierw nie przeszło i **to test był w błędzie**, nie serwer:
+student był w tym scenariuszu właścicielem organizacji, więc 201 było właściwą
+odpowiedzią; scenariusz rozpisano na dwa — właściciel może wszędzie, a edytor na
+własnym projekcie nie może. `cargo test --workspace --all-targets` — **1802
+testy, 0 niepowodzeń, 7 pominiętych**; clippy `--all-features -Dwarnings`, `cargo
+fmt --all --check`, `git diff --check`, `scripts/check-rust-boundaries.py`,
+`just openapi-check` — czysto. Kontrakt magazynu IAM na osobnej, jednorazowej
+bazie PostgreSQL: **19 testów**, w tym dwie nowe własności sprawdzane na obu
+adapterach i test rolling upgrade'u. Panel: `npm run build` i `npm run test` —
+**422 testy**. Ręcznie w przeglądarce: wystawienie zaproszenia, token raz,
+wklejenie go w drugim miejscu i wyjście z tego z rolą i oknem.
+
+Czego **nie** uruchomiono: dostarczania zaproszeń (nie ma wysyłki poczty i nie
+miało być — `label` jest wskazówką, nie adresatem); kroku 1b jako dwóch osób w
+dwóch przeglądarkach; kroków 3–5; żadnego E2E, klastra ani workerów.
