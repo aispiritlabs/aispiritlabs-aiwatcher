@@ -139,7 +139,7 @@ async fn a_project_execution_and_its_owner_both_survive_the_process_that_wrote_t
     assert!(
         matches!(
             reopened.load(&execution).await,
-            Err(StoreError::OutOfScope { .. })
+            Err(StoreError::OutOfScope(_))
         ),
         "a restart must not turn a project's run into a global one"
     );

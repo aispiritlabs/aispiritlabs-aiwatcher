@@ -155,25 +155,6 @@ pub enum StoreError {
     )]
     SingleProcessOnly,
 
-    /// An operation on an execution this store is not bound to.
-    ///
-    /// Both directions at once, deliberately. The unscoped store refusing a
-    /// project's run is what keeps the reactor, the worker, the launcher, the
-    /// timer tick, the outbox publisher and the retention sweep this binary
-    /// already runs away from it; a project store refusing a global run or
-    /// another project's is what stops a known id being a way in. There is no
-    /// fallback to the wider side — a path with no scope of its own does not
-    /// handle a scoped execution at all.
-    #[error(
-        "{execution} belongs to {holder} and this workflow store is bound to {bound}; \
-         a project's execution is never handled by another scope's path"
-    )]
-    OutOfScope {
-        execution: String,
-        bound: String,
-        holder: String,
-    },
-
     /// A start that would give an execution a second owner.
     ///
     /// Answered before the inbox, so it is a refusal rather than a duplicate: a
@@ -195,6 +176,24 @@ pub enum StoreError {
 
     #[error("{0}")]
     Backend(String),
+
+    /// An execution, a stored record, a reference or a key that belongs to a
+    /// different scope than the one asking for it.
+    ///
+    /// **One variant for both halves of the boundary**, because both answer the
+    /// same question the same way. The unscoped store refusing a project's run
+    /// is what keeps the reactor, the worker, the launcher, the timer tick, the
+    /// outbox publisher and the retention sweep this binary already runs away
+    /// from it; a project store refusing a global run, another project's, or a
+    /// manifest pointing out of its own namespace is what stops a known id or
+    /// URI being a way in. There is no fallback to the wider side.
+    ///
+    /// Its own variant rather than [`Self::Backend`] because the two answers
+    /// differ on the only question a caller asks about a refusal: a store that
+    /// was briefly unreachable is worth coming back for, and a scope will be
+    /// the same scope on the next tick.
+    #[error("{0}")]
+    OutOfScope(String),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -224,7 +223,7 @@ impl StoreError {
             Self::PayloadTooLarge { .. }
             | Self::SingleProcessOnly
             | Self::Encoding(_)
-            | Self::OutOfScope { .. }
+            | Self::OutOfScope(_)
             | Self::OwnershipConflict { .. }
             | Self::NotInThisScope { .. } => true,
             Self::VersionConflict { .. } | Self::Backend(_) | Self::Io(_) => false,

@@ -26,6 +26,15 @@
 //! store's namespace; knowing another namespace's URI is not access to it.
 //! This is a library boundary, not a project execution dispatcher or IAM gate.
 //!
+//! What a key here looks like is [`aiwatcher_execution::artifact::layout`], and
+//! it is shared rather than restated: the catalog writes the `manifest.json`
+//! beside the `data` this module writes, and two spellings of one rule is a
+//! manifest under one prefix describing bytes under another.
+//!
+//! [`ProjectArtifacts`] is how a caller gets both halves for one project at
+//! once, because a scoped byte store beside a deployment-wide catalog would
+//! record a project's outputs where anybody can read them.
+//!
 //! [`ActivityExecutor::lookup`]: aiwatcher_execution::ActivityExecutor::lookup
 
 use std::collections::BTreeMap;
@@ -34,13 +43,16 @@ use std::sync::Arc;
 use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
-use aiwatcher_execution::{ActivityError, FailureClass};
+use aiwatcher_execution::artifact::layout;
+use aiwatcher_execution::{
+    ActivityError, ArtifactCatalog, FailureClass, ObjectArtifactCatalog, StoreError,
+};
 use aiwatcher_iam::ProjectScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The key prefix every step result lives under, beside the five registries.
-pub const PREFIX: &str = "artifacts";
+pub const PREFIX: &str = layout::PREFIX;
 
 /// The scheme an artifact stored here is named by.
 ///
@@ -48,7 +60,7 @@ pub const PREFIX: &str = "artifacts";
 /// `AIWATCHER_PROMPT_STORE`, and a URI that named the endpoint would be a plan
 /// carrying a host. What this says is "resolve me through the object store this
 /// deployment configured", which is the only thing a reader may do with it.
-pub const SCHEME: &str = "object://";
+pub const SCHEME: &str = layout::SCHEME;
 
 /// One table of rows, as a step hands it on.
 pub type Rows = Vec<BTreeMap<String, Value>>;
@@ -92,7 +104,7 @@ impl Artifacts {
         Self {
             store,
             scope: None,
-            prefix: PREFIX.to_owned(),
+            prefix: layout::prefix(None),
         }
     }
 
@@ -115,11 +127,17 @@ impl Artifacts {
         Ok(Self {
             store: Arc::clone(&self.store),
             scope: Some(scope),
-            prefix: format!(
-                "{PREFIX}/scopes/{}/{}/registry",
-                scope.organization.0, scope.project.0
-            ),
+            prefix: layout::prefix(Some(scope)),
         })
+    }
+
+    /// The prefix this store writes and reads under.
+    ///
+    /// Read by [`ProjectArtifacts`], so that pairing a store with the catalog
+    /// that describes it is a comparison rather than an assumption.
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     #[must_use]
@@ -156,7 +174,7 @@ impl Artifacts {
         body: Vec<u8>,
     ) -> Result<ArtifactRef, ActivityError> {
         let digest = aiwatcher_jobs::digest(&body);
-        let key = data_key(&self.prefix, ArtifactKind::Rows, &digest);
+        let key = layout::data_key(&self.prefix, ArtifactKind::Rows, &digest);
         let size = body.len() as u64;
         self.store.put(&key, body).await.map_err(store_error)?;
         Ok(ArtifactRef {
@@ -182,7 +200,7 @@ impl Artifacts {
     /// [`ActivityError`] when the store refused the bytes.
     pub async fn put_log(&self, body: &[u8]) -> Result<ArtifactRef, ActivityError> {
         let digest = aiwatcher_jobs::digest(body);
-        let key = data_key(&self.prefix, ArtifactKind::Log, &digest);
+        let key = layout::data_key(&self.prefix, ArtifactKind::Log, &digest);
         self.store
             .put(&key, body.to_vec())
             .await
@@ -318,8 +336,7 @@ impl Artifacts {
         // Exact canonical keys, not a prefix check: traversal, encoded paths,
         // receipts and another registry must never become artifact bytes. The
         // legacy reader also cannot open project bytes, even knowing their URI.
-        if !artifact.has_digest() || key != data_key(&self.prefix, artifact.kind, &artifact.digest)
-        {
+        if !layout::addresses(&self.prefix, artifact) {
             return Err(scope_error());
         }
         Ok(key)
@@ -330,19 +347,6 @@ fn scope_error() -> ActivityError {
     ActivityError::new(
         FailureClass::Policy,
         "artifact or receipt does not belong to this storage scope",
-    )
-}
-
-/// `artifacts/<kind>/<first two hex>/<sha256>/data`.
-///
-/// The two-character shard is what keeps a bucket listing usable at a million
-/// objects; the key is immutable, and a human name for the same bytes is a
-/// dataset version pointing at this digest, never this key's identity.
-fn data_key(prefix: &str, kind: ArtifactKind, digest: &str) -> String {
-    format!(
-        "{prefix}/{}/{}/{digest}/data",
-        kind.as_str(),
-        digest.get(..2).unwrap_or("00")
     )
 }
 
@@ -367,6 +371,86 @@ fn store_error(error: aiwatcher_core::ports::PortError) -> ActivityError {
         ActivityError::transient(error.to_string())
     } else {
         ActivityError::new(FailureClass::Infrastructure, error.to_string())
+    }
+}
+
+/// The two halves of one project's artifact storage, bound together.
+///
+/// A step produces bytes and a note about them, and the two are written by
+/// different code in different crates: [`Artifacts`] stores the object, the
+/// [`ArtifactCatalog`] stores the manifest, the lineage pointer and the cache
+/// entry that finds it again. Handed out separately they can be bound to
+/// different scopes, and the failure that follows is silent in the direction
+/// that matters — a project's outputs described in the deployment-wide index,
+/// where a cache lookup for anybody answers with them.
+///
+/// So they are constructed together, from one scope, and this is the door that
+/// hands out both. [`Self::bind`] checks the two prefixes agree afterwards
+/// rather than trusting that it passed the same scope twice. Each half can
+/// still be bound on its own — that is what the existing storage tests do — so
+/// this is the shape a caller is given rather than a wall around the parts.
+///
+/// # What this is not
+///
+/// **It authorizes nothing.** No grant, no lease, no principal is read here,
+/// and possessing one of these is not permission to use it. A caller must take
+/// the scope from trusted durable execution ownership — never from a plan, a
+/// request parameter, a worker's name or a definition's author — and check the
+/// current grant *before* it asks this pair anything, a cache lookup included:
+/// a hit is an answer about a project's data whether or not any work follows.
+///
+/// Nothing in this process constructs one on a production path. The reactors
+/// wired in [`crate::execution::spawn`] are deployment-wide and stay that way
+/// until execution ownership, claims and streams are isolated too.
+#[derive(Clone, Debug)]
+pub struct ProjectArtifacts {
+    artifacts: Artifacts,
+    catalog: Arc<dyn ArtifactCatalog>,
+    scope: ProjectScope,
+}
+
+impl ProjectArtifacts {
+    /// The byte store and the catalog for one project, over one object store.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivityError`] of class `Policy` when either half refuses the scope,
+    /// or when the two do not agree on the prefix they would write under —
+    /// which is not reachable today and is checked because the alternative is
+    /// noticing it as an artifact nobody can open.
+    pub fn bind(store: &Arc<dyn ObjectStore>, scope: ProjectScope) -> Result<Self, ActivityError> {
+        let artifacts = Artifacts::new(Arc::clone(store)).for_project(scope)?;
+        let catalog = ObjectArtifactCatalog::new(Arc::clone(store))
+            .for_project(scope)
+            .map_err(|error: StoreError| {
+                ActivityError::new(FailureClass::Policy, error.to_string())
+            })?;
+        if catalog.prefix() != artifacts.prefix() {
+            return Err(scope_error());
+        }
+        Ok(Self {
+            artifacts,
+            catalog: Arc::new(catalog) as Arc<dyn ArtifactCatalog>,
+            scope,
+        })
+    }
+
+    /// Where this project's bytes go.
+    #[must_use]
+    pub const fn artifacts(&self) -> &Artifacts {
+        &self.artifacts
+    }
+
+    /// What describes them, and what a cache key resolves to.
+    #[must_use]
+    pub const fn catalog(&self) -> &Arc<dyn ArtifactCatalog> {
+        &self.catalog
+    }
+
+    /// The project both halves are bound to.
+    #[must_use]
+    pub const fn scope(&self) -> ProjectScope {
+        self.scope
     }
 }
 

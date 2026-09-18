@@ -8,7 +8,20 @@
 //!
 //! Two adapters, one port: [`memory`] for tests and a development run that
 //! keeps no lineage across a restart, [`object`] for everything else, under the
-//! `artifacts/` prefix beside the bytes it describes.
+//! `artifacts/` prefix beside the bytes it describes. What that prefix looks
+//! like — global or one project's — is [`layout`], shared with the writer of
+//! the bytes so that a manifest and the object it describes cannot end up
+//! under two different rules.
+//!
+//! **A catalog may be bound to one project.** [`object::ObjectArtifactCatalog::for_project`]
+//! moves every family it writes below
+//! `artifacts/scopes/<organization>/<project>/registry/`, beside those bytes,
+//! and refuses every reference that is not this namespace's own — on the way
+//! in and on the way back out, because a record somebody swapped underneath is
+//! the one that would otherwise answer with somebody else's. The binding is
+//! storage isolation and **not** authorization: the scope has to come from
+//! trusted durable execution ownership, and the current grant and lease are
+//! the caller's to check before it asks anything, the cache included.
 //!
 //! **Deleting the index loses nothing authoritative.** Dropping the cache must
 //! cost a rerun and never a result, so a hit is recorded in the workflow
@@ -146,6 +159,7 @@ pub trait ArtifactCatalog: Send + Sync + std::fmt::Debug {
     async fn invalidate(&self, cache_key: &str, at: OffsetDateTime) -> crate::Result<()>;
 }
 
+pub mod layout;
 pub mod memory;
 pub mod object;
 

@@ -674,15 +674,16 @@ fn execution_parts(error: &aiwatcher_execution::HandleError) -> (StatusCode, &'s
             (StatusCode::CONFLICT, "version_conflict")
         }
         // A scope boundary, not a bad moment. The store answered: this
-        // execution belongs to somebody else, and it will belong to them on the
-        // next request too — so 503 would be a promise to come back for
-        // something that never changes, which is the retry loop
-        // `says_the_same_next_time` exists to prevent one layer down. 404 is
-        // also the honest answer to whoever asked: a run they may not reach is
-        // a run they have, and naming it any other way is a way to learn that
-        // an id exists.
+        // execution — or this reference, or this key — belongs to another
+        // scope, and it will belong to it on the next request too, so 503 would
+        // be a promise to come back for something that never changes. That is
+        // the retry loop `says_the_same_next_time` exists to prevent one layer
+        // down, and it is why 502 is not the answer either: nothing upstream
+        // failed. 404 is what whoever asked actually has — a run they may not
+        // reach is a run they do not have — and naming it any other way is a
+        // way to learn that an id exists.
         HandleError::Store(
-            aiwatcher_execution::StoreError::OutOfScope { .. }
+            aiwatcher_execution::StoreError::OutOfScope(_)
             | aiwatcher_execution::StoreError::OwnershipConflict { .. }
             | aiwatcher_execution::StoreError::NotInThisScope { .. },
         ) => (StatusCode::NOT_FOUND, "not_found"),

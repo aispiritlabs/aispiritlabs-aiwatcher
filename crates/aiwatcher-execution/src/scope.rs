@@ -301,12 +301,12 @@ impl ScopeBinding {
         execution: &ExecutionId,
         recorded: Option<&ExecutionOwnership>,
     ) -> Result<T> {
-        Err(StoreError::OutOfScope {
-            execution: execution.to_string(),
-            bound: self.scope.label(),
-            holder: recorded
-                .map_or_else(|| ExecutionScope::Global.label(), ExecutionOwnership::label),
-        })
+        let holder = recorded.map_or_else(|| ExecutionScope::Global.label(), ExecutionOwnership::label);
+        Err(StoreError::OutOfScope(format!(
+            "{execution} belongs to {holder} and this workflow store is bound to {}; \
+             a project's execution is never handled by another scope's path",
+            self.scope.label(),
+        )))
     }
 
     /// The check every per-execution operation makes first.
@@ -535,7 +535,7 @@ mod tests {
             .appending(&execution(), Some(&owner(one, "alice")), None, false)
             .expect_err("an adoption");
         assert!(
-            matches!(refused, StoreError::OutOfScope { .. }),
+            matches!(refused, StoreError::OutOfScope(_)),
             "{refused}"
         );
     }
@@ -550,7 +550,7 @@ mod tests {
             .appending(&execution(), None, Some(&owned), false)
             .expect_err("a global append to an owned run");
         assert!(
-            matches!(refused, StoreError::OutOfScope { .. }),
+            matches!(refused, StoreError::OutOfScope(_)),
             "{refused}"
         );
 
@@ -571,7 +571,7 @@ mod tests {
             .appending(&execution(), Some(&owner(other, "alice")), None, true)
             .expect_err("somebody else's scope");
         assert!(
-            matches!(refused, StoreError::OutOfScope { .. }),
+            matches!(refused, StoreError::OutOfScope(_)),
             "{refused}"
         );
     }

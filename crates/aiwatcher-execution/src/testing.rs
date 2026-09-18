@@ -371,7 +371,7 @@ fn bound(
 
 /// Whether a refusal is the scope boundary saying no.
 fn is_out_of_scope(error: &StoreError) -> bool {
-    matches!(error, StoreError::OutOfScope { .. })
+    matches!(error, StoreError::OutOfScope(_))
 }
 
 /// A cutoff every write so far is before. The sweep's own clock, moved rather

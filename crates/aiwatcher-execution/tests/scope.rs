@@ -159,7 +159,7 @@ async fn the_handler_a_deployment_already_runs_reaches_nothing_of_a_project_s_ru
     assert!(
         matches!(
             refused,
-            aiwatcher_execution::HandleError::Store(StoreError::OutOfScope { .. })
+            aiwatcher_execution::HandleError::Store(StoreError::OutOfScope(_))
         ),
         "{refused}"
     );
@@ -226,7 +226,7 @@ async fn one_idempotency_key_in_two_projects_is_two_runs_with_two_owners() {
         .await
         .expect_err("another project's execution");
     assert!(
-        matches!(refused, StoreError::OutOfScope { .. }),
+        matches!(refused, StoreError::OutOfScope(_)),
         "{refused}"
     );
     let refused = their_store
@@ -234,7 +234,7 @@ async fn one_idempotency_key_in_two_projects_is_two_runs_with_two_owners() {
         .await
         .expect_err("another project's execution");
     assert!(
-        matches!(refused, StoreError::OutOfScope { .. }),
+        matches!(refused, StoreError::OutOfScope(_)),
         "{refused}"
     );
 }

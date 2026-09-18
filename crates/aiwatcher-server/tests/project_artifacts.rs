@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use aiwatcher_core::ports::{AttemptArtifacts, PortError, PortResult};
 use aiwatcher_core::prompts::{ObjectEntry, ObjectStore};
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
-use aiwatcher_execution::FailureClass;
+use aiwatcher_execution::{ArtifactCatalog, FailureClass};
 use aiwatcher_iam::{OrganizationId, ProjectId, ProjectScope};
 use aiwatcher_prompts::adapters::{fs::FileObjectStore, memory::MemoryObjectStore};
-use aiwatcher_server::execution::artifacts::{Artifacts, Receipt, SCHEME};
+use aiwatcher_server::execution::artifacts::{Artifacts, ProjectArtifacts, Receipt, SCHEME};
+use aiwatcher_server::execution::measure::{Stored, summarise};
 use async_trait::async_trait;
 use time::OffsetDateTime;
 
@@ -386,4 +387,226 @@ async fn project_bytes_are_verified_and_worker_row_validation_still_applies() {
         AttemptArtifacts::put_rows(&project, "rows", vec![serde_json::json!(1)]).await,
         Err(PortError::Rejected { .. })
     ));
+}
+
+/// One project attempt's whole footprint: the bytes, the receipt that says an
+/// attempt produced them, and the three catalog families that describe them.
+async fn one_attempt(
+    pair: &ProjectArtifacts,
+    body: &str,
+    idempotency_key: &str,
+) -> aiwatcher_core::ArtifactRef {
+    let artifact = pair
+        .artifacts()
+        .put_spelled_rows("rows", body.as_bytes().to_vec())
+        .await
+        .unwrap();
+    pair.artifacts()
+        .put_receipt(&Receipt {
+            idempotency_key: idempotency_key.to_owned(),
+            artifact: artifact.clone(),
+            rows: 1,
+            runtime_digest: "runtime-encoding".to_owned(),
+            stored_at: OffsetDateTime::UNIX_EPOCH,
+        })
+        .await
+        .unwrap();
+    aiwatcher_execution::artifact::object::record_outputs(
+        pair.catalog().as_ref(),
+        aiwatcher_execution::Provenance {
+            execution_id: aiwatcher_execution::ExecutionId::new("execution-1"),
+            step_id: "read".to_owned(),
+            attempt: 1,
+        },
+        &[],
+        std::slice::from_ref(&artifact),
+        Some("step/read/plan-1"),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .await
+    .unwrap();
+    artifact
+}
+
+#[tokio::test]
+async fn the_pair_a_project_is_given_binds_both_halves_to_one_scope() {
+    // A scoped byte store beside a deployment-wide catalog would record a
+    // project's outputs where anybody's cache lookup answers with them, so the
+    // two are constructed together or not at all.
+    let scratch = Scratch::new();
+    let store: Arc<dyn ObjectStore> = Arc::new(FileObjectStore::open(&scratch.0).await.unwrap());
+    let mine = scope();
+    let theirs = scope();
+    let pair = ProjectArtifacts::bind(&store, mine).unwrap();
+    assert_eq!(pair.scope(), mine);
+    assert_eq!(
+        pair.artifacts().project_scope(),
+        Some(mine),
+        "the byte store is bound"
+    );
+
+    let artifact = one_attempt(&pair, r#"[{"answer":1}]"#, "execution-1/read/1").await;
+    assert!(artifact.uri.contains(&mine.project.0.to_string()));
+
+    // Its own catalog describes it; nobody else's does, and the deployment-wide
+    // one will not even take the pointer.
+    let described = pair
+        .catalog()
+        .by_digest(&artifact.digest, ArtifactKind::Rows)
+        .await
+        .unwrap()
+        .expect("its own manifest");
+    assert_eq!(described.artifact, artifact);
+    let others = [ProjectArtifacts::bind(&store, theirs).unwrap()];
+    for other in &others {
+        assert!(
+            other
+                .catalog()
+                .by_digest(&artifact.digest, ArtifactKind::Rows)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            other
+                .catalog()
+                .cached("step/read/plan-1", OffsetDateTime::UNIX_EPOCH)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            other
+                .catalog()
+                .produced_by(&aiwatcher_execution::ExecutionId::new("execution-1"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            other
+                .artifacts()
+                .read_bytes(&artifact)
+                .await
+                .unwrap_err()
+                .class,
+            FailureClass::Policy
+        );
+    }
+    let global = aiwatcher_execution::ObjectArtifactCatalog::new(Arc::clone(&store));
+    assert!(
+        global
+            .by_digest(&artifact.digest, ArtifactKind::Rows)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        global
+            .record(aiwatcher_execution::CatalogedArtifact {
+                artifact: artifact.clone(),
+                produced_by: None,
+                inputs: Vec::new(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            })
+            .await
+            .is_err(),
+        "the deployment-wide catalog will not describe a project's artifact"
+    );
+}
+
+#[tokio::test]
+async fn a_projects_whole_footprint_is_measured_as_that_projects_and_deleted_by_nothing() {
+    // Every family an attempt writes — the bytes, the receipt, the manifest,
+    // the lineage pointer and the cache entry — lands under one prefix, and the
+    // hourly walk counts them as that project's. Counted as the deployment's,
+    // they would be a tenant's storage reported as everybody's; and a collector
+    // built one day on "no deployment-wide history names this" would read the
+    // absence of global history as permission to delete them.
+    let scratch = Scratch::new();
+    let store: Arc<dyn ObjectStore> = Arc::new(FileObjectStore::open(&scratch.0).await.unwrap());
+    let mine = scope();
+    let sibling = ProjectScope {
+        project: ProjectId::new(),
+        ..mine
+    };
+    let body = r#"[{"answer":1}]"#;
+
+    // The deployment-wide namespace writes the same bytes under the same
+    // attempt key and the same cache key.
+    let root = Artifacts::new(Arc::clone(&store));
+    let global = root
+        .put_spelled_rows("rows", body.as_bytes().to_vec())
+        .await
+        .unwrap();
+    root.put_receipt(&receipt(global.clone())).await.unwrap();
+    aiwatcher_execution::artifact::object::record_outputs(
+        &aiwatcher_execution::ObjectArtifactCatalog::new(Arc::clone(&store)),
+        aiwatcher_execution::Provenance {
+            execution_id: aiwatcher_execution::ExecutionId::new("execution-1"),
+            step_id: "read".to_owned(),
+            attempt: 1,
+        },
+        &[],
+        std::slice::from_ref(&global),
+        Some("step/read/plan-1"),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .await
+    .unwrap();
+
+    let mut projects = Vec::new();
+    for scope in [mine, sibling] {
+        let pair = ProjectArtifacts::bind(&store, scope).unwrap();
+        let artifact = one_attempt(&pair, body, "execution-1/read/1").await;
+        assert_eq!(artifact.digest, global.digest, "one content address");
+        assert_ne!(artifact.uri, global.uri, "and a key per namespace");
+        projects.push((scope, pair));
+    }
+
+    let entries = store.list("artifacts/").await.unwrap();
+    let measured = summarise(&entries, OffsetDateTime::UNIX_EPOCH);
+    let families = 5; // data, receipt, manifest, lineage pointer, cache entry
+    assert_eq!(
+        measured.global.objects, families,
+        "the deployment's count is the deployment's alone"
+    );
+    for (scope, _) in &projects {
+        assert_eq!(
+            measured.project(*scope).expect("its own bucket").objects,
+            families,
+            "every family a project writes is that project's"
+        );
+    }
+    assert_eq!(measured.unattributed, Stored::default());
+    assert_eq!(measured.elsewhere, Stored::default());
+    assert_eq!(
+        entries.len() as u64,
+        measured.global.objects
+            + projects
+                .iter()
+                .map(|(scope, _)| measured.project(*scope).expect("a bucket").objects)
+                .sum::<u64>(),
+        "the buckets partition the walk"
+    );
+
+    // The walk is a measurement. Everything it counted is still there
+    // afterwards, and every namespace still answers for its own.
+    assert_eq!(store.list("artifacts/").await.unwrap().len(), entries.len());
+    assert_eq!(root.read_bytes(&global).await.unwrap(), body.as_bytes());
+    for (_, pair) in &projects {
+        let described = pair
+            .catalog()
+            .produced_by(&aiwatcher_execution::ExecutionId::new("execution-1"))
+            .await
+            .unwrap();
+        assert_eq!(described.len(), 1);
+        assert_eq!(
+            pair.artifacts()
+                .read_bytes(&described[0].artifact)
+                .await
+                .unwrap(),
+            body.as_bytes()
+        );
+    }
 }
