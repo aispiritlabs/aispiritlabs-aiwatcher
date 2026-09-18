@@ -495,14 +495,24 @@ impl AskedIndex {
         self.state.lock().await.measured.of(project, evaluation_id)
     }
 
-    /// Every call a witness said what it asked in that ended at or after
-    /// `from_ms`, whichever page or memory holds it, each once — and how far
-    /// back the index reads.
+    /// Every call of one project a witness said what it asked in that ended at
+    /// or after `from_ms`, whichever page or memory holds it, each once — and
+    /// how far back the index reads.
+    ///
+    /// `project` is the side being read — `None` for the global one, which is
+    /// every read a production caller makes today. One log holds every side, so
+    /// a read that did not name one would hand a step somebody else's calls;
+    /// that is the fold knowing its scope rather than a grant check, which is
+    /// a separate question asked of IAM.
     ///
     /// # Errors
     ///
     /// The store's own failure, or a page that no longer reads.
-    pub async fn since(&self, from_ms: i64) -> Result<AskedSince, PortError> {
+    pub async fn since(
+        &self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        from_ms: i64,
+    ) -> Result<AskedSince, PortError> {
         let (pending, reaches_from_ms) = {
             let state = self.state.lock().await;
             (state.pending.clone(), state.reach.reads_from_ms)
@@ -524,7 +534,7 @@ impl AskedIndex {
                 let page: Page =
                     serde_json::from_slice(&bytes).map_err(|error| storage(&entry.key, error))?;
                 for call in page.calls {
-                    if call.at_ms >= from_ms {
+                    if call.at_ms >= from_ms && call.project == project {
                         calls.entry(call.position).or_insert(call);
                     }
                 }
@@ -532,7 +542,7 @@ impl AskedIndex {
             hour += 1;
         }
         for call in pending {
-            if call.at_ms >= from_ms {
+            if call.at_ms >= from_ms && call.project == project {
                 calls.entry(call.position).or_insert(call);
             }
         }
@@ -607,6 +617,62 @@ mod tests {
         ]
     }
 
+    /// A read names the side it is taken over, so a step holding one project's
+    /// question is never handed another project's calls.
+    #[tokio::test]
+    async fn a_read_of_the_index_answers_for_one_side_and_never_across_two() {
+        let scope = |last: u8| {
+            aiwatcher_core::ProjectScope::new(
+                uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+                uuid::Uuid::parse_str(&format!("0198c0de-0000-7000-8000-0000000000{last:02x}"))
+                    .expect("uuid"),
+            )
+        };
+        let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::default());
+        let index = AskedIndex::new(Arc::clone(&store), "projector");
+        index.reads_contiguous_positions(true).await;
+        for (project, recorded) in [(Some(scope(0xaa)), 1), (Some(scope(0xbb)), 5), (None, 9)]
+            .into_iter()
+            .flat_map(|(project, first)| {
+                relayed(
+                    &format!("gateway-{first}"),
+                    &format!("case-{first}"),
+                    first,
+                    0,
+                    &"a".repeat(32),
+                )
+                .into_iter()
+                .map(move |event| (project, event))
+            })
+        {
+            let mut recorded = recorded;
+            recorded.metadata.project = project;
+            index.apply(&recorded).await;
+        }
+        assert!(index.flush(true).await, "written to the store");
+
+        // One log, one set of pages, three sides — each read answering for its
+        // own, from the store as well as from memory.
+        let restarted = AskedIndex::new(Arc::clone(&store), "projector");
+        restarted.reads_contiguous_positions(true).await;
+        for (project, runs) in [
+            (Some(scope(0xaa)), vec!["gateway-1"]),
+            (Some(scope(0xbb)), vec!["gateway-5"]),
+            (None, vec!["gateway-9"]),
+        ] {
+            let read = restarted.since(project, 0).await.expect("reads");
+            assert_eq!(
+                read.calls
+                    .iter()
+                    .map(|call| call.run_id.as_str())
+                    .collect::<Vec<_>>(),
+                runs,
+                "{project:?}"
+            );
+            assert!(read.calls.iter().all(|call| call.project == project));
+        }
+    }
+
     #[tokio::test]
     async fn a_call_a_witness_relayed_is_read_back_after_a_restart_from_the_moment_asked_for() {
         let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::default());
@@ -622,7 +688,7 @@ mod tests {
             index.flush(false).await,
             "nothing due is nothing written, and nothing held back"
         );
-        let held = index.since(0).await.expect("reads");
+        let held = index.since(None, 0).await.expect("reads");
         assert_eq!(
             held.calls.len(),
             2,
@@ -638,7 +704,7 @@ mod tests {
             restarted.apply(&recorded).await;
         }
         let from = datetime!(2026-09-14 09:05:00 UTC).unix_timestamp() * 1_000;
-        let read = restarted.since(from).await.expect("reads");
+        let read = restarted.since(None, from).await.expect("reads");
         assert_eq!(
             read.reaches_from_ms, None,
             "it read the log from its first event"
@@ -660,7 +726,7 @@ mod tests {
                 asked_normalized: vec!["b".repeat(32)],
             }]
         );
-        assert_eq!(restarted.since(0).await.expect("reads").calls.len(), 2);
+        assert_eq!(restarted.since(None, 0).await.expect("reads").calls.len(), 2);
     }
 
     #[tokio::test]
@@ -718,7 +784,7 @@ mod tests {
             index.apply(&recorded).await;
         }
         assert!(index.flush(true).await);
-        let read = index.since(0).await.expect("reads");
+        let read = index.since(None, 0).await.expect("reads");
         assert!(read.calls.is_empty(), "the page past a day is gone");
         let now_ms =
             i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
@@ -744,7 +810,7 @@ mod tests {
         for recorded in relayed("gateway-2", "case-2", 100, 900, &"c".repeat(32)) {
             index.apply(&recorded).await;
         }
-        let read = index.since(0).await.expect("reads");
+        let read = index.since(None, 0).await.expect("reads");
         assert_eq!(
             read.reaches_from_ms,
             Some(datetime!(2026-09-14 09:15:00 UTC).unix_timestamp() * 1_000),

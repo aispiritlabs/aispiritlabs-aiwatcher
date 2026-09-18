@@ -1269,7 +1269,7 @@ impl ActivityExecutor for TracesExecutor {
                         })
                         .unwrap_or_else(|| declared.declared_at.saturating_mul(1_000));
                     let from_ms = start_ms.saturating_sub(before.saturating_mul(1_000));
-                    let read = index.since(from_ms).await.map_err(|error| {
+                    let read = index.since(None, from_ms).await.map_err(|error| {
                         if error.is_retryable() {
                             ActivityError::transient(error.to_string())
                         } else {
