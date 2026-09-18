@@ -89,6 +89,10 @@ utoipa.workspace = true
 [dev-dependencies]
 # The unit tests that drive a runtime: the reactors, the seed and the archive.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `tests/system.rs` asks the real router what this deployment is, over the
+# wiring the binary uses, without opening a socket — the same seam
+# `aiwatcher-api`'s own tests use.
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

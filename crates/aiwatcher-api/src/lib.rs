@@ -20,6 +20,7 @@
 //! | `/auth` | — | about the caller. Its layer runs in front of everything |
 //! | `/events` (POST) | — | the way in for a client that cannot reach the log directly |
 //! | `/labs` | object store | a workshop's exercise: the brief, and the card and cohort it pins — see [`labs`] |
+//! | `/system` | configuration | what this instance has wired, and the variable that decides each — see [`system`] |
 //!
 //! ADR_0021, ADR_0022, ADR_0025, ADR_0026.
 
@@ -65,6 +66,7 @@ pub mod scorecards;
 pub mod scoring;
 pub mod state;
 pub mod stream;
+pub mod system;
 pub mod training;
 mod training_scope;
 pub mod worker;

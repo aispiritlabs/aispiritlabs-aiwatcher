@@ -126,6 +126,12 @@ pub struct AppState {
     /// registration naming the variable. Read with no cluster credential:
     /// checking a name against a list needs none.
     pub pod_templates: Option<Arc<aiwatcher_execution::pods::PodTemplates>>,
+    /// What a step's pod *is* here (`AIWATCHER_POD_RUNTIME`): a Job in a
+    /// cluster, a container on this host, or a bare process. Nothing in this
+    /// crate decides anything with it — the launcher lives in the work role —
+    /// and it is here because [`crate::system`] is asked what this instance is,
+    /// and a capability nothing in this state knows would have to be guessed.
+    pub pod_runtime: aiwatcher_execution::pods::PodRuntime,
     /// The query engine this deployment runs (`AIWATCHER_QUERY_ENGINE`). Read
     /// by the compile that starts runs, so a plan written for another engine
     /// is refused when it is started rather than left for nothing to claim.
@@ -358,6 +364,7 @@ impl std::fmt::Debug for AppState {
                 "pod_templates",
                 &self.pod_templates.as_ref().map(|templates| templates.len()),
             )
+            .field("pod_runtime", &self.pod_runtime)
             .field("judge_provider", &self.judge_provider)
             .field("judge_concurrency", &self.judge_concurrency)
             .field("scorer_concurrency", &self.scorer_concurrency)

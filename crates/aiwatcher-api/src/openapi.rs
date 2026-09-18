@@ -389,6 +389,11 @@ use utoipa::OpenApi;
         crate::ingest::IngestResponse,
         crate::stream::LiveFrame,
         crate::error::ErrorBody,
+        crate::system::Inventory,
+        crate::system::Capability,
+        crate::system::CapabilityGroup,
+        crate::system::CapabilityState,
+        crate::system::Setting,
     )),
     tags(
         (name = "metrics", description = "Aggregates over retained runs"),
@@ -407,6 +412,7 @@ use utoipa::OpenApi;
         (name = "ingest", description = "HTTP fallback for publishing events"),
         (name = "auth", description = "Single sign-on: the login flow and the current caller"),
         (name = "health", description = "Kubernetes probes"),
+        (name = "system", description = "What this instance has configured, and the variable that decides each"),
     ),
 )]
 pub struct ApiDoc;
@@ -449,6 +455,7 @@ impl ApiDoc {
             crate::auth::openapi(),
             crate::iam::openapi(),
             crate::labs::openapi(),
+            crate::system::openapi(),
         ] {
             document.merge(module);
         }
@@ -585,6 +592,7 @@ mod tests {
             ("auth", crate::auth::openapi()),
             ("iam", crate::iam::openapi()),
             ("labs", crate::labs::openapi()),
+            ("system", crate::system::openapi()),
         ];
         let merged = operations(&ApiDoc::document());
 

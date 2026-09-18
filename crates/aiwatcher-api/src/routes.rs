@@ -85,6 +85,12 @@ pub fn router(state: AppState) -> Router {
         // ── The caller, rather than the data ─────────────────────────────────
         .merge(crate::auth::router())
         .merge(crate::iam::router())
+        // ── The instance, rather than anything it holds ──────────────────────
+        //
+        // An inventory of what this deployment wired, which is otherwise only
+        // readable one 501 at a time. `admin`, because it is an operator's
+        // question and not a run reader's.
+        .merge(crate::system::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::authenticate,

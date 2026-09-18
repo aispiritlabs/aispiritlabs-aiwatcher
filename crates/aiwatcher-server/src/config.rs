@@ -178,42 +178,27 @@ impl FromStr for ConversationPolicyMode {
 /// and the default. The other two are for a machine with no cluster, and the
 /// difference between them is what the step's own declaration still means:
 /// `Docker` runs the **image** under the template's **limits**, `Process` runs
-/// neither and needs nothing installed. Both keep the launcher, the derived
-/// name, the claim by key, the watch and the log. The chart offers only the
-/// first: a release in a cluster asking for either would be running steps
-/// beside the API.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PodRuntime {
-    #[default]
-    Kubernetes,
-    Docker,
-    Process,
-}
+/// neither and needs nothing installed.
+///
+/// Re-exported rather than defined here, because the API reports it and
+/// `aiwatcher-api` sits above this crate: it lives beside the templates in
+/// [`aiwatcher_execution::pods`], which is where the rest of what a pod means
+/// already is.
+pub use aiwatcher_execution::pods::PodRuntime;
 
-impl PodRuntime {
-    /// Whether a pod here is a pod in a cluster — which is what needs a client
-    /// and what puts it in a namespace.
-    #[must_use]
-    pub const fn in_cluster(self) -> bool {
-        matches!(self, Self::Kubernetes)
-    }
-}
-
-impl FromStr for PodRuntime {
-    type Err = ConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "kubernetes" | "k8s" | "cluster" | "pods" => Ok(Self::Kubernetes),
-            "docker" | "container" | "containers" => Ok(Self::Docker),
-            "process" | "processes" | "local" | "host" => Ok(Self::Process),
-            other => Err(ConfigError::Invalid {
-                name: "AIWATCHER_POD_RUNTIME",
-                value: other.to_owned(),
-                expected: "one of kubernetes, docker, process",
-            }),
-        }
-    }
+/// What `AIWATCHER_POD_RUNTIME` says, or the refusal naming it.
+///
+/// A function rather than a `FromStr`, because the words are the pod module's
+/// and the variable is this one's: parsing moved down to
+/// [`aiwatcher_execution::pods`] when the API started reporting the answer, and
+/// the refusal that names what to set stayed here with everything else that
+/// reads an environment.
+fn pod_runtime(raw: String) -> Result<PodRuntime, ConfigError> {
+    PodRuntime::parse(&raw).ok_or(ConfigError::Invalid {
+        name: "AIWATCHER_POD_RUNTIME",
+        value: raw,
+        expected: "one of kubernetes, docker, process",
+    })
 }
 
 /// Where a managed execution's history lives.
@@ -1092,7 +1077,7 @@ impl Config {
         config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");
         config.pod_api_url = var("AIWATCHER_POD_API_URL");
         if let Some(raw) = var("AIWATCHER_POD_RUNTIME") {
-            config.pod_runtime = raw.parse()?;
+            config.pod_runtime = pod_runtime(raw)?;
         }
         if let Some(raw) = var("AIWATCHER_POD_PROCESS_LIMIT") {
             config.pod_process_limit =
@@ -2188,7 +2173,7 @@ mod tests {
             ("host", PodRuntime::Process),
         ] {
             assert_eq!(
-                spelling.parse::<PodRuntime>().expect(spelling),
+                super::pod_runtime(spelling.to_owned()).expect(spelling),
                 runtime,
                 "{spelling}"
             );
@@ -2198,8 +2183,7 @@ mod tests {
                 "{spelling}"
             );
         }
-        let error = "nomad"
-            .parse::<PodRuntime>()
+        let error = super::pod_runtime("nomad".to_owned())
             .expect_err("a backend nothing implements")
             .to_string();
         assert!(

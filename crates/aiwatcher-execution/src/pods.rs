@@ -39,6 +39,63 @@ pub const OWNED_ENV: [&str; 4] = [
     "AIWATCHER_TOKEN",
 ];
 
+/// What a step's pod *is* on this deployment (`AIWATCHER_POD_RUNTIME`).
+///
+/// Beside the templates rather than in the server's configuration, because it
+/// is the same kind of fact: the operator's answer to "what does a pod mean
+/// here", read by whoever launches one and reported by whoever is asked what
+/// this instance is. A plan never knows it — a `container_job` step names a
+/// template and an image, and the `plan_id`, the derived name and the claim are
+/// identical for all three.
+///
+/// `Docker` runs the **image** under the template's **limits**, `Process` runs
+/// neither and needs nothing installed. Both keep the launcher, the derived
+/// name, the claim by key, the watch and the log. The chart offers only the
+/// first: a release in a cluster asking for either would be running steps
+/// beside the API.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PodRuntime {
+    #[default]
+    Kubernetes,
+    Docker,
+    Process,
+}
+
+impl PodRuntime {
+    /// Every spelling, in the order a refusal lists them.
+    pub const ALL: [Self; 3] = [Self::Kubernetes, Self::Docker, Self::Process];
+
+    /// The word a deployment chooses it by, and the word an inventory reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kubernetes => "kubernetes",
+            Self::Docker => "docker",
+            Self::Process => "process",
+        }
+    }
+
+    /// Whether a pod here is a pod in a cluster — which is what needs a client
+    /// and what puts it in a namespace.
+    #[must_use]
+    pub const fn in_cluster(self) -> bool {
+        matches!(self, Self::Kubernetes)
+    }
+
+    /// What a deployment wrote, or `None` — the caller names the variable,
+    /// because the same words are read from a file in one place and from the
+    /// environment in another.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "kubernetes" | "k8s" | "cluster" | "pods" => Some(Self::Kubernetes),
+            "docker" | "container" | "containers" => Some(Self::Docker),
+            "process" | "processes" | "local" | "host" => Some(Self::Process),
+            _ => None,
+        }
+    }
+}
+
 /// Five minutes from the Job's creation to the pod's claim, unless the
 /// template says otherwise — an image pull and a scheduling decision, which is
 /// minutes on a cold node and seconds on a warm one.
@@ -633,6 +690,16 @@ impl PodTemplates {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&PodTemplate> {
         self.templates.get(name)
+    }
+
+    /// What a step may name, and the only part of a template that may be said
+    /// out loud.
+    ///
+    /// A name is a Kubernetes label by construction (see [`PodTemplate::problems`]);
+    /// the template beside it is the operator's own pod fragment, where an
+    /// `envFrom`, a volume and a service account live.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.templates.keys().map(String::as_str)
     }
 
     #[must_use]

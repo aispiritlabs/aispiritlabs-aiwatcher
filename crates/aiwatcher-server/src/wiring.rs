@@ -1061,6 +1061,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
             ))
         }),
         pod_templates: build_pod_templates(&config)?,
+        pod_runtime: config.pod_runtime,
         schedules: registries
             .objects
             .as_ref()

@@ -158,6 +158,19 @@ impl Fixture {
         Self::build(false, true, Some(runner), None, None)
     }
 
+    /// The two together: a real identity, and nothing an object store would
+    /// have given this deployment.
+    ///
+    /// `without_registry` alone leaves `auth` unset, which makes every caller
+    /// anonymous and every role check pass — so a route that needs a role
+    /// cannot be told apart from one that does not. The system inventory needs
+    /// both halves at once: a role to check, and a deployment with something
+    /// genuinely missing to report.
+    async fn behind_a_proxy_without_registry() -> Self {
+        let auth = Self::proxy_authenticator().await;
+        Self::build(false, false, None, Some(auth), None)
+    }
+
     /// An instance behind an authenticating reverse proxy, which is what
     /// `AIWATCHER_AUTH_MODE=proxy` produces. Chosen for these tests because it
     /// is the one mode that establishes a real identity with no network at
@@ -248,6 +261,7 @@ impl Fixture {
             // registration. `with_pod_templates` is the deployment that has
             // some.
             pod_templates: None,
+            pod_runtime: aiwatcher_execution::pods::PodRuntime::default(),
             schedules: registry_enabled.then(|| {
                 Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::new(
                     MemoryObjectStore::new(),
@@ -8877,4 +8891,285 @@ async fn sample_publication_is_explicit_authorized_and_visible_after_reading_aga
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ── The instance, rather than anything it holds ──────────────────────────────
+
+/// Every capability on the inventory, by id.
+fn capabilities(body: &Value) -> std::collections::BTreeMap<String, Value> {
+    body["capabilities"]
+        .as_array()
+        .expect("the inventory carries capabilities")
+        .iter()
+        .map(|capability| {
+            (
+                capability["id"].as_str().expect("an id").to_owned(),
+                capability.clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn reading_what_this_instance_is_needs_the_admin_role() {
+    // An inventory of the deployment is an operator's question. Everything on
+    // it — which stores are wired, which third parties this instance reaches,
+    // which provider it trusts — helps somebody running this and somebody
+    // attacking it, and helps nobody reading a run.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, _) = fixture.get_as("/api/v1/system", "reader", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = fixture
+        .get_as("/api/v1/system", "author", "aiwatcher-editors")
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "an editor writes prompts; that is not the same as reading the deployment"
+    );
+    let (status, body) = fixture
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body["version"].as_str().expect("a version").is_empty());
+}
+
+#[tokio::test]
+async fn every_capability_names_the_variable_that_decides_it() {
+    // The property that makes this route worth serving at all: a reader who
+    // finds a row saying `not_configured` must be able to act on it without
+    // reading the source. A row that says something is missing and not what to
+    // set is a row that sends somebody to a shell on the pod.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = capabilities(&body);
+    assert!(rows.len() > 10, "the inventory is nearly empty: {body}");
+    for (id, capability) in &rows {
+        let variables = capability["variables"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{id} names no variables at all"));
+        assert!(!variables.is_empty(), "{id} names no variable");
+        for variable in variables {
+            let name = variable.as_str().expect("a variable is a name");
+            assert!(
+                name.starts_with("AIWATCHER_"),
+                "{id} names {name}, which is not one of this system's variables"
+            );
+        }
+        assert!(
+            !capability["note"].as_str().unwrap_or_default().is_empty(),
+            "{id} says nothing about what this deployment does without it"
+        );
+        assert!(
+            matches!(
+                capability["state"].as_str(),
+                Some("configured" | "not_configured")
+            ),
+            "{id} is in no state: {capability}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_capability_that_is_wired_and_one_that_is_not_read_differently() {
+    // What would otherwise rot silently: a row wired to `configured` outright
+    // reads exactly like one that checked the field it claims to describe.
+    let wired = Fixture::behind_a_proxy(false).await;
+    let (_, body) = wired
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    let rows = capabilities(&body);
+    assert_eq!(rows["prompt-registry"]["state"], "configured");
+    assert_eq!(rows["conversation-archive"]["state"], "configured");
+    // Nothing in this fixture reaches out, and every one of those says so by
+    // name rather than by an empty list.
+    assert_eq!(rows["dataset-hubs"]["state"], "not_configured");
+    assert_eq!(rows["workflow-runner"]["state"], "not_configured");
+    assert_eq!(rows["judge"]["state"], "not_configured");
+    assert_eq!(rows["scorer-service"]["state"], "not_configured");
+    assert_eq!(rows["pods"]["state"], "not_configured");
+    assert_eq!(rows["authentication"]["state"], "configured");
+    assert_eq!(
+        rows["authentication"]["settings"][0]["value"], "proxy",
+        "the mode is the one value on this row a deployment reads first"
+    );
+
+    let bare = Fixture::behind_a_proxy_without_registry().await;
+    let (_, body) = bare
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    let rows = capabilities(&body);
+    for id in [
+        "prompt-registry",
+        "dataset-registry",
+        "annotation-registry",
+        "training-registry",
+        "evaluation-registry",
+        "conversation-archive",
+        "schedules",
+        "workflow-definitions",
+        "attempt-artifacts",
+    ] {
+        assert_eq!(
+            rows[id]["state"], "not_configured",
+            "{id} on an instance with no object store"
+        );
+    }
+    assert_eq!(
+        rows["prompt-registry"]["variables"],
+        json!(["AIWATCHER_PROMPT_STORE"]),
+        "and it says which variable to set"
+    );
+}
+
+#[tokio::test]
+async fn a_pod_template_is_reported_by_name_and_never_by_its_body() {
+    // A template's name is a Kubernetes label by construction. The template
+    // beside it is the operator's own pod fragment — an `envFrom`, a service
+    // account, a volume — which is the one part of this configuration that is
+    // written the way a secret is referenced.
+    let fixture = Fixture::behind_a_proxy(false)
+        .await
+        .with_pod_templates(json!({
+            "houses": {
+                "images": ["registry.example.com/houses"],
+                "resources": {"max": {"cpu": "2", "memory": "4Gi"}},
+                "command": ["aiwatcher-worker", "run-attempt"],
+                "pod": {
+                    "serviceAccountName": "houses-runner",
+                    "containers": [{"envFrom": [{"secretRef": {"name": "house-api-credentials"}}]}]
+                }
+            }
+        }));
+    let (status, body) = fixture
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = capabilities(&body);
+    let pods = &rows["pods"];
+    assert_eq!(pods["state"], "configured");
+    let settings = pods["settings"].as_array().expect("settings");
+    assert!(
+        settings.iter().any(|setting| setting["name"] == "template"
+            && setting["value"] == "houses"
+            && setting["variable"] == "AIWATCHER_POD_TEMPLATES"),
+        "the template is named: {pods}"
+    );
+    assert!(
+        settings
+            .iter()
+            .any(|setting| setting["name"] == "pod runtime" && setting["value"] == "kubernetes"),
+        "and what a pod is here is said: {pods}"
+    );
+    let whole = body.to_string();
+    for secret in [
+        "house-api-credentials",
+        "houses-runner",
+        "registry.example.com/houses",
+        "secretRef",
+        "envFrom",
+    ] {
+        assert!(
+            !whole.contains(secret),
+            "the inventory printed {secret}, which is part of the template rather than its name"
+        );
+    }
+}
+
+#[tokio::test]
+async fn no_setting_prints_the_value_of_a_variable_that_is_a_secret_or_an_address() {
+    // The rule this module exists to keep, checked where it can be checked
+    // statically: a variable whose value is a credential or a host may be
+    // *named*, because naming it is how somebody knows what to set — and must
+    // never be the `variable` of a setting, because a setting is the one place
+    // a value is printed beside one. The other half of the rule, that no
+    // configured secret's value reaches the body whatever route it came from,
+    // is `aiwatcher-server/tests/system.rs`, which injects one into each.
+    const NEVER_A_VALUE: &[&str] = &[
+        "AIWATCHER_AUTH_CLIENT_SECRET",
+        "AIWATCHER_AUTH_SESSION_SECRET",
+        "AIWATCHER_AUTH_INGEST_TOKENS",
+        "AIWATCHER_POD_CREDENTIAL_SECRET",
+        "AIWATCHER_SCORER_TOKEN",
+        "AIWATCHER_JUDGE_TOKEN",
+        "AIWATCHER_WORKFLOW_RUNNER_TOKEN",
+        "AIWATCHER_KAGGLE_KEY",
+        "AIWATCHER_HUGGINGFACE_TOKEN",
+        "AIWATCHER_PROMPT_S3_ACCESS_KEY",
+        "AIWATCHER_PROMPT_S3_SECRET_KEY",
+        "AIWATCHER_PROMPT_S3_SESSION_TOKEN",
+        "AIWATCHER_CONVERSATION_KEYS",
+        "AIWATCHER_IAM_POSTGRES_URL",
+        "AIWATCHER_WORKFLOW_POSTGRES_URL",
+        "AIWATCHER_LASER_CONNECTION_STRING",
+        "AIWATCHER_PROMPT_S3_ENDPOINT",
+        "AIWATCHER_QUERY_URL",
+        "AIWATCHER_ML_PIPELINE_URL",
+        "AIWATCHER_JUDGE_URL",
+        "AIWATCHER_SCORER_URL",
+        "AIWATCHER_WORKFLOW_RUNNER_URL",
+        "AIWATCHER_POD_API_URL",
+    ];
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (_, body) = fixture
+        .get_as("/api/v1/system", "ops", "aiwatcher-admins")
+        .await;
+    let mut named = std::collections::BTreeSet::new();
+    let mut ids = std::collections::BTreeSet::new();
+    for (id, capability) in capabilities(&body) {
+        assert!(ids.insert(id.clone()), "{id} appears twice");
+        for variable in capability["variables"].as_array().expect("variables") {
+            named.insert(variable.as_str().expect("a name").to_owned());
+        }
+        for setting in capability["settings"].as_array().expect("settings") {
+            let Some(variable) = setting["variable"].as_str() else {
+                continue;
+            };
+            assert!(
+                !NEVER_A_VALUE.contains(&variable),
+                "{id} prints {variable} beside a value, and that value is a secret or an address"
+            );
+        }
+    }
+    for expected in [
+        "AIWATCHER_IAM_POSTGRES_URL",
+        "AIWATCHER_ML_PIPELINE_URL",
+        "AIWATCHER_JUDGE_URL",
+        "AIWATCHER_SCORER_URL",
+        "AIWATCHER_WORKFLOW_RUNNER_URL",
+        "AIWATCHER_KAGGLE_KEY",
+    ] {
+        assert!(
+            named.contains(expected),
+            "{expected} is named by no capability, so a reader cannot tell what to set"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_inventory_is_never_held_in_a_shared_cache() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/system")
+                .header("x-authentik-username", "ops")
+                .header("x-authentik-groups", "aiwatcher-admins")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
 }
