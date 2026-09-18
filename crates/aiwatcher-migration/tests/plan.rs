@@ -299,3 +299,42 @@ async fn already_scoped_keys_are_never_a_source() {
     );
     assert_eq!(first.body.objects, second.body.objects);
 }
+
+#[tokio::test]
+async fn two_families_on_one_prefix_are_refused_rather_than_read_twice() {
+    let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
+    let error = plan(
+        &store,
+        &Source::new("fs:/snapshot").with_prefix("prompts", "datasets"),
+        scope(),
+    )
+    .await
+    .expect_err("one prefix cannot belong to two registries");
+    assert!(
+        error
+            .to_string()
+            .contains("both configured onto the prefix"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn an_object_at_the_root_of_the_store_is_an_unknown_prefix_and_not_ignored() {
+    let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
+    store.put("stray.json", b"{}".to_vec()).await.unwrap();
+    let manifest = plan(&store, &Source::new("fs:/snapshot"), scope())
+        .await
+        .unwrap();
+    assert!(
+        manifest
+            .body
+            .blockers
+            .iter()
+            .any(|blocker| blocker.kind == BlockerKind::UnknownPrefix
+                && blocker.subject == "stray.json"),
+        "{:?}",
+        manifest.body.blockers
+    );
+    assert!(manifest.refuses_execution().is_empty());
+    assert!(!manifest.covers_every_family());
+}

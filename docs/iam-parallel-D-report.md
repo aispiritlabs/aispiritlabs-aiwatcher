@@ -194,7 +194,7 @@ Everything below was run in this branch. Nothing is reported that was not run.
 ```
 cargo test -p aiwatcher-core -p aiwatcher-prompts -p aiwatcher-training \
            -p aiwatcher-annotations -p aiwatcher-datasets -p aiwatcher-migration
-  → 328 passed, 0 failed, 6 ignored
+  → 330 passed, 0 failed, 6 ignored
 
 cargo clippy -p aiwatcher-core -p aiwatcher-prompts -p aiwatcher-training \
              -p aiwatcher-annotations -p aiwatcher-datasets -p aiwatcher-migration \
@@ -209,19 +209,21 @@ git diff --check   → clean
 `cargo fmt --all` was **not** run: it would rewrite the other streams' files.
 
 Per crate: core 106, prompts 52, training 29, annotations 77, datasets 34,
-migration 30. The pre-existing dataset dry-run tests still pass unchanged — the
+migration 32. The pre-existing dataset dry-run tests still pass unchanged — the
 old `migration_manifest` was rebuilt on the new classifier rather than left as a
 second set of key rules.
 
-### The migration crate's 30 tests
+### The migration crate's 32 tests
 
-**Dry run (8).** Deterministic and read-only, writing nothing including no
+**Dry run (10).** Deterministic and read-only, writing nothing including no
 probe. The manifest moves with the snapshot, the target and the configured
 prefix. Empty / blocked / unsupported read differently, each with counts. A
 foreign key and a damaged document each stop a run under their own blocker
 kind. References are counted, named, and the query-text reason is asserted. A
 dangling internal reference blocks a cutover without blocking the copy. Already
-scoped keys are never a source, so a half-finished copy plans identically.
+scoped keys are never a source, so a half-finished copy plans identically. Two
+families configured onto one prefix, and an object at the store's root, are each
+refused or named rather than read twice or walked past.
 
 **Execution (15).** Byte-for-byte copy, digests preserved, sources untouched,
 and both the prompt and training registries reopening their own objects under
