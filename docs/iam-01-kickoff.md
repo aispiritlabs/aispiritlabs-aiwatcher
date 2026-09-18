@@ -1,11 +1,11 @@
 # IAM-01 — where it stands, and what is left
 
-Date: 18.09.2026. **The control plane and the storage boundary are done; nothing
-runs inside a project yet.** No dispatcher, no project `/start`, no selector, no
-cutover.
+Date: 18.09.2026. **The control plane, the storage boundary and the dispatcher
+are done; nothing runs inside a project in a deployment yet.** No production
+wiring builds a dispatcher, no project `/start`, no selector, no cutover.
 
-This is the handover after four parallel streams landed on `main`. Their working
-reports are gone — what survived them is here, in
+This is the handover after four parallel streams landed on `main`, and after the
+gate they all waited on. What survived their working reports is here, in
 [ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md) (the boundary),
 [`crates/aiwatcher-iam/README.md`](../crates/aiwatcher-iam/README.md) (the
 contract), [`iam-migration-runbook.md`](iam-migration-runbook.md) (the operator's
@@ -39,52 +39,60 @@ conversation archive is closed on both sides, by name.
 **Four registries can be migrated by hand** with `aiwatcher-migrate`: prompts,
 datasets, training, annotations.
 
+**One loop runs a project's work**, `ProjectDispatcher`, and nothing in `spawn`
+builds one. Section 2 is what it does and why each step is where it is.
+
 ---
 
-## 2. The one gate: a dispatcher
+## 2. The gate, closed
 
-Everything else waits on this, and it has five rules that are not negotiable.
-Four of them were written by the stream that owns the code each protects.
+`aiwatcher_server::execution::project::ProjectDispatcher` exists, with
+`aiwatcher_execution::ExecutionAuthority` as the port the reactor asks through.
+The five rules are properties of the code now:
 
 1. **Scope and principal come from `store.ownership(&execution)`** on the bound
-   store — never from the plan, a parameter, a worker's name or a declaration's
-   author.
-2. **Check the current grant when the work is taken *and* again before
-   publication.** An IAM failure is `Transient`, never consent.
-3. **Check it before the cache lookup.** A hit is an answer about a project's
-   data whether or not any work follows, and `Reactor::cached` turns a catalog
-   error into `None` with a `warn` — so a `Policy` refusal there would be
-   invisible and the work would run and be stored globally.
-4. **Build both halves of artifact storage together** (`ProjectArtifacts::bind`).
-   A scoped byte store paired with the global catalog describes a project's
-   outputs in the deployment-wide index, where a cache lookup for anybody
-   answers with them.
-5. **Never register a project executor in the global `ExecutorRegistry`** before
-   1–4 hold.
+   store. The authority is handed that record and nothing else, so it has no
+   plan, parameter, worker name or declaration author to read either out of.
+   `ProjectGrant` refuses an execution nobody owns.
+2. **The current grant is checked when the work is taken and again before
+   publication.** `editor_grant` is the one policy the reactor's authority and
+   `ProjectAuthority` both call. An IAM failure is `Transient`: before the work
+   it leaves the attempt claimable and spends no retry budget; before
+   publication it is reported, because the lease is that pass's. A `Policy`
+   refusal fails the step rather than letting a run be claimed and dropped
+   every poll for ever.
+3. **Checked before the cache lookup** — before the stream is loaded at all,
+   which is the earliest point at which an execution id is known and what
+   `OwnedDefinition` is readable-without-the-stream for.
+4. **Both halves of artifact storage are built together** by
+   `ProjectArtifacts::bind`; the dispatcher holds the pair and the reactor
+   records through its catalog.
+5. **No project executor is in a process-wide `ExecutorRegistry`.** It names one
+   execution and one declaration, so it is built per claimed attempt from that
+   attempt's owner.
 
-### The two changes stream C is waiting on
+`Reactor::resume` answers `None` under an authority: a claim rebuilt across two
+requests has no pass to ask one in.
 
-Both are in files stream A owns, both are safe only after the gate above:
+Tests: `aiwatcher-execution/tests/authority.rs` (the reactor's ordering, with a
+stub) and `aiwatcher-server/tests/evaluation/project_dispatcher.rs` (the whole
+chain, against the real memory IAM policy and a filesystem object store).
 
-- `crates/aiwatcher-server/src/execution/scoring/project.rs` —
-  `ProjectAuthority::authorize` admits `RuntimeBinding::ScoreEvaluation` only.
-  Judged measurements compile to `JudgeEvaluation` and framework metrics to
-  `ExternalEvaluation` (`aiwatcher-api/src/scoring.rs`, `plan_for`). Admit all
-  three, still comparing `spec.declaration` with the pinned declaration.
-- `crates/aiwatcher-server/src/execution/scoring.rs` — the first guard in
-  `ScoreExecutor::execute` refuses when `project.is_some()` and a judge, a
-  scorer **or** `artifacts` is set. The judge and the scorer are deployment
-  clients rather than somebody else's data, so those two refusals may go; the
-  `artifacts` one may not, because that reader is global. Suggested shape:
-  refuse on `self.artifacts.is_some()` alone.
+### The two changes stream C was waiting on — done
 
-`prepare` already calls `authority.authorize(...)` before reading the
-declaration, and the second IAM check before `Committing` is already there. The
-rest of `execute` needs nothing.
+- `ProjectAuthority::authorize` admits `ScoreEvaluation`, `JudgeEvaluation` and
+  `ExternalEvaluation`, still comparing the binding's declaration with the
+  pinned one.
+- `ScoreExecutor::execute` refuses a project registry beside a global
+  `artifacts` reader **alone**. A judge and a scorer service are the
+  deployment's own clients answering a question composed from the project's
+  card; the artifact reader resolves an `object://` in the deployment's
+  namespace, which is somebody else's bytes.
 
----
+A project recording therefore still cannot read generated answers: that step's
+rows come through the artifact store, and only a global one exists on this path.
 
-## 3. After the dispatcher, before `/start`
+## 3. What `/start` is still waiting on
 
 | What | Why it is not optional |
 |---|---|
@@ -95,8 +103,9 @@ rest of `execute` needs nothing.
 | **Grant checks on every read, command, artifact and worker route** | The migration plan's own acceptance criteria |
 | A **retention policy for declarations, judge settings and kept replies** | They grow with the number of questions per declaration and have no policy of their own |
 
-Only when those are integrated and tested may a project `/start` be registered.
-A library test is not that permission; nor is a URL prefix or a panel filter.
+Only when those are integrated and tested may a project `/start` be registered,
+and only then may `spawn` build a dispatcher. A library test is not that
+permission; nor is a URL prefix or a panel filter.
 
 ---
 
@@ -151,47 +160,49 @@ be copied into a project.
 
 ---
 
-## 6. What has never been run
+## 6. Known rough edges
 
-Authentik, S3/RustFS, a Kubernetes cluster, workers, or any end-to-end. Every
-stream's PostgreSQL work used a disposable container of its own. Seven tests are
-`#[ignore]` because they need a database or a bucket. No user data was touched
-and no deployment was changed.
-
-Four module headers are over `scripts/lint-comments.py`'s 25-line limit; one of
+Six module headers are over `scripts/lint-comments.py`'s 25-line limit; one of
 them, `crates/aiwatcher-projector/src/pipeline.rs`, predates all of this.
 `ADR_0032` is deliberately unused — another line of work reserved it.
 
+Seven tests are `#[ignore]` because they need a database or a bucket. No user
+data was touched and no deployment was changed.
+
 ---
 
-## 7. Prompt for the next session
+## 7. What has never been run, still
 
-> Kontynuujesz IAM-01 w repozytorium AIWatcher, po zamknięciu czterech
-> równoległych strumieni. Przeczytaj najpierw `docs/iam-01-kickoff.md`, potem
-> `docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md`, sekcję o wykonaniu w
+Authentik, S3/RustFS, a Kubernetes cluster, workers, or any end-to-end for a
+project. The dispatcher has been exercised against the memory IAM policy, the
+filesystem object store and the memory workflow store, and against a disposable
+PostgreSQL for the store contract and the IAM control plane — never against a
+deployment.
+
+---
+
+## 8. Prompt for the next session
+
+> Kontynuujesz IAM-01 w repozytorium AIWatcher. Dispatcher projektowy stoi
+> (`aiwatcher_server::execution::project::ProjectDispatcher`, sekcja 2), obie
+> blokady strumienia C są zdjęte, ale **nic w `spawn` go nie buduje i nie ma
+> projektowego `/start`**. Przeczytaj `docs/iam-01-kickoff.md`,
+> `docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md`, sekcję o dispatcherze w
 > `crates/aiwatcher-iam/README.md` i instrukcje repozytorium. Zweryfikuj stan w
-> kodzie — dokumentacja opisuje etap zamknięty 18.09.2026 i mogła się
-> zdezaktualizować.
+> kodzie.
 >
-> Zadanie: zbuduj **projektowy dispatcher** — jedyną bramkę, na której czeka
-> wszystko inne. Ma pobierać scope i principala wyłącznie z
-> `store.ownership(&execution)` na związanym magazynie, sprawdzać aktualny grant
-> przy podejmowaniu pracy **i ponownie przed publikacją**, sprawdzać go **przed
-> lookupem w cache**, budować obie połowy magazynu artefaktów przez
-> `ProjectArtifacts::bind`, i nie rejestrować projektowego executora w globalnym
-> `ExecutorRegistry`, dopóki to wszystko nie zachodzi. Błąd IAM to `Transient`,
-> nigdy zgoda. Sekcja 2 kickoffu ma pełną listę z uzasadnieniami.
+> Zadanie: sekcja 3 — pozycje, na które czeka trasa. Zacznij od **jawnej decyzji
+> o logu zdarzeń**: albo scoped outbox/ingest/projekcja, albo zapisana decyzja,
+> że fakty projektu nie trafiają na log, z konsekwencjami dla żywego widoku,
+> spanów i foldów (dziś to wychodzi *z konstrukcji*, co jest bezpieczne i
+> niewidoczne). Potem scoped retention sweep, sprawdzanie grantów na każdym
+> odczycie, komendzie, artefakcie i trasie workera, oraz retencja deklaracji,
+> ustawień sędziego i zachowanych odpowiedzi.
 >
-> Dopiero gdy dispatcher stoi i jest przetestowany, zdejmij dwie blokady, na
-> które czeka strumień C (sekcja 2, „dwie zmiany"): `ProjectAuthority::authorize`
-> dopuszczający `JudgeEvaluation` i `ExternalEvaluation`, oraz pierwszy strażnik
-> `ScoreExecutor::execute` zawężony do samego `artifacts`.
->
-> **Nie otwieraj projektowego `/start`** i nie rejestruj niczego w produkcyjnym
-> reactorze, dopóki nie są zintegrowane i przetestowane pozycje z sekcji 3
-> kickoffu. Test biblioteczny nie jest zgodą na otwarcie trasy, a prefiks URL ani
-> filtr w panelu nie zastępują izolacji. Jeśli pełen zakres przekracza bezpieczną
-> iterację, dostarcz dispatcher z testami i nazwij pozostałe blokady.
+> **Nie otwieraj projektowego `/start` i nie rejestruj dispatchera w
+> produkcyjnym `spawn`**, dopóki te pozycje nie są zintegrowane i przetestowane.
+> Test biblioteczny nie jest zgodą na otwarcie trasy, a prefiks URL ani filtr w
+> panelu nie zastępują izolacji.
 >
 > Pracuj na osobnej gałęzi z `main`. Nie zmieniaj istniejących migracji SQL —
 > nowe są addytywne, z rolling upgrade i rollbackiem starego binarium. Nie

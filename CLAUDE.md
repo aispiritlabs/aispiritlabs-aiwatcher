@@ -596,12 +596,17 @@ before changing that area.
    migrated; `aiwatcher-migrate` copies four registries into a named project by
    hand, blocks the conversation archive and names eleven prefixes it will not
    touch. None of it is authorization: a grant is IAM's answer, asked fresh,
-   before the cache lookup as well as before the work. What is **not** done is
-   written down as plainly as what is: no dispatcher and no project `/start`,
-   and logs, streams, query and notebook runtimes, worker credentials and
-   scheduled jobs are still instance-wide. Until those land, no organization or
-   project selector is activated, and this deployment is not described as
-   multi-tenant safe.
+   before the cache lookup as well as before the work — which is what
+   `ProjectDispatcher` is, the one loop that reads the owner off the bound
+   store, asks IAM when it takes the work and again before it publishes, treats
+   an IAM failure as `Transient`, pairs the byte store with the catalog through
+   `ProjectArtifacts::bind`, and builds its executor per attempt so nothing of
+   a project's is in a process-wide registry. What is **not** done is written
+   down as plainly as what is: **no production wiring constructs one**, there is
+   no project `/start`, and logs, streams, query and notebook runtimes, worker
+   credentials, retention and scheduled jobs are still instance-wide. Until
+   those land, no organization or project selector is activated, and this
+   deployment is not described as multi-tenant safe.
 
 ## Conventions
 

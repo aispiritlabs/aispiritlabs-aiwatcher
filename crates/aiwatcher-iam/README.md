@@ -1283,3 +1283,54 @@ the owner whose layout has just moved.
 **Mapping data into a project grants nobody access to it.** Membership and
 grants are a separate decision, and nothing in the tool maps a group name or an
 email address to anything.
+
+## The project dispatcher: the gate everything else was waiting on
+
+`aiwatcher_server::execution::project::ProjectDispatcher` is the loop that runs
+one project's work, and the five rules ADR_0033 stated for it are now
+properties of the code rather than a contract to keep:
+
+1. **Scope and principal come from `store.ownership`.** A new port,
+   `aiwatcher_execution::ExecutionAuthority`, is asked with that record and with
+   nothing else — it has no plan, parameter, worker name or declaration author
+   to read either out of. `ProjectGrant` implements it against an `IamStore`,
+   and refuses an execution nobody owns: a project's reactor adopting a global
+   run is the repointing the record exists to prevent.
+2. **Asked when the work is taken and again before publication.** `Reactor::take`
+   asks before the stream is loaded; `Reactor::settle_at` asks after the lease
+   check and before the catalog is written. `editor_grant` is the one policy both
+   the reactor's authority and `ProjectAuthority` call, so a revocation reaches
+   every check rather than the ones somebody remembered.
+3. **Asked before the cache lookup**, which follows from asking before the stream
+   — the earliest point at which an execution id is known.
+4. **`ProjectArtifacts::bind`** builds the byte store and the catalog from one
+   scope, and the dispatcher holds the pair. The catalog is what the reactor
+   records through; the byte half has no reader yet, because a project recording
+   publishes through the evaluation registry and a project executor reading the
+   *global* artifact store is refused by name.
+5. **Nothing is registered in a process-wide `ExecutorRegistry`.** A project
+   executor names one execution and one declaration, so it is built per claimed
+   attempt from that attempt's owner and lives exactly as long as it.
+
+An IAM failure is `Transient`: before the work it leaves the attempt claimable
+and spends no retry budget, and before publication it is reported so the outcome
+is not lost silently. A `Policy` refusal fails the step, because a run whose
+owner may no longer have it run must end rather than be claimed and dropped
+every poll. `Reactor::resume` answers `None` under an authority: a claim rebuilt
+across two requests has no pass to ask one in.
+
+With the gate standing, the two refusals stream C was held by are lifted.
+`ProjectAuthority::authorize` admits `ScoreEvaluation`, `JudgeEvaluation` and
+`ExternalEvaluation`, still comparing the binding's declaration with the pinned
+one; and `ScoreExecutor::execute` refuses a project registry beside a global
+`artifacts` reader alone. A judge and a scorer service are the deployment's own
+clients answering a question composed from the project's card; the artifact
+reader resolves an `object://` in the deployment's namespace, which is somebody
+else's bytes.
+
+**This is a library boundary with tests, not a deployment.** No production
+wiring constructs a dispatcher, there is still no project `/start`, and the
+items in `docs/iam-01-kickoff.md` §3 — a scoped log path or a stated absence,
+scoped live reads, a scoped retention sweep, artifact collection, grant checks
+on every read and worker route, and a retention policy for declarations, judge
+settings and kept replies — are what a route would still be waiting on.

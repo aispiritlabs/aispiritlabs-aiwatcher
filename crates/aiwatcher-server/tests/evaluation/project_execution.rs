@@ -272,32 +272,31 @@ async fn a_project_executor_binds_the_principal_execution_and_declaration_not_th
             .class,
         FailureClass::Policy
     );
-    wrong = f.command.clone();
-    let aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec) = &mut wrong.step.runtime else {
-        panic!("scoring")
+    // A card that asks a judge or a scorer service compiles to another binding
+    // over the same declaration, so all three are admitted — and in each of
+    // them the declaration is still the pinned one, or nothing is.
+    let spec = |declaration: &str| aiwatcher_execution::plan::ScoreEvaluationSpec {
+        declaration: declaration.to_owned(),
     };
-    spec.declaration = "0".repeat(64);
-    assert_eq!(
-        executor
-            .execute(&wrong, &f.context)
-            .await
-            .unwrap_err()
-            .class,
-        FailureClass::Policy
-    );
-    wrong = f.command.clone();
-    let aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec) = &wrong.step.runtime else {
-        panic!("scoring")
+    let binding = |declaration: &str| {
+        [
+            aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec(declaration)),
+            aiwatcher_execution::RuntimeBinding::JudgeEvaluation(spec(declaration)),
+            aiwatcher_execution::RuntimeBinding::ExternalEvaluation(spec(declaration)),
+        ]
     };
-    wrong.step.runtime = aiwatcher_execution::RuntimeBinding::JudgeEvaluation(spec.clone());
-    assert_eq!(
-        executor
-            .execute(&wrong, &f.context)
-            .await
-            .unwrap_err()
-            .class,
-        FailureClass::Policy
-    );
+    for runtime in binding(&"0".repeat(64)) {
+        wrong = f.command.clone();
+        wrong.step.runtime = runtime;
+        assert_eq!(
+            executor
+                .execute(&wrong, &f.context)
+                .await
+                .unwrap_err()
+                .class,
+            FailureClass::Policy
+        );
+    }
     let other = ProjectScope {
         project: aiwatcher_iam::ProjectId::new(),
         ..f.scope
@@ -462,4 +461,95 @@ async fn revocation_or_expiry_while_a_project_measurement_reads_prevents_publica
             FailureClass::Policy
         );
     }
+}
+
+#[tokio::test]
+async fn a_judged_or_framework_binding_over_the_pinned_declaration_is_admitted() {
+    // A card that asks a judge compiles to `judge_evaluation` and one that asks
+    // a scorer service to `external_evaluation`. They are the same measurement
+    // in the role that holds the client, so the authority admits all three —
+    // and whether *this* process holds that client is the dispatcher's
+    // question rather than the authority's.
+    let f = ProjectRun::new("project-executor-bindings").await;
+    for runtime in [
+        aiwatcher_execution::RuntimeBinding::JudgeEvaluation(
+            aiwatcher_execution::plan::ScoreEvaluationSpec {
+                declaration: f.declaration.clone(),
+            },
+        ),
+        aiwatcher_execution::RuntimeBinding::ExternalEvaluation(
+            aiwatcher_execution::plan::ScoreEvaluationSpec {
+                declaration: f.declaration.clone(),
+            },
+        ),
+    ] {
+        let mut pinned = f.command.clone();
+        pinned.step.runtime = runtime;
+        f.executor(f.actor.clone())
+            .execute(&pinned, &f.context)
+            .await
+            .expect("the pinned declaration in a measuring binding");
+    }
+    // And a revoked grant still refuses every one of them.
+    f.revoke().await;
+    let mut pinned = f.command.clone();
+    pinned.step.runtime = aiwatcher_execution::RuntimeBinding::JudgeEvaluation(
+        aiwatcher_execution::plan::ScoreEvaluationSpec {
+            declaration: f.declaration.clone(),
+        },
+    );
+    assert_eq!(
+        f.executor(f.actor.clone())
+            .execute(&pinned, &f.context)
+            .await
+            .unwrap_err()
+            .class,
+        FailureClass::Policy
+    );
+}
+
+/// A judge on this host that is never asked: the declaration under test names
+/// no rubric, so what it proves is which capability the guard refuses.
+#[derive(Debug)]
+struct Unasked;
+
+#[async_trait]
+impl aiwatcher_evaluation::JudgeModel for Unasked {
+    fn provider(&self) -> &str {
+        "llamacpp"
+    }
+
+    async fn ask(
+        &self,
+        _call: &aiwatcher_evaluation::JudgeCall,
+    ) -> std::result::Result<aiwatcher_evaluation::JudgeReply, aiwatcher_evaluation::JudgeFailure>
+    {
+        panic!("a declaration that names no rubric put a question to a judge")
+    }
+}
+
+#[tokio::test]
+async fn a_project_recording_may_hold_a_deployment_s_judge_and_never_its_artifact_store() {
+    let f = ProjectRun::new("project-executor-capabilities").await;
+    // A judge is a socket and a credential this role holds, asked a question
+    // composed from the project's own card.
+    f.executor(f.actor.clone())
+        .judged_by(Arc::new(Unasked), 1)
+        .execute(&f.command, &f.context)
+        .await
+        .expect("a project recording beside the deployment's judge");
+
+    // The artifact reader is not: it resolves an `object://` in the global
+    // namespace, so a project run reading through it would read bytes that are
+    // not its project's.
+    let global = aiwatcher_server::execution::artifacts::Artifacts::new(f.store.clone());
+    assert_eq!(
+        f.executor(f.actor.clone())
+            .reading_from(global)
+            .execute(&f.command, &f.context)
+            .await
+            .unwrap_err()
+            .class,
+        FailureClass::Policy
+    );
 }

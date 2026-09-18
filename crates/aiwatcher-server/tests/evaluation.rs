@@ -67,6 +67,8 @@ mod project_declarations;
 
 #[path = "evaluation/project_admission.rs"]
 mod project_admission;
+#[path = "evaluation/project_dispatcher.rs"]
+mod project_dispatcher;
 #[path = "evaluation/project_execution.rs"]
 mod project_execution;
 #[path = "evaluation/project_external.rs"]

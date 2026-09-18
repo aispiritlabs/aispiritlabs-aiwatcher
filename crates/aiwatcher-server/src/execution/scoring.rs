@@ -344,12 +344,15 @@ impl ActivityExecutor for ScoreExecutor {
         command: &ActivityCommand,
         context: &ActivityContext,
     ) -> Result<ActivityResult, ActivityError> {
-        if self.project.is_some()
-            && (self.judge.is_some() || self.scorers.is_some() || self.artifacts.is_some())
-        {
+        // A judge and a scorer service are the deployment's own clients — a
+        // socket and a credential this role holds, asked a question composed
+        // from the project's own card. This reader is not: it resolves an
+        // `object://` in the *global* namespace, so a project run that read
+        // through it would read somebody else's bytes.
+        if self.project.is_some() && self.artifacts.is_some() {
             return Err(ActivityError::new(
                 FailureClass::Policy,
-                "project recordings cannot use global judge, scorer or artifact capabilities",
+                "a project recording cannot read answers through the deployment's artifact store",
             ));
         }
         let (RuntimeBinding::ScoreEvaluation(spec)

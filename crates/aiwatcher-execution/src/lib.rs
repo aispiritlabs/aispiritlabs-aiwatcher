@@ -33,6 +33,7 @@
 
 pub mod activity;
 pub mod artifact;
+pub mod authority;
 pub mod cache;
 pub mod claim;
 pub mod compile;
@@ -64,6 +65,7 @@ pub use artifact::{
     ArtifactCatalog, CacheEntry, CatalogedArtifact, MemoryArtifactCatalog, ObjectArtifactCatalog,
     Provenance,
 };
+pub use authority::{Admitting, ExecutionAuthority};
 pub use cache::cache_key;
 pub use claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
 pub use compile::{CompileOptions, compile_curation};

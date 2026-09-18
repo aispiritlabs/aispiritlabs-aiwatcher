@@ -30,6 +30,7 @@ pub mod judge;
 pub mod marimo;
 pub mod measure;
 pub mod pods;
+pub mod project;
 pub mod publish;
 pub mod query;
 pub mod scheduler;

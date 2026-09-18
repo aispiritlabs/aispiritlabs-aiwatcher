@@ -1,12 +1,15 @@
 //! Claim an attempt, run it, report what happened.
 //!
 //! Steps 1, 2, 7 and 8 of [`crate::activity`]'s eight — the four that are the
-//! same for every runtime, so an [`ActivityExecutor`] only owns 3 to 6.
+//! same for every runtime, so an [`ActivityExecutor`] only owns 3 to 6, and
+//! [`crate::authority`]'s two asks bracket them where one is wired.
 //!
 //! ```text
-//!   claim ──► load the plan ──► lookup? ──► execute ──► still holding? ──► report
-//!     │                            │                          │
-//!     └── nothing to do            └── the timeout case        └── no: stop, silently
+//!   claim ──► may I? ──► load the plan ──► lookup? ──► execute ──► still
+//!     │          │                            │                   holding?
+//!     │          └── no: released, or failed  │                   and may I
+//!     └── nothing to do                       └── the timeout      still? ──► report
+//!                                                 case                  └─► no: stop
 //! ```
 //!
 //! Three rules carry it, and each is a failure somebody would otherwise meet in
@@ -35,9 +38,10 @@ use aiwatcher_core::{CausationId, CorrelationId, MessageId};
 use time::OffsetDateTime;
 
 use crate::activity::{
-    ActivityCommand, ActivityContext, ActivityExecutor, ActivityResult, ExecutorRegistry,
-    PriorAttempt, StopReason, StopSignal,
+    ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
+    ExecutorRegistry, PriorAttempt, StopReason, StopSignal,
 };
+use crate::authority::{Admitting, ExecutionAuthority};
 use crate::claim::AttemptRow;
 use crate::decide::{Now, replay};
 use crate::handler::{ExecutionHandler, HandleError};
@@ -144,6 +148,10 @@ pub struct Reactor<S> {
     /// deployment with no object store is in: deleting the index never loses
     /// an authoritative result, taken to its limit.
     catalog: Option<Arc<dyn crate::ArtifactCatalog>>,
+    /// Who is asked whether this execution's owner may still have its work
+    /// done. `None` is the unscoped reactor: the store it holds sees no
+    /// project's work, so there is nobody to ask about.
+    authority: Option<Arc<dyn ExecutionAuthority>>,
     watch: Watch,
 }
 
@@ -160,6 +168,7 @@ impl<S: WorkflowStore> Reactor<S> {
             executors,
             owner,
             catalog: None,
+            authority: None,
             watch: Watch::default(),
         }
     }
@@ -175,6 +184,20 @@ impl<S: WorkflowStore> Reactor<S> {
     #[must_use]
     pub fn with_catalog(mut self, catalog: Arc<dyn crate::ArtifactCatalog>) -> Self {
         self.catalog = Some(catalog);
+        self
+    }
+
+    /// Give it somebody to ask whether an execution's owner may still have its
+    /// work done (ADR_0033).
+    ///
+    /// Wired with a project-bound store and a project-bound catalog, never on
+    /// its own: an authority in front of the unscoped store would be asked
+    /// about executions nobody owns, and a scoped store behind the global
+    /// catalog would describe a project's outputs where a cache lookup for
+    /// anybody answers with them.
+    #[must_use]
+    pub fn with_authority(mut self, authority: Arc<dyn ExecutionAuthority>) -> Self {
+        self.authority = Some(authority);
         self
     }
 
@@ -227,7 +250,7 @@ impl<S: WorkflowStore> Reactor<S> {
             });
         };
 
-        let outcome = self.watched(executor, &claimed).await;
+        let outcome = self.perform(executor, &claimed).await;
         let finished_at =
             now + time::Duration::try_from(pass.elapsed()).unwrap_or(time::Duration::ZERO);
         self.settle_at(*claimed, outcome, now, finished_at).await
@@ -270,6 +293,15 @@ impl<S: WorkflowStore> Reactor<S> {
         };
 
         let execution = row.key.execution_id.clone();
+
+        // Before the stream, not only before the cache: the ownership record is
+        // readable without loading the execution precisely so that a process
+        // deciding whether it may read one does not have to read it first
+        // (ADR_0033).
+        if let Some(refused) = self.admitted(&row, Admitting::Work, now).await? {
+            return Ok(Taken::Settled(refused));
+        }
+
         let Some(run) = self.load_execution(&execution).await? else {
             return Ok(Taken::Settled(Performed::Released {
                 step_id: row.key.step_id.clone(),
@@ -383,6 +415,19 @@ impl<S: WorkflowStore> Reactor<S> {
         key: &crate::claim::AttemptKey,
         now: OffsetDateTime,
     ) -> Result<Option<Claimed>, HandleError> {
+        // An authority is asked per pass, and this rebuilds a claim across two
+        // requests with the work in somebody else's process in between —
+        // nowhere to ask it, and no lease check it could stand on. A reactor
+        // that has one holds a project's store, so it answers as it would
+        // about an attempt it does not hold, which is what every worker route
+        // above this already treats as final.
+        if self.authority.is_some() {
+            tracing::warn!(
+                attempt = %key,
+                "a reactor with an execution authority does not resume a claim across requests"
+            );
+            return Ok(None);
+        }
         let Some(row) = self.handler.store().attempt(key).await? else {
             return Ok(None);
         };
@@ -456,7 +501,15 @@ impl<S: WorkflowStore> Reactor<S> {
     /// into `LeaseLost`. `finished_at` is what the outcome is stamped with, and
     /// through it `step.completed` — the half of a node's duration the fold was
     /// reading as its start.
-    async fn settle_at(
+    ///
+    /// Public for [`Self::perform`]'s reason: a caller running its own three
+    /// calls in this process has both instants, and [`Self::settle`] would make
+    /// it choose one.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do.
+    pub async fn settle_at(
         &self,
         claimed: Claimed,
         outcome: Result<ActivityResult, StepError>,
@@ -482,6 +535,19 @@ impl<S: WorkflowStore> Reactor<S> {
                 step_id: row.key.step_id.clone(),
                 attempt: row.key.attempt,
             });
+        }
+
+        // Asked again, after the lease and before anything of this result is
+        // written: a grant that was live when the work was taken may have been
+        // revoked while it ran (ADR_0033). Every refusal is reported here,
+        // including a retryable one — the work is done and the lease is held,
+        // so saying nothing would lose it silently — and the catalog is not
+        // written either way.
+        if let Some(refused) = self
+            .admitted(&row, Admitting::Publication, finished_at)
+            .await?
+        {
+            return Ok(refused);
         }
 
         // Recorded before the completion is reported, and only for work that
@@ -520,6 +586,94 @@ impl<S: WorkflowStore> Reactor<S> {
             step_id: row.key.step_id,
             attempt: row.key.attempt,
             succeeded,
+        })
+    }
+
+    /// Ask whoever decides whether this attempt's owner may still be served.
+    ///
+    /// The scope and the principal come from the record on the bound store and
+    /// from nowhere else, which is what makes ADR_0033's first rule structural
+    /// rather than a convention: an authority is handed the record, so it has
+    /// no plan, parameter or claimant's name to read one out of.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do. A refusal is not one of them — it
+    /// comes back as `Some(Performed)`, carrying what this pass did about it.
+    async fn admitted(
+        &self,
+        row: &AttemptRow,
+        admitting: Admitting,
+        now: OffsetDateTime,
+    ) -> Result<Option<Performed>, HandleError> {
+        let Some(authority) = self.authority.as_ref() else {
+            return Ok(None);
+        };
+        let owner = self
+            .handler
+            .store()
+            .ownership(&row.key.execution_id)
+            .await?;
+        match authority.admits(owner.as_ref(), admitting).await {
+            Ok(()) => Ok(None),
+            Err(refusal) => Ok(Some(self.refuse(row, &refusal, admitting, now).await?)),
+        }
+    }
+
+    /// What a refusal does to the attempt it was asked about.
+    ///
+    /// Before the work, a retryable class is an authority that could not
+    /// answer — IAM down, a pool exhausted — and the attempt is left exactly as
+    /// it was: nothing is written, no retry budget is spent, and the next pass
+    /// asks again once the lease lapses. Anything else is a decision, and a run
+    /// whose owner may no longer have it run has to end rather than be claimed
+    /// and dropped every poll for ever.
+    ///
+    /// Before publication every refusal is reported, whatever its class: the
+    /// work is done and the lease is this pass's, so leaving the attempt alone
+    /// would lose an outcome nothing ever says anything about.
+    async fn refuse(
+        &self,
+        row: &AttemptRow,
+        refusal: &ActivityError,
+        admitting: Admitting,
+        now: OffsetDateTime,
+    ) -> Result<Performed, HandleError> {
+        let attempt = &row.key;
+        if refusal.class.is_retryable() && admitting == Admitting::Work {
+            tracing::warn!(
+                %attempt,
+                class = refusal.class.as_str(),
+                reason = refusal.message,
+                "could not establish whether this attempt may run; it is left claimable"
+            );
+            return Ok(Performed::Released {
+                step_id: row.key.step_id.clone(),
+                reason: refusal.message.clone(),
+            });
+        }
+        tracing::warn!(
+            %attempt,
+            class = refusal.class.as_str(),
+            admitting = admitting.as_str(),
+            reason = refusal.message,
+            "this attempt's owner may not have it run"
+        );
+        self.report(
+            &row.key,
+            WorkflowEvent::StepFailed {
+                step_id: row.key.step_id.clone(),
+                attempt: row.key.attempt,
+                error: refusal.as_step_error(),
+            },
+            now,
+            "outcome",
+        )
+        .await?;
+        Ok(Performed::Reported {
+            step_id: row.key.step_id.clone(),
+            attempt: row.key.attempt,
+            succeeded: false,
         })
     }
 
@@ -585,7 +739,14 @@ impl<S: WorkflowStore> Reactor<S> {
         }
     }
 
-    /// [`Self::perform`], stopped when its run stops or its deadline passes.
+    /// Steps 3–6, stopped when the run stops or the deadline passes.
+    ///
+    /// The seam's middle, and public for the reason [`Self::take`] and
+    /// [`Self::settle_at`] are: a caller whose executor is built per attempt —
+    /// one bound to *this* execution's owner — cannot hand a registry to
+    /// [`Self::poll_once`] and still get the watch. Its own loop is then the
+    /// same three calls in the same order rather than a second idea of what
+    /// running an attempt means.
     ///
     /// The work and the watch race. The work finishing first is the ordinary
     /// case and its outcome is reported as it was. The watch finishing first
@@ -594,12 +755,12 @@ impl<S: WorkflowStore> Reactor<S> {
     /// to say how it ended — an executor that stops cooperatively reports its
     /// own error, and one that finishes anyway reports its result, which the
     /// decider reads like any completion of a cancelling run.
-    async fn watched(
+    pub async fn perform(
         &self,
         executor: &Arc<dyn ActivityExecutor>,
         claimed: &Claimed,
     ) -> Result<ActivityResult, StepError> {
-        let perform = self.perform(executor, &claimed.command, &claimed.context, &claimed.row);
+        let perform = self.carry_out(executor, &claimed.command, &claimed.context, &claimed.row);
         tokio::pin!(perform);
         let reason = tokio::select! {
             outcome = &mut perform => return outcome,
@@ -685,7 +846,7 @@ impl<S: WorkflowStore> Reactor<S> {
     }
 
     /// Steps 3–6, with the takeover's question in front of them.
-    async fn perform(
+    async fn carry_out(
         &self,
         executor: &Arc<dyn ActivityExecutor>,
         command: &ActivityCommand,

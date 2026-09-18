@@ -14,6 +14,18 @@ ordering every durable write here obeys.
   built from the `ExecutorRegistry`, so a process with no `AIWATCHER_QUERY_URL`
   takes no `flow_php` attempt. A runtime whose client would not build is one
   this process claims nothing for, rather than one it fails every attempt of.
+- **Never let a reactor read a project's data before it has asked.** Where an
+  `ExecutionAuthority` is wired, `take` reads `store.ownership` and asks it
+  *before* the stream, the cache lookup and `step.started`, and `settle_at`
+  asks again after the lease and before the catalog is written. The record is
+  the authority's whole input, so there is no plan, parameter or claimant's
+  name to get a scope or a principal out of — and `ProjectDispatcher` is the
+  only thing that wires one (ADR_0033).
+- **Never read a refusal that could not be made as consent.** A retryable class
+  before the work leaves the attempt claimable and spends nothing; before
+  publication every class is reported, because the lease is that pass's and
+  saying nothing would lose the outcome. `Policy` ends the run rather than
+  letting it be claimed and dropped every poll for ever.
 - **Never let a worker decide anything but its own function.** The loop is claim
   → load the plan → cache lookup → `step.started` → **perform** → re-check the
   lease → record → report (`Reactor::take`, `settle`, `resume`), and only
