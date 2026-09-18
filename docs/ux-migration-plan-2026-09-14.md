@@ -912,3 +912,74 @@ wklejenie go w drugim miejscu i wyjście z tego z rolą i oknem.
 Czego **nie** uruchomiono: dostarczania zaproszeń (nie ma wysyłki poczty i nie
 miało być — `label` jest wskazówką, nie adresatem); kroku 1b jako dwóch osób w
 dwóch przeglądarkach; kroków 3–5; żadnego E2E, klastra ani workerów.
+
+### Prompt dla sesji po kroku 2
+
+> Pracujesz w repozytorium AIWatcher. Kroki 0–2 z „Kolejności do pierwszego testu
+> permissionów i lekcji" są **zrobione i zweryfikowane na żywym serwerze**:
+> lokalne SSO, panel IAM pod `/account/access`, matryca uprawnień (28/28),
+> roster i zaproszenia. Stoją na gałęzi `iam-01/local-sso-and-panel`, sześć
+> commitów, niepushowane. Przeczytaj `docs/ux-migration-plan-2026-09-14.md` (dwie
+> ostatnie kontynuacje i „Kolejność do pierwszego testu permissionów"),
+> `docs/local-sso.md`, `crates/aiwatcher-iam/README.md` i `apps/panel/CLAUDE.md`.
+> **Zweryfikuj stan w kodzie — dokumentacja opisuje 18.09.2026 i mogła się
+> zdezaktualizować.**
+>
+> **Środowisko**, wszystko lokalnie i jednorazowe: `just authentik-up`,
+> `just authentik-seed`, `just authentik-secret` (do `.env`), `just postgres-up`,
+> `just run-sso-iam`, `just panel`. Ludzie to `teacher` / `teacher-dev` (instancyjny
+> admin) i `student` / `student-dev` (viewer). Dwie sesje naraz bez dwóch
+> przeglądarek daje `python3 scripts/sso-session.py <kto>`, a całą matrycę
+> `python3 scripts/iam-permission-check.py`. PostgreSQL **wyłącznie** na osobnej,
+> jednorazowej bazie.
+>
+> **Krok 3 — sprawdź, nie buduj od nowa.** Nowy shell w większości istnieje:
+> UX-09 dowiózł dwa układy, flagę `VITE_AIWATCHER_SHELL`, preferowany start,
+> przypięcia i liczniki przejść, z regresjami w `navigation-preferences.test.tsx`.
+> Twoje zadanie to przejść „Kryteria odbioru" i **zapisać, czego naprawdę
+> brakuje** względem „Docelowej architektury informacji" — w `navigation.ts` nie
+> ma obszarów **Administracja** ani **System**, a selektor organizacji/projektu w
+> górnym pasku ma pozostać **nieaktywny**: to, co zbudowano w kroku 1, jest
+> narzędziem testowym pod `/account`, nie ogłoszeniem multi-tenancy. Nie
+> aktywuj go.
+>
+> **Krok 4 — Learning UI, i to jest właściwa praca.** Jedno zdanie zmienia jej
+> zakres: **warsztat to projekt, uczestnik to grant, zapis to zrealizowane
+> zaproszenie.** Cała połowa dostępowa już istnieje i działa — nie buduj dla niej
+> backendu i nie wymyślaj pojęcia „warsztatu" w Ruście. Zbuduj nad tym, co jest:
+> lista warsztatów z projektów organizacji (`roster` widzi też te, do których
+> prowadzący nie ma grantu), strona warsztatu z uczestnikami (`grants` na
+> projekcie) i ich stanem dostępu wprost z okna — jeszcze nie zaczął się, edycja
+> do, tylko odczyt, skończył się — zapisy przez zaproszenia (token pokazany raz,
+> uczestnik wkleja u siebie), oraz dziewięć slotów laboratoriów.
+>
+> **Czego o warsztacie nie wolno wymyślić.** Treść instrukcji, testy, ewaluacje,
+> metryki i postęp nie mają żadnego kontraktu — oznacz je jako **niedostępne** i
+> nie podstawiaj danych zastępczych; `AreaPlaceholder` istnieje właśnie po to.
+> Silnik treści i ocen to osobna praca. Popraw za to zdanie z obecnego
+> placeholdera, które przestało być prawdziwe: „timed access are not available"
+> — dostęp czasowy jest dostępny i właśnie nim jest okno grantu.
+>
+> **Czego nie wolno.** Nie zaczynaj IAM-02 (`docs/iam-02-data-plane.md`) — jest
+> ostatnie świadomie. Nie otwieraj projektowego `/start`, nie rejestruj
+> dispatchera w produkcyjnym `spawn`, nie zakresuj logu zdarzeń ani strumieni.
+> Nie opisuj wdrożenia jako multi-tenant safe. Nie zmieniaj istniejących migracji
+> SQL; nowe są addytywne. Obowiązuje reguła: **nowy zasób autorski dostaje swoją
+> zakresową rodzinę tras od urodzenia** (`ProjectAuthorization` plus
+> `<prefix>/scopes/<organization>/<project>/registry/`).
+>
+> **Testy na koniec każdego kroku.** Panel: `npm run test`, `npm run build` (to
+> `check:architecture` + `vite build` + pełne `tsc -b`), przejście klawiaturą,
+> 375 px i szeroki ekran, motyw jasny i ciemny, żadnego poziomego przewijania
+> strony. `npm run lint` **nie działa w tym repozytorium i nie działało wcześniej**
+> — `apps/panel` nie ma konfiguracji eslint ani samego eslinta; nie goń tego, to
+> osobna usterka. Rust, jeśli tkniesz którykolwiek crate: `cargo test --workspace
+> --all-targets`, `cargo clippy --workspace --all-targets --all-features
+> -Dwarnings`, `cargo fmt --all --check`, `git diff --check`,
+> `python3 scripts/check-rust-boundaries.py`. Po zmianie trasy lub typu w
+> kontrakcie: `just openapi` i commit obu stron.
+>
+> Pracuj na gałęzi z `main` (albo kontynuuj `iam-01/local-sso-and-panel`),
+> commituj po ścieżkach, jeden krótki konwencjonalny nagłówek, bez trailera
+> współautora. Po każdym kroku zdaj raport i **jawnie wypisz, czego nie
+> uruchomiłeś**.
