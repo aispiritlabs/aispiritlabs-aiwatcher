@@ -139,8 +139,12 @@ pub struct Lab {
     pub name: LabName,
     /// What it is called where somebody reads it.
     pub title: String,
-    /// The instructions, as Markdown. Authored, so it outlives the log — a
-    /// participant reading last term's lab is the ordinary case.
+    /// The instructions, as text. Authored, so it outlives the log — a
+    /// participant reading last term's lab is the ordinary case. Nothing here
+    /// or in the panel renders it as anything else: interpreting half of a
+    /// syntax is worse than interpreting none, and choosing a renderer is a
+    /// decision to take on purpose rather than as a side effect of drawing a
+    /// lesson.
     pub brief: String,
     /// Where it sits in the workshop. Absent for a lab nobody has placed yet;
     /// nothing here refuses two labs in one position, because a registry that

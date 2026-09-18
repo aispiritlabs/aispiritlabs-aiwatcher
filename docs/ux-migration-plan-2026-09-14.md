@@ -1112,3 +1112,128 @@ strumienie, które mogą iść równolegle, wraz z mapą kolizji i promptem na k
 [docs/parallel-streams-2026-09-18.md](parallel-streams-2026-09-18.md). Cztery
 startują od razu — System, FLOW-01, treść warsztatu i IAM-02/A (projekt na
 kopercie); reszta IAM-02 jest łańcuchem za nimi, z bramką M1 pośrodku.
+
+## Kontynuacja — treść warsztatu, czyli LEARN-02
+
+Data: 18.09.2026. **Pierwsze zadanie nie było kodem i zmieniło rozmiar całej
+reszty.** Cztery rzeczy, których brakowało w dziewięciu pustych slotach —
+brief, testy, oddanie pracy i wynik — zostały przyłożone do tego, co ta
+instancja już ma, zanim powstał choćby jeden plik. Trzy z czterech już były,
+pod nazwami, które wzięły się z mierzenia modelu, a nie z uczenia kogokolwiek.
+
+### Co z czego wynikło
+
+- **Testy to karta i kohorta.** `Scorecard` jest dokładnie tym, czego szuka
+  lab: nazwany, wersjonowany treścią zestaw 1–32 pomiarów, każdy z nazwą
+  metryki, wskaźnikami JSON w odpowiedź, oczekiwanie i pytanie, oraz scorerem z
+  domkniętego enuma. Kierunek każdej metryki **wyprowadza karta**, autor go
+  nigdy nie wysyła. Przypadki to `Cohort` z `POST /api/v1/evaluation-cohorts`,
+  przypięta digestem trzech plików. Obie rodziny tras są już projektowe.
+- **Oddanie pracy to nagranie albo wygenerowane odpowiedzi.** `PUT
+  /api/v1/evaluation-recordings/{name}` przypina odpowiedzi digestem bajtów;
+  `Answers::Generated` nazywa zadanie workera, które odpowiada na każdy
+  przypadek pod promptem i modelem wariantu, trzymane do nich przez trace'y
+  przebiegów. To, co uczestnik *zbudował*, to `VariantManifest`. Projektowe.
+- **Wynik to opublikowany `EvaluationResult`** — a widok całej grupy nie
+  potrzebuje niczego nowego, i to jest znalezisko, które zdecydowało o
+  kształcie. `context_id` jest adresem treści kohorty, splitu, suity, scorera i
+  definicji metryk **razem**, więc każdy wynik zmierzony na przypadkach jednego
+  laboratorium jego kartą ma ten sam. `GET
+  /api/v1/evaluation-results?context_id=…` to już „wyniki wszystkich".
+- **Brief nie istnieje** — żadna z 226 tras nie trzyma autorskiego tekstu
+  instrukcji. I, mniej oczywiste, nie istnieje **wiązanie**: nigdzie nie jest
+  napisane, że *laboratorium 3 tego warsztatu to ten brief, mierzony tą kartą
+  na tych przypadkach*. `EvaluationContext` jest tym wiązaniem bez briefu, ale
+  jest **wyprowadzany przy publikacji z deklaracji**, a deklaracja potrzebuje
+  wariantu — czyli pracy uczestnika, której nie ma, gdy prowadzący pisze lab.
+
+### Co powstało
+
+`aiwatcher-labs` — szósty rejestr autorski, kształt ADR_0011 co do joty
+([ADR_0034](ADR/ADR_0034_WORKSHOP_LABS.md)), plus moduł `aiwatcher-api/src/labs.rs`.
+Lab to `{name, title, brief, position?, tests?}`, wersja to digest całego
+dokumentu, `published` to etykieta, którą czyta uczestnik, a publikacja bez
+etykiety to szkic. `LabTests` przypina kartę **na wersji** i kohortę digestem.
+Pięć tras, każda z bliźniaczą rodziną projektową od urodzenia: lista,
+publikacja, lab, wersja, etykieta — i szósta, `GET
+/labs/{name}/measurement`, która odpowiada `context_id`, bo digest po
+kanonizowanym dokumencie to dokładnie to, co druga implementacja w TypeScripcie
+zrobiłaby subtelnie inaczej (precedens: `POST /evaluation-approvals/address`).
+
+Dwie decyzje warte zapisania. **Przypięcia są sprawdzane tam, gdzie lab jest
+pisany**: publikacja rozwiązuje kartę i kohortę w rejestrze *tego* projektu i
+odmawia 422 `lab_unpinned`, zamiast zapisać lab, który czyta się dobrze i nic
+nie mierzy. I **karta z sędzią jest odmawiana po nazwie metryki**
+(`lab_unmeasurable`): sędzia i zestaw kalibracyjny są deklarowane per przebieg,
+więc dwie prace nie muszą być ocenione przez tego samego, a ich wyniki nie
+dzielą kontekstu — powiedzenie tego jest lepsze niż odpowiedzenie
+identyfikatorem, który znaczy mniej, niż wygląda.
+
+Jedna zmiana poza własną granicą, wypisana wprost: `EvaluationContext::id` w
+`aiwatcher-evaluation` — adres treści kontekstu, który `Evaluation::prepare`
+liczył inline i teraz woła, więc implementacja została jedna. To właściwe
+miejsce: tożsamość kontekstu należy do kontekstu.
+
+### Panel
+
+`features/learning/screens/overview/labs.tsx` przestało być dziewięcioma
+pustymi slotami i jest czytelnikiem czterech zakresowych tras
+(`lib/labs.ts`). Lab otwiera się w miejscu: brief tak, jak go napisano (bez
+renderera Markdown — panel go nie ma, a wybranie go byłoby decyzją podjętą przy
+okazji rysowania lekcji), karta i kohorta, metryki z kierunkiem **serwera**, i
+wyniki dzielące kontekst laboratorium. Czego nie ma: postępu, punktów,
+rankingu, terminu. Lab bez przypiętych testów rysuje zdanie serwera
+(`unavailable`), a warsztat bez laboratoriów mówi, że ich nie ma — dziewięć
+atrap zniknęło, bo rysowanie prawdopodobnego ćwiczenia to ta sama atrapa, przed
+którą chroniły, tylko z drugiej strony.
+
+Które laboratorium jest otwarte, jest **jedynym** wyborem w tym panelu, którego
+nie ma w URL-u, i to jest świadome: lab jest sekcją strony warsztatu, a nie
+osobnym widokiem. Przeniesie się do URL-a tego dnia, w którym dostanie własną
+trasę — formularz oddania pracy albo własną ocenę.
+
+### Czego nie zbudowano, i dlaczego to jest widoczne
+
+- **`POST /evaluation-runs/{id}/start` nie ma bliźniaka projektowego** — z
+  reguły samego ADR_0033, że żaden projektowy `/start` nie jest otwierany przed
+  IAM-02/D. Lab można więc napisać, przeczytać i pobrać jego przypadki w
+  projekcie, a przebieg, który ocenia oddaną pracę, startuje pod autoryzacją
+  instancji. Panel mówi to zdaniem, zamiast rysować przycisk, który dostałby
+  odmowę.
+- **`/api/v1/experiments` jest tylko legacy**, więc widok grupy stoi na
+  zakresowym `evaluation-results?context_id=`, a nie na wierszach eksperymentu.
+  Te same liczby, jeden odczyt naraz.
+- Żadnego drugiego pojęcia dostępu: kto widzi laboratorium, decyduje grant na
+  projekcie warsztatu, i nic innego.
+
+### Walidacja
+
+- `aiwatcher-labs`: **8 testów** (idempotencja publikacji, etykieta kontra
+  szkic, etykieta wskazująca na nieistniejącą wersję, kolejność listy z
+  nieumieszczonymi na końcu, kontekst jako klucz zgłoszeń, odmowa karty z
+  sędzią po nazwie metryki, izolacja projektów przy tym samym digeście,
+  odmowy przed zapisem).
+- `aiwatcher-api`: **4 testy HTTP** na rodzinie zakresowej — lab czytany
+  wyłącznie przez swój projekt, przypięcia cudzego projektu odmówione tam,
+  gdzie lab jest pisany (z pełnym łańcuchem dataset → kohorta → karta → lab →
+  `context_id`), lab bez testów jako odpowiedź a nie awaria, nagłówek mutacji,
+  brak grantu jako 404 i `Cache-Control: no-store`.
+- Panel: **20 testów** w obszarze (12 na stronie), w tym trzy nowe —
+  brak laboratoriów rysuje pustkę zamiast slotów, testy i oceny czytane z
+  serwera z **asercją, że `context_id` w zapytaniu to ten, który serwer
+  odpowiedział** (sprawdzona przez psucie: podmiana na wyliczony w
+  przeglądarce wywala test), i zdanie serwera dla laboratorium bez pomiaru.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  --all-features -Dwarnings`, `python3 scripts/check-rust-boundaries.py`,
+  `npm run build` (granice architektury, Vite, pełne `tsc`) — zielone.
+- Drzewo *dokładnie* z tymi zmianami (`git checkout-index` z indeksu, bez
+  plików innych sesji) zbudowane osobno: `cargo test --workspace --all-targets
+  --no-run` — powodzenie, a wygenerowany z niego kontrakt ma 236 ścieżek, czyli
+  226 plus dziesięć laboratoryjnych.
+
+Czego **nie** uruchomiono: pełnego `cargo test --workspace` (dwie inne sesje
+pracują w tym samym katalogu roboczym i ich niezacommitowane zmiany są w
+drzewie); żywego serwera z SSO i przeglądarki; klastra, workerów, S3/RustFS;
+`npm run lint` (nadal nie istnieje — PORZ-01). `npm run test` w panelu ma jedną
+porażkę, **nie z tej pracy**: `commands.test.ts` wymaga schematu dla `/system`,
+którego SYS-01 jeszcze nie dopisało.

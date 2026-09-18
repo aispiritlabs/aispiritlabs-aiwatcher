@@ -190,6 +190,7 @@ Guardrails says which file holds what.
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
 | `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, a conversation cohort's own archived responses, or answers a worker's task **generates** for each case's input — held to the variant's prompt and model by the traces of their runs — against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric, held against people when the card says so — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-labs` | A workshop's labs (ADR_0034): the authored brief somebody reads, and the measurement their work is held to. Almost everything a lab needs was already here — its tests are an `aiwatcher-evaluation` scorecard version and a derived cohort, the work handed in is a recording or answers a worker generated, and a mark is a published result — so this holds the one thing that was not: a versioned document naming the brief, the card, the cohort and where it sits. `LabTests::measurement` folds those pins into the `EvaluationContext` every submission publishes under, which is the whole join from a lab to its marks. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -608,6 +609,28 @@ before changing that area.
    those land, no organization or project selector is activated, and this
    deployment is not described as multi-tenant safe.
 
+26. **A lab is an authored brief bound to a pinned measurement, and three of
+   the four things it needs already existed**
+   ([ADR_0034](docs/ADR/ADR_0034_WORKSHOP_LABS.md)). Learning is built on one
+   sentence — a workshop is a project, a participant is a grant, enrolling is
+   redeeming an invitation — and it carried the access half and none of the
+   content. The obvious reading was four missing things; holding them against
+   what this instance has left one. The tests are a `Scorecard` at a version
+   plus a `Cohort` derived from a dataset version, both already project-scoped.
+   Handing work in is a staged recording, or answers a worker generates for a
+   `VariantManifest`. A mark is a published `EvaluationResult` — and the class's
+   view of one needs nothing new either, because a `context_id` is the content
+   address of the cohort, the split, the suite, the scorer and the metric
+   definitions *together*, so every result measured on one lab's pins shares it
+   and `/evaluation-results?context_id=` is already "everybody's marks". What
+   was missing is the brief, and the document binding it to a card and a cohort:
+   `aiwatcher-labs`, ADR_0011's shape exactly, project-scoped from birth. A lab
+   answers its own `context_id` through `GET /labs/{name}/measurement` and
+   nothing else computes one, the precedent being
+   `POST /evaluation-approvals/address`. Two gaps stay visible rather than
+   papered over: `/evaluation-runs/{id}/start` has no scoped twin by ADR_0033's
+   own rule, and `/experiments` is legacy-only.
+
 ## Conventions
 
 ### Rust
@@ -733,6 +756,7 @@ each rule in exactly one place:
 | `crates/aiwatcher-annotations/CLAUDE.md` | drawing, the family split, usage rights, hubs, imports, `integrations::fetch` |
 | `crates/aiwatcher-training/CLAUDE.md` | training runs, the model registry, promotion, the serving profile |
 | `crates/aiwatcher-prompts/CLAUDE.md` | versions, optimisation verdicts, labels |
+| `crates/aiwatcher-labs/CLAUDE.md` | the brief, the pins, and the context a lab's marks share |
 | `crates/aiwatcher-projector/CLAUDE.md` | the period fold, the journal, the `asked` index |
 | `apps/panel/CLAUDE.md` | how the panel is built, and what the browser may not decide |
 | `sdk/CLAUDE.md` | the four SDKs: their split failure policies, naming rules and what each may not import |
@@ -848,6 +872,17 @@ round leaves a reference to bytes nobody wrote. It applies to:
   its own variant, unrestricted in `may_claim`, because the unauthenticated mode
   it replaces let anonymous workers claim anything and adopting a credential
   must not silently break that machine.
+- **Never let a route report a secret's value because its presence is worth
+  reporting.** `GET /api/v1/system` answers what this deployment has wired —
+  which is a fact worth having in one place rather than one 501 at a time — and
+  the line it keeps is that *configured* is not a secret and the *value* often
+  is. A credential is never printed; neither is an address, because a database
+  URL or an object store's endpoint is reconnaissance for somebody already
+  inside. Both are reported as the **variable's name**, which is what a reader
+  needs anyway. The issuer is the one exception and a deliberate one: it is
+  already public on `/auth/config` before anybody signs in. It is an `admin`
+  route, it writes nothing, and `aiwatcher-server/tests/system.rs` puts a
+  recognisable value into every sensitive variable and fails if one comes back.
 
 ### Organizations, projects and grants
 
