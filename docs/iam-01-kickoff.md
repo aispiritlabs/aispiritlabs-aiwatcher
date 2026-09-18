@@ -219,31 +219,42 @@ deployment.
 
 ## 8. Prompt for the next session
 
-> Kontynuujesz IAM-01 w repozytorium AIWatcher. Dispatcher projektowy stoi
-> (`aiwatcher_server::execution::project::ProjectDispatcher`, sekcja 2), obie
-> blokady strumienia C są zdjęte, ale **nic w `spawn` go nie buduje i nie ma
-> projektowego `/start`**. Przeczytaj `docs/iam-01-kickoff.md`,
+IAM-01 is closed. The next session starts **IAM-02**, and
+[`iam-02-data-plane.md`](iam-02-data-plane.md) is its plan: read that first,
+this file second. The decision this prompt used to ask for — whether a
+project's facts reach the event log — is **made** there, in its section 2.
+
+> Zaczynasz IAM-02 w repozytorium AIWatcher. IAM-01 jest zamknięte: dispatcher
+> stoi (`aiwatcher_server::execution::project::ProjectDispatcher`), obie blokady
+> strumienia C są zdjęte, ale **nic w `spawn` go nie buduje i nie ma
+> projektowego `/start`**. Przeczytaj `docs/iam-02-data-plane.md` (plan i
+> decyzje), potem `docs/iam-01-kickoff.md`,
 > `docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md`, sekcję o dispatcherze w
 > `crates/aiwatcher-iam/README.md` i instrukcje repozytorium. Zweryfikuj stan w
-> kodzie.
+> kodzie — dokumentacja opisuje etap zamknięty 18.09.2026.
 >
-> Zadanie: sekcja 3 — pozycje, na które czeka trasa. Zacznij od **jawnej decyzji
-> o logu zdarzeń**: albo scoped outbox/ingest/projekcja, albo zapisana decyzja,
-> że fakty projektu nie trafiają na log, z konsekwencjami dla żywego widoku,
-> spanów i foldów (dziś to wychodzi *z konstrukcji*, co jest bezpieczne i
-> niewidoczne). Potem scoped retention sweep, sprawdzanie grantów na każdym
-> odczycie, komendzie, artefakcie i trasie workera, oraz retencja deklaracji,
-> ustawień sędziego i zachowanych odpowiedzi.
+> Zadanie: **E1 — projekt na kopercie**. `EventEnvelope` niesie opcjonalny
+> `ProjectScope`; trasa ingestu **zawsze nadpisuje** go wartością z
+> poświadczenia, a wartość od producenta jest odrzucana. W przeciwieństwie do
+> `published_by` to pole **musi być serializowane**, bo czyta je projektor z
+> szyny, a nie ta sama trasa. `IngestToken` zyskuje zakres, rola zostaje twardo
+> `Editor`, zakres tylko zawęża. Brak pola to strona globalna, więc nic
+> istniejącego się nie rusza. Zaktualizuj `contracts/envelope.schema.json`;
+> SDK nie zmieniaj — nigdy tego pola nie wysyłają.
 >
-> **Nie otwieraj projektowego `/start` i nie rejestruj dispatchera w
-> produkcyjnym `spawn`**, dopóki te pozycje nie są zintegrowane i przetestowane.
-> Test biblioteczny nie jest zgodą na otwarcie trasy, a prefiks URL ani filtr w
-> panelu nie zastępują izolacji.
+> Jeśli E1 zmieści się z zapasem, weź E2 (jeden fold z kluczem zakresu w
+> wierszu — **nigdy fold per tenant**) i przebiegnij `just load-test`, bo
+> `AIWATCHER_MAX_SPANS_TOTAL` jest kontraktem pamięciowym.
+>
+> **Nie otwieraj projektowego `/start`, nie rejestruj dispatchera w produkcyjnym
+> `spawn` i nie aktywuj selektora organizacji/projektu.** Bramka M1 wymaga E1–E4
+> zweryfikowanych przez rzeczywiste HTTP; test biblioteczny nie jest zgodą na
+> otwarcie trasy, a prefiks URL ani filtr w panelu nie zastępują izolacji.
 >
 > Pracuj na osobnej gałęzi z `main`. Nie zmieniaj istniejących migracji SQL —
-> nowe są addytywne, z rolling upgrade i rollbackiem starego binarium. Nie
-> regeneruj kontraktu HTTP bez rzeczywistej zmiany API. Na koniec uruchom
-> `cargo test --workspace --all-targets`, clippy z `-D warnings`,
+> nowe są addytywne, z rolling upgrade i rollbackiem starego binarium. Kontrakt
+> HTTP regeneruj `just openapi` **tylko** jeśli rzeczywiście zmieniłeś API. Na
+> koniec uruchom `cargo test --workspace --all-targets`, clippy z `-D warnings`,
 > `cargo fmt --all --check`, `git diff --check`,
 > `python3 scripts/check-rust-boundaries.py` i
 > `python3 scripts/lint-comments.py`; PostgreSQL testuj wyłącznie na osobnej,
