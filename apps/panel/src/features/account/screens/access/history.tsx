@@ -1,5 +1,5 @@
 import type { AuditEntry, IamChange, IamCommand, IamGrant, IamGrantee } from '@/api/generated';
-import { edgeOf, short, useAudit, useCommand } from '@/features/account/iam';
+import { edgeOf, short, useAudit, useCommand } from '@/shared/lib/iam';
 import {
   Badge,
   Button,

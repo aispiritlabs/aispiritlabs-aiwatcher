@@ -9,7 +9,7 @@ import {
   useInvitations,
   useInvite,
   useRevokeInvitation,
-} from '@/features/account/iam';
+} from '@/shared/lib/iam';
 import {
   Badge,
   Button,
@@ -40,15 +40,24 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
  * The token appears exactly once, here, in the response that created it. The
  * record kept afterwards holds only a digest, so this card can say what was
  * offered and whether it was taken, and can never show the secret again.
+ *
+ * Two areas draw it, so the framing is a parameter and nothing else is. What
+ * an administrator calls inviting somebody to a project, an instructor calls
+ * enrolling them in a workshop; it is the same offer, and a second
+ * implementation of it under Learning would be a second thing to keep right
+ * the day the window gains a field.
  */
 export function Invitations({
   organization,
   project,
-  projectName,
+  title,
+  intro,
 }: {
   organization: string;
   project: string;
-  projectName: string;
+  title: string;
+  /** Who this offer is for and where they redeem it, in the reader's own terms. */
+  intro: React.ReactNode;
 }) {
   const offers = useInvitations(organization);
   const invite = useInvite(organization, project);
@@ -85,14 +94,10 @@ export function Invitations({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Invite somebody to {projectName}</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-sm">
-        <p className="text-xs text-muted-foreground">
-          For somebody who has not signed in here yet, so there is no subject to grant to. They
-          redeem the token below on their own Organizations &amp; projects page, and become a member
-          of this organization with exactly the grant declared here.
-        </p>
+        <p className="text-xs text-muted-foreground">{intro}</p>
 
         <form className="flex flex-col gap-3" onSubmit={submit}>
           <div className="flex flex-wrap gap-3">

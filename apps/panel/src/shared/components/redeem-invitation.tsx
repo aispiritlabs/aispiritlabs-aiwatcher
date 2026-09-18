@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { edgeOf, useRedeem } from '@/features/account/iam';
+import { edgeOf, useRedeem } from '@/shared/lib/iam';
 import {
   Badge,
   Button,
@@ -23,10 +23,19 @@ import {
  * Redeeming is a write by somebody who is not yet a member, which is the whole
  * point: the server learns their `(provider, subject)` pair from the session
  * they are already holding, and nothing they typed names them.
+ *
+ * Both areas that deal in grants draw it, and the framing is the only thing
+ * that differs: an administrator was invited to a project, a participant was
+ * enrolled in a workshop, and the token is the same token.
  */
 export function Redeem({
+  title,
+  intro,
   onRedeemed,
 }: {
+  title: string;
+  /** What arriving here with a token means, in the reader's own terms. */
+  intro: React.ReactNode;
   onRedeemed: (organization: string, project: string) => void;
 }) {
   const redeem = useRedeem();
@@ -35,13 +44,10 @@ export function Redeem({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Redeem an invitation</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        <p className="text-xs text-muted-foreground">
-          If somebody sent you a token, paste it here. It works once, for whoever is signed in — so
-          redeem it as yourself, not on somebody else&rsquo;s behalf.
-        </p>
+        <p className="text-xs text-muted-foreground">{intro}</p>
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {

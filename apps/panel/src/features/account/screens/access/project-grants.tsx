@@ -1,5 +1,5 @@
 import type { IamGrant } from '@/api/generated';
-import { edgeOf, short, useCommand, useProjectGrants } from '@/features/account/iam';
+import { edgeOf, short, useCommand, useProjectGrants } from '@/shared/lib/iam';
 import {
   Badge,
   Button,

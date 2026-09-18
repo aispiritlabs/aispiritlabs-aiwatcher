@@ -10,14 +10,14 @@ import {
   useProjectAccess,
   useProjects,
   useRoster,
-} from '@/features/account/iam';
+} from '@/shared/lib/iam';
 import { GrantForm } from '@/features/account/screens/access/grant-form';
 import { History } from '@/features/account/screens/access/history';
-import { Invitations } from '@/features/account/screens/access/invitations';
 import { OrganizationAdmin } from '@/features/account/screens/access/organization-admin';
 import { People } from '@/features/account/screens/access/people';
+import { Invitations } from '@/shared/components/invitations';
+import { Redeem } from '@/shared/components/redeem-invitation';
 import { ProjectGrants } from '@/features/account/screens/access/project-grants';
-import { Redeem } from '@/features/account/screens/access/redeem';
 import {
   Badge,
   Button,
@@ -93,7 +93,16 @@ export function AccessPage() {
     <div className="flex flex-col gap-4">
       <Heading />
 
-      <Redeem onRedeemed={(organization, project) => select(organization, project)} />
+      <Redeem
+        title="Redeem an invitation"
+        intro={
+          <>
+            If somebody sent you a token, paste it here. It works once, for whoever is signed in —
+            so redeem it as yourself, not on somebody else&rsquo;s behalf.
+          </>
+        }
+        onRedeemed={(organization, project) => select(organization, project)}
+      />
 
       <Card>
         <CardHeader>
@@ -245,7 +254,15 @@ export function AccessPage() {
                   <Invitations
                     organization={search.organization}
                     project={search.project}
-                    projectName={access.data?.project.name ?? 'this project'}
+                    title={`Invite somebody to ${access.data?.project.name ?? 'this project'}`}
+                    intro={
+                      <>
+                        For somebody who has not signed in here yet, so there is no subject to grant
+                        to. They redeem the token below on their own Organizations &amp; projects
+                        page, and become a member of this organization with exactly the grant
+                        declared here.
+                      </>
+                    }
                   />
                 </>
               ) : access.data ? (
@@ -323,7 +340,7 @@ function ProjectAccessCard({
   pending,
   error,
 }: {
-  access: IamProjectAccess | undefined;
+  access: IamProjectAccess | null | undefined;
   pending: boolean;
   error: unknown;
 }) {
@@ -335,6 +352,13 @@ function ProjectAccessCard({
       <CardContent className="flex flex-col gap-3 text-sm">
         {pending ? <Spinner /> : null}
         {error ? <Refusal error={error} fallback="this project could not be read" /> : null}
+        {access === null ? (
+          <p className="text-xs text-muted-foreground">
+            No grant of yours reaches this project. Administering an organization is not access to
+            what is inside it — an admin issues grants here and holds none until one is issued to
+            them.
+          </p>
+        ) : null}
         {access ? (
           <>
             <div className="flex flex-wrap items-center gap-2">

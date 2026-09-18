@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { IamCommand, IamOrganizationRole } from '@/api/generated';
-import { useCommand } from '@/features/account/iam';
+import { useCommand } from '@/shared/lib/iam';
 import {
   Button,
   Card,

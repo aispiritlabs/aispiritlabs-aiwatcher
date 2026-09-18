@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { IamCommand, IamPrincipal, IamProjectRole } from '@/api/generated';
-import { localInputValue, unixFrom, useCommand } from '@/features/account/iam';
+import { localInputValue, unixFrom, useCommand } from '@/shared/lib/iam';
 import {
   Button,
   Card,

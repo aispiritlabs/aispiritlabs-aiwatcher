@@ -198,7 +198,10 @@ export const SECTIONS: NavSection[] = [
     id: 'learning', label: 'Learning', icon: BookOpen,
     blurb: 'Workshops and practical labs.', home: '/learning',
     areas: [{ to: '/learning', label: 'Workshops & labs', icon: BookOpen,
-      blurb: 'Preview the lab structure; enrollment and timed access are not yet available.', views: [] }],
+      // Timed access *is* available and is the grant window; what has no
+      // contract is a lab's brief, its tests and its mark, and the area says
+      // which of the two each part is rather than one sentence covering both.
+      blurb: 'Workshops, who is on them and until when; the labs are still empty slots.', views: [] }],
   },
 ];
 

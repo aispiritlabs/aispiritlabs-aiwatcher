@@ -1,0 +1,513 @@
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router';
+import { afterEach, expect, it, vi } from 'vitest';
+
+import { LearningPage } from './page';
+import { searchSchema } from './search';
+import { refusal, serve, withQueries, type Route } from '@/test/server';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+const DAY = 24 * 60 * 60;
+const MONDAY = 1_800_000_000;
+const WEDNESDAY = MONDAY + 2 * DAY;
+
+const project = { name: 'Retrieval workshop', scope: { organization: 'org', project: 'ret' } };
+const other = { name: 'Vision workshop', scope: { organization: 'org', project: 'vis' } };
+
+const grant = (id: string, parts: Record<string, unknown> = {}) => ({
+  id,
+  role: 'editor',
+  scope: project.scope,
+  grantee: { kind: 'user', value: { provider: 'authentik', subject: 'student-subject' } },
+  window: { valid_from: MONDAY, edit_until: null, read_until: null },
+  ...parts,
+});
+
+/** The three reads every rendering of this page makes, with sensible defaults. */
+function server(routes: Route[]) {
+  return serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: true } } },
+    {
+      method: 'GET',
+      path: '/auth/me',
+      answer: {
+        status: 200,
+        body: { credential: 'session', roles: ['viewer'], subject: 'teacher-subject' },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/iam/organizations',
+      answer: { status: 200, body: [{ id: 'org', name: 'AI Spirit Labs' }] },
+    },
+    ...routes,
+  ]);
+}
+
+async function open(entry: string) {
+  vi.setSystemTime(new Date(WEDNESDAY * 1000));
+  vi.stubGlobal('scrollTo', () => {});
+  const root = createRootRoute();
+  const route = createRoute({
+    getParentRoute: () => root,
+    path: '/learning',
+    validateSearch: searchSchema,
+    component: LearningPage,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([route]),
+    history: createMemoryHistory({ initialEntries: [entry] }),
+  });
+  render(withQueries(<RouterProvider router={router} />));
+  return router;
+}
+
+it('separates the workshops a grant reaches from the ones only administered', async () => {
+  // Two reads that answer different questions: `projects` is the caller's own
+  // grants, a roster's `projects` is every project in the organization. Mixing
+  // them would put a role badge on a workshop nobody can open.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    {
+      method: 'GET',
+      path: '/projects',
+      answer: {
+        status: 200,
+        body: [
+          {
+            project,
+            role: 'editor',
+            evaluated_at: WEDNESDAY,
+            grants: [{ grant: grant('g1'), role: 'editor' }],
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: {
+        status: 200,
+        body: {
+          organization: { id: 'org', name: 'AI Spirit Labs' },
+          members: [],
+          teams: [],
+          projects: [project, other],
+        },
+      },
+    },
+  ]);
+  await open('/learning?organization=org');
+
+  const mine = (await screen.findByText('Open to you now')).closest('section') as HTMLElement;
+  expect(within(mine).getByText('Retrieval workshop')).toBeTruthy();
+  expect(within(mine).queryByText('Vision workshop')).toBeNull();
+
+  // A live grant is what puts a workshop on the first list, so the second one
+  // is not "administered": a place that opens next week sits there too, and
+  // the page says all three reasons rather than picking one.
+  const theirs = screen.getByText('Also in this organization').closest('section') as HTMLElement;
+  expect(within(theirs).getByText('Vision workshop')).toBeTruthy();
+  expect(within(theirs).getByText('nothing of yours in force')).toBeTruthy();
+});
+
+it('tells a participant what the list cannot show them', async () => {
+  // The gap a browser found: `Policy::projects` keeps only the projects a
+  // grant reaches *now*, so a place opening next Monday is simply absent — and
+  // a participant cannot read the roster to discover it. Saying so is the
+  // whole fix available here; there is no route for "what am I enrolled on".
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    {
+      method: 'GET',
+      path: '/projects',
+      answer: {
+        status: 200,
+        body: [
+          {
+            project,
+            role: 'editor',
+            evaluated_at: WEDNESDAY,
+            grants: [{ grant: grant('g1'), role: 'editor' }],
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+  ]);
+  await open('/learning?organization=org');
+
+  await screen.findByText('Retrieval workshop');
+  expect(screen.getByText(/A place that opens later is not here yet/)).toBeTruthy();
+  expect(screen.queryByText('Also in this organization')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('keeps one person’s two grants on one row and shows the closed one beside the live one', async () => {
+  // The case that decides whether this page can be trusted: a workshop grant
+  // ending must never read as that person having lost access, because the
+  // permanent grant beside it is still in force.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    {
+      method: 'GET',
+      path: '/projects',
+      answer: {
+        status: 200,
+        body: [
+          {
+            project,
+            role: 'admin',
+            evaluated_at: WEDNESDAY,
+            grants: [{ grant: grant('mine', { role: 'admin' }), role: 'admin' }],
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: {
+        status: 200,
+        body: {
+          project,
+          role: 'admin',
+          evaluated_at: WEDNESDAY,
+          grants: [{ grant: grant('mine', { role: 'admin' }), role: 'admin' }],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: {
+        status: 200,
+        body: [
+          grant('lapsed', {
+            role: 'editor',
+            window: { valid_from: MONDAY, edit_until: null, read_until: MONDAY + DAY },
+          }),
+          grant('standing', { role: 'viewer' }),
+        ],
+      },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  const person = (await screen.findByText(/^at authentik$/)).closest('li') as HTMLElement;
+  expect(within(person).getByText('2 grants, each in force on its own')).toBeTruthy();
+  expect(within(person).getByText('closed')).toBeTruthy();
+  expect(within(person).getByText('open')).toBeTruthy();
+});
+
+it('reads an editor whose editing has ended as read-only, and a viewer as unchanged', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const ended = { valid_from: MONDAY, edit_until: MONDAY + DAY, read_until: null };
+  server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [] } },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: {
+        status: 200,
+        body: {
+          organization: { id: 'org', name: 'AI Spirit Labs' },
+          members: [],
+          teams: [],
+          projects: [project],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: { status: 404, body: refusal('not_found', 'no grant') },
+    },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: {
+        status: 200,
+        body: [
+          grant('editing-over', { role: 'editor', window: ended }),
+          grant('reader', {
+            role: 'viewer',
+            window: ended,
+            grantee: { kind: 'user', value: { provider: 'authentik', subject: 'reader-subject' } },
+          }),
+        ],
+      },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  await screen.findByText('read-only');
+  expect(screen.getByText('open')).toBeTruthy();
+  expect(screen.getAllByText(/editing ended/)).toHaveLength(1);
+});
+
+it('renders an absent grant of your own as the answer it is, not as a failure', async () => {
+  // `Policy::access` reports nothing when the caller holds no live grant, which
+  // is the ordinary state of an administrator looking at a workshop they run
+  // and are not on. Drawing that 404 in red told them a read had broken.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [] } },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: {
+        status: 200,
+        body: {
+          organization: { id: 'org', name: 'AI Spirit Labs' },
+          members: [],
+          teams: [],
+          projects: [project],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: { status: 404, body: refusal('not_found', 'no grant') },
+    },
+    { method: 'GET', path: '/grants', answer: { status: 200, body: [] } },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  await screen.findByText(/You hold no grant on this workshop/);
+  expect(screen.queryByRole('alert')).toBeNull();
+  // Administering it is still enough to enrol somebody, which is the whole
+  // reason the roster answers about projects no grant of theirs reaches.
+  expect(screen.getByRole('button', { name: 'Create invitation' })).toBeTruthy();
+});
+
+it('offers no enrolment control to somebody who may not enrol', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [] } },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: {
+        status: 200,
+        body: {
+          project,
+          role: 'editor',
+          evaluated_at: WEDNESDAY,
+          grants: [{ grant: grant('g1'), role: 'editor' }],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  await screen.findByText(/Enrolling somebody needs admin on this workshop/);
+  expect(screen.queryByRole('button', { name: 'Create invitation' })).toBeNull();
+  // A 403 on the participant list is the server answering about the reader.
+  expect(screen.getByText(/The list of participants is for whoever may enrol one/)).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('shows an enrolment token once and never asks the server for it again', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const issued = {
+    token: 'the-secret-token',
+    invitation: {
+      id: 'inv-1',
+      scope: project.scope,
+      role: 'viewer',
+      created_at: MONDAY,
+      expires_at: MONDAY + DAY,
+      created_by: { provider: 'authentik', subject: 'teacher-subject' },
+      window: { valid_from: MONDAY, edit_until: null, read_until: null },
+      redeemed: null,
+    },
+  };
+  const calls = server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [] } },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: {
+        status: 200,
+        body: {
+          organization: { id: 'org', name: 'AI Spirit Labs' },
+          members: [],
+          teams: [],
+          projects: [project],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: { status: 404, body: refusal('not_found', 'no grant') },
+    },
+    { method: 'GET', path: '/grants', answer: { status: 200, body: [] } },
+    {
+      method: 'GET',
+      path: '/invitations',
+      answer: (call) => ({ status: 200, body: call === 1 ? [] : [issued.invitation] }),
+    },
+    { method: 'POST', path: '/invitations', answer: { status: 201, body: issued } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Create invitation' }));
+  await screen.findByRole('button', { name: /the-secret-token/ });
+  // The offer comes back in the list afterwards, and it carries no token: only
+  // a digest is kept, so nothing can show the secret a second time.
+  await screen.findByText('open');
+  expect(calls.calls.filter((call) => call.method === 'POST')).toHaveLength(1);
+  expect(JSON.stringify(calls.calls.filter((call) => call.method === 'GET'))).not.toContain(
+    'the-secret-token',
+  );
+});
+
+it('draws nine lab slots and claims no brief, test or mark for any of them', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    {
+      method: 'GET',
+      path: '/projects',
+      answer: {
+        status: 200,
+        body: [
+          {
+            project,
+            role: 'viewer',
+            evaluated_at: WEDNESDAY,
+            grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: {
+        status: 200,
+        body: {
+          project,
+          role: 'viewer',
+          evaluated_at: WEDNESDAY,
+          grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  expect(within(labs).getAllByRole('listitem')).toHaveLength(9);
+  expect(within(labs).getAllByText('no contract')).toHaveLength(9 * 4);
+  // Nothing on a lab slot may be a number: a progress figure nobody measured
+  // is the fake this area exists not to draw.
+  expect(within(labs).queryByText(/%/)).toBeNull();
+});
+
+it('keeps the workshop being looked at in the URL', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  server([
+    {
+      method: 'GET',
+      path: '/projects',
+      answer: {
+        status: 200,
+        body: [
+          {
+            project,
+            role: 'viewer',
+            evaluated_at: WEDNESDAY,
+            grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    {
+      method: 'GET',
+      path: '/access',
+      answer: {
+        status: 200,
+        body: {
+          project,
+          role: 'viewer',
+          evaluated_at: WEDNESDAY,
+          grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+  ]);
+  const router = await open('/learning?organization=org');
+
+  await userEvent.click(await screen.findByRole('button', { name: /Retrieval workshop/ }));
+  expect(router.state.location.search).toEqual({ organization: 'org', project: 'ret' });
+  await userEvent.click(await screen.findByRole('button', { name: 'All workshops' }));
+  expect(router.state.location.search).toEqual({ organization: 'org' });
+});
+
+it('says why there is nothing to enrol anybody in when no provider is configured', async () => {
+  serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+  ]);
+  await open('/learning');
+  await screen.findByText('This instance has no identity provider');
+  expect(screen.queryByText('Organizations')).toBeNull();
+});

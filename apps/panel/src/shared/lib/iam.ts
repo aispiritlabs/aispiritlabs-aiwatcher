@@ -28,11 +28,17 @@ import type {
   IamRedeemed,
   IamRoster,
 } from '@/api/generated';
-import { confirmDone } from '@/shared/lib/result';
-import { answerOf } from '@/shared/lib/result';
+import { answerOf, answerOrNone, confirmDone } from '@/shared/lib/result';
 
 /**
- * The control plane, as the eight calls it has.
+ * The control plane, as the eleven calls it has.
+ *
+ * In `shared` rather than in `features/account` because two areas now read it:
+ * Account administers organizations and grants, and Learning draws the same
+ * grants as a workshop's enrollment. The architecture check is what forced the
+ * move and it was right to — a second copy of these hooks under Learning would
+ * be a second set of cache keys for the same answers, and an invitation issued
+ * on one page would leave a stale list on the other.
  *
  * Two of them answer about the **caller** — `projects` and `access`, which is
  * the right shape for a permission check — and two about the **organization**:
@@ -97,16 +103,24 @@ export function useProjects(organization: string | undefined): UseQueryResult<Ia
   });
 }
 
-/** One fresh decision, with every source that contributed to it. */
+/**
+ * One fresh decision, with every source that contributed to it — or `null`.
+ *
+ * A 404 here is the server's *answer*, not a failure: `Policy::access` takes
+ * the maximum over the caller's live grants and reports nothing when there are
+ * none, which is the ordinary state of an administrator looking at a project
+ * they administer and do not attend. Drawing that as a red error told somebody
+ * a read had broken when it had worked perfectly.
+ */
 export function useProjectAccess(
   organization: string | undefined,
   project: string | undefined,
-): UseQueryResult<IamProjectAccess> {
+): UseQueryResult<IamProjectAccess | null> {
   return useQuery({
     queryKey: accessKey(organization ?? '', project ?? ''),
     enabled: Boolean(organization && project),
     queryFn: async () =>
-      answerOf(
+      answerOrNone(
         await readAccess({
           path: { organization: organization as string, project: project as string },
         }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { edgeOf, localInputValue, unixFrom } from '@/features/account/iam';
+import { edgeOf, localInputValue, unixFrom } from '@/shared/lib/iam';
 
 describe('a grant window, between the form and the wire', () => {
   it('reads an empty edge as no edge rather than as the epoch', () => {
