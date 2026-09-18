@@ -210,3 +210,30 @@ reads that run as proof of something it never had.
   own; create-only is what keeps that safe, not the checkpoint.
 * **No adapter is a blocker, not a gap in the numbers.** Read §1 before
   telling anybody a project holds its data.
+
+## 9. What a copied project still cannot do
+
+A completed run puts objects under a project's keys. It does not make that
+project usable, and the gap is not in this tool.
+
+* **Nobody has access to what was copied.** This tool creates no organization,
+  team, membership or grant — §1 says so — and no IdP group or email address
+  maps to anything. Somebody still has to decide who may read the project, and
+  then grant it explicitly. **A copy is not a share.**
+* **Sharing needs an invitation, and there is none.** `Command::Grant` takes the
+  exact `(provider, subject)` pair, which is unknowable before the invitee's
+  first sign-in. Until a one-time, expiring invitation redeemed after SSO
+  exists, a project can only be granted to principals who have already signed in
+  and whose subject somebody has read out of the audit log by hand.
+* **There is no organization or project UI.** No panel source file mentions
+  either; the generated client has the routes and nothing calls them. A copied
+  project is reachable over the API and invisible in the browser.
+* **Copied data has no observability.** Runs, spans, metrics and the live stream
+  are instance-wide: a project's facts stay off the event log by construction,
+  so nothing that was copied here appears in Explore, in a trace or in a
+  stream. [IAM-02](iam-02-data-plane.md) is the plan for that half, and its M1
+  gate — sign in, see only your projects, watch only your streams — is what
+  makes a copied project something a person can actually open.
+* **Revocation does not reach a live stream or a running job.** The session
+  cookie's TTL is the revocation window today. Plan a cutover on the assumption
+  that access taken away is not access already ended.

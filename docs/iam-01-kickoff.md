@@ -9,7 +9,8 @@ gate they all waited on. What survived their working reports is here, in
 [ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md) (the boundary),
 [`crates/aiwatcher-iam/README.md`](../crates/aiwatcher-iam/README.md) (the
 contract), [`iam-migration-runbook.md`](iam-migration-runbook.md) (the operator's
-procedure) and the code. Read those before this; this file is what to do next.
+procedure) and the code. What to do next is here and, staged, in
+[IAM-02](iam-02-data-plane.md).
 
 ---
 
@@ -106,6 +107,41 @@ rows come through the artifact store, and only a global one exists on this path.
 Only when those are integrated and tested may a project `/start` be registered,
 and only then may `spawn` build a dispatcher. A library test is not that
 permission; nor is a URL prefix or a panel filter.
+
+**The staged plan for all of it is [IAM-02](iam-02-data-plane.md)**, whose M1
+gate is the smallest useful thing: sign in, see only your own projects, watch
+only your own streams. It turns on one decision — `EventEnvelope` carries an
+optional `ProjectScope`, written at ingest from the credential and never
+honoured from a producer — because today a project's facts stay off the log by
+construction, so a project run has no live view, no span and no fold.
+
+### What sharing a project needs
+
+Separate from `/start`, and mostly not blocked by it. The scoped route families
+already take a **real** grant decision (`ProjectAuthorization`, fresh per
+operation, rechecked after a write's body arrives), so the authored half —
+prompts, datasets, annotations, training, evaluations, workflow definitions,
+reviews, cohorts, recordings, bundles, approvals, calibrations, declarations —
+is ready to be shared as soon as three things exist:
+
+1. **Invitations.** `Command::Grant` takes the exact `(provider, subject)` pair,
+   and nobody knows that before the invitee's first sign-in. An invitation is a
+   one-time, expiring token bound to `(scope, role, window)`, redeemed after SSO
+   in the transaction that creates the grant for the redeemer's principal. An
+   email address is a delivery hint and never an identity key; a replay and a
+   different recipient must both be refused.
+2. **A panel.** No panel source file mentions organizations or projects today —
+   the generated client holds 82 scoped entries and there is no UI at all. An
+   organization/project switcher, a members-and-grants page and a share dialog.
+   `/account` already renders IdP groups read-only and says they are not teams.
+3. **Revocation that reaches a live stream.** The session cookie's TTL *is* the
+   revocation window today. A stream that lives for hours has to ask again and
+   close on refusal, and a `Last-Event-ID` resume has to ask **before** it
+   replays — otherwise resuming is a way to read after access was taken away.
+
+Sharing the *observability* half — runs, spans, metrics, the live stream — needs
+IAM-02's E1–E4 as well. **No organization or project selector is activated
+before the M1 gate.**
 
 ---
 
