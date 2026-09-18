@@ -1178,7 +1178,7 @@ IAM grant behavior, UI, migration or deployed E2E is claimed by this stage.
 
 Four parallel streams took the four remaining halves of IAM-01 at once, from one
 snapshot. The boundary they share is [ADR_0033](../../docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md);
-each stream's own report is in `docs/iam-parallel-{A,B,C,D}-report.md`, and the
+what is left to do is `docs/iam-01-kickoff.md`, and the
 operator's procedure is `docs/iam-migration-runbook.md`. **Project `/start` is
 still closed, no production caller constructs a bound store, and no selector
 should be activated on the strength of this.**

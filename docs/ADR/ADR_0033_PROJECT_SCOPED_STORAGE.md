@@ -17,9 +17,8 @@ one.
 What was left was everything that **runs**: an execution's history, its claim
 table, its timers, its outbox, its artifacts and the measurements a project
 declares over its own judges and scorers. Four streams took those four halves at
-once, from one snapshot, and the reports are
-[A](../iam-parallel-A-report.md), [B](../iam-parallel-B-report.md),
-[C](../iam-parallel-C-report.md) and [D](../iam-parallel-D-report.md).
+once, from one snapshot; what is left of their reports is
+[the IAM-01 kickoff](../iam-01-kickoff.md).
 
 Two things forced a decision rather than a fourth repetition of the pattern.
 
