@@ -305,7 +305,7 @@ impl Registry {
         format!("{}/pipelines/{}/head.json", self.prefix, Self::id(name))
     }
 
-    fn pipeline_version_key(&self, name: &str, revision: &str) -> String {
+    pub(crate) fn pipeline_version_key(&self, name: &str, revision: &str) -> String {
         format!(
             "{}/pipelines/{}/versions/{revision}.json",
             self.prefix,

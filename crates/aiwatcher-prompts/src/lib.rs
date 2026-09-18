@@ -20,6 +20,7 @@
 //! ADR_0011.
 
 pub mod adapters;
+mod migration;
 mod scope;
 pub mod sigv4;
 mod version;

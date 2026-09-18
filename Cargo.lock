@@ -326,6 +326,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-migration"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-annotations",
+ "aiwatcher-core",
+ "aiwatcher-datasets",
+ "aiwatcher-iam",
+ "aiwatcher-prompts",
+ "aiwatcher-training",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "aiwatcher-projector"
 version = "0.1.0"
 dependencies = [

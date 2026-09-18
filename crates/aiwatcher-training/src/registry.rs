@@ -1,6 +1,7 @@
 //! The object-store side: key layout, the accumulate-in-place write, and the
 //! two caps that keep a six-hour run one readable object.
 
+mod migration;
 mod scope;
 mod version;
 
