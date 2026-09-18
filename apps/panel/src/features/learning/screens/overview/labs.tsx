@@ -65,7 +65,7 @@ export function Labs({ organization, project }: { organization: string; project:
 
         {labs.isPending ? <Spinner /> : null}
         {labs.isError ? (
-          <Refusal error={labs.error} fallback="this workshop&rsquo;s labs could not be read" />
+          <Refusal error={labs.error} fallback="this workshop's labs could not be read" />
         ) : null}
         {labs.isSuccess && labs.data.length === 0 ? (
           <EmptyState
@@ -315,9 +315,7 @@ function Marks({
     <div className="flex flex-col gap-2">
       <h3 className="text-xs font-medium text-muted-foreground">Results</h3>
       {pending ? <Spinner /> : null}
-      {error ? (
-        <Refusal error={error} fallback="this lab&rsquo;s results could not be read" />
-      ) : null}
+      {error ? <Refusal error={error} fallback="this lab's results could not be read" /> : null}
       {results && results.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           Nothing has been measured on these cases yet. A result appears here when a scoring run
