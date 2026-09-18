@@ -53,6 +53,23 @@ mod curation;
 #[path = "evaluation/project_cohorts.rs"]
 mod project_cohorts;
 
+#[path = "evaluation/project_bundles.rs"]
+mod project_bundles;
+
+#[path = "evaluation/project_evidence.rs"]
+mod project_evidence;
+
+#[path = "evaluation/project_results.rs"]
+mod project_results;
+
+#[path = "evaluation/project_declarations.rs"]
+mod project_declarations;
+
+#[path = "evaluation/project_admission.rs"]
+mod project_admission;
+#[path = "evaluation/project_execution.rs"]
+mod project_execution;
+
 #[path = "evaluation/fixture.rs"]
 mod fixture;
 

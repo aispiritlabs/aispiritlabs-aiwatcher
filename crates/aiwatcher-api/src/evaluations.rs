@@ -5,12 +5,12 @@
 //! See ADR_0010.
 
 use crate::auth::Caller;
+use crate::evidence_scope::{EvidenceAdmin, EvidenceRead, EvidenceWrite};
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
-    Approval, ApprovalBundles, ApprovalLine, ApprovalLinePage, ApprovalPage, CaseDiffPage,
-    CaseFilter, CasePage, DiffQuery, DurableEvaluation, DurablePage, EvaluationManifest,
-    EvaluationReceipt, EvidenceComparison, EvidenceState, GateDecision, GatePolicy,
-    PublishEvaluation, ResultStatus, StagedFile,
+    Approval, ApprovalLine, ApprovalLinePage, ApprovalPage, CaseDiffPage, CaseFilter, CasePage,
+    DiffQuery, DurableEvaluation, DurablePage, EvaluationManifest, EvaluationReceipt,
+    EvidenceComparison, EvidenceState, GateDecision, GatePolicy, PublishEvaluation, ResultStatus,
 };
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, post, put};
@@ -28,6 +28,17 @@ use crate::state::AppState;
     list_evaluations,
     get_evaluation,
     list_evaluation_suites,
+    address_approval,
+    gate_result,
+    admit_line,
+    list_lines,
+    withdraw_line,
+    stage_variant_artifact,
+))]
+struct Api;
+
+#[derive(OpenApi)]
+#[openapi(paths(
     publish_result,
     list_results,
     get_result,
@@ -37,36 +48,40 @@ use crate::state::AppState;
     forget_result,
     approve_source,
     list_approvals,
-    withdraw_approval,
-    address_approval,
-    stage_bundle,
-    list_bundle,
-    discard_bundle,
-    gate_result,
-    admit_line,
-    list_lines,
-    withdraw_line,
-    stage_variant_artifact,
+    withdraw_approval
 ))]
-struct Api;
+struct EvidenceApi;
+
+#[derive(serde::Deserialize)]
+struct ResultPath {
+    evaluation_id: String,
+}
+#[derive(serde::Deserialize)]
+struct ApprovalPath {
+    approval_id: String,
+}
 
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    let mut api = Api::openapi();
+    api.merge(crate::project_scope::openapi(EvidenceApi::openapi()));
+    api.merge(crate::evaluation_bundles::openapi());
+    api
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/evaluation-results", get(list_results))
-        .route(
-            "/api/v1/evaluation-results",
-            post(publish_result).layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            evidence_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
         )
-        .route(
-            "/api/v1/evaluation-results/{evaluation_id}",
-            get(get_result).delete(forget_result),
-        )
+        .nest("/api/v1", evidence_router())
         .route(
             "/api/v1/evaluation-results/{evaluation_id}/gate",
             post(gate_result),
@@ -84,39 +99,45 @@ pub fn router() -> Router<AppState> {
             put(stage_variant_artifact)
                 .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
-        .route("/api/v1/evaluation-approvals", get(list_approvals))
-        .route("/api/v1/evaluation-approvals", post(approve_source))
         .route(
             "/api/v1/evaluation-approvals/address",
             post(address_approval),
         )
-        .route(
-            "/api/v1/evaluation-approvals/{approval_id}",
-            delete(withdraw_approval),
-        )
-        .route(
-            "/api/v1/evaluation-approvals/{approval_id}/bundle",
-            get(list_bundle).delete(discard_bundle),
-        )
-        .route(
-            "/api/v1/evaluation-approvals/{approval_id}/bundle/{*name}",
-            put(stage_bundle).layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
-        )
-        .route(
-            "/api/v1/evaluation-results/{evaluation_id}/cases",
-            get(get_cases),
-        )
-        .route(
-            "/api/v1/evaluation-results/{evaluation_id}/comparison",
-            get(compare_results),
-        )
-        .route(
-            "/api/v1/evaluation-results/{evaluation_id}/comparison/cases",
-            get(compare_cases),
-        )
         .route("/api/v1/evaluations", get(list_evaluations))
         .route("/api/v1/evaluations/{evaluation_id}", get(get_evaluation))
         .route("/api/v1/evaluation-suites", get(list_evaluation_suites))
+        .merge(crate::evaluation_bundles::router())
+}
+
+fn evidence_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/evaluation-results",
+            get(list_results)
+                .post(publish_result)
+                .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
+        .route(
+            "/evaluation-results/{evaluation_id}",
+            get(get_result).delete(forget_result),
+        )
+        .route("/evaluation-results/{evaluation_id}/cases", get(get_cases))
+        .route(
+            "/evaluation-results/{evaluation_id}/comparison",
+            get(compare_results),
+        )
+        .route(
+            "/evaluation-results/{evaluation_id}/comparison/cases",
+            get(compare_cases),
+        )
+        .route(
+            "/evaluation-approvals",
+            get(list_approvals).post(approve_source),
+        )
+        .route(
+            "/evaluation-approvals/{approval_id}",
+            delete(withdraw_approval),
+        )
 }
 
 #[derive(serde::Deserialize, utoipa::IntoParams)]
@@ -263,13 +284,6 @@ fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
         .ok_or(ApiError::EvaluationDisabled)
 }
 
-fn bundles(state: &AppState) -> ApiResult<&dyn ApprovalBundles> {
-    state
-        .evaluation_bundles
-        .as_deref()
-        .ok_or(ApiError::EvaluationDisabled)
-}
-
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 struct ResultQuery {
@@ -325,18 +339,16 @@ struct CasesQuery {
     (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID"),
     (status = 410, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn publish_result(
-    State(state): State<AppState>,
+    evidence: EvidenceWrite,
     caller: Caller,
     Json(request): Json<PublishEvaluation>,
 ) -> ApiResult<Json<EvaluationReceipt>> {
-    caller.require(Role::Editor)?;
+    let registry = evidence.authorize().await?;
     if request.manifest.context.scored_here() {
         return Err(ApiError::MeasuredHere);
     }
     Ok(Json(
-        registry(&state)?
-            .clone()
-            .with_content_access(caller.require(Role::Admin).is_ok())
+        registry
             .publish(request, &caller.identity().subject, now())
             .await?,
     ))
@@ -347,15 +359,12 @@ async fn publish_result(
 /// Conversation content requires Admin; other readers receive a forbidden state.
 #[utoipa::path(get, path = "/api/v1/evaluation-results", params(ResultQuery), responses((status = 200, body = DurablePage)), tag = "evaluation")]
 async fn list_results(
-    State(state): State<AppState>,
+    EvidenceRead(registry): EvidenceRead,
     caller: Caller,
     Query(query): Query<ResultQuery>,
 ) -> ApiResult<Json<DurablePage>> {
-    caller.require(Role::Viewer)?;
     Ok(Json(
-        registry(&state)?
-            .clone()
-            .with_content_access(caller.require(Role::Admin).is_ok())
+        registry
             .list(
                 query.cursor.as_deref(),
                 query.limit.unwrap_or(200),
@@ -371,14 +380,11 @@ async fn list_results(
 #[utoipa::path(get, path = "/api/v1/evaluation-results/{evaluation_id}", params(("evaluation_id" = String, Path)),
     responses((status = 200, body = DurableEvaluation), (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_result(
-    State(state): State<AppState>,
+    EvidenceRead(registry): EvidenceRead,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(ResultPath { evaluation_id: id }): Path<ResultPath>,
 ) -> ApiResult<Json<DurableEvaluation>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .clone()
-        .with_content_access(caller.require(Role::Admin).is_ok())
+    registry
         .get(&id, &caller.identity().subject, now())
         .await?
         .map(Json)
@@ -397,15 +403,12 @@ async fn get_result(
     params(("evaluation_id" = String, Path), ComparisonQuery),
     responses((status = 200, body = EvidenceComparison), (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn compare_results(
-    State(state): State<AppState>,
+    EvidenceRead(registry): EvidenceRead,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(ResultPath { evaluation_id: id }): Path<ResultPath>,
     Query(query): Query<ComparisonQuery>,
 ) -> ApiResult<Json<EvidenceComparison>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .clone()
-        .with_content_access(caller.require(Role::Admin).is_ok())
+    registry
         .compare(&id, &query.baseline, &caller.identity().subject, now())
         .await?
         .map(Json)
@@ -425,15 +428,12 @@ async fn compare_results(
     responses((status = 200, body = CaseDiffPage), (status = 400, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn compare_cases(
-    State(state): State<AppState>,
+    EvidenceRead(registry): EvidenceRead,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(ResultPath { evaluation_id: id }): Path<ResultPath>,
     Query(query): Query<CaseComparisonQuery>,
 ) -> ApiResult<Json<CaseDiffPage>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .clone()
-        .with_content_access(caller.require(Role::Admin).is_ok())
+    registry
         .compare_cases(
             &id,
             &query.baseline,
@@ -453,15 +453,12 @@ async fn compare_cases(
 #[utoipa::path(get, path = "/api/v1/evaluation-results/{evaluation_id}/cases", params(("evaluation_id" = String, Path), CasesQuery),
     responses((status = 200, body = CasePage), (status = 400, body = crate::error::ErrorBody), (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_cases(
-    State(state): State<AppState>,
+    EvidenceRead(registry): EvidenceRead,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(ResultPath { evaluation_id: id }): Path<ResultPath>,
     Query(query): Query<CasesQuery>,
 ) -> ApiResult<Json<CasePage>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .clone()
-        .with_content_access(caller.require(Role::Admin).is_ok())
+    registry
         .cases(
             &id,
             &query.version,
@@ -621,15 +618,14 @@ async fn stage_variant_artifact(
     (status = 409, body = crate::error::ErrorBody, description = "`admitted_other_bytes`: the pair is admitted already, over other bundle bytes; the message names the approval"),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn approve_source(
-    State(state): State<AppState>,
+    EvidenceAdmin(evidence): EvidenceAdmin,
     caller: Caller,
     Json(manifest): Json<EvaluationManifest>,
 ) -> ApiResult<Json<Approval>> {
-    caller.require(Role::Admin)?;
     Ok(Json(
-        registry(&state)?
-            .clone()
-            .with_content_access(true)
+        evidence
+            .authorize()
+            .await?
             .approve(&manifest, &caller.identity().subject, now())
             .await?,
     ))
@@ -639,13 +635,9 @@ async fn approve_source(
 /// that vanished from the list would read as one nobody ever made.
 #[utoipa::path(get, path = "/api/v1/evaluation-approvals",
     responses((status = 200, body = ApprovalPage), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn list_approvals(
-    State(state): State<AppState>,
-    caller: Caller,
-) -> ApiResult<Json<ApprovalPage>> {
-    caller.require(Role::Viewer)?;
+async fn list_approvals(EvidenceRead(registry): EvidenceRead) -> ApiResult<Json<ApprovalPage>> {
     Ok(Json(ApprovalPage {
-        approvals: registry(&state)?.approvals().await?,
+        approvals: registry.approvals().await?,
     }))
 }
 
@@ -657,12 +649,13 @@ async fn list_approvals(
     responses((status = 200, body = Approval), (status = 403, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn withdraw_approval(
-    State(state): State<AppState>,
+    EvidenceAdmin(evidence): EvidenceAdmin,
     caller: Caller,
-    Path(approval_id): Path<String>,
+    Path(ApprovalPath { approval_id }): Path<ApprovalPath>,
 ) -> ApiResult<Json<Approval>> {
-    caller.require(Role::Admin)?;
-    registry(&state)?
+    evidence
+        .authorize()
+        .await?
         .withdraw(&approval_id, &caller.identity().subject, now())
         .await?
         .map(Json)
@@ -680,12 +673,10 @@ async fn withdraw_approval(
     responses((status = 204), (status = 403, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn forget_result(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(id): Path<String>,
+    EvidenceAdmin(evidence): EvidenceAdmin,
+    Path(ResultPath { evaluation_id: id }): Path<ResultPath>,
 ) -> ApiResult<axum::http::StatusCode> {
-    caller.require(Role::Admin)?;
-    if registry(&state)?.forget(&id).await? {
+    if evidence.authorize().await?.forget(&id).await? {
         return Ok(axum::http::StatusCode::NO_CONTENT);
     }
     Err(ApiError::NotFound(id))
@@ -773,73 +764,6 @@ fn legacy_detail(detail: DurableEvaluation, page: Option<CasePage>) -> ApiResult
         report: None,
         comparison: None,
     })
-}
-
-// ── The bytes an approval admits a pair by ───────────────────────────────────
-
-/// Stage one member of a bundle, by the name the declaration gives it.
-///
-/// This is what lets a *new* pair be admitted with nobody on the server's
-/// host. Admin, because approving is: an ingest token is an editor by
-/// construction, and bytes that decide what may be published are the operator's
-/// act rather than the producer's.
-///
-/// It admits nothing on its own. The approval that follows resolves the whole
-/// bundle and records its digest, so bytes staged after one do not widen it —
-/// they stop that pair reading until they are what was admitted again.
-#[utoipa::path(put, path = "/api/v1/evaluation-approvals/{approval_id}/bundle/{name}",
-    params(("approval_id" = String, Path), ("name" = String, Path,
-        description = "One member: `manifest.json`, `scorer.py`, `model-artifacts/<file>`")),
-    request_body = Vec<u8>,
-    responses((status = 200, body = StagedFile), (status = 403, body = crate::error::ErrorBody),
-    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn stage_bundle(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path((approval_id, name)): Path<(String, String)>,
-    body: axum::body::Bytes,
-) -> ApiResult<Json<StagedFile>> {
-    caller.require(Role::Admin)?;
-    Ok(Json(
-        bundles(&state)?
-            .stage(&approval_id, &name, body.to_vec())
-            .await?,
-    ))
-}
-
-/// What is staged for one pair. Names and sizes: the digests are the
-/// declaration's, and a second copy of them here could only disagree.
-#[utoipa::path(get, path = "/api/v1/evaluation-approvals/{approval_id}/bundle",
-    params(("approval_id" = String, Path)),
-    responses((status = 200, body = Vec<StagedFile>), (status = 501, body = crate::error::ErrorBody)),
-    tag = "evaluation")]
-async fn list_bundle(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(approval_id): Path<String>,
-) -> ApiResult<Json<Vec<StagedFile>>> {
-    caller.require(Role::Viewer)?;
-    Ok(Json(bundles(&state)?.staged(&approval_id).await?))
-}
-
-/// Remove every staged member of one pair.
-///
-/// What it does not do is un-admit anything: an approval is withdrawn through
-/// its own route, and evidence already published under this pair keeps reading
-/// until the adapter is asked for bytes that are no longer there. Use it to
-/// correct a bundle before approving, or to clear one that was withdrawn.
-#[utoipa::path(delete, path = "/api/v1/evaluation-approvals/{approval_id}/bundle",
-    params(("approval_id" = String, Path)),
-    responses((status = 204), (status = 403, body = crate::error::ErrorBody),
-    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn discard_bundle(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(approval_id): Path<String>,
-) -> ApiResult<axum::http::StatusCode> {
-    caller.require(Role::Admin)?;
-    bundles(&state)?.discard(&approval_id).await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// The address one declaration's bundle is staged under, and the pair it names.

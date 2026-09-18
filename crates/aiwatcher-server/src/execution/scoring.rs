@@ -8,7 +8,7 @@
 //! The plan carries the declaration's digest, so a retry reads exactly what the
 //! first attempt read.
 //!
-//! **The approval is the only authority.** Nothing here admits anything, and a
+//! **The approval is the content authority.** Nothing here admits anything, and a
 //! conversation cohort's cases are content a request reads only for an admin.
 //! Nobody's session is here to ask, and asking whoever pressed start would make
 //! an editor's click a way to read it — so the gate is asked first, and only a
@@ -40,6 +40,9 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::artifacts::Artifacts;
+
+pub mod project;
+use project::ProjectAuthority;
 
 /// The scoring executor, if this deployment has an evaluation registry.
 ///
@@ -147,6 +150,7 @@ pub fn external(
 #[derive(Debug)]
 pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
+    project: Option<ProjectAuthority>,
     judge: Option<(Arc<dyn JudgeModel>, usize)>,
     scorers: Option<(Arc<dyn ExternalScorers>, usize)>,
     /// Where a generated run's answers are read from: the rows the generation
@@ -159,10 +163,25 @@ impl ScoreExecutor {
     pub const fn new(evaluations: Arc<Evaluations>) -> Self {
         Self {
             evaluations,
+            project: None,
             judge: None,
             scorers: None,
             artifacts: None,
         }
+    }
+
+    /// An explicitly bound, recorded project measurement. Not registered by
+    /// the process-wide executor registry: its authority names just one run.
+    /// No start/worker route supplies this authority until their storage and
+    /// read paths are project-isolated.
+    pub fn for_project(
+        evaluations: &Evaluations,
+        authority: ProjectAuthority,
+    ) -> Result<Self, EvaluationError> {
+        let evaluations = evaluations.for_project_evidence(authority.scope())?;
+        let mut executor = Self::new(Arc::new(evaluations));
+        executor.project = Some(authority);
+        Ok(executor)
     }
 
     /// The same executor, reading a generated run's answers from this store.
@@ -325,6 +344,14 @@ impl ActivityExecutor for ScoreExecutor {
         command: &ActivityCommand,
         context: &ActivityContext,
     ) -> Result<ActivityResult, ActivityError> {
+        if self.project.is_some()
+            && (self.judge.is_some() || self.scorers.is_some() || self.artifacts.is_some())
+        {
+            return Err(ActivityError::new(
+                FailureClass::Policy,
+                "project recordings cannot use global judge, scorer or artifact capabilities",
+            ));
+        }
         let (RuntimeBinding::ScoreEvaluation(spec)
         | RuntimeBinding::JudgeEvaluation(spec)
         | RuntimeBinding::ExternalEvaluation(spec)) = &command.step.runtime
@@ -339,7 +366,13 @@ impl ActivityExecutor for ScoreExecutor {
             external_taken,
             manifest,
             subject,
-        } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        } = prepare(
+            &self.evaluations,
+            &spec.declaration,
+            command,
+            self.project.as_ref(),
+        )
+        .await?;
         let run = &declared.run;
         let reads_archive = manifest
             .context
@@ -559,10 +592,6 @@ impl ActivityExecutor for ScoreExecutor {
             }
         };
 
-        // The last look. Past here the result is being published, and a
-        // publication stopped halfway is worth less than one finished a few
-        // seconds after a cancel, so the reactor waits for it however late.
-        let _committing = context.stop.committing()?;
         let mut judged = judged;
         judged.extend(scored_elsewhere);
         let scored = score_spelled(
@@ -582,6 +611,14 @@ impl ActivityExecutor for ScoreExecutor {
                 .filter(|case| case.error.is_some())
                 .count(),
         );
+        if let Some(authority) = &self.project {
+            authority
+                .authorize(&evaluations, command, &spec.declaration)
+                .await?;
+        }
+        // Authorization admits this write, not an IAM/storage transaction.
+        // Revocation after this boundary does not interrupt a partial commit.
+        let _committing = context.stop.committing()?;
         let receipt = evaluations
             .publish(
                 PublishEvaluation {
@@ -618,7 +655,8 @@ impl ActivityExecutor for ScoreExecutor {
             })),
             diagnostics: None,
             awaiting: None,
-            ..ActivityResult::default()
+            // A cache hit must not stand in for current project authorization.
+            cacheable: self.project.is_none(),
         })
     }
 }
@@ -664,7 +702,7 @@ impl ActivityExecutor for CasesExecutor {
             manifest,
             subject,
             ..
-        } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        } = prepare(&self.evaluations, &spec.declaration, command, None).await?;
         if declared.run.answers.generation().is_none() {
             return Err(ActivityError::user_code(
                 "this run scores answers it already has, so nothing is generated for its cases",
@@ -1114,7 +1152,7 @@ impl ActivityExecutor for TracesExecutor {
             manifest,
             subject,
             ..
-        } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        } = prepare(&self.evaluations, &spec.declaration, command, None).await?;
         // What a witness's digests of a request are tested for: each case's
         // input, read under the pair's admission as the cases step read it.
         let variant = &declared.run.variant;
@@ -1386,14 +1424,35 @@ async fn prepare(
     evaluations: &Evaluations,
     declaration: &str,
     command: &ActivityCommand,
+    authority: Option<&ProjectAuthority>,
 ) -> Result<Prepared, ActivityError> {
-    let declared = evaluations
-        .scoring_run(declaration)
-        .await
-        .map_err(refusal)?
-        .ok_or_else(|| {
-            ActivityError::user_code(format!("no scoring run is declared under {declaration}"))
-        })?;
+    if let Some(authority) = authority {
+        authority
+            .authorize(evaluations, command, declaration)
+            .await?;
+    } else if evaluations.project_scope().is_some() {
+        return Err(ActivityError::new(
+            FailureClass::Policy,
+            "project execution authority is not configured; admission does not authorize execution",
+        ));
+    }
+    let declared = if authority.is_some() {
+        // Recheck the project's declaration restrictions too: only recordings,
+        // native cohorts and built-in scorers, with no global artifact reader.
+        evaluations
+            .scoring_run_view(declaration)
+            .await
+            .map_err(refusal)?
+            .map(|view| view.declaration)
+    } else {
+        evaluations
+            .scoring_run(declaration)
+            .await
+            .map_err(refusal)?
+    }
+    .ok_or_else(|| {
+        ActivityError::user_code(format!("no scoring run is declared under {declaration}"))
+    })?;
     let run = &declared.run;
     let card = evaluations
         .scorecard(&run.scorecard.name, Some(&run.scorecard.version))

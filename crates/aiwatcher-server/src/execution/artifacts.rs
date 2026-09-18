@@ -20,6 +20,12 @@
 //! attempt overwrites identically; the wrong way round leaves a completed step
 //! whose artifact 404s.
 //!
+//! A project-bound store puts both families below
+//! `artifacts/scopes/<org>/<project>/registry/`. The scope is outside the bytes
+//! and their digest. Reads require an exact canonical data reference in this
+//! store's namespace; knowing another namespace's URI is not access to it.
+//! This is a library boundary, not a project execution dispatcher or IAM gate.
+//!
 //! [`ActivityExecutor::lookup`]: aiwatcher_execution::ActivityExecutor::lookup
 
 use std::collections::BTreeMap;
@@ -29,6 +35,7 @@ use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
 use aiwatcher_execution::{ActivityError, FailureClass};
+use aiwatcher_iam::ProjectScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -75,12 +82,49 @@ pub struct Receipt {
 #[derive(Clone, Debug)]
 pub struct Artifacts {
     store: Arc<dyn ObjectStore>,
+    scope: Option<ProjectScope>,
+    prefix: String,
 }
 
 impl Artifacts {
     #[must_use]
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            scope: None,
+            prefix: PREFIX.to_owned(),
+        }
+    }
+
+    /// Bind the byte store and attempt receipts to one project, without changing
+    /// content digests. This is storage isolation, not IAM authorization: callers
+    /// must obtain the scope from trusted execution ownership and check grants.
+    /// No production dispatcher uses this yet.
+    ///
+    /// # Errors
+    ///
+    /// Policy when rebinding an already scoped store to a different project.
+    pub fn for_project(&self, scope: ProjectScope) -> Result<Self, ActivityError> {
+        if let Some(current) = self.scope {
+            return if current == scope {
+                Ok(self.clone())
+            } else {
+                Err(scope_error())
+            };
+        }
+        Ok(Self {
+            store: Arc::clone(&self.store),
+            scope: Some(scope),
+            prefix: format!(
+                "{PREFIX}/scopes/{}/{}/registry",
+                scope.organization.0, scope.project.0
+            ),
+        })
+    }
+
+    #[must_use]
+    pub const fn project_scope(&self) -> Option<ProjectScope> {
+        self.scope
     }
 
     /// Store `rows` and hand back the pointer to them.
@@ -112,7 +156,7 @@ impl Artifacts {
         body: Vec<u8>,
     ) -> Result<ArtifactRef, ActivityError> {
         let digest = aiwatcher_jobs::digest(&body);
-        let key = data_key(ArtifactKind::Rows, &digest);
+        let key = data_key(&self.prefix, ArtifactKind::Rows, &digest);
         let size = body.len() as u64;
         self.store.put(&key, body).await.map_err(store_error)?;
         Ok(ArtifactRef {
@@ -138,7 +182,7 @@ impl Artifacts {
     /// [`ActivityError`] when the store refused the bytes.
     pub async fn put_log(&self, body: &[u8]) -> Result<ArtifactRef, ActivityError> {
         let digest = aiwatcher_jobs::digest(body);
-        let key = data_key(ArtifactKind::Log, &digest);
+        let key = data_key(&self.prefix, ArtifactKind::Log, &digest);
         self.store
             .put(&key, body.to_vec())
             .await
@@ -217,11 +261,12 @@ impl Artifacts {
     ///
     /// [`ActivityError`] when the store refused it.
     pub async fn put_receipt(&self, receipt: &Receipt) -> Result<(), ActivityError> {
+        self.reference_key(&receipt.artifact)?;
         let body = serde_json::to_vec(receipt).map_err(|error| {
             ActivityError::user_code(format!("the receipt does not encode: {error}"))
         })?;
         self.store
-            .put(&receipt_key(&receipt.idempotency_key), body)
+            .put(&receipt_key(&self.prefix, &receipt.idempotency_key), body)
             .await
             .map_err(store_error)
     }
@@ -235,7 +280,7 @@ impl Artifacts {
     pub async fn receipt(&self, idempotency_key: &str) -> Result<Option<Receipt>, ActivityError> {
         let Some(bytes) = self
             .store
-            .get(&receipt_key(idempotency_key))
+            .get(&receipt_key(&self.prefix, idempotency_key))
             .await
             .map_err(store_error)?
         else {
@@ -244,10 +289,22 @@ impl Artifacts {
         // A receipt this build cannot read is treated as absent rather than as
         // an error: the work is repeatable, and refusing to run because of a
         // note about a previous run would be the note taking the run down.
-        Ok(serde_json::from_slice(&bytes).ok())
+        let Ok(receipt) = serde_json::from_slice::<Receipt>(&bytes) else {
+            return Ok(None);
+        };
+        if receipt.idempotency_key != idempotency_key {
+            return Err(scope_error());
+        }
+        self.reference_key(&receipt.artifact)?;
+        Ok(Some(receipt))
     }
 
     async fn get(&self, artifact: &ArtifactRef) -> Result<Option<Vec<u8>>, ActivityError> {
+        let key = self.reference_key(artifact)?;
+        self.store.get(key).await.map_err(store_error)
+    }
+
+    fn reference_key<'a>(&self, artifact: &'a ArtifactRef) -> Result<&'a str, ActivityError> {
         let key = artifact.uri.strip_prefix(SCHEME).ok_or_else(|| {
             // A `file://` or an `s3://` from somewhere else is a pointer this
             // process cannot verify. One is accepted as a *uri* and never as
@@ -258,8 +315,22 @@ impl Artifacts {
                 artifact.uri
             ))
         })?;
-        self.store.get(key).await.map_err(store_error)
+        // Exact canonical keys, not a prefix check: traversal, encoded paths,
+        // receipts and another registry must never become artifact bytes. The
+        // legacy reader also cannot open project bytes, even knowing their URI.
+        if !artifact.has_digest() || key != data_key(&self.prefix, artifact.kind, &artifact.digest)
+        {
+            return Err(scope_error());
+        }
+        Ok(key)
     }
+}
+
+fn scope_error() -> ActivityError {
+    ActivityError::new(
+        FailureClass::Policy,
+        "artifact or receipt does not belong to this storage scope",
+    )
 }
 
 /// `artifacts/<kind>/<first two hex>/<sha256>/data`.
@@ -267,9 +338,9 @@ impl Artifacts {
 /// The two-character shard is what keeps a bucket listing usable at a million
 /// objects; the key is immutable, and a human name for the same bytes is a
 /// dataset version pointing at this digest, never this key's identity.
-fn data_key(kind: ArtifactKind, digest: &str) -> String {
+fn data_key(prefix: &str, kind: ArtifactKind, digest: &str) -> String {
     format!(
-        "{PREFIX}/{}/{}/{digest}/data",
+        "{prefix}/{}/{}/{digest}/data",
         kind.as_str(),
         digest.get(..2).unwrap_or("00")
     )
@@ -280,9 +351,9 @@ fn data_key(kind: ArtifactKind, digest: &str) -> String {
 /// A step id comes from a canvas and an execution id from a request. Neither is
 /// checked against a path grammar anywhere, and a key is a path in the file
 /// adapter.
-fn receipt_key(idempotency_key: &str) -> String {
+fn receipt_key(prefix: &str, idempotency_key: &str) -> String {
     format!(
-        "{PREFIX}/receipts/{}.json",
+        "{prefix}/receipts/{}.json",
         aiwatcher_jobs::digest(idempotency_key.as_bytes())
     )
 }
@@ -538,7 +609,13 @@ mod tests {
         // The plan was fine and the query was fine. Calling it user code would
         // send somebody to read a Flow script that has nothing wrong with it.
         let artifacts = artifacts();
-        let missing = ArtifactRef::new("rows", "object://artifacts/rows/ab/abcd/data", "abcd");
+        let digest = "ab".repeat(32);
+        let missing = ArtifactRef::new(
+            "rows",
+            format!("object://artifacts/rows/ab/{digest}/data"),
+            digest,
+        )
+        .of_kind(ArtifactKind::Rows);
         let error = artifacts
             .read_rows(&missing)
             .await
@@ -551,14 +628,15 @@ mod tests {
     async fn bytes_that_do_not_hash_to_what_they_are_named_by_are_refused() {
         // The one corruption nothing downstream detects: a step reading
         // somebody else's table and succeeding.
-        let artifacts = artifacts();
+        let store = Arc::new(MemoryObjectStore::new());
+        let artifacts = Artifacts::new(store.clone());
         let stored = artifacts.put_rows("rows", &rows()).await.expect("a put");
-        let lying = ArtifactRef {
-            digest: "00".repeat(32),
-            ..stored
-        };
+        store
+            .put(stored.uri.strip_prefix(SCHEME).unwrap(), b"[]".to_vec())
+            .await
+            .expect("corrupt the stored bytes");
         let error = artifacts
-            .read_rows(&lying)
+            .read_rows(&stored)
             .await
             .expect_err("a digest that does not match");
         assert!(error.message.contains("hash to"), "{error}");

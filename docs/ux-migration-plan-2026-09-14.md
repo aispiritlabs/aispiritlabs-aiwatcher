@@ -22,7 +22,7 @@ Inspiracje W&B: oddzielenie kontekstu globalnego, projektu i obiektu; wspólne f
 | UX-08 | Awarie i dostępność | Awaria auth/config zamyka dostęp do panelu, pokazuje retry. Uprawnienia UI nie zakładają auth=none przy błędzie. Błąd routera ma komunikat. TimeRange zawija się i komunikuje aktywną opcję. Poprawiono kolor błędów, daty ze strefą czasową, tytuły stron i reakcję grafu workflow na motyw. |
 | UX-09 | Nawigacja | Wdrożono neutralny start, wszystkie obszary, grupy mobilne i globalne wyszukiwanie/konto. Przełącznik nowy/klasyczny układ zachowuje edytor i URL; flaga wdrożenia wymusza rollout/rollback. Preferowany start, nazwane przypięcia pełnych linków, wersjonowany zapis per instancja/tożsamość i lokalna diagnostyka przejść. Centralna analityka i automatyczne kohorty pozostają poza tą implementacją. |
 | UX-10 | Profil | `/account`: bieżąca tożsamość, role instancji, grupy SSO tylko do odczytu; jawny tryb lokalny. Brak deklaracji fikcyjnych zespołów i projektowych uprawnień. |
-| IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz rejestry zasobów z zakresem organizacja/projekt (datasety, curation, prompty, treningi, modele, anotacje z plikami obrazów oraz formularze, oceny, karty ewaluacji, definicje workflow oraz review przypadków z publikacją do datasetu i kohorty z natywnych datasetów/anotacji). Jest dry-run inwentaryzacji migracji. Pozostałe rejestry, query, strumienie, zadania i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
+| IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz rejestry zasobów z zakresem organizacja/projekt (datasety, curation, prompty, treningi, modele, anotacje z plikami obrazów oraz formularze, oceny, karty ewaluacji, definicje workflow oraz review przypadków z publikacją do datasetu i kohorty z natywnych datasetów/anotacji oraz nagrania odpowiedzi, pliki pakietów dowodów i wyniki producentów z approvals oraz retencją). Jest dry-run inwentaryzacji migracji. Pozostałe rejestry, query, strumienie, zadania i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
 | IAM-02 | Zaproszenia i dostęp warsztatowy | Niewdrożone; zależą od IAM-01. |
 | FLOW-01 | Pełne przejścia i lineage | Pozostają dedykowane strony agentów, powiązania wersji prompt/model/dataset, porównania przedziałów i wspólne filtry. |
 | LEARN-01 | Learning | Wdrożono `/learning`: stan niedostępnych warsztatów oraz 9 slotów laboratoriów bez fikcyjnej treści, wyników i aktywnych operacji. Listy/szczegóły rzeczywistych warsztatów i provisioning pozostają. |
@@ -457,3 +457,190 @@ Walidacja:
 - HTTP korzysta z rzeczywistego routera, podpisanych sesji OIDC i lokalnego discovery/JWKS, pamięciowego IAM oraz testowego adaptera źródła nad rzeczywistym rejestrem datasetów. Testy serwera osobno sprawdzają produkcyjny `LocalSource` i natywne rejestry. Nie wykonano pełnego E2E z Authentikiem, PostgreSQL, S3 ani workerami.
 
 Następne bramki: zakres pełnych dowodów i wyników ewaluacji wraz z approvals/pakietami i resolverami promptów/modeli, autoryzacja wykonań, pozostałe rejestry i strumienie; następnie pełny manifest, wykonawca migracji i cutover. Trwała koordynacja publikacji review nadal pozostaje otwarta.
+
+
+## Kontynuacja — nagrania odpowiedzi z zakresem IAM-01
+
+Data: 15.09.2026. **Dziewiąty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#ninth-resource-boundary-project-recorded-answers).
+
+- **API:** zapis dokumentu odpowiedzi pod `/api/v1/orgs/{organization}/projects/{project}/evaluation-recordings/{name}` oraz pobranie oryginalnych bajtów pod `evaluation-recordings/{digest}/content`. Zapis współdzieli handler ze starą trasą; odczyt jest addytywny w obu rodzinach tras. OpenAPI i klient panelu aktualizowane razem.
+- **Role:** viewer czyta, editor/admin zapisuje. PUT wymaga nagłówka IAM i ponownej kontroli aktualnego grantu po odebraniu body; limit uploadu pozostaje 100 MiB. Odpowiedzi projektowe mają `no-store`, podobnie jak pobranie nagrania przez starą trasę. Rola instancji nie zastępuje grantu projektu, a stare API zachowuje wymaganie roli editor do uploadu.
+- **Magazyn:** oryginalne dokumenty pod `evaluation-scopes/<org>/<project>/registry/evaluation-recordings/<digest>.json`. Nazwa jest metadanymi wyświetlania, dopuszcza ukośnik i nie wyznacza klucza. Hash obliczany z odebranych bajtów, rozmiar i URI `evaluation://recordings/<digest>` pozostają niezmienione. Identyczne nagranie w innym projekcie wymaga osobnego uploadu; znajomość hasha nie otwiera danych projektowych przez globalny magazyn ani po wyłączeniu IAM.
+- **Odczyt i integralność:** odpowiedź zawiera oryginalne bajty JSON, w tym odstępy i zapis liczb, po sprawdzeniu SHA-256. Niepoprawny digest jest odrzucany przed odczytem magazynu; brak lokalnego obiektu daje 404, uszkodzenie daje 503 bez zwrócenia treści. Odczyt biblioteczny nagrań korzysta z tej samej weryfikacji. Rejestr nie zachowuje globalnego resolvera i odmawia przepięcia zakresu.
+- **Granice:** nagranie to treść dostarczona przez wywołującego, bez potwierdzenia wykonania pomiaru. ID przypadków/run/trace/span oraz zużycie pozostają metadanymi producenta, bez weryfikacji dostępu do wskazanych źródeł. Nie dodano projektowych deklaracji pomiarów, approvals, kalibracji, wyników ani dostępu workerów. URI wymaga interpretacji w tym samym projekcie. Panel/SDK nadal używają starych tras; selektory UI pozostają nieaktywne. Nie wykonano migracji danych ani wdrożenia; inwentaryzacja migracji nie obejmuje jeszcze nagrań. Kontrola grantu nie anuluje operacji magazynu dopuszczonej przed cofnięciem dostępu; retencja i zatrzymywanie aktywnej pracy pozostają osobnym zakresem.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-evaluation`: **350 testów**, powodzenie. Dodano **4 scenariusze HTTP i 1 test plikowego magazynu**. HTTP sprawdza obie operacje, izolację projektów/organizacji/starych tras, identyczne treści, dokładne bajty pobrania, role, nagłówki, przedziały grantów, cofnięcie dostępu, upload po wygaśnięciu grantu, brak auth/IAM i błędne dane.
+- `cargo test -p aiwatcher-server --test evaluation`: **131 testów**, powodzenie; **1 test RustFS/S3 jawnie pominięty**, bez uruchamiania zewnętrznej usługi.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-evaluation --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono dwie operacje projektowe, wymagane parametry zakresu, nagłówek PUT i unikalność identyfikatorów wszystkich operacji. `just openapi-check`, `cargo fmt --all --check` i `git diff --check`: powodzenie.
+- Test magazynu ponownie otwiera rejestr, porównuje oryginalne bajty i tożsamość artefaktu oraz sprawdza odmowę przepięcia zakresu, niepoprawnych digestów i odczytu po uszkodzeniu/usunięciu lokalnego obiektu. Testy HTTP używają podpisanych sesji OIDC, rzeczywistego routera, lokalnego discovery/JWKS i pamięciowego IAM; nie wykonano pełnego E2E z Authentikiem, PostgreSQL, S3 ani workerami.
+
+Następne bramki: zakres pełnych dowodów i wyników ewaluacji wraz z approvals/pakietami i resolverami promptów/modeli, kalibracje i deklaracje pomiarów, autoryzacja wykonań, pozostałe rejestry i strumienie; następnie pełny manifest, wykonawca migracji i cutover. Trwała koordynacja publikacji review nadal pozostaje otwarta.
+
+
+## Kontynuacja — pliki pakietów dowodów z zakresem IAM-01
+
+Data: 15.09.2026. **Dziesiąty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt i granice: [README IAM](../crates/aiwatcher-iam/README.md#tenth-resource-boundary-project-approval-bundle-files).
+
+- **API:** trzy operacje pod `/api/v1/orgs/{organization}/projects/{project}/evaluation-approvals/{approval_id}/bundle` — lista nazw/rozmiarów, usunięcie plików pakietu oraz upload pojedynczego pliku pod `/{name}`, także `model-artifacts/<file>`. Wspólne handlery ze starymi trasami; OpenAPI i klient panelu aktualizowane razem.
+- **Role:** viewer listuje, **admin projektu** przesyła i usuwa. PUT i DELETE wymagają nagłówka IAM; po odebraniu body uploadu ponownie sprawdzany jest bieżący grant admin. Wygaśnięcia admina nie zastępuje niezależny editor ani rola instancji. Odpowiedzi projektowe mają `no-store`; stara rodzina tras zachowuje role instancji. Wspólny generator OpenAPI obejmuje teraz także nagłówki i parametry zakresu DELETE oraz jego unikalny identyfikator operacji.
+- **Magazyn:** fabryka `ApprovalBundles::for_project` domyślnie odmawia. Adapter serwera wiąże pliki z `evaluation-scopes/<org>/<project>/bundles/<approval_id>/`, bez katalogu hosta i bez globalnych rejestrów datasetów, anotacji, rozmów, promptów czy modeli. Odmawia przepięcia do innego projektu. Korzysta z istniejącej konfiguracji magazynu pakietów, bez dodatkowej konfiguracji wdrożenia.
+- **Tożsamość i operacje:** zachowane oryginalne bajty, nazwy plików i ID pary wariant/kontekst. Ten sam ID w różnych projektach oznacza osobne pliki. Upload zastępuje wyłącznie plik własnego projektu; usunięcie nie narusza innego projektu ani innego ID pakietu, a powtórzone usunięcie pustego pakietu jest idempotentne. Brak pakietu daje pustą listę; odczyt biblioteczny nie korzysta z globalnych plików ani katalogu hosta, także gdy istnieje tam ten sam ID.
+- **Walidacja kluczy:** adres pary i nazwa pliku są sprawdzane przed dostępem. Cała lista z magazynu musi należeć do dokładnego prefiksu pary i zawierać prawidłowe nazwy, zanim zostanie zwrócona lub rozpocznie się usuwanie. Cudzy albo niepoprawny klucz odrzuca całą listę przed pierwszym usunięciem. Ta kontrola obejmuje również stare trasy.
+- **Granice:** upload nie zatwierdza pakietu, nie wykonuje scorera, nie pobiera URL-i ani nie sprawdza wszystkich przypięć manifestu. Usunięcie plików nie wycofuje approval ani nie usuwa opublikowanego wyniku. Projektowe approvals, pełny resolver źródeł, wyniki, kalibracje, deklaracje pomiarów i wykonania pozostają do wdrożenia. UI i SDK nadal używają starych tras; selektory są nieaktywne. Nie wykonano migracji danych ani wdrożenia; inwentaryzacja migracji nie obejmuje pakietów. Usuwanie wielu plików nie jest transakcyjne i po awarii magazynu może wymagać ponowienia. Cofnięcie grantu nie anuluje wcześniej dopuszczonej operacji magazynu.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-evaluation`: **354 testy**, powodzenie. Dodano **4 scenariusze HTTP** wszystkich trzech operacji: izolacja projektów/organizacji/starych tras, nagłówki PUT/DELETE, admin kontra editor/rola instancji, przedziały grantów, cofnięcie dostępu, opóźniony upload po wygaśnięciu admina przy aktywnym editorze, brak auth/IAM/fabryki.
+- Dodano **2 testy adaptera serwera**: rzeczywisty plikowy magazyn i ponowne otwarcie, oryginalne bajty tekstu/binarnych artefaktów, te same ID w różnych projektach, brak fallbacku do globalnych plików/katalogu hosta i odmowa przepięcia; osobno błędny adapter listowania potwierdza odmowę przed jakimkolwiek usunięciem, również na starej ścieżce.
+- `cargo test -p aiwatcher-server --test evaluation`: **133 testy**, powodzenie; **1 test RustFS/S3 jawnie pominięty**, bez uruchamiania zewnętrznej usługi.
+- `cargo clippy -p aiwatcher-api -p aiwatcher-evaluation -p aiwatcher-server --all-targets -- -D warnings`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. `npm run build`: granice architektury, Vite i TypeScript — powodzenie; pozostaje wcześniejsze ostrzeżenie o głównym chunku ponad 500 kB. UI nie zmieniono; bez nowego przeglądu wizualnego.
+- Wygenerowano OpenAPI i klienta panelu; sprawdzono trzy operacje projektowe, parametry zakresu, wymagane nagłówki PUT/DELETE i unikalność identyfikatorów wszystkich operacji. `just openapi-check`, `cargo fmt --all --check` i `git diff --check`: powodzenie.
+- Testy HTTP używają podpisanych sesji OIDC, rzeczywistego routera, lokalnego discovery/JWKS i pamięciowego IAM z testowym adapterem pakietów. Testy serwera sprawdzają produkcyjny `LocalSource`. Nie wykonano pełnego E2E z Authentikiem, PostgreSQL, S3 ani workerami.
+
+Fundament projektowego resolvera manifestów producenta wykonano w kontynuacji poniżej. Następne bramki: podłączenie resolvera do projektowych approvals, izolacja wyników oraz kalibracji, deklaracje pomiarów i autoryzacja wykonań; pozostałe rejestry i strumienie, pełny manifest migracji, wykonawca migracji i cutover. Trwała koordynacja publikacji review pozostaje otwarta.
+
+
+## Kontynuacja — fundament projektowego resolvera dowodów IAM-01
+
+**Etap biblioteczny, bez nowych tras HTTP; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#producer-evidence-resolver-foundation).
+
+- **Fabryka:** `SourceAuthority::for_project_evidence` domyślnie odmawia. Adapter serwera buduje nowy resolver z rejestrami datasetów, anotacji, promptów i modeli związanymi z jednym projektem oraz projektowym prefiksem pakietów. Nie przenosi katalogu hosta ani archiwum rozmów. Odmawia przepięcia zakresu, również gdy przekazany rejestr źródłowy należy już do innego projektu.
+- **Weryfikacja:** manifest producenta przechodzi istniejącą kontrolę przypiętych plików, pakietu modelu i jego artefaktów, wersji promptu/modelu oraz przypadków i ich kolejności. Obsługiwane źródła to zewnętrzne przypadki w pakiecie, natywny dataset i eksport anotacji. Brak lub uszkodzenie lokalnej wersji nie uruchamia fallbacku do identycznych danych globalnych, innego projektu ani dysku hosta. URI nie jest pobierane. Hashe i formaty danych pozostają bez zmian.
+- **Odmowy:** rozmowy, datasety ocen, sędziowie i konteksty `aiwatcher.scoring` są odrzucane; wymagają dalszych właścicieli zakresu i polityki wykonania. Resolver zawężony do tworzenia kohort nie odzyskuje zdolności rozwiązywania pełnych manifestów.
+- **Granica integracji:** fabryka nie jest jeszcze wywoływana przez produkcyjne trasy approvals/wyników. Nie uwierzytelnia argumentu `subject` ani nie sprawdza grantów IAM — przyszły wywołujący musi sprawdzić bieżący dostęp oraz użyć rejestru z projektowymi approvals, wynikami i retencją. Obecne trasy kohort i plików pakietów zachowują swoje węższe możliwości. Nie aktywowano selektorów UI, nie wykonano migracji ani wdrożenia.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-server --test evaluation --quiet`: **138 testów przeszło, 1 istniejący test RustFS/S3 pominięty**. Dodano **5 testów**: rzeczywisty plikowy magazyn i ponowne otwarcie, projekty/organizacje/globalne dane, osobna obecność identycznych wersji, uszkodzenie/usunięcie źródła, projektowe prompty i modele, integralność artefaktów modelu oraz wszystkich przypiętych plików zewnętrznego pakietu, odmowa przepięcia i domyślna odmowa fabryki.
+- `cargo test -p aiwatcher-evaluation --quiet`: **96 testów**, powodzenie.
+- `cargo clippy -p aiwatcher-server -p aiwatcher-evaluation --all-targets -- -D warnings`: powodzenie.
+- `cargo fmt --all --check` i `git diff --check`: powodzenie.
+- Nie zmieniano UI ani kontraktu HTTP; w tej iteracji nie regenerowano klienta i nie uruchamiano testów panelu. Testy adapterów nie są testami autoryzowanej trasy projektowych approvals/wyników ani pełnym E2E z Authentikiem, PostgreSQL, S3 i workerami.
+
+Projektowy rejestr approvals i wyników podłączono w kontynuacji poniżej. Kalibracje, pomiary serwerowe, wykonania, strumienie i cutover pozostają osobnymi bramkami.
+
+
+## Kontynuacja — projektowe approvals, wyniki producentów i retencja IAM-01
+
+**Jedenasty adapter danych; IAM-01 i cała migracja pozostają w toku.**
+Kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#eleventh-resource-boundary-project-producer-approvals-and-results).
+
+- **API:** 10 operacji pod `/api/v1/orgs/{organization}/projects/{project}`: lista/zatwierdzanie/wycofanie approvals, publikacja/katalog/szczegół/usunięcie wyników, strony przypadków i oba porównania. Wspólne handlery ze starymi trasami. OpenAPI i wygenerowany klient panelu zaktualizowane razem.
+- **Role:** viewer czyta, editor publikuje, admin projektu zatwierdza, wycofuje i usuwa. Mutacje wymagają nagłówka IAM i ponownego sprawdzenia wymaganej roli po odebraniu body. Wygasłego admina nie zastępuje niezależny editor ani rola instancji. Odpowiedzi projektowe mają `no-store`; brak/cofnięcie dostępu odrzuca żądanie przed odczytem rejestru.
+- **Izolacja:** `Registry::for_project_evidence` podłącza jawny resolver i magazyn `evaluation-scopes/<org>/<project>/registry/evaluations/`: approvals, claimy, shardy, nagłówki, katalog, znaczniki wycofania/usunięcia i raporty retencji. Znajomość ID nie otwiera wyniku ani baseline’u w innym projekcie. Identyczne ID wymagają osobnej publikacji i zatwierdzenia. Brak fallbacku do globalnych approvals, wyników ani telemetrycznej projekcji, również po wyłączeniu IAM. Zachowano atomowy create, oryginalne bajty i adresy treści.
+- **Retencja:** istniejący worker wykrywa zakresy zawierające dowody i stosuje tę samą regułę sweep/collection osobno dla każdego, z osobnymi trwałymi raportami. Usuwanie nie zależy od aktywnego grantu człowieka. Collection pozostaje godzinowe; termin ostatniej kolekcji jest odczytywany z raportu również po restarcie. Koszt jest jawny: wykrywanie listuje prefiks `evaluation-scopes/` co minutę i rośnie z liczbą obiektów; indeksowana/paginowana lista zakresów pozostaje pracą skalującą. Błąd wykrywania/wiązania jest logowany, błąd uruchomionego sweepu trafia do raportu projektu.
+- **Granice:** wyłącznie dowody mierzone przez producenta. Kalibracje, sędziowie, rozmowy, deklaracje pomiarów serwerowych, approval lines, projektowe gate/experiments i połączenia z obserwacjami pozostają nieudostępnione. Bezstanowe obliczanie adresu approval pozostaje na istniejącej trasie. ID trace/span/execution w dowodach są metadanymi producenta, nie dowodem dostępu ani wykonania. Cofnięcie grantu nie anuluje operacji magazynu już dopuszczonej; nie ma wspólnej transakcji IAM i object store. UI/SDK nadal używają starych tras; selektory są nieaktywne. Nie wykonano migracji ani wdrożenia.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-api -p aiwatcher-evaluation --quiet`: **358 testów**, powodzenie (239 HTTP, 23 kontraktu/biblioteki API, 96 ewaluacji). **4 nowe scenariusze HTTP** obejmują 10 operacji, izolację projektów/organizacji/starych tras, granty przed startem/po wygaśnięciu/cofnięciu, role projektu kontra instancji, nagłówki, spóźniony upload po utracie editor/admin, brak auth/IAM/fabryki, wycofanie i niezależne usuwanie.
+- `cargo test -p aiwatcher-server --test evaluation --quiet`: **140 testów przeszło, 1 istniejący test RustFS/S3 pominięty**. **2 nowe scenariusze** sprawdzają produkcyjne adaptery: plikowy magazyn i reopen z identycznymi receiptami/bajtami oraz osobnymi approvals, a także rzeczywistą pętlę retencji wykrywającą projekt, usuwającą wygasłe shardy i zapisującą osobny raport.
+- Clippy API/ewaluacji/serwera z `--all-targets -- -D warnings`, `cargo fmt --all --check`, `just openapi-check` i `git diff --check`: powodzenie.
+- Panel: **53 pliki, 417 testów**, powodzenie. Build (architektura, Vite, TypeScript): powodzenie; pozostaje ostrzeżenie o głównym chunku ponad 500 kB. Bez nowego przeglądu wizualnego — UI nie zmieniono.
+- HTTP używa podpisanych sesji OIDC, lokalnego discovery/JWKS, rzeczywistego routera, pamięciowego IAM i jawnego testowego resolvera. Testy serwera osobno sprawdzają produkcyjny `LocalSource`. Nie jest to pełny E2E z Authentikiem, PostgreSQL, S3 ani workerami wykonującymi pomiary.
+
+Kalibracje producentów podłączono w kontynuacji poniżej. Następne bramki: deklaracje pomiarów z ich właścicielami, autoryzacja wykonań i strumieni, pozostałe rejestry; pełny manifest migracji, wykonawca i cutover. Trwała koordynacja publikacji review pozostaje otwarta.
+
+## Kontynuacja — projektowe kalibracje IAM-01
+
+**Dwunasty adapter danych; IAM-01 pozostaje w toku.** Kontrakt:
+[README IAM](../crates/aiwatcher-iam/README.md#twelfth-resource-boundary-project-calibration-sets).
+
+- Dwie operacje pod `/api/v1/orgs/{organization}/projects/{project}/evaluation-calibrations`: POST tworzy niezmienny zbiór ocen ludzi, GET `/{version}` odczytuje go po adresie treści. Wspólne handlery zachowują stare trasy.
+- Editor tworzy, viewer czyta; POST wymaga nagłówka IAM i ponownego sprawdzenia grantu po odebraniu body. Admin instancji nie zastępuje roli projektu, odpowiedzi mają `no-store`.
+- Wynik producenta, jego approvals, rubryki i oceny muszą być dostępne w tym samym projekcie. Zbieżność ID z globalnym lub sąsiednim zasobem nie wystarcza. Magazyn otwiera wyłącznie `evaluation-judges/calibrations/` pod prefiksem projektowego rejestru — nie otwiera konfiguracji/odpowiedzi sędziów ani deklaracji pomiarów. Rejestr authored-only nadal odmawia kalibracji.
+- Zachowano oryginalny hash, format, idempotencję pierwszego zapisu i weryfikację przy odczycie. Zmiana oceny człowieka tworzy nowy zbiór, a nie przepisuje stary. Kalibracja zawiera wartości ocen i referencje, nie pytania/odpowiedzi; istniejący zbiór pozostaje czytelny po wycofaniu wyniku, ale stworzenie nowego wymaga aktualnie czytelnego źródła. To istniejący kontrakt, nie mechanizm usuwania metadanych ocen.
+- Granice: wyłącznie kalibracje z projektowych wyników producentów. Rozmowy, wyniki serwerowe/sędziowskie, deklaracje pomiarów i ich wykonania pozostają zamknięte. Utworzenie kalibracji nie uruchamia sędziego. Odczyt wielu stron nie jest wspólną transakcją IAM/magazynu; cofnięcie grantu nie przerywa już dopuszczonej pracy. Bez migracji danych, wdrożenia i aktywacji selektorów UI.
+
+Walidacja:
+
+- API: **23 testy biblioteki/kontraktu i 241 HTTP**, powodzenie. **2 nowe scenariusze** sprawdzają obie trasy, izolację projektów/organizacji/globalnych danych oraz każdej zależności, niezmienność po zmianie oceny, wycofanie, przedziały/cofnięcie grantów, role instancji kontra projektu, nagłówek, spóźniony upload, brak uwierzytelnienia/IAM i `no-store`.
+- Ewaluacje: **96 testów**, powodzenie. Serwer (`--test evaluation`): **141 przeszło, 1 istniejący RustFS/S3 pominięty**. **1 nowy test** używa produkcyjnego resolvera i plikowego magazynu: reopen, idempotencja, brak fallbacku, wykrywanie uszkodzenia, usunięcie i odmowa pozostałych rodzin judge/scoring.
+- Clippy API/ewaluacji/serwera z `--all-targets -- -D warnings`, format i `git diff --check`: powodzenie. OpenAPI i klient wygenerowane, `just openapi-check`: powodzenie.
+- Panel: **53 pliki, 417 testów**, build architektury/Vite/TypeScript — powodzenie. UI bez zmian; bez nowego przeglądu wizualnego. Nadal ostrzeżenie o chunku ponad 500 kB.
+- Nie wykonano pełnego E2E Authentik/PostgreSQL/S3 ani pomiaru na workerze. Testy HTTP korzystają z rzeczywistego routera, podpisanych sesji i pamięciowego IAM; resolver produkcyjny sprawdzany osobno w teście serwera.
+
+Fundament deklaracji nad nagraniami wykonano poniżej. Projektowe trasy deklaracji, pomiary z kalibracjami i autoryzacja uruchamiania oraz pracy wykonawców pozostają otwarte, podobnie jak pozostałe bramki IAM-01, migracja i cutover.
+
+## Kontynuacja — fundament projektowych deklaracji nad nagraniami IAM-01
+
+**Etap biblioteczny, bez nowych tras HTTP i bez uruchamiania pomiarów.** IAM-01 i cała migracja pozostają w toku. Kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#project-recording-declarations-library-foundation).
+
+- Projektowy rejestr dowodów zapisuje niezmienne deklaracje pod `evaluation-scopes/<org>/<project>/registry/evaluation-runs/`. Zakres nie zmienia hasha; identyczna deklaracja w dwóch projektach ma ten sam ID, ale niezależnego pierwszego autora i czas. Węższe rejestry authored/cohort nadal odmawiają dostępu do deklaracji.
+- Przed zapisem wymagane są lokalna przypięta karta, zweryfikowane bajty nagrania i lokalne metadane dokładnie tej kohorty. Resolver ponownie wyprowadza przypięcia z właściciela datasetu/anotacji; sam wcześniejszy zapis pochodzenia kohorty nie zastępuje obecności źródła. Pełny manifest jest walidowany przed zapisem. Brak lub uszkodzenie nie uruchamia fallbacku do globalnych danych, sąsiedniego projektu ani katalogu hosta.
+- Odczyt deklaracji oraz ponowiony zapis sprawdzają jej adres treści i zapisane ID, również na starej ścieżce bibliotecznej. Pełny widok ponownie sprawdza zależności; surowe metadane deklaracji pozostają czytelne po utracie źródła, bez udawania dopuszczonego pomiaru.
+- Obsługiwany zakres to nagrania, natywne kohorty curation/anotacji i wbudowane scorery. Sędziowie, zewnętrzni scorerzy/kalibracje, archiwum, zewnętrzne kohorty i generowanie odpowiedzi pozostają odrzucane. Resolver nadal odmawia zatwierdzania `aiwatcher.scoring`, a widok deklaracji pokazuje `admitted: false`.
+- Granice: referencje kodu, konfiguracji generowania, promptu/modelu/workflow przechodzą walidację struktury manifestu, nie pełną weryfikację bajtów i właścicieli — ta należy do przyszłego projektowego admission. Argument autora nie jest autoryzacją IAM. Nie dodano HTTP, wykonawcy, polityki retencji deklaracji ani wspólnej transakcji IAM/magazynu. Nie aktywowano selektorów UI, nie migrowano danych i nie zmieniano wdrożenia.
+
+Walidacja:
+
+- `cargo test -p aiwatcher-evaluation -p aiwatcher-api --quiet`: **360 testów**, powodzenie (96 ewaluacji, 23 biblioteki/kontraktu API, 241 HTTP).
+- `cargo test -p aiwatcher-server --test evaluation --quiet`: **143 przeszły, 1 istniejący RustFS/S3 pominięty**. Dwa nowe testy używają produkcyjnego resolvera; obejmują reopen plikowego magazynu, niezależność projektów/organizacji/globalnych danych, wszystkie lokalne zależności obsługiwanego pomiaru, idempotencję, uszkodzenie deklaracji i brak/uszkodzenie źródeł, odmowy nowych uprawnień wykonawczych i węższych rejestrów.
+- Clippy API/ewaluacji/serwera z `--all-targets -- -D warnings`, `cargo fmt --all --check` i `git diff --check`: powodzenie. Nie zmieniono kontraktu HTTP ani UI; bez regeneracji klienta, testów panelu i nowego przeglądu wizualnego w tej iteracji.
+- Testy biblioteczne nie zastępują projektowej autoryzacji deklaracji przez HTTP ani pełnego E2E z Authentikiem, PostgreSQL, S3 i workerami.
+
+Projektowe trasy deklaracji dodano w kolejnym etapie poniżej. Pomiary sędziowskie i kalibracje, weryfikacja pełnego wariantu przy admission, autoryzacja uruchamiania/wykonawców i strumieni pozostają otwarte. Pozostałe rejestry, pełny manifest migracji, wykonawca, cutover i trwała koordynacja publikacji review nadal wymagają wdrożenia.
+
+## Kontynuacja — projektowe API deklaracji IAM-01
+
+Dodano `POST /api/v1/orgs/{organization}/projects/{project}/evaluation-runs` i `GET .../evaluation-runs/{id}`. Kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#thirteenth-resource-boundary-project-recording-declarations). **IAM-01 nadal w toku; deklaracja nie uruchamia ani nie zatwierdza pomiaru.**
+
+- Te same handlery obsługują projektowe i stare trasy. Odczyt wymaga bieżącego grantu viewer, deklarowanie editor oraz `X-AIWatcher-IAM: 1`. Po odebraniu JSON grant editor jest sprawdzany ponownie. Rola administratora instancji nie zastępuje uprawnień projektu; autor pochodzi z uwierzytelnionej tożsamości, nie z body.
+- Projektowe odpowiedzi mają `Cache-Control: no-store`. Zakres jest wiązany przez extractor, bez fallbacku do globalnych deklaracji. Nie dodano projektowej trasy `/start` ani katalogu zewnętrznych scorerów. Globalne `/start` nie odnajduje deklaracji zapisanej wyłącznie w projekcie.
+- Zachowano ograniczenia poprzedniego etapu: nagrania, natywne kohorty i wbudowane scorery. Sędziowie, zewnętrzni scorerzy, generowanie, archiwum i autoryzacja workerów pozostają poza wdrożeniem. Kontrola grantu jest dopuszczeniem operacji, nie wspólną transakcją IAM/magazynu ani anulowaniem zapisu już rozpoczętego przed cofnięciem grantu.
+- Dwa testy HTTP pokrywają izolację projektów/organizacji/globalnych danych, niezależne identyczne ID, idempotencję, role i okna czasowe, cofnięcie dostępu, brak nagłówka, administratora instancji bez grantu, utratę roli podczas uploadu bez zapisu deklaracji, odmowę generowania i uruchamiania oraz brak IAM/uwierzytelnienia. Resolver kohort HTTP jest dublem; produkcyjne sprawdzanie źródeł i bajtów pokrywają testy serwera z poprzedniego etapu.
+
+Walidacja: `cargo test -p aiwatcher-api --quiet` — **266 testów** (23 biblioteki/kontraktu, 243 HTTP); Clippy API z `--all-targets -- -D warnings` — powodzenie. `just openapi` odświeżył kontrakt i klienta panelu; `npm run build` panelu przeszedł wraz z kontrolą architektury i TypeScriptem (ostrzeżenie Vite o dużym chunku). Nie zmieniono interfejsu ani nie aktywowano selektorów. Brak nowego wizualnego odbioru i pełnego E2E z Authentikiem/PostgreSQL/S3/workerami; migracja danych i cutover nadal niewykonane.
+
+Następne bramki: projektowe pomiary sędziowskie/zewnętrzne, następnie uruchamianie oraz autoryzacja wykonawców. Admission wariantu dla ograniczonego zakresu pomiarów wdrożono poniżej. Nie przenosić globalnego `/start` pod projektowy prefiks bez izolacji ścieżek wykonania.
+
+## Kontynuacja — admission wariantu i zamknięta granica wykonawców IAM-01
+
+**Częściowe wykonanie etapu: admission działa dla nagrań/natywnych kohort/wbudowanych scorerów; autoryzowane projektowe wykonania nadal niewdrożone.** Kontrakt i następne wymagania: [README IAM](../crates/aiwatcher-iam/README.md#project-admission-for-built-in-recording-measurements).
+
+- Istniejąca projektowa trasa zatwierdzania (rola project admin) może dopuścić `aiwatcher.scoring` w tym zakresie. Rejestr weryfikuje wersję skompilowanego scorera, lokalną kartę i dokładnie jej metryki. Resolver sprawdza projektowy pakiet wariantu, bajty kodu/konfiguracji/schematów/narzędzi/workflow, właścicieli promptu/modelu oraz natywną kohortę. Pomija wyłącznie producenckie `suite.json`/`scorer.py`, zastąpione kartą i binarium. Przypięcie workflow jest nadal weryfikacją bajtów, nie zgodą na jego wykonanie.
+- Admission i pełny widok projektowego pomiaru ponownie sprawdzają lokalne źródło i zgodność pakietu po znalezieniu niewycofanego approval. Uszkodzenie po zatwierdzeniu nie oznacza już `admitted: true`; może zakończyć odczyt błędem. Koszt: ponowne rozwiązywanie źródła w istniejących limitach adaptera, bez cache pomiędzy żądaniami.
+- Wspólne przygotowanie trzech ścieżek wykonawców scoringu odmawia projektowego rejestru jako `Policy` przed odczytaniem deklaracji. Samo przekazanie zatwierdzonego projektowego rejestru do `ScoreExecutor` nie daje uprawnień wykonawczych. To blokada braku autoryzacji, **nie implementacja autoryzowanego projektowego wykonania**.
+- Powód pozostawienia blokady: historia wykonania, artefakty i strumienie nadal mają globalne ścieżki. Zgoda na start bez ich izolacji otworzyłaby drugą drogę do projektowych danych. Nie dodano `/start`, nie uruchomiono workerów i nie aktywowano selektorów UI.
+
+Nowy test produkcyjnego adaptera: staging zależności, lokalny prompt mimo identycznego globalnego, idempotencja i reopen magazynu, uszkodzenie kodu/konfiguracji/workflow po zatwierdzeniu, odmowa innej wersji scorera i kierunku metryki, izolacja projektu/organizacji/globalnych danych, withdrawal oraz odmowa wykonawcy bez publikacji wyniku. Istniejące testy wspólnego resolvera obejmują właścicieli promptów/modeli; istniejące testy HTTP wymagają project admin do zatwierdzania.
+
+Walidacja: testy API i ewaluacji — **362 przeszły**; testy integracyjne `aiwatcher-server --test evaluation` — **144 przeszły, 1 RustFS/S3 pominięty**. Nie zmieniono kształtów HTTP ani klienta. Brak pełnego E2E Authentik/PostgreSQL/S3/worker.
+
+Następny etap wykonawczy musi zapisać zaufany principal i scope razem z wykonaniem, odizolować identyfikator/historię/komendy/artefakty/strumienie oraz sprawdzać aktualne granty przy podejmowaniu pracy i publikacji, z jawną polityką cofnięcia dostępu podczas commit. Dopiero wtedy można otworzyć projektowe `/start`. Jawna autoryzacja samego wykonawcy jest kolejnym etapem poniżej.
+
+## Kontynuacja — jawna autoryzacja wykonawcy nagrań IAM-01
+
+**Etap biblioteczny wykonawcy, nie uruchamianie managed runs. IAM-01 nadal otwarte.** `ScoreExecutor::for_project` przyjmuje jawną `ProjectAuthority`: magazyn IAM, scope, dokładny principal provider/subject, identyfikator wykonania i deklaracji. Typ nie jest serializowany ani odbierany przez HTTP. Przyszły dispatcher musi odczytać te dane z zaufanego, trwałego właścicielstwa wykonania — nie z planu, parametrów, nazwy workera czy autora deklaracji. **Trwałe właścicielstwo i dispatcher nadal niewdrożone.**
+
+- Przed odczytem deklaracji: zgodność scope/wykonania/deklaracji/klucza kroku, runtime nagrania i aktualny grant co najmniej Editor. Pełny widok deklaracji sprawdza lokalne zależności i ograniczony zakres pomiarów. Approval pozostaje osobną zgodą na dowody.
+- Po obliczeniu wyniku, przed `Committing` i publikacją: ponowne pytanie do IAM. Cofnięcie grantu lub koniec okna edycji daje Policy, niedostępność magazynu IAM — Transient. Wynik zapisuje się wyłącznie w projekcie i nie jest cacheowalny.
+- Jawna granica: cofnięcie dostępu podczas odczytu blokuje publikację; po dopuszczeniu zapisu commit kończy się w całości. Nie jest to transakcja IAM + object store ani natychmiastowe przerywanie wszystkich odczytów/obliczeń. Kolejna próba ponownie wymaga grantu.
+- Standardowy executor z projektowym rejestrem nadal odmawia. Projektowy executor nie może użyć globalnych artefaktów, sędziego ani scorer service. Nie dodano go do globalnego rejestru wykonawców — ten nie jest jeszcze projektowym dispatcherem, a jego cache lookup poprzedza wykonanie.
+
+Cztery testy integracyjne używają produkcyjnego resolvera, plikowego object store i rzeczywistej polityki memory IAM: błędny principal/wykonanie/deklaracja/runtime, rebinding, lokalna publikacja i brak cache, withdrawal approval, cofnięcie/wygaśnięcie grantu w trakcie zatrzymanego odczytu, cofnięcie podczas zatrzymanego commit i odmowa kolejnej próby. Właściciel organizacji bez aktywnego projektowego grantu nie może wykonywać pomiaru.
+
+Walidacja: **148 testów integracyjnych ewaluacji i 147 testów biblioteki serwera przeszło**, 1 test RustFS/S3 pominięty; Clippy serwera `--all-targets -D warnings`, formatowanie i `git diff --check` poprawne. Kontrakt HTTP nie zmieniony.
+
+Następna bramka: trwała tożsamość i scope wykonania oraz izolacja claimów, historii, artefaktów i strumieni, potem dispatcher i `/start`. Brak nowych tras, selektorów UI, migracji/cutover i pełnego E2E wdrożenia. Szczegółowy kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#project-recording-executor-explicit-authority-not-yet-a-start-path).
+
+## Kontynuacja — projektowe bajty artefaktów i receipty prób IAM-01
+
+**Wydzielona część bramki magazynu wykonania, nie trwałe właścicielstwo ani uruchamianie projektowych zadań. IAM-01 nadal otwarte.** Kontrakt: [README IAM](../crates/aiwatcher-iam/README.md#project-artifact-bytes-and-attempt-receipts-storage-foundation).
+
+- `Artifacts::for_project` wiąże tabele, ich oryginalny JSON, logi podów i receipty z `artifacts/scopes/<org>/<project>/registry/`. Te same bajty zachowują digest, ale mają osobny URI w każdym projekcie. Te same klucze prób nie współdzielą receiptów. Przepięcie związanego magazynu do innego zakresu jest odrzucane.
+- Odczyt bajtów i sprawdzenie obecności wymagają dokładnego klucza danych zgodnego z zakresem, rodzajem i SHA-256 referencji. Odmowa następuje przed I/O, również dla innych rejestrów, receiptów, traversal i zakodowanych separatorów. Port workerów korzysta z tej samej reguły. **Stary globalny czytnik również odmawia projektowych URI**, bez fallbacku; poprawne referencje dotychczasowego writera zachowują działanie.
+- Zapis receiptu odmawia cudzej referencji; odczyt sprawdza także zgodność z żądanym kluczem próby. Podmieniony receipt nie staje się wynikiem innego wykonania. Nieczytelny JSON pozostaje cache miss zgodnie z wcześniejszym kontraktem. Zachowano kolejność dane → receipt i weryfikację hasha odczytanych bajtów.
+- Granice: to biblioteczna izolacja magazynu, bez samodzielnej autoryzacji IAM/lease. Dispatcher musi dopiero odczytywać scope z trwałego, zaufanego właścicielstwa. Katalog metadanych, lineage/cache, rozliczanie retencji, historia, claimy i strumienie nadal wymagają izolacji; nie wolno podłączyć projektowych bajtów do globalnego katalogu/reactora. Nie otwarto `/start`, nie aktywowano UI, nie wykonano migracji ani wdrożenia.
+
+Walidacja: `cargo test -p aiwatcher-server --quiet` — **300 testów przeszło** (147 biblioteki, 148 ewaluacji, 5 nowych integracji artefaktów), **1 istniejący RustFS/S3 pominięty**. Nowe testy obejmują rzeczywisty magazyn plikowy i reopen, identyczne hashe i klucze prób w projektach/organizacjach/globalnie, dokładny zapis dużych liczb, niezależne usunięcie, podmianę referencji/receiptów oraz brak I/O przy odmowie. Clippy serwera `--all-targets -- -D warnings`, format i `git diff --check`: powodzenie. Bez zmiany kontraktu HTTP/UI i bez pełnego E2E Authentik/PostgreSQL/S3/workerów.
+
+Następne kroki nadal obejmują trwały principal/scope zapisany razem z wykonaniem, izolację pozostałych ścieżek i dopiero potem dispatcher oraz projektowe `/start`. **Cała migracja pozostaje w toku.**

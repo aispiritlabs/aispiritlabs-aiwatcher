@@ -168,15 +168,16 @@ pub(crate) const SCORING_RUNS: &str = "evaluation-runs/";
 /// arrived — never by a name somebody chose, so two recordings cannot occupy
 /// one key and a declaration naming a digest names these exact bytes.
 pub(crate) fn recording(digest: &str) -> String {
-    format!("evaluation-recordings/{digest}.json")
+    format!("{RECORDINGS}{digest}.json")
 }
 /// A judge's settings, under the digest a context pins them by.
 pub(crate) fn judge_settings(digest: &str) -> String {
     format!("evaluation-judges/settings/{digest}.json")
 }
 /// A frozen set of human judgements, under its own content address.
+pub(crate) const CALIBRATIONS: &str = "evaluation-judges/calibrations/";
 pub(crate) fn calibration(version: &str) -> String {
-    format!("evaluation-judges/calibrations/{version}.json")
+    format!("{CALIBRATIONS}{version}.json")
 }
 /// What a judge said to one exact question, within the declared run that
 /// asked it. Named by the run and by the digest of the question, so a retry
@@ -350,3 +351,6 @@ impl Store {
         Ok(())
     }
 }
+
+/// Raw recorded answer documents, addressed by their exact bytes.
+pub(crate) const RECORDINGS: &str = "evaluation-recordings/";
