@@ -525,6 +525,10 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             checkpoint: None,
             timers: vec![TimerWrite::Fire(timer.timer_id.clone())],
             attempts: Vec::new(),
+            // A hosted decider's append is never the one that creates an
+            // execution: the start wrote the record, and this asserts it by
+            // the store it goes through.
+            ownership: None,
         };
         self.store()
             .append(&timer.execution, request)
@@ -639,6 +643,10 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             checkpoint: None,
             timers: vec![TimerWrite::Fire(timer.timer_id.clone())],
             attempts: Vec::new(),
+            // A hosted decider's append is never the one that creates an
+            // execution: the start wrote the record, and this asserts it by
+            // the store it goes through.
+            ownership: None,
         };
         self.store()
             .append(&timer.execution, request)
@@ -907,6 +915,10 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             // A hosted run has no claimable attempts: the worker schedules its
             // own next node.
             attempts: Vec::new(),
+            // A hosted decider's append is never the one that creates an
+            // execution: the start wrote the record, and this asserts it by
+            // the store it goes through.
+            ownership: None,
         };
         request.check_payloads().map_err(HandleError::from)?;
 

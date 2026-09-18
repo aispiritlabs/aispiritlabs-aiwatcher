@@ -165,6 +165,24 @@ struct OneProcess(MemoryWorkflowStore);
 
 #[async_trait::async_trait]
 impl WorkflowStore for OneProcess {
+    fn scope(&self) -> aiwatcher_execution::ExecutionScope {
+        self.0.scope()
+    }
+
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> aiwatcher_execution::Result<std::sync::Arc<dyn WorkflowStore>> {
+        self.0.for_project(scope)
+    }
+
+    async fn ownership(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::ExecutionOwnership>> {
+        self.0.ownership(execution).await
+    }
+
     fn capabilities(&self) -> StoreCapabilities {
         StoreCapabilities {
             multi_process: false,
@@ -387,6 +405,24 @@ struct Contends {
 
 #[async_trait::async_trait]
 impl WorkflowStore for Contends {
+    fn scope(&self) -> aiwatcher_execution::ExecutionScope {
+        self.inner.scope()
+    }
+
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> aiwatcher_execution::Result<std::sync::Arc<dyn WorkflowStore>> {
+        self.inner.for_project(scope)
+    }
+
+    async fn ownership(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::ExecutionOwnership>> {
+        self.inner.ownership(execution).await
+    }
+
     fn capabilities(&self) -> StoreCapabilities {
         self.inner.capabilities()
     }

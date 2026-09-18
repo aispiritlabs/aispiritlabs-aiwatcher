@@ -290,6 +290,10 @@ async fn start_execution(
                 requested_by: requester.clone(),
                 decided_by: body.decided_by,
                 payloads: body.payloads,
+                // The unscoped path. Every start this build performs is
+                // one: no project route creates an execution yet, and a run
+                // with no owner is a global run by construction.
+                project: None,
             },
         })
         .await?;

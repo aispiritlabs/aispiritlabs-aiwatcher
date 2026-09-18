@@ -49,6 +49,7 @@ pub mod plan;
 pub mod pods;
 pub mod reactor;
 pub mod schedule;
+pub mod scope;
 pub mod start;
 pub mod state;
 pub mod store;
@@ -85,6 +86,7 @@ pub use schedule::{
     Cadence, OverlapPolicy, Schedule, ScheduleReader, ScheduleStore, ScheduledDefinition,
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
 };
+pub use scope::{ExecutionOwnership, ExecutionScope, OwnedDefinition, ProjectStart, ScopeBinding};
 pub use start::{
     Decider, ExecutionTarget, Executions, Missing, RunIdentity, StartRefused, StartRequest,
     StartRun, Started, Window,

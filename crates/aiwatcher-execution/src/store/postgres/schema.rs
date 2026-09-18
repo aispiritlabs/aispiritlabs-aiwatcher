@@ -68,6 +68,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         10,
         include_str!("../../../migrations/0010_run_payload_policy.sql"),
     ),
+    (
+        11,
+        include_str!("../../../migrations/0011_execution_ownership.sql"),
+    ),
 ];
 
 /// Bring the database up to the schema this build expects.

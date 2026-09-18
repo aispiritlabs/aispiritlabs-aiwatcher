@@ -40,6 +40,7 @@ use crate::schedule::rule::OverlapPolicy;
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope, ProjectStart};
 use crate::state::{ExecutionId, ExecutionMode, ExecutionOwner, RunState, StateType, StepState};
 use crate::store::{AppendRequest, ExpectedVersion, WorkflowStore};
 use crate::{Result, StoreError};
@@ -157,6 +158,7 @@ fn start_request(
         checkpoint: Some(("execution".to_owned(), Checkpoint::from_global_position(7))),
         timers: Vec::new(),
         attempts: Vec::new(),
+        ownership: None,
     }
 }
 
@@ -195,6 +197,7 @@ fn timer_request(
         checkpoint: None,
         timers,
         attempts: Vec::new(),
+        ownership: None,
     }
 }
 
@@ -226,6 +229,7 @@ fn outcome_request(
         checkpoint: None,
         timers: Vec::new(),
         attempts: Vec::new(),
+        ownership: None,
     }
 }
 
@@ -271,6 +275,7 @@ fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptWrite>) 
         checkpoint: None,
         timers: Vec::new(),
         attempts: rows,
+        ownership: None,
     }
 }
 
@@ -292,7 +297,81 @@ fn finish(execution: &ExecutionId, message_id: &str) -> AppendRequest {
         checkpoint: None,
         timers: Vec::new(),
         attempts: Vec::new(),
+        ownership: None,
     }
+}
+
+/// A project nothing else in this suite uses.
+///
+/// Fresh per call, for [`fresh`]'s reason: these properties run against a
+/// PostgreSQL somebody else's run also used, and a fixed scope would make one
+/// property's isolation depend on another's leftovers.
+#[must_use]
+pub fn project() -> aiwatcher_iam::ProjectScope {
+    aiwatcher_iam::ProjectScope {
+        organization: aiwatcher_iam::OrganizationId::new(),
+        project: aiwatcher_iam::ProjectId::new(),
+    }
+}
+
+/// The record a start in `scope` establishes, for a caller outside this module.
+///
+/// The adapter-specific tests beside the suite need the same fixture the
+/// properties use — an adapter proving "the record survives a restart" against
+/// a record of its own would be proving it about something else.
+#[must_use]
+pub fn ownership_for(scope: aiwatcher_iam::ProjectScope, subject: &str) -> ExecutionOwnership {
+    owner(scope, subject)
+}
+
+/// A start that creates a project execution, for the same caller.
+#[must_use]
+pub fn owned_start_for(
+    execution: &ExecutionId,
+    message_id: &str,
+    owner: ExecutionOwnership,
+) -> AppendRequest {
+    owned_start(execution, message_id, owner)
+}
+
+/// The record a start in `scope` establishes.
+fn owner(scope: aiwatcher_iam::ProjectScope, subject: &str) -> ExecutionOwnership {
+    ExecutionOwnership::of(
+        &ProjectStart::new(
+            scope,
+            aiwatcher_iam::Principal::new("https://id.example", subject).expect("a principal"),
+        ),
+        &plan(),
+    )
+}
+
+/// A start that creates a project execution, owner and all.
+fn owned_start(
+    execution: &ExecutionId,
+    message_id: &str,
+    owner: ExecutionOwnership,
+) -> AppendRequest {
+    AppendRequest {
+        ownership: Some(owner),
+        ..start_request(execution, ExpectedVersion::NoStream, message_id)
+    }
+}
+
+/// The same store, bound to `scope`.
+fn bound(
+    name: &str,
+    store: &dyn WorkflowStore,
+    scope: aiwatcher_iam::ProjectScope,
+) -> std::sync::Arc<dyn WorkflowStore> {
+    match store.for_project(scope) {
+        Ok(bound) => bound,
+        Err(error) => panic!("{name}: binding a store to a project: {error}"),
+    }
+}
+
+/// Whether a refusal is the scope boundary saying no.
+fn is_out_of_scope(error: &StoreError) -> bool {
+    matches!(error, StoreError::OutOfScope { .. })
 }
 
 /// A cutoff every write so far is before. The sweep's own clock, moved rather
@@ -343,6 +422,18 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_slot_put_back_after_a_transient_failure_is_due_again(name, store).await;
     a_slot_whose_holder_vanished_is_taken_over_when_the_lease_expires(name, store).await;
     a_definition_with_a_run_that_has_not_finished_blocks_its_next_slot(name, store).await;
+    an_execution_is_owned_by_the_project_that_started_it_and_reads_back_that_way(name, store).await;
+    an_unscoped_path_reaches_nothing_about_a_project_s_execution(name, store).await;
+    a_project_reaches_nothing_about_another_project_s_execution(name, store).await;
+    a_project_may_not_adopt_an_execution_nobody_owns(name, store).await;
+    a_repeated_start_naming_another_owner_does_not_repoint_the_execution(name, store).await;
+    the_same_start_twice_in_one_project_is_one_execution_and_one_owner(name, store).await;
+    a_global_claimant_never_takes_a_project_s_attempt(name, store).await;
+    a_project_claimant_never_takes_a_global_attempt(name, store).await;
+    a_project_s_timers_and_outbox_rows_reach_only_its_own_side(name, store).await;
+    a_retention_sweep_forgets_its_own_side_and_leaves_the_other_alone(name, store).await;
+    a_store_binds_to_one_project_and_refuses_a_second(name, store).await;
+    what_is_instance_wide_is_refused_by_name_rather_than_answered(name, store).await;
 }
 
 macro_rules! ok {
@@ -402,6 +493,7 @@ pub async fn a_decision_only_lands_at_the_version_its_author_read(
                 checkpoint: None,
                 timers: Vec::new(),
                 attempts: Vec::new(),
+                ownership: None,
             },
         ),
         "an append at the current version"
@@ -754,6 +846,7 @@ pub async fn a_hosted_message_survives_the_store_it_was_written_to(
                 checkpoint: None,
                 timers: Vec::new(),
                 attempts: Vec::new(),
+                ownership: None,
             }
         ),
         "a hosted append"
@@ -2574,4 +2667,612 @@ fn admission(key: &SlotKey, owner: &str, now: OffsetDateTime) -> SlotAdmissionRe
 
 fn stamp() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos()
+}
+
+// ── Scope: who owns an execution, and who may not reach it ───────────────────
+//
+// These are the properties that make the reactor, the worker, the launcher, the
+// timer tick, the outbox publisher and the retention sweep this binary already
+// runs safe to leave as they are. Each one is a thing a global path would
+// otherwise do to a project's run by accident, so each is asserted from both
+// sides: the unscoped store refusing, and the bound store answering.
+
+/// The record is written with the execution and reads back as what started it.
+pub async fn an_execution_is_owned_by_the_project_that_started_it_and_reads_back_that_way(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("owned");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    let record = owner(scope, "alice");
+    ok!(
+        name,
+        mine.append(&execution, owned_start(&execution, "start", record.clone())),
+        "a project start"
+    );
+
+    assert_eq!(
+        ok!(name, mine.ownership(&execution), "reading the owner"),
+        Some(record.clone()),
+        "{name}: the owner is the record the start established"
+    );
+    // And it names what was started, so a dispatcher can decide before it reads
+    // the stream.
+    assert_eq!(record.definition.plan_id, plan().plan_id, "{name}");
+    assert!(
+        ok!(name, mine.load(&execution), "loading the stream").version > 0,
+        "{name}: the stream landed with the record"
+    );
+    assert!(
+        ok!(name, mine.projection(&execution), "the projection").is_some(),
+        "{name}"
+    );
+}
+
+/// Every global door refuses a project's execution, rather than answering it.
+pub async fn an_unscoped_path_reaches_nothing_about_a_project_s_execution(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("hidden");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            owned_start(&execution, "start", owner(scope, "alice"))
+        ),
+        "a project start"
+    );
+
+    // Reads first: a known id must not be a way in. The refusal says so rather
+    // than answering an empty stream, which would read as "no such run" and
+    // send somebody to start a second one under an id that is taken.
+    for (what, refused) in [
+        ("load", store.load(&execution).await.err()),
+        ("load_page", store.load_page(&execution, 0, 10).await.err()),
+        ("projection", store.projection(&execution).await.err()),
+        ("ownership", store.ownership(&execution).await.err()),
+        ("timers_of", store.timers_of(&execution).await.err()),
+        ("decider_lease", store.decider_lease(&execution).await.err()),
+        (
+            "attempt",
+            store
+                .attempt(&AttemptKey::new(execution.clone(), "extract", 1))
+                .await
+                .err(),
+        ),
+        (
+            "recorded_outcome",
+            store
+                .recorded_outcome(&AttemptKey::new(execution.clone(), "extract", 1))
+                .await
+                .err(),
+        ),
+    ] {
+        let Some(error) = refused else {
+            panic!("{name}: the unscoped store answered {what} for a project's execution");
+        };
+        assert!(is_out_of_scope(&error), "{name}: {what}: {error}");
+        assert!(
+            error.says_the_same_next_time(),
+            "{name}: {what}: a boundary is not a bad moment"
+        );
+    }
+
+    // Then the writes. A command, and a start of the *same* id: both are the
+    // unscoped path reaching a run it does not own.
+    let refused = store
+        .append(
+            &execution,
+            dispatch(&execution, "global-command", Vec::new()),
+        )
+        .await
+        .expect_err("an unscoped command on a project's execution");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+
+    let refused = store
+        .append(
+            &execution,
+            start_request(&execution, ExpectedVersion::Any, "start"),
+        )
+        .await
+        .expect_err("an unscoped start of a project's execution");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+
+    // And the lease, which is a write that reads like a read.
+    let refused = store
+        .take_decider_lease(&execution, "somebody", OffsetDateTime::UNIX_EPOCH)
+        .await
+        .expect_err("an unscoped lease on a project's execution");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+}
+
+/// One project's id reaches nothing of another's.
+pub async fn a_project_reaches_nothing_about_another_project_s_execution(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("neighbour");
+    let (one, other) = (project(), project());
+    let mine = bound(name, store, one);
+    let theirs = bound(name, store, other);
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            owned_start(&execution, "start", owner(one, "alice"))
+        ),
+        "a project start"
+    );
+
+    let refused = theirs
+        .load(&execution)
+        .await
+        .expect_err("another project's execution");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+
+    let refused = theirs
+        .append(&execution, dispatch(&execution, "theirs", Vec::new()))
+        .await
+        .expect_err("another project's command");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+
+    // Including a start of their own under an id that is taken: the record says
+    // whose it is, and a second scope's start of it is not this execution's.
+    let refused = theirs
+        .append(
+            &execution,
+            owned_start(&execution, "start", owner(other, "mallory")),
+        )
+        .await
+        .expect_err("another project's start of a taken id");
+    assert!(
+        is_out_of_scope(&refused) || matches!(refused, StoreError::OwnershipConflict { .. }),
+        "{name}: {refused}"
+    );
+}
+
+/// An execution that exists and has no owner is a global run and stays one.
+pub async fn a_project_may_not_adopt_an_execution_nobody_owns(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("global");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "start")
+        ),
+        "a global start"
+    );
+
+    let scope = project();
+    let mine = bound(name, store, scope);
+    for (what, refused) in [
+        ("load", mine.load(&execution).await.err()),
+        ("projection", mine.projection(&execution).await.err()),
+        (
+            "append",
+            mine.append(&execution, dispatch(&execution, "adopt", Vec::new()))
+                .await
+                .err(),
+        ),
+        (
+            "ownership",
+            mine.append(
+                &execution,
+                owned_start(&execution, "adopt-start", owner(scope, "mallory")),
+            )
+            .await
+            .err(),
+        ),
+    ] {
+        let Some(error) = refused else {
+            panic!("{name}: a project store adopted a global execution through {what}");
+        };
+        assert!(is_out_of_scope(&error), "{name}: {what}: {error}");
+    }
+
+    // And the global path still has it, unchanged.
+    assert!(
+        ok!(name, store.load(&execution), "the global stream").version > 0,
+        "{name}"
+    );
+}
+
+/// A repeated start naming a different owner is refused, never a second owner.
+pub async fn a_repeated_start_naming_another_owner_does_not_repoint_the_execution(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("immutable");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    let held = owner(scope, "alice");
+    ok!(
+        name,
+        mine.append(&execution, owned_start(&execution, "start", held.clone())),
+        "a project start"
+    );
+
+    // Same execution, same project, a different principal. The message id is
+    // the same one the first start used — a redelivery by every other measure —
+    // and it is still refused, because the answer to "whose run is this" may
+    // not depend on who asked last.
+    let refused = mine
+        .append(
+            &execution,
+            owned_start(&execution, "start", owner(scope, "mallory")),
+        )
+        .await
+        .expect_err("a second owner");
+    assert!(
+        matches!(refused, StoreError::OwnershipConflict { .. }),
+        "{name}: {refused}"
+    );
+    assert!(refused.says_the_same_next_time(), "{name}");
+    assert_eq!(
+        ok!(name, mine.ownership(&execution), "the owner"),
+        Some(held),
+        "{name}: the record did not move"
+    );
+}
+
+/// The same start twice is one execution, one owner and one history.
+pub async fn the_same_start_twice_in_one_project_is_one_execution_and_one_owner(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("idempotent");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    let record = owner(scope, "alice");
+    let first = ok!(
+        name,
+        mine.append(&execution, owned_start(&execution, "start", record.clone())),
+        "the first start"
+    );
+    let again = ok!(
+        name,
+        mine.append(&execution, owned_start(&execution, "start", record.clone())),
+        "the same start again"
+    );
+    assert!(
+        again.is_duplicate(),
+        "{name}: a redelivered start is a duplicate, not a second run"
+    );
+    // The stream did not grow. `Duplicate` reports where the *input* landed
+    // and `Appended` reports the last version written, so the two numbers are
+    // not the same question and comparing them would prove nothing.
+    assert_eq!(
+        ok!(name, mine.load(&execution), "the stream").version,
+        first.version(),
+        "{name}: the second start appended nothing"
+    );
+    assert_eq!(
+        ok!(name, mine.ownership(&execution), "the owner"),
+        Some(record),
+        "{name}"
+    );
+}
+
+/// The claim a global reactor, worker or launcher would make sees nothing of a
+/// project's work.
+pub async fn a_global_claimant_never_takes_a_project_s_attempt(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("project-claim");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            owned_start(&execution, "start", owner(scope, "alice"))
+        ),
+        "a project start"
+    );
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            dispatch(
+                &execution,
+                "dispatch",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
+        ),
+        "a dispatch"
+    );
+
+    let now = OffsetDateTime::UNIX_EPOCH;
+    // The filter matches the row in every way a filter can. What refuses it is
+    // the store's binding, which is the point: a claimant says what it can run,
+    // not which executions it may reach.
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&mine_filter(&execution), "global-worker", now),
+            "an unscoped claim"
+        )
+        .is_none(),
+        "{name}: the unscoped claimant took a project's attempt"
+    );
+    // The launcher's read and the stranded-work count are the same question
+    // asked without claiming, and they answer the same way.
+    assert!(
+        ok!(
+            name,
+            store.claimable_attempts(RuntimeKind::PythonTask, now, 10),
+            "an unscoped read"
+        )
+        .iter()
+        .all(|row| row.key.execution_id != execution),
+        "{name}: the unscoped launcher read a project's attempt"
+    );
+    // And by key, which is how a pod claims its own attempt (ADR_0029): the
+    // refusal comes from the store's binding rather than from the row being
+    // absent, so a known key is not a way past it either.
+    let refused = store
+        .attempt(&claimable(&execution).key)
+        .await
+        .expect_err("an unscoped read of a project's attempt row");
+    assert!(is_out_of_scope(&refused), "{name}: {refused}");
+    let refused = store
+        .claim_attempt(
+            &ClaimFilter {
+                attempt: Some(claimable(&execution).key),
+                ..mine_filter(&execution)
+            },
+            "global-pod",
+            now,
+        )
+        .await;
+    assert!(
+        refused.as_ref().is_ok_and(Option::is_none) || refused.is_err(),
+        "{name}: the unscoped claimant took a project's attempt by key"
+    );
+
+    // And the project's own claimant does take it.
+    let taken = ok!(
+        name,
+        mine.claim_attempt(&mine_filter(&execution), "project-worker", now),
+        "a project claim"
+    );
+    assert_eq!(
+        taken.map(|row| row.key.execution_id),
+        Some(execution),
+        "{name}: the project's own claimant takes its own row"
+    );
+}
+
+/// And the other way: a project claimant sees nothing of the global side.
+pub async fn a_project_claimant_never_takes_a_global_attempt(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("global-claim");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "start")
+        ),
+        "a global start"
+    );
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "dispatch",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
+        ),
+        "a dispatch"
+    );
+
+    let mine = bound(name, store, project());
+    assert!(
+        ok!(
+            name,
+            mine.claim_attempt(
+                &mine_filter(&execution),
+                "project-worker",
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            "a project claim"
+        )
+        .is_none(),
+        "{name}: a project claimant took a global attempt"
+    );
+}
+
+/// A timer and an outbox row belong to the side their execution does.
+pub async fn a_project_s_timers_and_outbox_rows_reach_only_its_own_side(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("project-rows");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    let due = OffsetDateTime::UNIX_EPOCH + Duration::seconds(10);
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            owned_start(&execution, "start", owner(scope, "alice"))
+        ),
+        "a project start"
+    );
+    ok!(
+        name,
+        mine.append(
+            &execution,
+            timer_request(
+                &execution,
+                "schedule",
+                vec![TimerWrite::Schedule(timer(&execution, "t-1", due))]
+            )
+        ),
+        "a timer"
+    );
+
+    let later = due + Duration::seconds(1);
+    assert!(
+        ok!(name, store.due_timers(later, 100), "the global tick")
+            .iter()
+            .all(|found| found.execution != execution),
+        "{name}: the global timer tick found a project's deadline"
+    );
+    assert!(
+        ok!(name, mine.due_timers(later, 100), "the project's tick")
+            .iter()
+            .any(|found| found.execution == execution),
+        "{name}: the project's own tick did not find its deadline"
+    );
+
+    // The start wrote an outbox row. The global publisher must not put a
+    // project's facts on the instance's log.
+    assert!(
+        ok!(name, store.pending_outbox(1000), "the global outbox")
+            .iter()
+            .all(|row| row.partition_key != format!("workflow:{execution}")),
+        "{name}: the global publisher would have published a project's fact"
+    );
+    let ours = ok!(name, mine.pending_outbox(1000), "the project's outbox");
+    assert!(
+        ours.iter()
+            .any(|row| row.partition_key == format!("workflow:{execution}")),
+        "{name}: the project's own publisher did not see its row"
+    );
+}
+
+/// A sweep forgets its own side's runs and leaves the other's history alone.
+pub async fn a_retention_sweep_forgets_its_own_side_and_leaves_the_other_alone(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let theirs = fresh("project-kept");
+    let scope = project();
+    let mine = bound(name, store, scope);
+    ok!(
+        name,
+        mine.append(
+            &theirs,
+            owned_start(&theirs, "start", owner(scope, "alice"))
+        ),
+        "a project start"
+    );
+    // Its outbox row would keep it anyway; published first, so the only thing
+    // deciding its fate is the scope.
+    let rows: Vec<MessageId> = ok!(name, mine.pending_outbox(1000), "the project's outbox")
+        .into_iter()
+        .map(|row| row.message_id)
+        .collect();
+    ok!(
+        name,
+        mine.mark_published(&rows, OffsetDateTime::UNIX_EPOCH),
+        "publishing"
+    );
+    ok!(
+        name,
+        mine.append(&theirs, finish(&theirs, "finish")),
+        "an ending"
+    );
+
+    let swept = ok!(
+        name,
+        store.prune(well_after_everything(), 100),
+        "an unscoped sweep"
+    );
+    let _ = swept;
+    assert!(
+        ok!(name, mine.projection(&theirs), "the project's run").is_some(),
+        "{name}: the unscoped retention sweep forgot a project's run"
+    );
+
+    // The project's own sweep does forget it.
+    ok!(
+        name,
+        mine.prune(well_after_everything(), 100),
+        "the project's sweep"
+    );
+    assert!(
+        ok!(name, mine.projection(&theirs), "the project's run").is_none(),
+        "{name}: the project's own sweep kept it"
+    );
+}
+
+/// One store, one project. A second binding is refused rather than replacing.
+pub async fn a_store_binds_to_one_project_and_refuses_a_second(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let (one, other) = (project(), project());
+    let mine = bound(name, store, one);
+    assert_eq!(
+        mine.scope(),
+        ExecutionScope::Project(one),
+        "{name}: a bound store says what it is bound to"
+    );
+    assert_eq!(
+        store.scope(),
+        ExecutionScope::Global,
+        "{name}: the store a deployment wires is the unscoped one"
+    );
+    // Binding to the same project again is the same store, so wiring that
+    // resolves a scope twice costs nothing.
+    let again = bound(name, mine.as_ref(), one);
+    assert_eq!(again.scope(), ExecutionScope::Project(one), "{name}");
+
+    let refused = mine
+        .for_project(other)
+        .expect_err("a second project is refused");
+    assert!(
+        matches!(refused, StoreError::NotInThisScope { .. }),
+        "{name}: {refused}"
+    );
+}
+
+/// What has no scoped form says so by name rather than answering globally.
+pub async fn what_is_instance_wide_is_refused_by_name_rather_than_answered(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let mine = bound(name, store, project());
+    for (what, refused) in [
+        ("checkpoint", mine.checkpoint("execution").await.err()),
+        (
+            "advance_checkpoint",
+            mine.advance_checkpoint("execution", Checkpoint::from_global_position(1))
+                .await
+                .err(),
+        ),
+        (
+            "recent_slots",
+            mine.recent_slots(DefinitionKind::CurationPipeline, "import", 5)
+                .await
+                .err(),
+        ),
+    ] {
+        let Some(error) = refused else {
+            panic!("{name}: a project-bound store answered {what} from the instance's own tables");
+        };
+        assert!(
+            matches!(error, StoreError::NotInThisScope { .. }),
+            "{name}: {what}: {error}"
+        );
+    }
+}
+
+/// The filter that matches this execution's dispatched row in every way.
+fn mine_filter(execution: &ExecutionId) -> ClaimFilter {
+    mine(execution)
 }

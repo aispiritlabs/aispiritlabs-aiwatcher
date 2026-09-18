@@ -45,6 +45,7 @@ use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope, ScopeBinding};
 use crate::state::ExecutionId;
 
 use super::{
@@ -69,14 +70,46 @@ const COMMITS_DIR: &str = "commits";
 /// One definition's slots. Keyed like a stream, so a schedule with a name full
 /// of separators does not become a path.
 const SLOTS_DIR: &str = "slots";
+/// Who owns each execution that anybody owns. One file per execution, beside
+/// the stream and keyed the same way, so the record is read without the stream
+/// and removed with it.
+const OWNERSHIP_DIR: &str = "ownership";
+
+/// Refuse what a project-bound store has no answer for.
+///
+/// Processor checkpoints and schedule slots are instance-wide: one cursor per
+/// processor, one slot per definition, and neither has a scoped form yet. A
+/// bound store says so by name rather than answering for the global one, which
+/// would be the fallback this boundary is about.
+fn refuse_instance_wide(binding: ScopeBinding, what: &str) -> Result<()> {
+    if binding.scope().is_global() {
+        return Ok(());
+    }
+    Err(StoreError::NotInThisScope {
+        what: format!("{what} while bound to {}", binding.scope().label()),
+    })
+}
 
 /// A single-process workflow store under a directory.
-#[derive(Debug)]
+///
+/// `binding` narrows what may be reached through one handle; the directory, the
+/// gate and the operating system's lock are shared, because there is one store
+/// under that path however many scopes look at it. That is what makes
+/// [`Self::for_project`] free and what keeps the unscoped handle refusing a
+/// project's execution from the other side.
+#[derive(Clone, Debug)]
 pub struct FileWorkflowStore {
+    held: Arc<Held>,
+    binding: ScopeBinding,
+}
+
+/// What one process holds while the store is open.
+#[derive(Debug)]
+struct Held {
     root: PathBuf,
     /// Serialises this process's own appends. The lock file keeps other
     /// processes out; this keeps two tasks from interleaving one decision.
-    gate: Arc<Mutex<()>>,
+    gate: Mutex<()>,
     _lock: LockGuard,
 }
 
@@ -142,6 +175,12 @@ struct PendingCommit {
     /// timer nothing will ever deliver.
     #[serde(default)]
     timers: Vec<TimerWrite>,
+    /// The ownership this decision establishes, for the one append that creates
+    /// a project execution. Journalled with the rest for the same reason: an
+    /// owner written outside the commit is either a claim on an id nothing
+    /// backs or a window in which the run exists and is nobody's.
+    #[serde(default)]
+    ownership: Option<ExecutionOwnership>,
     checkpoint: Option<(String, Checkpoint)>,
 }
 
@@ -157,6 +196,7 @@ impl FileWorkflowStore {
         fs::create_dir_all(root.join(STREAMS_DIR)).await?;
         fs::create_dir_all(root.join(PROJECTIONS_DIR)).await?;
         fs::create_dir_all(root.join(CHECKPOINTS_DIR)).await?;
+        fs::create_dir_all(root.join(OWNERSHIP_DIR)).await?;
 
         fs::create_dir_all(root.join(COMMITS_DIR)).await?;
         fs::create_dir_all(root.join(SLOTS_DIR)).await?;
@@ -186,9 +226,12 @@ impl FileWorkflowStore {
         }
 
         let store = Self {
-            root,
-            gate: Arc::new(Mutex::new(())),
-            _lock: LockGuard(lock),
+            held: Arc::new(Held {
+                root,
+                gate: Mutex::new(()),
+                _lock: LockGuard(lock),
+            }),
+            binding: ScopeBinding::global(),
         };
         // Before anything reads this store: finish whatever the last process
         // was in the middle of, then bring an old claim table up to the shape
@@ -199,21 +242,86 @@ impl FileWorkflowStore {
     }
 
     fn stream_path(&self, execution: &ExecutionId) -> PathBuf {
-        self.root
+        self.held
+            .root
             .join(STREAMS_DIR)
             .join(format!("{}.jsonl", sanitise(execution.as_str())))
     }
 
     fn projection_path(&self, execution: &ExecutionId) -> PathBuf {
-        self.root
+        self.held
+            .root
             .join(PROJECTIONS_DIR)
             .join(format!("{}.json", sanitise(execution.as_str())))
     }
 
     fn checkpoint_path(&self, processor: &str) -> PathBuf {
-        self.root
+        self.held
+            .root
             .join(CHECKPOINTS_DIR)
             .join(format!("{}.json", sanitise(processor)))
+    }
+
+    fn ownership_path(&self, execution: &ExecutionId) -> PathBuf {
+        self.held
+            .root
+            .join(OWNERSHIP_DIR)
+            .join(format!("{}.json", sanitise(execution.as_str())))
+    }
+
+    /// Who owns one execution, as this store holds it.
+    ///
+    /// A file that will not parse is refused rather than read as absent: absent
+    /// means "global", and answering a corrupt record that way would hand a
+    /// project's run to the unscoped path. The stream is still there, so this
+    /// is recoverable by hand; reading it as nobody's is not.
+    async fn owner_of(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        let Ok(body) = fs::read(self.ownership_path(execution)).await else {
+            return Ok(None);
+        };
+        let owner = serde_json::from_slice::<ExecutionOwnership>(&body).map_err(|error| {
+            StoreError::Backend(format!(
+                "the ownership record of {execution} does not read back: {error}"
+            ))
+        })?;
+        Ok(Some(owner))
+    }
+
+    /// Whether this store holds any history for that id.
+    async fn holds(&self, execution: &ExecutionId) -> bool {
+        fs::metadata(self.stream_path(execution))
+            .await
+            .is_ok_and(|meta| meta.len() > 0)
+    }
+
+    /// The check every per-execution operation makes first.
+    async fn check(&self, execution: &ExecutionId) -> Result<()> {
+        let owner = self.owner_of(execution).await?;
+        self.binding
+            .check(execution, owner.as_ref(), self.holds(execution).await)
+    }
+
+    /// Whether a row addressed by `workflow:<execution>` is this side's.
+    async fn admits_partition(&self, partition_key: &str) -> bool {
+        match partition_key.strip_prefix("workflow:") {
+            Some(execution) => self.check(&ExecutionId::new(execution)).await.is_ok(),
+            None => false,
+        }
+    }
+
+    /// The attempt rows on this store's side of the boundary.
+    ///
+    /// A read per execution rather than a join: this adapter holds one process
+    /// and a development store, and the claim table is one row per *unfinished*
+    /// step, so the scan is bounded by concurrency rather than by history.
+    async fn mine(&self, rows: BTreeMap<AttemptKey, AttemptRow>) -> Vec<AttemptRow> {
+        let mut mine = Vec::with_capacity(rows.len());
+        for (key, row) in rows {
+            if self.check(&key.execution_id).await.is_ok() {
+                mine.push(row);
+            }
+        }
+        mine
     }
 
     async fn read_stream(&self, execution: &ExecutionId) -> Result<Vec<RecordedMessage>> {
@@ -270,7 +378,7 @@ impl FileWorkflowStore {
     /// of it — measured at 458 ms per claim over 50 000 rows, growing without
     /// limit because retention is opt-in.
     async fn read_attempts(&self) -> Result<BTreeMap<AttemptKey, AttemptRow>> {
-        let Ok(body) = fs::read(self.root.join(ATTEMPTS_FILE)).await else {
+        let Ok(body) = fs::read(self.held.root.join(ATTEMPTS_FILE)).await else {
             return Ok(BTreeMap::new());
         };
         Ok(serde_json::from_slice::<Vec<AttemptRow>>(&body)
@@ -281,7 +389,7 @@ impl FileWorkflowStore {
     }
 
     async fn read_leases(&self) -> Result<BTreeMap<String, DeciderLease>> {
-        let Ok(body) = fs::read(self.root.join(LEASES_FILE)).await else {
+        let Ok(body) = fs::read(self.held.root.join(LEASES_FILE)).await else {
             return Ok(BTreeMap::new());
         };
         Ok(serde_json::from_slice::<Vec<DeciderLease>>(&body)
@@ -293,11 +401,15 @@ impl FileWorkflowStore {
 
     async fn write_leases(&self, leases: &BTreeMap<String, DeciderLease>) -> Result<()> {
         let rows: Vec<&DeciderLease> = leases.values().collect();
-        write_atomically(&self.root.join(LEASES_FILE), &serde_json::to_vec(&rows)?).await
+        write_atomically(
+            &self.held.root.join(LEASES_FILE),
+            &serde_json::to_vec(&rows)?,
+        )
+        .await
     }
 
     async fn read_timers(&self) -> Result<BTreeMap<(String, String), Timer>> {
-        let Ok(body) = fs::read(self.root.join(TIMERS_FILE)).await else {
+        let Ok(body) = fs::read(self.held.root.join(TIMERS_FILE)).await else {
             return Ok(BTreeMap::new());
         };
         Ok(serde_json::from_slice::<Vec<Timer>>(&body)
@@ -314,12 +426,20 @@ impl FileWorkflowStore {
 
     async fn write_timers(&self, timers: &BTreeMap<(String, String), Timer>) -> Result<()> {
         let rows: Vec<&Timer> = timers.values().collect();
-        write_atomically(&self.root.join(TIMERS_FILE), &serde_json::to_vec(&rows)?).await
+        write_atomically(
+            &self.held.root.join(TIMERS_FILE),
+            &serde_json::to_vec(&rows)?,
+        )
+        .await
     }
 
     async fn write_attempts(&self, rows: &BTreeMap<AttemptKey, AttemptRow>) -> Result<()> {
         let rows: Vec<&AttemptRow> = rows.values().collect();
-        write_atomically(&self.root.join(ATTEMPTS_FILE), &serde_json::to_vec(&rows)?).await
+        write_atomically(
+            &self.held.root.join(ATTEMPTS_FILE),
+            &serde_json::to_vec(&rows)?,
+        )
+        .await
     }
 
     /// When this store last wrote anything about an execution.
@@ -337,7 +457,7 @@ impl FileWorkflowStore {
     }
 
     async fn read_outbox(&self) -> Result<Vec<OutboxMessage>> {
-        let Ok(body) = fs::read_to_string(self.root.join(OUTBOX_FILE)).await else {
+        let Ok(body) = fs::read_to_string(self.held.root.join(OUTBOX_FILE)).await else {
             return Ok(Vec::new());
         };
         let mut rows = Vec::new();
@@ -359,7 +479,7 @@ impl FileWorkflowStore {
             body.push_str(&serde_json::to_string(row)?);
             body.push('\n');
         }
-        write_atomically(&self.root.join(OUTBOX_FILE), body.as_bytes()).await
+        write_atomically(&self.held.root.join(OUTBOX_FILE), body.as_bytes()).await
     }
 
     fn commit_path(&self, sequence: u128) -> PathBuf {
@@ -367,7 +487,8 @@ impl FileWorkflowStore {
         // written. Normally there is at most one — the gate serialises an
         // append from the journal write to the journal delete — but recovery
         // may not depend on that being true of a directory it did not write.
-        self.root
+        self.held
+            .root
             .join(COMMITS_DIR)
             .join(format!("{sequence:039}.json"))
     }
@@ -384,6 +505,18 @@ impl FileWorkflowStore {
     /// - a dispatch is an insert by key and a retirement is a remove, which are
     ///   both already idempotent.
     async fn apply(&self, commit: &PendingCommit) -> Result<()> {
+        // Before the stream, so a decision finished by `recover` never leaves
+        // one message of a project execution readable without its owner. A
+        // whole-file write of the same bytes, so re-running writes what the
+        // first pass wrote.
+        if let Some(owner) = &commit.ownership {
+            write_atomically(
+                &self.ownership_path(&commit.execution),
+                &serde_json::to_vec(owner)?,
+            )
+            .await?;
+        }
+
         let (existing, valid) = self.read_stream_valid(&commit.execution).await?;
         let already = commit.records.first().is_some_and(|first| {
             existing
@@ -494,7 +627,7 @@ impl FileWorkflowStore {
     /// already held the input. Repairing before the duplicate check is what
     /// turns that answer back into a true one.
     async fn recover(&self) -> Result<()> {
-        let directory = self.root.join(COMMITS_DIR);
+        let directory = self.held.root.join(COMMITS_DIR);
         let Ok(mut entries) = fs::read_dir(&directory).await else {
             return Ok(());
         };
@@ -528,7 +661,8 @@ impl FileWorkflowStore {
     }
 
     fn slots_path(&self, kind: DefinitionKind, name: &str) -> PathBuf {
-        self.root
+        self.held
+            .root
             .join(SLOTS_DIR)
             .join(format!("{}-{}.json", kind.as_str(), sanitise(name)))
     }
@@ -557,7 +691,7 @@ impl FileWorkflowStore {
     /// under the same gate as the slot write, so the check and the claim are
     /// one critical section.
     async fn running_execution_of(&self, definition: &str) -> Result<Option<String>> {
-        let mut entries = fs::read_dir(self.root.join(PROJECTIONS_DIR)).await?;
+        let mut entries = fs::read_dir(self.held.root.join(PROJECTIONS_DIR)).await?;
         let mut running: Option<String> = None;
         while let Some(entry) = entries.next_entry().await? {
             let Ok(body) = fs::read(entry.path()).await else {
@@ -613,7 +747,24 @@ impl WorkflowStore for FileWorkflowStore {
         }
     }
 
+    fn scope(&self) -> ExecutionScope {
+        self.binding.scope()
+    }
+
+    fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Arc<dyn WorkflowStore>> {
+        Ok(Arc::new(Self {
+            held: Arc::clone(&self.held),
+            binding: self.binding.bind(scope)?,
+        }))
+    }
+
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        self.check(execution).await?;
+        self.owner_of(execution).await
+    }
+
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
+        self.check(execution).await?;
         let messages = self.read_stream(execution).await?;
         Ok(StreamSlice {
             version: messages.len() as u64,
@@ -627,6 +778,7 @@ impl WorkflowStore for FileWorkflowStore {
         after: u64,
         limit: usize,
     ) -> Result<StreamSlice> {
+        self.check(execution).await?;
         // A file is read whole whatever the page asks for, and saying so is
         // better than a signature that implies otherwise: this adapter holds
         // one process and a development store, and the day a stream is large
@@ -645,18 +797,19 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
-        let mut due: Vec<Timer> = self
-            .read_timers()
-            .await?
-            .into_values()
-            .filter(|timer| timer.is_due(now))
-            .collect();
+        let mut due: Vec<Timer> = Vec::new();
+        for timer in self.read_timers().await?.into_values() {
+            if timer.is_due(now) && self.check(&timer.execution).await.is_ok() {
+                due.push(timer);
+            }
+        }
         due.sort_by_key(|timer| timer.due_at);
         due.truncate(limit);
         Ok(due)
     }
 
     async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        self.check(execution).await?;
         let mut waiting: Vec<Timer> = self
             .read_timers()
             .await?
@@ -668,6 +821,7 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        self.check(&key.execution_id).await?;
         // This adapter reads the stream file whole whatever is asked of it, and
         // saying so is better than a signature that implies an index: it holds
         // one process and a development store, and a run long enough for the
@@ -690,7 +844,8 @@ impl WorkflowStore for FileWorkflowStore {
     ) -> Result<LeaseOutcome> {
         // The same gate one decision takes: two tasks in this process racing
         // for one lease would otherwise both read "free" and both write.
-        let _gate = self.gate.lock().await;
+        let _gate = self.held.gate.lock().await;
+        self.check(execution).await?;
         let mut leases = self.read_leases().await?;
         let key = execution.as_str().to_owned();
         let taken = match leases.get_mut(&key) {
@@ -720,7 +875,8 @@ impl WorkflowStore for FileWorkflowStore {
         holder: &str,
         now: OffsetDateTime,
     ) -> Result<bool> {
-        let _gate = self.gate.lock().await;
+        let _gate = self.held.gate.lock().await;
+        self.check(execution).await?;
         let mut leases = self.read_leases().await?;
         if !leases
             .get(execution.as_str())
@@ -734,6 +890,7 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        self.check(execution).await?;
         Ok(self.read_leases().await?.remove(execution.as_str()))
     }
 
@@ -743,7 +900,7 @@ impl WorkflowStore for FileWorkflowStore {
         request: AppendRequest,
     ) -> Result<AppendOutcome> {
         request.check_payloads()?;
-        let _gate = self.gate.lock().await;
+        let _gate = self.held.gate.lock().await;
 
         // Before the duplicate check, never after it: a decision the last
         // attempt accepted and did not finish is repaired here, so the inbox
@@ -753,6 +910,17 @@ impl WorkflowStore for FileWorkflowStore {
 
         let existing = self.read_stream(execution).await?;
         let version = existing.len() as u64;
+
+        // Scope before everything, including the inbox: a redelivery of a
+        // project's message down the unscoped path is still that path handling
+        // a project's execution, and answering it `Duplicate` would be the
+        // silent fallback this boundary exists to refuse.
+        let establishing = self.binding.appending(
+            execution,
+            request.ownership.as_ref(),
+            self.owner_of(execution).await?.as_ref(),
+            version == 0,
+        )?;
 
         if let Some(seen) = existing
             .iter()
@@ -802,6 +970,7 @@ impl WorkflowStore for FileWorkflowStore {
             outbox: request.outbox,
             attempts: request.attempts,
             timers: request.timers,
+            ownership: establishing,
             checkpoint: request.checkpoint,
         };
 
@@ -818,6 +987,7 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
+        self.check(execution).await?;
         let Ok(body) = fs::read(self.projection_path(execution)).await else {
             return Ok(None);
         };
@@ -825,31 +995,45 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>> {
-        Ok(self
-            .read_outbox()
-            .await?
-            .into_iter()
-            .filter(|row| row.published_at.is_none())
-            .take(limit)
-            .collect())
+        let mut pending = Vec::new();
+        for row in self.read_outbox().await? {
+            if pending.len() == limit {
+                break;
+            }
+            if row.published_at.is_none() && self.admits_partition(&row.partition_key).await {
+                pending.push(row);
+            }
+        }
+        Ok(pending)
     }
 
     async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
-        let _gate = self.gate.lock().await;
-        let mut rows = self.read_outbox().await?;
+        let _gate = self.held.gate.lock().await;
+        let rows = self.read_outbox().await?;
         // Dropped rather than flagged, which for this adapter is also what
         // keeps the file from growing without bound: it is rewritten whole on
         // every publish, so a kept row is paid for on every pass afterwards.
-        rows.retain(|row| !ids.contains(&row.message_id));
-        self.write_outbox(&rows).await
+        //
+        // Scoped like the read that produced the ids, so a publisher handed one
+        // from the other side of the boundary deletes nothing.
+        let mut kept = Vec::with_capacity(rows.len());
+        for row in rows {
+            let doomed =
+                ids.contains(&row.message_id) && self.admits_partition(&row.partition_key).await;
+            if !doomed {
+                kept.push(row);
+            }
+        }
+        self.write_outbox(&kept).await
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        refuse_instance_wide(self.binding, "admit a schedule slot")?;
         // The same gate as an append. This store holds one process, so the
         // mutex is the whole exclusion — which is also why
         // `capabilities().multi_process` is `false` and a deployment that wants
         // two ticks is told to pick another store.
-        let _gate = self.gate.lock().await;
+        let _gate = self.held.gate.lock().await;
 
         let kind = request.key.definition_kind;
         let mut rows = self.read_slots(kind, &request.key.definition_name).await?;
@@ -901,7 +1085,8 @@ impl WorkflowStore for FileWorkflowStore {
         settlement: SlotSettlement,
         now: OffsetDateTime,
     ) -> Result<()> {
-        let _gate = self.gate.lock().await;
+        refuse_instance_wide(self.binding, "settle a schedule slot")?;
+        let _gate = self.held.gate.lock().await;
         let mut rows = self
             .read_slots(key.definition_kind, &key.definition_name)
             .await?;
@@ -936,6 +1121,7 @@ impl WorkflowStore for FileWorkflowStore {
         name: &str,
         limit: usize,
     ) -> Result<Vec<SlotRecord>> {
+        refuse_instance_wide(self.binding, "read schedule slots")?;
         let mut rows = self.read_slots(kind, name).await?;
         rows.sort_by_key(|row| std::cmp::Reverse(row.key.slot));
         rows.truncate(limit);
@@ -943,6 +1129,7 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let Ok(body) = fs::read(self.checkpoint_path(processor)).await else {
             return Ok(None);
         };
@@ -958,15 +1145,26 @@ impl WorkflowStore for FileWorkflowStore {
         // The same gate as an append: this store holds one process, so the
         // mutex is the whole exclusion, and `capabilities().claimable` is
         // `false` precisely because that guarantee stops at the process edge.
-        let _gate = self.gate.lock().await;
-        let mut rows = self.read_attempts().await?;
-        let Some(key) = rows
-            .values()
-            .find(|row| row.is_claimable(now) && filter.matches(row))
-            .map(|row| row.key.clone())
-        else {
+        let _gate = self.held.gate.lock().await;
+        let rows = self.read_attempts().await?;
+        // The scope is checked before the filter and not by it: a claimant says
+        // what it can *run*, and which executions it may reach at all is the
+        // store's binding rather than something a claim filter could assert
+        // about itself.
+        let mut key = None;
+        for row in rows.values() {
+            if row.is_claimable(now)
+                && filter.matches(row)
+                && self.check(&row.key.execution_id).await.is_ok()
+            {
+                key = Some(row.key.clone());
+                break;
+            }
+        }
+        let Some(key) = key else {
             return Ok(None);
         };
+        let mut rows = rows;
         let Some(row) = rows.get_mut(&key) else {
             return Ok(None);
         };
@@ -977,7 +1175,8 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
-        let _gate = self.gate.lock().await;
+        let _gate = self.held.gate.lock().await;
+        self.check(&key.execution_id).await?;
         let mut rows = self.read_attempts().await?;
         let Some(row) = rows.get_mut(key) else {
             return Ok(false);
@@ -991,13 +1190,17 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
+        self.check(&key.execution_id).await?;
         Ok(self.read_attempts().await?.remove(key))
     }
 
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
         // No gate, as for `attempt`: a read, and `write_attempts` replaces the
         // file by rename, so this sees one whole table or the one before it.
-        Ok(tally_unclaimed(self.read_attempts().await?.values(), now))
+        Ok(tally_unclaimed(
+            self.mine(self.read_attempts().await?).await.iter(),
+            now,
+        ))
     }
 
     async fn claimable_attempts(
@@ -1008,7 +1211,7 @@ impl WorkflowStore for FileWorkflowStore {
     ) -> Result<Vec<AttemptRow>> {
         // No gate, for `unclaimed_attempts`' reason.
         Ok(claimable_of(
-            self.read_attempts().await?.values(),
+            self.mine(self.read_attempts().await?).await.iter(),
             runtime,
             now,
             limit,
@@ -1016,6 +1219,7 @@ impl WorkflowStore for FileWorkflowStore {
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        refuse_instance_wide(self.binding, "advance a processor checkpoint")?;
         write_atomically(
             &self.checkpoint_path(processor),
             &serde_json::to_vec(&checkpoint)?,
@@ -1037,7 +1241,7 @@ impl WorkflowStore for FileWorkflowStore {
     /// projections, which are the history and are meant to be kept until a
     /// deployment says otherwise.
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
-        let _guard = self.gate.lock().await;
+        let _guard = self.held.gate.lock().await;
 
         let unpublished: HashSet<String> = self
             .read_outbox()
@@ -1048,7 +1252,7 @@ impl WorkflowStore for FileWorkflowStore {
             .collect();
 
         let mut doomed: Vec<RunProjection> = Vec::new();
-        let mut entries = fs::read_dir(self.root.join(PROJECTIONS_DIR)).await?;
+        let mut entries = fs::read_dir(self.held.root.join(PROJECTIONS_DIR)).await?;
         while let Some(entry) = entries.next_entry().await? {
             if doomed.len() == limit {
                 break;
@@ -1060,6 +1264,11 @@ impl WorkflowStore for FileWorkflowStore {
                 continue;
             };
             if unpublished.contains(&format!("workflow:{}", run.execution_id)) {
+                continue;
+            }
+            // A sweep forgets its own side's runs and no others: the unscoped
+            // retention window is not a statement about a project's history.
+            if self.check(&run.execution_id).await.is_err() {
                 continue;
             }
             if prunable(&run, self.last_activity(&run.execution_id).await, before) {
@@ -1075,6 +1284,10 @@ impl WorkflowStore for FileWorkflowStore {
             // nothing points at and nothing ever looks for.
             let _ = fs::remove_file(self.stream_path(&run.execution_id)).await;
             let _ = fs::remove_file(self.projection_path(&run.execution_id)).await;
+            // With the execution, after both: a record left behind names a run
+            // that no longer exists, and one removed first would make a
+            // half-pruned project run readable from the unscoped path.
+            let _ = fs::remove_file(self.ownership_path(&run.execution_id)).await;
             pruned.executions += 1;
         }
 
@@ -1247,6 +1460,7 @@ mod tests {
                 RuntimeKind::FlowPhp,
                 MessageId::new(format!("{message_id}/cmd")),
             ))],
+            ownership: None,
         }
     }
 

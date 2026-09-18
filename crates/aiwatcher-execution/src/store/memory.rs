@@ -30,6 +30,7 @@ use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope, ScopeBinding};
 use crate::state::ExecutionId;
 
 use super::{
@@ -58,12 +59,63 @@ struct Inner {
     decider_leases: HashMap<String, DeciderLease>,
     /// Deferred appends, by execution and the worker's own timer id.
     timers: BTreeMap<(String, String), Timer>,
+    /// Who owns each execution that anybody owns. Absent is a global run, which
+    /// is what every stream written before this record existed is.
+    ownership: HashMap<String, ExecutionOwnership>,
+}
+
+impl Inner {
+    /// Who owns one execution, as this store holds it.
+    fn owner_of(&self, execution: &str) -> Option<&ExecutionOwnership> {
+        self.ownership.get(execution)
+    }
+
+    /// Whether this store holds any history for that id.
+    ///
+    /// An empty vector counts as absent: `append` reaches for the entry before
+    /// it knows whether it may write, so a refused start must not leave behind
+    /// an id that reads as a global run.
+    fn holds(&self, execution: &str) -> bool {
+        self.streams
+            .get(execution)
+            .is_some_and(|stream| !stream.is_empty())
+    }
+
+    /// Whether a binding may touch that execution at all.
+    fn admits(&self, binding: ScopeBinding, execution: &str) -> bool {
+        binding.admits(self.owner_of(execution), self.holds(execution))
+    }
+
+    /// The same question, as the refusal a caller returns.
+    fn check(&self, binding: ScopeBinding, execution: &ExecutionId) -> Result<()> {
+        binding.check(
+            execution,
+            self.owner_of(execution.as_str()),
+            self.holds(execution.as_str()),
+        )
+    }
+
+    /// Whether a row addressed by `workflow:<execution>` is this side's.
+    ///
+    /// The outbox is keyed by partition rather than by execution, so the one
+    /// place a scope has to be read back out of a string is here.
+    fn admits_partition(&self, binding: ScopeBinding, partition_key: &str) -> bool {
+        partition_key
+            .strip_prefix("workflow:")
+            .is_some_and(|execution| self.admits(binding, execution))
+    }
 }
 
 /// An in-memory workflow store.
+///
+/// `binding` narrows what may be reached through this handle without copying
+/// anything: a project-bound store shares the same `Inner` and sees only that
+/// project's executions. One lock, one set of rows, two doors — which is what
+/// makes a test that holds both able to prove that neither reaches the other's.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryWorkflowStore {
     inner: Arc<Mutex<Inner>>,
+    binding: ScopeBinding,
 }
 
 impl MemoryWorkflowStore {
@@ -88,8 +140,26 @@ impl WorkflowStore for MemoryWorkflowStore {
         }
     }
 
+    fn scope(&self) -> ExecutionScope {
+        self.binding.scope()
+    }
+
+    fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Arc<dyn WorkflowStore>> {
+        Ok(Arc::new(Self {
+            inner: Arc::clone(&self.inner),
+            binding: self.binding.bind(scope)?,
+        }))
+    }
+
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
+        Ok(inner.owner_of(execution.as_str()).cloned())
+    }
+
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
         let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         let messages = inner
             .streams
             .get(execution.as_str())
@@ -108,6 +178,7 @@ impl WorkflowStore for MemoryWorkflowStore {
         limit: usize,
     ) -> Result<StreamSlice> {
         let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         let stream = inner.streams.get(execution.as_str());
         let version = stream.map_or(0, Vec::len) as u64;
         let messages = stream
@@ -125,7 +196,9 @@ impl WorkflowStore for MemoryWorkflowStore {
         let mut due: Vec<Timer> = inner
             .timers
             .values()
-            .filter(|timer| timer.is_due(now))
+            .filter(|timer| {
+                timer.is_due(now) && inner.admits(self.binding, timer.execution.as_str())
+            })
             .cloned()
             .collect();
         // Oldest first, so a backlog drains in the order it accumulated rather
@@ -137,6 +210,7 @@ impl WorkflowStore for MemoryWorkflowStore {
 
     async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
         let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         let mut waiting: Vec<Timer> = inner
             .timers
             .values()
@@ -149,6 +223,7 @@ impl WorkflowStore for MemoryWorkflowStore {
 
     async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
         let inner = self.inner.lock().await;
+        inner.check(self.binding, &key.execution_id)?;
         Ok(inner
             .streams
             .get(key.execution_id.as_str())
@@ -167,6 +242,7 @@ impl WorkflowStore for MemoryWorkflowStore {
         now: OffsetDateTime,
     ) -> Result<LeaseOutcome> {
         let mut inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         match inner.decider_leases.get_mut(execution.as_str()) {
             Some(lease) if lease.held_by(holder, now) || lease.expired(now) => {
                 lease.take(holder, now);
@@ -193,6 +269,7 @@ impl WorkflowStore for MemoryWorkflowStore {
         now: OffsetDateTime,
     ) -> Result<bool> {
         let mut inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         let Some(lease) = inner.decider_leases.get(execution.as_str()) else {
             return Ok(false);
         };
@@ -205,6 +282,7 @@ impl WorkflowStore for MemoryWorkflowStore {
 
     async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
         let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
         Ok(inner.decider_leases.get(execution.as_str()).cloned())
     }
 
@@ -219,7 +297,18 @@ impl WorkflowStore for MemoryWorkflowStore {
         let stream = inner.streams.entry(key.clone()).or_default();
         let version = stream.len() as u64;
 
-        // The inbox first: a redelivery is not a conflict, and answering it
+        // Scope before everything, including the inbox: a redelivery of a
+        // project's message down the unscoped path is still that path handling
+        // a project's execution, and answering it `Duplicate` would be the
+        // silent fallback this boundary exists to refuse.
+        let establishing = self.binding.appending(
+            execution,
+            request.ownership.as_ref(),
+            inner.ownership.get(&key),
+            version == 0,
+        )?;
+
+        // The inbox next: a redelivery is not a conflict, and answering it
         // with one would make every at-least-once retry look like a race.
         if let Some(seen) = inner
             .seen
@@ -248,6 +337,12 @@ impl WorkflowStore for MemoryWorkflowStore {
         }
 
         let now = OffsetDateTime::now_utc();
+        // Before the stream, so a crash-free reader never sees one message of a
+        // project execution without knowing whose it is. One lock holds both,
+        // so the order is a statement about intent rather than about recovery.
+        if let Some(owner) = establishing {
+            inner.ownership.insert(key.clone(), owner);
+        }
         let stream = inner.streams.entry(key.clone()).or_default();
         // The input's own version is what the inbox remembers: it is where the
         // previous result can be looked up, and it stays true as the stream
@@ -317,23 +412,20 @@ impl WorkflowStore for MemoryWorkflowStore {
     }
 
     async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
-        Ok(self
-            .inner
-            .lock()
-            .await
-            .projections
-            .get(execution.as_str())
-            .cloned())
+        let inner = self.inner.lock().await;
+        inner.check(self.binding, execution)?;
+        Ok(inner.projections.get(execution.as_str()).cloned())
     }
 
     async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>> {
-        Ok(self
-            .inner
-            .lock()
-            .await
+        let inner = self.inner.lock().await;
+        Ok(inner
             .outbox
             .iter()
-            .filter(|row| row.published_at.is_none())
+            .filter(|row| {
+                row.published_at.is_none()
+                    && inner.admits_partition(self.binding, &row.partition_key)
+            })
             .take(limit)
             .cloned()
             .collect())
@@ -342,15 +434,25 @@ impl WorkflowStore for MemoryWorkflowStore {
     async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
         // Dropped rather than flagged: the fact is on the log, and a second
         // copy here would grow with every step of every run.
-        self.inner
-            .lock()
-            .await
+        //
+        // Scoped like the read that produced the ids, so a publisher that was
+        // handed one from the other side of the boundary deletes nothing.
+        let mut inner = self.inner.lock().await;
+        let binding = self.binding;
+        let doomed: HashSet<MessageId> = inner
             .outbox
-            .retain(|row| !ids.contains(&row.message_id));
+            .iter()
+            .filter(|row| {
+                ids.contains(&row.message_id) && inner.admits_partition(binding, &row.partition_key)
+            })
+            .map(|row| row.message_id.clone())
+            .collect();
+        inner.outbox.retain(|row| !doomed.contains(&row.message_id));
         Ok(())
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        refuse_instance_wide(self.binding, "admit a schedule slot")?;
         // The mutex is the transaction, exactly as it is for `append`: the
         // overlap check and the claim are one critical section, so two logical
         // workers cannot both read "nothing is running" and both start.
@@ -409,6 +511,7 @@ impl WorkflowStore for MemoryWorkflowStore {
         settlement: SlotSettlement,
         now: OffsetDateTime,
     ) -> Result<()> {
+        refuse_instance_wide(self.binding, "settle a schedule slot")?;
         let mut inner = self.inner.lock().await;
         let Some(record) = inner.slots.get_mut(key) else {
             return Ok(());
@@ -443,6 +546,7 @@ impl WorkflowStore for MemoryWorkflowStore {
         name: &str,
         limit: usize,
     ) -> Result<Vec<SlotRecord>> {
+        refuse_instance_wide(self.binding, "read schedule slots")?;
         let inner = self.inner.lock().await;
         let mut found: Vec<SlotRecord> = inner
             .slots
@@ -458,6 +562,7 @@ impl WorkflowStore for MemoryWorkflowStore {
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         Ok(self.inner.lock().await.checkpoints.get(processor).cloned())
     }
 
@@ -471,10 +576,20 @@ impl WorkflowStore for MemoryWorkflowStore {
         // The lock is the `SELECT … FOR UPDATE SKIP LOCKED`: whoever holds it
         // sees the row unclaimed and leaves it claimed, so two claimants
         // racing produce one claim and one `None`.
+        //
+        // The scope is checked before the filter and not by it: a claimant says
+        // what it can *run*, and which executions it may reach at all is the
+        // store's binding rather than something a claim filter could assert
+        // about itself.
+        let binding = self.binding;
         let Some(key) = inner
             .attempts
             .values()
-            .find(|row| row.is_claimable(now) && filter.matches(row))
+            .find(|row| {
+                row.is_claimable(now)
+                    && filter.matches(row)
+                    && inner.admits(binding, row.key.execution_id.as_str())
+            })
             .map(|row| row.key.clone())
         else {
             return Ok(None);
@@ -488,6 +603,7 @@ impl WorkflowStore for MemoryWorkflowStore {
 
     async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
         let mut inner = self.inner.lock().await;
+        inner.check(self.binding, &key.execution_id)?;
         let Some(row) = inner.attempts.get_mut(key) else {
             return Ok(false);
         };
@@ -499,12 +615,19 @@ impl WorkflowStore for MemoryWorkflowStore {
     }
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
-        Ok(self.inner.lock().await.attempts.get(key).cloned())
+        let inner = self.inner.lock().await;
+        inner.check(self.binding, &key.execution_id)?;
+        Ok(inner.attempts.get(key).cloned())
     }
 
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        let inner = self.inner.lock().await;
+        let binding = self.binding;
         Ok(tally_unclaimed(
-            self.inner.lock().await.attempts.values(),
+            inner
+                .attempts
+                .values()
+                .filter(|row| inner.admits(binding, row.key.execution_id.as_str())),
             now,
         ))
     }
@@ -515,8 +638,13 @@ impl WorkflowStore for MemoryWorkflowStore {
         now: OffsetDateTime,
         limit: usize,
     ) -> Result<Vec<AttemptRow>> {
+        let inner = self.inner.lock().await;
+        let binding = self.binding;
         Ok(claimable_of(
-            self.inner.lock().await.attempts.values(),
+            inner
+                .attempts
+                .values()
+                .filter(|row| inner.admits(binding, row.key.execution_id.as_str())),
             runtime,
             now,
             limit,
@@ -524,6 +652,7 @@ impl WorkflowStore for MemoryWorkflowStore {
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        refuse_instance_wide(self.binding, "advance a processor checkpoint")?;
         self.inner
             .lock()
             .await
@@ -545,9 +674,11 @@ impl WorkflowStore for MemoryWorkflowStore {
             .map(|row| row.partition_key.clone())
             .collect();
 
+        let binding = self.binding;
         let doomed: Vec<String> = inner
             .projections
             .iter()
+            .filter(|(execution, _)| inner.admits(binding, execution))
             .filter(|(execution, run)| {
                 prunable(run, last_activity(inner.streams.get(*execution)), before)
             })
@@ -561,6 +692,10 @@ impl WorkflowStore for MemoryWorkflowStore {
             inner.streams.remove(execution);
             inner.seen.remove(execution);
             inner.projections.remove(execution);
+            // With the execution, never before or after it: an ownership row
+            // left behind names a run that no longer exists, and one removed
+            // early leaves a live run readable from the unscoped path.
+            inner.ownership.remove(execution);
             pruned.executions += 1;
         }
         let doomed: HashSet<&String> = doomed.iter().collect();
@@ -571,6 +706,21 @@ impl WorkflowStore for MemoryWorkflowStore {
         pruned.attempts = before_count - inner.attempts.len();
         Ok(pruned)
     }
+}
+
+/// Refuse what a project-bound store has no answer for.
+///
+/// Processor checkpoints and schedule slots are instance-wide: there is one
+/// cursor per processor and one slot per definition, and neither has a scoped
+/// form yet. A bound store says so by name rather than answering for the global
+/// one, which would be the fallback this boundary is about.
+fn refuse_instance_wide(binding: ScopeBinding, what: &str) -> Result<()> {
+    if binding.scope().is_global() {
+        return Ok(());
+    }
+    Err(StoreError::NotInThisScope {
+        what: format!("{what} while bound to {}", binding.scope().label()),
+    })
 }
 
 /// When this store last wrote anything about an execution.

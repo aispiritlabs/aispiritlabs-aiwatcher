@@ -41,6 +41,7 @@ use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, WorkflowEvent, WorkflowMessage,
 };
 use crate::plan::{ExecutionPlan, RuntimeBinding};
+use crate::scope::ExecutionOwnership;
 use crate::state::{ExecutionId, ExecutionMode, ExecutionState, RunState, StateType};
 use crate::store::{AppendOutcome, AppendRequest, ExpectedVersion, WorkflowStore};
 
@@ -144,7 +145,37 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         metadata: MessageMetadata,
         now: Now,
     ) -> Result<Handled, HandleError> {
-        self.handle_with_checkpoint(execution, input, metadata, now, None)
+        self.handle_with_checkpoint(execution, input, metadata, now, None, None)
+            .await
+    }
+
+    /// Handle the command that starts an execution, writing down who owns it.
+    ///
+    /// The one append that may carry an [`ExecutionOwnership`], and the only
+    /// way one is ever created. It lands in the transaction that creates the
+    /// execution — never as a row written before the start, which would be a
+    /// claim on an id nothing backs, and never as one written after it, which
+    /// would leave a window in which the run exists and is nobody's.
+    ///
+    /// `None` is the unscoped path and is what every start this build performs
+    /// today passes. The record is not derived from the command: the plan in it
+    /// says *what* is being started, and who owns it comes from the caller's
+    /// own [`ProjectStart`](crate::scope::ProjectStart).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::handle`], plus [`StoreError::OwnershipConflict`] when the
+    /// execution already has a different owner and
+    /// [`StoreError::OutOfScope`] when the store is not the one bound to it.
+    pub async fn start(
+        &self,
+        execution: &ExecutionId,
+        input: WorkflowMessage,
+        metadata: MessageMetadata,
+        now: Now,
+        ownership: Option<ExecutionOwnership>,
+    ) -> Result<Handled, HandleError> {
+        self.handle_with_checkpoint(execution, input, metadata, now, None, ownership)
             .await
     }
 
@@ -176,6 +207,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 metadata,
                 now,
                 Some((processor.to_owned(), checkpoint.clone())),
+                None,
             )
             .await?;
         if handled.duplicate {
@@ -204,7 +236,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         metadata: MessageMetadata,
         now: Now,
     ) -> Result<Handled, HandleError> {
-        self.decide_and_append(execution, input, metadata, now, None)
+        self.decide_and_append(execution, input, metadata, now, None, None)
             .await
     }
 
@@ -215,6 +247,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         metadata: MessageMetadata,
         now: Now,
         checkpoint: Option<(String, Checkpoint)>,
+        ownership: Option<ExecutionOwnership>,
     ) -> Result<Handled, HandleError> {
         // An effect command is what the decider emits for a reactor to run. A
         // caller that could post one would be scheduling work behind the state
@@ -234,7 +267,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         if let Some(WorkflowCommand::StartExecution { plan, mode, .. }) = input.command() {
             self.check_capacity(plan, *mode)?;
         }
-        self.decide_and_append(execution, input, metadata, now, checkpoint)
+        self.decide_and_append(execution, input, metadata, now, checkpoint, ownership)
             .await
     }
 
@@ -246,6 +279,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         metadata: MessageMetadata,
         now: Now,
         checkpoint: Option<(String, Checkpoint)>,
+        ownership: Option<ExecutionOwnership>,
     ) -> Result<Handled, HandleError> {
         for attempt in 0..=MAX_CONFLICT_RETRIES {
             let slice = self.store.load(execution).await?;
@@ -257,6 +291,25 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 .iter()
                 .find(|recorded| recorded.metadata.message_id == metadata.message_id)
             {
+                // A start carries the ownership it establishes, and this answer
+                // is the one place the store's own check would be skipped: the
+                // decision committed long ago, so nothing reaches `append`. A
+                // repeated start whose owner matches is the redelivery it looks
+                // like; one naming somebody else is not this execution's start,
+                // and answering it `Duplicate` would tell that caller the run
+                // was theirs.
+                if let Some(wanted) = &ownership {
+                    let held = self.store.ownership(execution).await?;
+                    if held.as_ref() != Some(wanted) {
+                        return Err(HandleError::Store(StoreError::OwnershipConflict {
+                            execution: execution.to_string(),
+                            holder: held.as_ref().map_or_else(
+                                || crate::scope::ExecutionScope::Global.label(),
+                                ExecutionOwnership::label,
+                            ),
+                        }));
+                    }
+                }
                 let state = replay(slice.events());
                 return Ok(Handled {
                     outcome: AppendOutcome::Duplicate {
@@ -302,6 +355,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 checkpoint: checkpoint.clone(),
                 timers: timers.clone(),
                 attempts,
+                ownership: ownership.clone(),
             };
 
             match self.store.append(execution, request).await {

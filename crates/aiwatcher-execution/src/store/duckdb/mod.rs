@@ -43,6 +43,7 @@ use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope, ScopeBinding};
 use crate::state::ExecutionId;
 
 use super::{
@@ -54,6 +55,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct DuckdbWorkflowStore {
     inner: Arc<Mutex<Connection>>,
+    binding: ScopeBinding,
 }
 
 impl DuckdbWorkflowStore {
@@ -82,6 +84,7 @@ impl DuckdbWorkflowStore {
         schema::apply(&connection)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(connection)),
+            binding: ScopeBinding::global(),
         })
     }
 
@@ -97,6 +100,7 @@ impl DuckdbWorkflowStore {
         schema::apply(&connection)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(connection)),
+            binding: ScopeBinding::global(),
         })
     }
 
@@ -119,6 +123,46 @@ impl DuckdbWorkflowStore {
         .await
         .map_err(|error| StoreError::Backend(format!("the database task failed: {error}")))?
     }
+}
+
+/// Who owns one execution, and whether this database holds any history for it.
+///
+/// A record that will not decode is refused rather than read as absent: absent
+/// means "global", and answering a corrupt record that way would hand a
+/// project's run to the unscoped path.
+fn owner_in(db: &Connection, execution: &str) -> Result<(Option<ExecutionOwnership>, bool)> {
+    let owner: Option<ExecutionOwnership> = one(
+        db,
+        "select payload from ownership where execution = ?",
+        [execution.to_owned()],
+    )?;
+    let held: i64 = db
+        .query_row(
+            "select count(*) from streams where execution = ?",
+            [execution.to_owned()],
+            |row| row.get(0),
+        )
+        .map_err(|error| StoreError::Backend(format!("counting a stream: {error}")))?;
+    Ok((owner, held > 0))
+}
+
+/// The check every per-execution operation makes first.
+fn check_in(db: &Connection, binding: ScopeBinding, execution: &ExecutionId) -> Result<()> {
+    let (owner, held) = owner_in(db, execution.as_str())?;
+    binding.check(execution, owner.as_ref(), held)
+}
+
+/// Refuse what a project-bound store has no answer for.
+///
+/// Processor checkpoints and schedule slots are instance-wide: one cursor per
+/// processor, one slot per definition, and neither has a scoped form yet.
+fn refuse_instance_wide(binding: ScopeBinding, what: &str) -> Result<()> {
+    if binding.scope().is_global() {
+        return Ok(());
+    }
+    Err(StoreError::NotInThisScope {
+        what: format!("{what} while bound to {}", binding.scope().label()),
+    })
 }
 
 /// Encode a value the way every payload column here is encoded.
@@ -206,9 +250,34 @@ impl WorkflowStore for DuckdbWorkflowStore {
         }
     }
 
+    fn scope(&self) -> ExecutionScope {
+        self.binding.scope()
+    }
+
+    fn for_project(&self, scope: aiwatcher_iam::ProjectScope) -> Result<Arc<dyn WorkflowStore>> {
+        Ok(Arc::new(Self {
+            inner: Arc::clone(&self.inner),
+            binding: self.binding.bind(scope)?,
+        }))
+    }
+
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        let binding = self.binding;
+        let id = execution.clone();
+        self.with(move |db| {
+            let (owner, held) = owner_in(db, id.as_str())?;
+            binding.check(&id, owner.as_ref(), held)?;
+            Ok(owner)
+        })
+        .await
+    }
+
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             let messages: Vec<RecordedMessage> = rows(
                 db,
                 "select payload from streams where execution = ? order by version",
@@ -229,7 +298,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
         limit: usize,
     ) -> Result<StreamSlice> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             // The stream's *current* version rather than the page's end, so a
             // reader can tell a short page from the last one without a second
             // call.
@@ -256,11 +328,16 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
     async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
         let at = stamp(now);
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             rows(
                 db,
-                "select payload from timers where due_at <= ? order by due_at limit ?",
-                duckdb::params![at, limit as i64],
+                "select payload from timers \
+                  where due_at <= ? \
+                    and coalesce((select o.scope_key from ownership o \
+                                   where o.execution = timers.execution), '') = ? \
+                  order by due_at limit ?",
+                duckdb::params![at, scope_key, limit as i64],
             )
         })
         .await
@@ -268,7 +345,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
     async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             rows(
                 db,
                 "select payload from timers where execution = ? order by due_at",
@@ -282,7 +362,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
         let execution = key.execution_id.to_string();
         let step = key.step_id.clone();
         let attempt = i64::from(key.attempt);
+        let binding = self.binding;
+        let id = key.execution_id.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             one(
                 db,
                 "select payload from outcomes where execution = ? and step = ? and attempt = ?",
@@ -299,9 +382,11 @@ impl WorkflowStore for DuckdbWorkflowStore {
         now: OffsetDateTime,
     ) -> Result<LeaseOutcome> {
         let key = execution.to_string();
+        let binding = self.binding;
         let execution = execution.clone();
         let holder = holder.to_owned();
         self.with(move |db| {
+            check_in(db, binding, &execution)?;
             let held: Option<DeciderLease> = one(
                 db,
                 "select payload from decider_leases where execution = ?",
@@ -337,8 +422,11 @@ impl WorkflowStore for DuckdbWorkflowStore {
         now: OffsetDateTime,
     ) -> Result<bool> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         let holder = holder.to_owned();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             let Some(lease): Option<DeciderLease> = one(
                 db,
                 "select payload from decider_leases where execution = ?",
@@ -359,7 +447,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
     async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             one(
                 db,
                 "select payload from decider_leases where execution = ?",
@@ -376,6 +467,8 @@ impl WorkflowStore for DuckdbWorkflowStore {
     ) -> Result<AppendOutcome> {
         request.check_payloads()?;
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
             let version: i64 = db
                 .query_row(
@@ -386,7 +479,19 @@ impl WorkflowStore for DuckdbWorkflowStore {
                 .map_err(|error| StoreError::Backend(format!("counting a stream: {error}")))?;
             let version = version as u64;
 
-            // The inbox first: a redelivery is not a conflict, and answering it
+            // Scope before everything, including the inbox: a redelivery of a
+            // project's message down the unscoped path is still that path
+            // handling a project's execution, and answering it `Duplicate`
+            // would be the silent fallback this boundary refuses.
+            let (recorded, _) = owner_in(db, &key)?;
+            let establishing = binding.appending(
+                &id,
+                request.ownership.as_ref(),
+                recorded.as_ref(),
+                version == 0,
+            )?;
+
+            // The inbox next: a redelivery is not a conflict, and answering it
             // with one would make every at-least-once retry look like a race.
             let message_id = request.input.metadata.message_id.to_string();
             let seen: Option<i64> = db
@@ -425,7 +530,21 @@ impl WorkflowStore for DuckdbWorkflowStore {
             // in the middle leaves none of them rather than some.
             db.execute_batch("begin transaction")
                 .map_err(|error| StoreError::Backend(format!("starting a transaction: {error}")))?;
-            let outcome = append_all(db, &key, &message_id, version, request);
+            let outcome = append_all(db, &key, &message_id, version, request).and_then(|outcome| {
+                // Inside the same transaction as the six writes: the record
+                // and the run are created together or neither is.
+                if let Some(owner) = &establishing {
+                    db.execute(
+                        "insert or replace into ownership (execution, scope_key, payload) \
+                             values (?, ?, ?)",
+                        duckdb::params![key.clone(), owner.execution_scope().key(), encode(owner)?],
+                    )
+                    .map_err(|error| {
+                        StoreError::Backend(format!("writing an ownership record: {error}"))
+                    })?;
+                }
+                Ok(outcome)
+            });
             match &outcome {
                 Ok(_) => db.execute_batch("commit"),
                 Err(_) => db.execute_batch("rollback"),
@@ -438,7 +557,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
     async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
         let key = execution.to_string();
+        let binding = self.binding;
+        let id = execution.clone();
         self.with(move |db| {
+            check_in(db, binding, &id)?;
             one(
                 db,
                 "select payload from projections where execution = ?",
@@ -449,11 +571,18 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>> {
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
+            // `partition_key` is `workflow:<execution>`, so the join back to
+            // the record is a string this adapter already stores rather than a
+            // second column.
             rows(
                 db,
-                "select payload from outbox order by sequence limit ?",
-                [limit as i64],
+                "select payload from outbox \
+                  where coalesce((select o.scope_key from ownership o \
+                                   where 'workflow:' || o.execution = outbox.partition_key), '') = ? \
+                  order by sequence limit ?",
+                duckdb::params![scope_key, limit as i64],
             )
         })
         .await
@@ -461,15 +590,23 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
     async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
         let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             // Deleted rather than flagged: the fact is on the event log, and a
             // second copy here would grow with every step of every run.
+            //
+            // Scoped like the read that produced the ids, so a publisher handed
+            // one from the other side of the boundary deletes nothing.
             let mut statement = db
-                .prepare("delete from outbox where message_id = ?")
+                .prepare(
+                    "delete from outbox where message_id = ? \
+                      and coalesce((select o.scope_key from ownership o \
+                                     where 'workflow:' || o.execution = outbox.partition_key), '') = ?",
+                )
                 .map_err(|error| StoreError::Backend(format!("preparing a delete: {error}")))?;
             for id in ids {
                 statement
-                    .execute([id])
+                    .execute(duckdb::params![id, scope_key.clone()])
                     .map_err(|error| StoreError::Backend(format!("publishing a row: {error}")))?;
             }
             Ok(())
@@ -478,6 +615,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        refuse_instance_wide(self.binding, "admit a schedule slot")?;
         let request = request.clone();
         self.with(move |db| {
             let key = encode(&request.key)?;
@@ -550,6 +688,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
         settlement: SlotSettlement,
         now: OffsetDateTime,
     ) -> Result<()> {
+        refuse_instance_wide(self.binding, "settle a schedule slot")?;
         let key = key.clone();
         let owner = owner.to_owned();
         self.with(move |db| {
@@ -599,6 +738,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
         name: &str,
         limit: usize,
     ) -> Result<Vec<SlotRecord>> {
+        refuse_instance_wide(self.binding, "read schedule slots")?;
         let name = name.to_owned();
         let kind = kind.as_str();
         self.with(move |db| {
@@ -613,6 +753,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let processor = processor.to_owned();
         self.with(move |db| {
             one(
@@ -632,16 +773,24 @@ impl WorkflowStore for DuckdbWorkflowStore {
     ) -> Result<Option<AttemptRow>> {
         let filter = filter.clone();
         let owner = owner.to_owned();
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             // `order by updated_at`, which is what the PostgreSQL adapter
             // orders by and what stops a backlog being served newest-first
             // while its head starves. The predicate is `ClaimFilter`'s and
             // `AttemptRow`'s, in Rust, because a second copy of it in SQL is a
             // second answer to which row is claimable.
+            // The scope is a `where`, not part of the filter: a claimant says
+            // what it can *run*, and which executions it may reach at all is
+            // the store's binding rather than something a claim filter could
+            // assert about itself.
             let candidates: Vec<AttemptRow> = rows(
                 db,
-                "select payload from attempts order by updated_at, execution, step, attempt",
-                [],
+                "select payload from attempts \
+                  where coalesce((select o.scope_key from ownership o \
+                                   where o.execution = attempts.execution), '') = ? \
+                  order by updated_at, execution, step, attempt",
+                [scope_key],
             )?;
             let Some(mut row) = candidates
                 .into_iter()
@@ -657,9 +806,11 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
+        let binding = self.binding;
         let key = key.clone();
         let owner = owner.to_owned();
         self.with(move |db| {
+            check_in(db, binding, &key.execution_id)?;
             let Some(mut row) = read_attempt(db, &key)? else {
                 return Ok(false);
             };
@@ -674,16 +825,28 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
+        let binding = self.binding;
         let key = key.clone();
-        self.with(move |db| read_attempt(db, &key)).await
+        self.with(move |db| {
+            check_in(db, binding, &key.execution_id)?;
+            read_attempt(db, &key)
+        })
+        .await
     }
 
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             // Loaded and asked, as `claim_attempt` does: the rule is
             // `AttemptRow`'s, and a second answer in SQL is what this adapter
             // declines to keep. The table holds live attempts only.
-            let live: Vec<AttemptRow> = rows(db, "select payload from attempts", [])?;
+            let live: Vec<AttemptRow> = rows(
+                db,
+                "select payload from attempts \
+                  where coalesce((select o.scope_key from ownership o \
+                                   where o.execution = attempts.execution), '') = ?",
+                [scope_key],
+            )?;
             Ok(tally_unclaimed(&live, now))
         })
         .await
@@ -695,13 +858,17 @@ impl WorkflowStore for DuckdbWorkflowStore {
         now: OffsetDateTime,
         limit: usize,
     ) -> Result<Vec<AttemptRow>> {
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             // Ordered as `claim_attempt` orders, and asked in Rust for its
             // reason: the rule is `AttemptRow`'s.
             let live: Vec<AttemptRow> = rows(
                 db,
-                "select payload from attempts order by updated_at, execution, step, attempt",
-                [],
+                "select payload from attempts \
+                  where coalesce((select o.scope_key from ownership o \
+                                   where o.execution = attempts.execution), '') = ? \
+                  order by updated_at, execution, step, attempt",
+                [scope_key],
             )?;
             Ok(claimable_of(&live, runtime, now, limit))
         })
@@ -709,6 +876,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        refuse_instance_wide(self.binding, "advance a processor checkpoint")?;
         let processor = processor.to_owned();
         self.with(move |db| {
             db.execute(
@@ -722,6 +890,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
     }
 
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
+        let scope_key = self.binding.scope().key();
         self.with(move |db| {
             // Which executions the outbox still speaks for. Read before
             // anything is chosen, because the answer has to be the same for
@@ -743,11 +912,13 @@ impl WorkflowStore for DuckdbWorkflowStore {
                         "select p.execution, p.payload, \
                             coalesce((select max(s.recorded_at) from streams s \
                                       where s.execution = p.execution), 0) \
-                         from projections p",
+                         from projections p \
+                         where coalesce((select o.scope_key from ownership o \
+                                          where o.execution = p.execution), '') = ?",
                     )
                     .map_err(|error| StoreError::Backend(format!("preparing a scan: {error}")))?;
                 let found = statement
-                    .query_map([], |row| {
+                    .query_map([scope_key], |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
@@ -776,7 +947,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
             for execution in &doomed {
                 // The whole execution together: a kept projection whose stream
                 // is gone is a run the panel lists and cannot open.
-                for table in ["streams", "inbox", "projections"] {
+                // `ownership` last: a record left behind names an execution
+                // that no longer exists, and one removed first would make a
+                // half-pruned project run readable from the unscoped path.
+                for table in ["streams", "inbox", "projections", "ownership"] {
                     db.execute(
                         &format!("delete from {table} where execution = ?"),
                         [execution.clone()],

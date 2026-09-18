@@ -39,6 +39,7 @@ use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope, ScopeBinding};
 use crate::state::{ExecutionId, StateType};
 use crate::store::{
     AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
@@ -52,9 +53,13 @@ pub use self::error::PostgresError;
 use self::error::is_unique_violation;
 
 /// The workflow store on PostgreSQL.
+///
+/// `binding` narrows what may be reached through one handle; the pool is
+/// shared, because there is one database however many scopes look at it.
 #[derive(Clone, Debug)]
 pub struct PostgresWorkflowStore {
     pool: PgPool,
+    binding: ScopeBinding,
 }
 
 impl PostgresWorkflowStore {
@@ -64,13 +69,85 @@ impl PostgresWorkflowStore {
     /// own pool.
     #[must_use]
     pub const fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            binding: ScopeBinding::global(),
+        }
     }
 
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
     }
+
+    /// The scope every cross-execution query compares against.
+    ///
+    /// The empty string for the unscoped store. Each of those queries carries
+    /// the same sub-select — `coalesce((select o.scope_key from
+    /// execution_ownership o where o.execution_id = …), '')` — so one bound
+    /// value serves both sides of the boundary and neither runs different SQL
+    /// from the other. A primary-key lookup per candidate row, which is what
+    /// keeps a claim a claim rather than a join.
+    fn scope_key(&self) -> String {
+        self.binding.scope().key()
+    }
+
+    /// Who owns one execution, and whether this store holds any history for it.
+    ///
+    /// Two questions in one round trip, because every per-execution operation
+    /// asks both and a store that asked twice would be a store whose answer
+    /// could change in between.
+    async fn owner_of(
+        &self,
+        execution: &ExecutionId,
+    ) -> Result<(Option<ExecutionOwnership>, bool)> {
+        let row = sqlx::query(
+            "select (select record from execution_ownership where execution_id = $1) as record,
+                    exists (select 1 from workflow_messages where execution_id = $1) as held",
+        )
+        .bind(execution.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        owner_from(&row)
+    }
+
+    /// The check every per-execution operation makes first.
+    async fn check(&self, execution: &ExecutionId) -> Result<()> {
+        let (owner, held) = self.owner_of(execution).await?;
+        self.binding.check(execution, owner.as_ref(), held)
+    }
+}
+
+/// Read an ownership record and an existence flag off a row that selected both.
+fn owner_from(row: &PgRow) -> Result<(Option<ExecutionOwnership>, bool)> {
+    let record: Option<serde_json::Value> = row.get("record");
+    let held: bool = row.get("held");
+    let owner = match record {
+        Some(document) => Some(
+            serde_json::from_value::<ExecutionOwnership>(document).map_err(|error| {
+                // Refused rather than read as absent: absent means "global",
+                // and answering a corrupt record that way would hand a
+                // project's run to the unscoped path.
+                StoreError::Backend(format!("an ownership record does not read back: {error}"))
+            })?,
+        ),
+        None => None,
+    };
+    Ok((owner, held))
+}
+
+/// Refuse what a project-bound store has no answer for.
+///
+/// Processor checkpoints and schedule slots are instance-wide: one cursor per
+/// processor, one slot per definition, and neither has a scoped form yet.
+fn refuse_instance_wide(binding: ScopeBinding, what: &str) -> Result<()> {
+    if binding.scope().is_global() {
+        return Ok(());
+    }
+    Err(StoreError::NotInThisScope {
+        what: format!("{what} while bound to {}", binding.scope().label()),
+    })
 }
 
 #[async_trait]
@@ -85,7 +162,28 @@ impl WorkflowStore for PostgresWorkflowStore {
         }
     }
 
+    fn scope(&self) -> ExecutionScope {
+        self.binding.scope()
+    }
+
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<std::sync::Arc<dyn WorkflowStore>> {
+        Ok(std::sync::Arc::new(Self {
+            pool: self.pool.clone(),
+            binding: self.binding.bind(scope)?,
+        }))
+    }
+
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        let (owner, held) = self.owner_of(execution).await?;
+        self.binding.check(execution, owner.as_ref(), held)?;
+        Ok(owner)
+    }
+
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
+        self.check(execution).await?;
         let rows = sqlx::query(
             "select stream_version, direction, message, metadata, recorded_at
                from workflow_messages
@@ -113,6 +211,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         after: u64,
         limit: usize,
     ) -> Result<StreamSlice> {
+        self.check(execution).await?;
         // The version comes from its own query rather than from the page's
         // length: a page is a window, and `max(stream_version)` is the only
         // thing that tells a reader whether it is looking at the end.
@@ -153,11 +252,14 @@ impl WorkflowStore for PostgresWorkflowStore {
             "select execution_id, timer_id, due_at, message
                from execution_timers
               where due_at <= $1
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = execution_timers.execution_id), '') = $3
               order by due_at
               limit $2",
         )
         .bind(now)
         .bind(limit as i64)
+        .bind(self.scope_key())
         .fetch_all(&self.pool)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -165,6 +267,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        self.check(execution).await?;
         let rows = sqlx::query(
             "select execution_id, timer_id, due_at, message
                from execution_timers where execution_id = $1 order by due_at",
@@ -177,6 +280,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        self.check(&key.execution_id).await?;
         // The index `0009` adds, matched exactly: the same expression, the same
         // partial condition. A read that spelled it differently would be a
         // sequential scan over every message of every run — which is the whole
@@ -211,6 +315,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         holder: &str,
         now: OffsetDateTime,
     ) -> Result<LeaseOutcome> {
+        self.check(execution).await?;
         // One statement, because two — read, then write — is the race this
         // exists to settle. The `where` is the whole rule: insert when nobody
         // has it, update only when it is already this holder's or has run out.
@@ -261,6 +366,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         holder: &str,
         now: OffsetDateTime,
     ) -> Result<bool> {
+        self.check(execution).await?;
         let done = sqlx::query(
             "delete from execution_decider_leases
               where execution_id = $1 and holder = $2 and claimed_at >= $3",
@@ -275,6 +381,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        self.check(execution).await?;
         let row = sqlx::query(
             "select holder, previous_holder, claimed_at
                from execution_decider_leases where execution_id = $1",
@@ -307,7 +414,50 @@ impl WorkflowStore for PostgresWorkflowStore {
         .map_err(|error| StoreError::Backend(error.to_string()))?;
         let version = version as u64;
 
-        // The inbox first, and inside the transaction: a redelivery is not a
+        // Scope before everything, including the inbox, and in this
+        // transaction: a redelivery of a project's message down the unscoped
+        // path is still that path handling a project's execution, and answering
+        // it `Duplicate` would be the silent fallback this boundary refuses.
+        //
+        // `for update` on the ownership row is what makes two starts of one
+        // execution serialise here rather than both reading "nobody owns it":
+        // the second waits, sees the first's record and is a conflict.
+        let recorded = sqlx::query(
+            "select (select record from execution_ownership where execution_id = $1 for update)
+                      as record,
+                    exists (select 1 from workflow_messages where execution_id = $1) as held",
+        )
+        .bind(execution.as_str())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        let (recorded, _) = owner_from(&recorded)?;
+        let establishing = self.binding.appending(
+            execution,
+            request.ownership.as_ref(),
+            recorded.as_ref(),
+            version == 0,
+        )?;
+        if let Some(owner) = &establishing {
+            // Before the stream, so no message of a project execution is ever
+            // stored without the record that says whose it is. One transaction
+            // holds both, so the order is a statement about intent rather than
+            // about recovery — and `on conflict do nothing` keeps a redelivered
+            // first append idempotent.
+            sqlx::query(
+                "insert into execution_ownership (execution_id, scope_key, record)
+                 values ($1, $2, $3)
+                 on conflict (execution_id) do nothing",
+            )
+            .bind(execution.as_str())
+            .bind(owner.execution_scope().key())
+            .bind(serde_json::to_value(owner).map_err(StoreError::Encoding)?)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        }
+
+        // The inbox next, and inside the transaction: a redelivery is not a
         // conflict, and answering it with one would make every at-least-once
         // retry look like a race.
         let seen: Option<i64> = sqlx::query_scalar(
@@ -466,6 +616,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
+        self.check(execution).await?;
         let row = sqlx::query(
             "select execution_id, plan_id, definition_name, owner, mode, payloads,
                     state_type, state_name, requested_by, steps,
@@ -485,10 +636,13 @@ impl WorkflowStore for PostgresWorkflowStore {
                     attempts, published_at, last_error
                from outbox_messages
               where published_at is null
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = outbox_messages.execution_id), '') = $2
               order by available_at, message_id
               limit $1",
         )
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(self.scope_key())
         .fetch_all(&self.pool)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -504,11 +658,20 @@ impl WorkflowStore for PostgresWorkflowStore {
         // sink has taken it, and a published row here would answer no question
         // while the table grew with every step of every run — the one table in
         // this schema whose rows have a reader that finishes with them.
-        sqlx::query("delete from outbox_messages where message_id = any($1)")
-            .bind(&ids)
-            .execute(&self.pool)
-            .await
-            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        //
+        // Scoped like the read that produced the ids, so a publisher handed one
+        // from the other side of the boundary deletes nothing.
+        sqlx::query(
+            "delete from outbox_messages
+              where message_id = any($1)
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = outbox_messages.execution_id), '') = $2",
+        )
+        .bind(&ids)
+        .bind(self.scope_key())
+        .execute(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
         Ok(())
     }
 
@@ -556,14 +719,16 @@ impl WorkflowStore for PostgresWorkflowStore {
         //
         // `claimed_at < $3` is `aiwatcher_jobs::lease_expired`'s strict
         // inequality — a lease is held through its last second and free the
-        // second after — the one `unclaimed_attempts` and every other adapter
-        // keep. It read `<=`, which took a row at exactly five minutes that the
-        // count still called held and `AttemptRow::is_held_by` still told its
-        // holder was its own.
+        // second after — the one every other adapter keeps.
         //
         // `runtime <> all($9)` unless a key was named is the key-only rule
         // (ADR_0029): a pod's attempt is taken by the claim naming it and by
         // nothing else, however well the rest of a worker's filter matches.
+        //
+        // `$10` is this store's binding rather than the filter's: a claimant
+        // says what it can *run*, and which executions it may reach is not
+        // something it asserts about itself. In the `where` for `task_ref`'s
+        // reason.
         let row = sqlx::query(
             "select execution_id, step_id, attempt, runtime, command_id, queue,
                     task_ref, state, lease_owner, previous_owner, claimed_at, not_before
@@ -574,6 +739,8 @@ impl WorkflowStore for PostgresWorkflowStore {
                 and (not_before is null or not_before <= $4)
                 and ($6::text is null or (execution_id = $6 and step_id = $7 and attempt::bigint = $8))
                 and ($6::text is not null or runtime <> all($9))
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = step_attempts.execution_id), '') = $10
                 and ( (queue is not null and queue = any($1)
                        and task_ref is not null and task_ref = any($5))
                    or (queue is null and runtime = any($2)) )
@@ -590,6 +757,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(filter.attempt.as_ref().map(|key| key.step_id.as_str()))
         .bind(filter.attempt.as_ref().map(|key| i64::from(key.attempt)))
         .bind(&by_key)
+        .bind(self.scope_key())
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -608,6 +776,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
+        self.check(&key.execution_id).await?;
         let stale = now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
         // The `lease_owner` and freshness checks are in the `where`, not in a
         // read followed by a write: a renewal that read a live lease and wrote
@@ -635,6 +804,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
+        self.check(&key.execution_id).await?;
         let row = sqlx::query(
             "select execution_id, step_id, attempt, runtime, command_id, queue,
                     task_ref, state, lease_owner, previous_owner, claimed_at, not_before
@@ -669,6 +839,8 @@ impl WorkflowStore for PostgresWorkflowStore {
                 and runtime = $1
                 and (claimed_at is null or claimed_at < $2)
                 and (not_before is null or not_before <= $3)
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = step_attempts.execution_id), '') = $5
               order by updated_at
               limit $4",
         )
@@ -676,6 +848,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(stale)
         .bind(now)
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(self.scope_key())
         .fetch_all(&self.pool)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -699,9 +872,12 @@ impl WorkflowStore for PostgresWorkflowStore {
                                   'awaiting_input')
                 and queue is null
                 and (claimed_at is null or claimed_at < $1)
+                and coalesce((select o.scope_key from execution_ownership o
+                               where o.execution_id = step_attempts.execution_id), '') = $2
               group by runtime",
         )
         .bind(stale)
+        .bind(self.scope_key())
         .fetch_all(&self.pool)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -718,6 +894,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        refuse_instance_wide(self.binding, "admit a schedule slot")?;
         // One transaction, and the row lock is what makes it one. `SELECT …
         // FOR UPDATE` on the slot serialises two replicas that both found the
         // same slot due, so the overlap check below cannot be read by both
@@ -819,6 +996,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         settlement: SlotSettlement,
         now: OffsetDateTime,
     ) -> Result<()> {
+        refuse_instance_wide(self.binding, "settle a schedule slot")?;
         let state = settlement.outcome().map(outcome_str);
         let execution_id = settlement.execution_id();
         let detail = settlement.detail();
@@ -853,6 +1031,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         name: &str,
         limit: usize,
     ) -> Result<Vec<SlotRecord>> {
+        refuse_instance_wide(self.binding, "read schedule slots")?;
         let rows = sqlx::query(
             "select definition_name, slot, state, execution_id,
                     detail, lease_owner, leased_at, updated_at
@@ -871,6 +1050,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let value: Option<String> = sqlx::query_scalar(
             "select checkpoint from processor_checkpoints where processor_id = $1",
         )
@@ -882,6 +1062,7 @@ impl WorkflowStore for PostgresWorkflowStore {
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        refuse_instance_wide(self.binding, "advance a processor checkpoint")?;
         let mut transaction = self
             .pool
             .begin()
@@ -917,6 +1098,11 @@ impl WorkflowStore for PostgresWorkflowStore {
             "select execution_id from execution_runs
               where state_type = any($1)
                 and updated_at < $2
+                -- A sweep forgets its own side's runs and no others: the
+                -- unscoped retention window is not a statement about a
+                -- project's history.
+                and coalesce((select w.scope_key from execution_ownership w
+                               where w.execution_id = execution_runs.execution_id), '') = $4
                 and not exists (
                       select 1 from outbox_messages o
                        where o.execution_id = execution_runs.execution_id
@@ -937,6 +1123,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(&terminal)
         .bind(before)
         .bind(limit as i64)
+        .bind(self.scope_key())
         .fetch_all(&mut *transaction)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -968,6 +1155,10 @@ impl WorkflowStore for PostgresWorkflowStore {
             // forgotten would fire a message into a stream that is gone.
             "delete from execution_timers where execution_id = any($1)",
             "delete from execution_runs where execution_id = any($1)",
+            // With the run, after it: a record left behind names an execution
+            // that no longer exists, and one removed first would make a
+            // half-pruned project run readable from the unscoped path.
+            "delete from execution_ownership where execution_id = any($1)",
         ] {
             sqlx::query(statement)
                 .bind(&doomed)

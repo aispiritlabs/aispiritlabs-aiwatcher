@@ -155,6 +155,44 @@ pub enum StoreError {
     )]
     SingleProcessOnly,
 
+    /// An operation on an execution this store is not bound to.
+    ///
+    /// Both directions at once, deliberately. The unscoped store refusing a
+    /// project's run is what keeps the reactor, the worker, the launcher, the
+    /// timer tick, the outbox publisher and the retention sweep this binary
+    /// already runs away from it; a project store refusing a global run or
+    /// another project's is what stops a known id being a way in. There is no
+    /// fallback to the wider side — a path with no scope of its own does not
+    /// handle a scoped execution at all.
+    #[error(
+        "{execution} belongs to {holder} and this workflow store is bound to {bound}; \
+         a project's execution is never handled by another scope's path"
+    )]
+    OutOfScope {
+        execution: String,
+        bound: String,
+        holder: String,
+    },
+
+    /// A start that would give an execution a second owner.
+    ///
+    /// Answered before the inbox, so it is a refusal rather than a duplicate: a
+    /// repeated start whose owner matches is a redelivery and reads as one, and
+    /// a repeated start naming somebody else is not this execution's start.
+    #[error(
+        "{execution} is already owned by {holder}. Execution ownership is written once, \
+         with the execution, and is never repointed"
+    )]
+    OwnershipConflict { execution: String, holder: String },
+
+    /// Something this store's binding has no answer for.
+    ///
+    /// A project-bound store is not a second instance: processor checkpoints
+    /// and schedule slots are instance-wide and are not scoped by this stage,
+    /// so it says so by name rather than quietly answering for the global one.
+    #[error("a workflow store cannot {what}")]
+    NotInThisScope { what: String },
+
     #[error("{0}")]
     Backend(String),
 
@@ -174,10 +212,21 @@ impl StoreError {
     /// appended, which is the store working. [`Self::Backend`] and
     /// [`Self::Io`] are the honest `false`: they have flattened whatever the
     /// adapter hit, so the safe answer is that it may have been a bad moment.
+    ///
+    /// The three scope refusals are the firmest `true` here. Ownership is
+    /// immutable, so a path that is not this execution's will not become it on
+    /// the next tick — and a scheduler that came back for one would retry a
+    /// boundary every minute for ever, which is exactly what
+    /// [`DefinitionError::says_the_same_next_time`] exists to prevent.
     #[must_use]
     pub const fn says_the_same_next_time(&self) -> bool {
         match self {
-            Self::PayloadTooLarge { .. } | Self::SingleProcessOnly | Self::Encoding(_) => true,
+            Self::PayloadTooLarge { .. }
+            | Self::SingleProcessOnly
+            | Self::Encoding(_)
+            | Self::OutOfScope { .. }
+            | Self::OwnershipConflict { .. }
+            | Self::NotInThisScope { .. } => true,
             Self::VersionConflict { .. } | Self::Backend(_) | Self::Io(_) => false,
         }
     }

@@ -372,6 +372,7 @@ mod tests {
             checkpoint: None,
             timers: Vec::new(),
             attempts: rows,
+            ownership: None,
         }
     }
 

@@ -300,6 +300,7 @@ mod tests {
             checkpoint: None,
             timers: Vec::new(),
             attempts: Vec::new(),
+            ownership: None,
         }
     }
 

@@ -435,6 +435,11 @@ async fn write(
                     // store a turn at nine tomorrow should say so when it is
                     // saved.
                     payloads: None,
+                    // The unscoped path. A schedule is instance-wide — the slot
+                    // table has no scoped form — so the run it starts is a
+                    // global one, which is what the store's binding refuses to
+                    // let a project reach.
+                    project: None,
                 },
             )
             .await?

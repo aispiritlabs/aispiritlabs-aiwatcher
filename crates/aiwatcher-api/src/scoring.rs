@@ -319,6 +319,10 @@ async fn start_scoring_run(
                 requested_by: requester,
                 decided_by: Default::default(),
                 payloads: None,
+                // The unscoped path. Every start this build performs is
+                // one: no project route creates an execution yet, and a run
+                // with no owner is a global run by construction.
+                project: None,
             },
         )
         .await?;

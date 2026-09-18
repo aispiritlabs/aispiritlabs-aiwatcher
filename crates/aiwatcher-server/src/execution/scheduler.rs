@@ -326,6 +326,9 @@ async fn start_run(
                 // The deployment's own. A pinned instance with no archive is a
                 // fact about the deployment, and the refusal says so itself.
                 payloads: None,
+                // The unscoped path. The slot table is instance-wide and has no
+                // scoped form, so what a tick starts is a global run.
+                project: None,
             },
         )
         .await?;

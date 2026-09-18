@@ -57,6 +57,7 @@ use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
+use crate::scope::{ExecutionOwnership, ExecutionScope};
 use crate::state::ExecutionId;
 
 /// What the caller believed the stream was at.
@@ -104,6 +105,21 @@ pub struct AppendRequest {
     /// always has its completion. A row inserted separately would be work
     /// nobody decided on.
     pub attempts: Vec<AttemptWrite>,
+    /// The ownership this decision establishes, for the one append that
+    /// creates a project execution.
+    ///
+    /// In this request rather than in a call of its own, for the reason the
+    /// other five pieces are: an owner written before the start is a claim on
+    /// an id nothing backs, and one written after it is a window in which the
+    /// run exists and is nobody's. Every other append carries `None` — the
+    /// record is already there, and this is the only field of a decision that
+    /// is written once and never again.
+    ///
+    /// `None` on a project-bound store is an ordinary command; `Some` on the
+    /// unscoped store is refused, because a path with no scope may not mint
+    /// one. [`ScopeBinding::appending`](crate::scope::ScopeBinding::appending)
+    /// is the whole rule.
+    pub ownership: Option<ExecutionOwnership>,
 }
 
 impl AppendRequest {
@@ -271,10 +287,74 @@ pub fn prunable(
 }
 
 /// The transactional store an execution's history lives in.
+///
+/// **Every method is bound to [`WorkflowStore::scope`].** A per-execution
+/// operation on an execution another scope owns is [`StoreError::OutOfScope`],
+/// refused before the backend is touched; a query across executions —
+/// [`Self::due_timers`], [`Self::pending_outbox`], [`Self::claim_attempt`],
+/// [`Self::unclaimed_attempts`], [`Self::claimable_attempts`], [`Self::prune`]
+/// — answers only for this store's side of the boundary. That is what makes
+/// the reactor, the worker, the launcher, the timer tick, the outbox publisher
+/// and the retention sweep this binary already runs safe to leave exactly as
+/// they are: they hold the unscoped store, so a project's execution is
+/// invisible to them rather than something they were trusted not to take.
+///
+/// Two operations are instance-wide and have no scoped form yet, so a
+/// project-bound store refuses them by name ([`StoreError::NotInThisScope`])
+/// rather than answering for the global one: the processor checkpoints
+/// ([`Self::checkpoint`], [`Self::advance_checkpoint`]) and the schedule slots
+/// ([`Self::admit_slot`], [`Self::settle_slot`], [`Self::recent_slots`]).
 #[async_trait]
 pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// What this adapter can do. Read before a plan is accepted, never after.
     fn capabilities(&self) -> StoreCapabilities;
+
+    /// Which executions this store handles at all.
+    ///
+    /// [`ExecutionScope::Global`] for the store a deployment wires, which is
+    /// every one this build creates today. A caller that needs to know whether
+    /// it is holding a scoped store asks here rather than remembering what it
+    /// built — the reactor, the launcher and the publisher all take a store
+    /// they were handed.
+    fn scope(&self) -> ExecutionScope;
+
+    /// The same store, bound to one project.
+    ///
+    /// Shares the backing data — one lock, one directory, one pool — and
+    /// narrows what may be reached through it: that project's executions, and
+    /// nothing else. Binding to the scope it already holds is the same store,
+    /// so wiring that resolves a scope twice costs nothing; binding to a second
+    /// one is refused, because a rebinding that won would move every live
+    /// claim, timer and outbox row of one project under another's name.
+    ///
+    /// This is **not** authorization. It says which executions this store may
+    /// touch; whether the principal that asked still holds a grant is IAM's
+    /// answer, asked fresh by whoever calls.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotInThisScope`] when this store is already bound
+    /// elsewhere, or whatever the backend could not do.
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<std::sync::Arc<dyn WorkflowStore>>;
+
+    /// Who owns one execution, if anybody does.
+    ///
+    /// The record written with the execution and never again. `None` is a
+    /// global run — every stream written before ownership existed, and every
+    /// one an instance with no IAM writes.
+    ///
+    /// Scoped like every other per-execution read: the unscoped store refuses
+    /// an execution a project owns rather than reporting its owner, so a known
+    /// id is not a way to learn who holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::OutOfScope`] when this store is not the one bound to that
+    /// execution, or whatever the backend could not do.
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>>;
 
     /// The whole stream for one execution.
     ///
@@ -662,6 +742,21 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
 impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
     fn capabilities(&self) -> StoreCapabilities {
         (**self).capabilities()
+    }
+
+    fn scope(&self) -> ExecutionScope {
+        (**self).scope()
+    }
+
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> Result<std::sync::Arc<dyn WorkflowStore>> {
+        (**self).for_project(scope)
+    }
+
+    async fn ownership(&self, execution: &ExecutionId) -> Result<Option<ExecutionOwnership>> {
+        (**self).ownership(execution).await
     }
 
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {

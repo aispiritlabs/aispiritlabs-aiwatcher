@@ -124,6 +124,16 @@ create table if not exists timers (
     primary key (execution, timer_id)
 );
 
+-- Who owns each execution that anybody owns. Absent is a global run, which is
+-- what every stream written before this table existed is — so no backfill is
+-- performed and none is needed. `scope_key` is `<organization>/<project>`, the
+-- string `ExecutionScope::key` builds; the payload is the whole record.
+create table if not exists ownership (
+    execution varchar primary key,
+    scope_key varchar not null,
+    payload   varchar not null
+);
+
 -- What a receipt lookup reads. The step and the attempt are lifted out for the
 -- same reason `due_at` is: a worker whose reply was lost asks whether its
 -- attempt already recorded an outcome, and answering it by decoding every

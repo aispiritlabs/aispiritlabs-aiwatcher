@@ -38,6 +38,7 @@ use crate::error::DefinitionError;
 use crate::handler::{ExecutionHandler, Handled};
 use crate::message::{PayloadDefault, PayloadPolicy};
 use crate::plan::{DefinitionKind, ResolvedWindow};
+use crate::scope::{ExecutionOwnership, ExecutionScope, ProjectStart};
 use crate::{
     ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, HandleError, MessageMetadata, Now,
     WorkflowCommand, WorkflowMessage, WorkflowStore, compile_curation, derive_uuid,
@@ -153,17 +154,41 @@ pub enum RunIdentity {
 }
 
 impl RunIdentity {
-    /// The id, once there is a plan to derive it against.
-    fn of(&self, plan: &ExecutionPlan) -> ExecutionId {
-        match self {
-            Self::Named(id) => id.clone(),
-            Self::Key(key) => ExecutionId::new(derive_uuid(&format!(
+    /// The id, once there is a plan and a scope to derive it against.
+    ///
+    /// **A global id is exactly what it was.** The derivations below are the
+    /// ones every stream in every existing deployment was written under, byte
+    /// for byte, so nothing that has run moves and no historical stream becomes
+    /// unreachable. A project folds its scope in instead, which is what makes
+    /// the same idempotency key in two projects two independent runs rather
+    /// than one run two projects can address — and what stops one project's
+    /// key reaching the other's history at all.
+    ///
+    /// [`Self::Fresh`] needs neither: a v7 uuid is already unique per call, and
+    /// deriving it from a scope would only make it less so.
+    fn of(&self, plan: &ExecutionPlan, scope: ExecutionScope) -> ExecutionId {
+        match (self, scope.project()) {
+            (Self::Named(id), None) => id.clone(),
+            (Self::Key(key), None) => ExecutionId::new(derive_uuid(&format!(
                 "aiwatcher/execution/request/{}/{key}",
                 plan.plan_id
             ))),
+            // A named id is a caller's own derivation — a slot's, from the
+            // definition and the moment — so two projects that both run a
+            // definition of the same name at nine o'clock would otherwise reach
+            // one id and one of them would be a conflict. Derived again with
+            // the scope, both are idempotent and neither is the other's.
+            (Self::Named(id), Some(project)) => ExecutionId::new(derive_uuid(&format!(
+                "aiwatcher/execution/project/{}/{}/named/{id}",
+                project.organization.0, project.project.0
+            ))),
+            (Self::Key(key), Some(project)) => ExecutionId::new(derive_uuid(&format!(
+                "aiwatcher/execution/project/{}/{}/request/{}/{key}",
+                project.organization.0, project.project.0, plan.plan_id
+            ))),
             // Hyphen-free, like a launch's `workflow_run_id`: this id becomes a
             // correlation id, a partition key and a file name.
-            Self::Fresh => ExecutionId::new(uuid::Uuid::now_v7().simple().to_string()),
+            (Self::Fresh, _) => ExecutionId::new(uuid::Uuid::now_v7().simple().to_string()),
         }
     }
 }
@@ -176,10 +201,22 @@ pub struct StartRun {
     pub parameters: BTreeMap<String, Value>,
     /// Who asked. Recorded rather than derived, so a run always says who was
     /// responsible for it.
+    ///
+    /// **Not ownership.** It is a display string a caller supplies, and a run
+    /// started in a project says who owns it in [`Self::project`] instead —
+    /// read from a verified principal, written down once and never repointed.
     pub requested_by: String,
     pub decided_by: Decider,
     /// Where this run's words live. `None` is the deployment's own answer.
     pub payloads: Option<PayloadPolicy>,
+    /// Which project this run belongs to, and who asked for it.
+    ///
+    /// `None` is the unscoped path, which is every run this build starts today.
+    /// `Some` is what makes the run a project's: it decides the execution id,
+    /// it is written down as the execution's owner in the transaction that
+    /// creates it, and it is never read back from the plan, the parameters,
+    /// `requested_by` or anything a claimant says about itself.
+    pub project: Option<ProjectStart>,
 }
 
 /// A definition to compile, and the run to start on it.
@@ -439,7 +476,22 @@ impl<S: WorkflowStore> Executions<'_, S> {
     pub async fn start(&self, plan: ExecutionPlan, run: StartRun) -> Result<Started, StartRefused> {
         let handler = self.handler()?;
         let payloads = self.payload_policy(run.payloads)?;
-        let execution_id = run.identity.of(&plan);
+        let scope = run
+            .project
+            .as_ref()
+            .map_or(ExecutionScope::Global, |project| {
+                ExecutionScope::Project(project.scope)
+            });
+        let execution_id = run.identity.of(&plan, scope);
+        // Built here, from the caller's own trusted half and the plan being
+        // started — never from the command, which is a document anybody
+        // downstream could have composed. The store writes it in the same
+        // transaction as the first message and refuses a second owner
+        // afterwards.
+        let ownership = run
+            .project
+            .as_ref()
+            .map(|project| ExecutionOwnership::of(project, &plan));
         // Derived from the execution, so a redelivered request — a retried
         // POST, a proxy that repeated it, a second worker on the same slot —
         // lands on the inbox rather than beside it.
@@ -449,7 +501,7 @@ impl<S: WorkflowStore> Executions<'_, S> {
         let (owner, mode) = run.decided_by.parts();
         let now = OffsetDateTime::now_utc();
         let handled = handler
-            .handle(
+            .start(
                 &execution_id,
                 WorkflowMessage::Command(WorkflowCommand::StartExecution {
                     execution_id: execution_id.clone(),
@@ -462,6 +514,7 @@ impl<S: WorkflowStore> Executions<'_, S> {
                 }),
                 MessageMetadata::caused_by(&execution_id, &message_id, message_id.clone(), now),
                 Now::at(now),
+                ownership,
             )
             .await?;
 
@@ -644,6 +697,7 @@ mod tests {
             requested_by: "tester".to_owned(),
             decided_by: Decider::Local,
             payloads: None,
+            project: None,
         }
     }
 
@@ -720,16 +774,96 @@ mod tests {
         // Otherwise somebody who fixed their pipeline and repeated their key
         // would get the *old* run back, with a 202 saying it was theirs.
         let key = RunIdentity::Key("nightly".to_owned());
-        assert_ne!(key.of(&plan("ab")), key.of(&plan("cd")));
+        assert_ne!(
+            key.of(&plan("ab"), ExecutionScope::Global),
+            key.of(&plan("cd"), ExecutionScope::Global)
+        );
+    }
+
+    fn project() -> aiwatcher_iam::ProjectScope {
+        aiwatcher_iam::ProjectScope {
+            organization: aiwatcher_iam::OrganizationId::new(),
+            project: aiwatcher_iam::ProjectId::new(),
+        }
+    }
+
+    #[test]
+    fn one_key_in_two_projects_is_two_independent_runs() {
+        // The case a shared idempotency key would otherwise collapse: two
+        // tenants pressing the same button on the same pipeline would reach one
+        // execution, and the second would be told its run had already started.
+        let plan = plan("ab");
+        let key = RunIdentity::Key("nightly".to_owned());
+        let (one, other) = (project(), project());
+        assert_ne!(
+            key.of(&plan, ExecutionScope::Project(one)),
+            key.of(&plan, ExecutionScope::Project(other))
+        );
+        // And neither is the unscoped run's, so a project key never addresses
+        // a global history.
+        assert_ne!(
+            key.of(&plan, ExecutionScope::Project(one)),
+            key.of(&plan, ExecutionScope::Global)
+        );
+        // Idempotent within one project, which is the whole point of a key.
+        assert_eq!(
+            key.of(&plan, ExecutionScope::Project(one)),
+            key.of(&plan, ExecutionScope::Project(one))
+        );
+    }
+
+    #[test]
+    fn a_global_id_is_exactly_the_one_this_build_has_always_derived() {
+        // Pinned, not recomputed: every historical stream is addressed by these
+        // bytes, and a derivation that moved would make them unreachable.
+        let plan = plan("ab");
+        assert_eq!(
+            RunIdentity::Key("nightly".to_owned())
+                .of(&plan, ExecutionScope::Global)
+                .as_str(),
+            crate::derive_uuid(&format!(
+                "aiwatcher/execution/request/{}/nightly",
+                plan.plan_id
+            )),
+        );
+        let named = ExecutionId::new("slot-2026-09-18T09:00");
+        assert_eq!(
+            RunIdentity::Named(named.clone()).of(&plan, ExecutionScope::Global),
+            named,
+            "a named global id is used exactly as the caller derived it"
+        );
+    }
+
+    #[test]
+    fn two_projects_that_both_find_one_slot_due_start_two_runs_and_each_is_idempotent() {
+        // A slot's id is derived by its caller from the definition and the
+        // moment, so two projects running a definition of the same name at nine
+        // o'clock would otherwise reach one id — and one of them would be told
+        // its run was already going.
+        let plan = plan("ab");
+        let slot = RunIdentity::Named(ExecutionId::new("curation_pipeline/nightly/1789700400"));
+        let (one, other) = (project(), project());
+        assert_ne!(
+            slot.of(&plan, ExecutionScope::Project(one)),
+            slot.of(&plan, ExecutionScope::Project(other))
+        );
+        assert_eq!(
+            slot.of(&plan, ExecutionScope::Project(one)),
+            slot.of(&plan, ExecutionScope::Project(one)),
+            "two workers that both find the slot due derive one id"
+        );
     }
 
     #[test]
     fn two_requests_with_no_key_are_two_runs() {
         let plan = plan("ab");
-        assert_ne!(RunIdentity::Fresh.of(&plan), RunIdentity::Fresh.of(&plan));
+        assert_ne!(
+            RunIdentity::Fresh.of(&plan, ExecutionScope::Global),
+            RunIdentity::Fresh.of(&plan, ExecutionScope::Global)
+        );
         // And an id that becomes a correlation id, a partition key and a file
         // name carries none of the characters any of those three dislike.
-        let id = RunIdentity::Fresh.of(&plan);
+        let id = RunIdentity::Fresh.of(&plan, ExecutionScope::Global);
         assert!(
             id.as_str().chars().all(|c| c.is_ascii_alphanumeric()),
             "{id} has to survive being a file name"
@@ -743,7 +877,10 @@ mod tests {
         // here instead — from the plan — would give them two, because they
         // read the head a moment apart and compile different `plan_id`s.
         let named = ExecutionId::new("schedule/nightly/2026-09-12T09:00:00Z");
-        assert_eq!(RunIdentity::Named(named.clone()).of(&plan("ab")), named);
+        assert_eq!(
+            RunIdentity::Named(named.clone()).of(&plan("ab"), ExecutionScope::Global),
+            named
+        );
     }
 
     #[test]

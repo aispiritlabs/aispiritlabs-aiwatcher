@@ -100,6 +100,52 @@ async fn a_file_store_survives_the_process_that_wrote_it() {
 }
 
 #[tokio::test]
+async fn a_project_execution_and_its_owner_both_survive_the_process_that_wrote_them() {
+    // The ownership record is the one thing a restart may not lose: without it
+    // a project's run reads back as a global one, which is every unscoped path
+    // in this binary reaching it. It is journalled with the decision that
+    // created the run, so this is the same property as the stream's.
+    let scratch = Scratch::new("owned-restart");
+    let scope = aiwatcher_execution::testing::project();
+    let execution = fresh("owned-restart");
+    let owner = {
+        let store = FileWorkflowStore::open(&scratch.0).await.expect("a store");
+        let bound = store.for_project(scope).expect("a project store");
+        let owner = aiwatcher_execution::testing::ownership_for(scope, "alice");
+        bound
+            .append(
+                &execution,
+                aiwatcher_execution::testing::owned_start_for(&execution, "start", owner.clone()),
+            )
+            .await
+            .expect("a project start");
+        owner
+    };
+
+    let reopened = FileWorkflowStore::open(&scratch.0)
+        .await
+        .expect("the lock was released when the store was dropped");
+    let bound = reopened.for_project(scope).expect("a project store");
+    assert_eq!(
+        bound.ownership(&execution).await.expect("a read"),
+        Some(owner),
+        "the record came back with the stream"
+    );
+    assert!(
+        bound.load(&execution).await.expect("a load").version > 0,
+        "and so did the history"
+    );
+    // And the unscoped handle reaches neither.
+    assert!(
+        matches!(
+            reopened.load(&execution).await,
+            Err(StoreError::OutOfScope { .. })
+        ),
+        "a restart must not turn a project's run into a global one"
+    );
+}
+
+#[tokio::test]
 async fn a_second_process_is_refused_the_file_store_by_name() {
     // The whole reason this adapter is not the default anywhere a worker runs:
     // a workflow stream has a decider, a reactor and a worker racing to append,
@@ -183,5 +229,6 @@ fn pause(execution: &ExecutionId, message_id: &str) -> AppendRequest {
         checkpoint: None,
         timers: Vec::new(),
         attempts: Vec::new(),
+        ownership: None,
     }
 }

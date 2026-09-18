@@ -384,6 +384,24 @@ struct OneProcess(MemoryWorkflowStore);
 
 #[async_trait::async_trait]
 impl WorkflowStore for OneProcess {
+    fn scope(&self) -> aiwatcher_execution::ExecutionScope {
+        self.0.scope()
+    }
+
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> aiwatcher_execution::Result<std::sync::Arc<dyn WorkflowStore>> {
+        self.0.for_project(scope)
+    }
+
+    async fn ownership(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::ExecutionOwnership>> {
+        self.0.ownership(execution).await
+    }
+
     fn capabilities(&self) -> aiwatcher_execution::store::StoreCapabilities {
         aiwatcher_execution::store::StoreCapabilities {
             multi_process: false,
@@ -747,6 +765,7 @@ async fn a_timer_on_a_run_that_has_ended_is_retired_rather_than_delivered() {
                 checkpoint: None,
                 timers: vec![saga_timeout("orphan", at(10))],
                 attempts: Vec::new(),
+                ownership: None,
             },
         )
         .await
