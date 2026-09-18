@@ -36,6 +36,11 @@ laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "igg
 # project database.
 workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher")
 
+# The IAM control plane's own database, on the same development server. Never
+# the workflow store's: grants and executions have different lifetimes, and
+# `just postgres-reset` is something people do to the latter.
+iam_postgres_url := env_var_or_default("AIWATCHER_IAM_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher_iam")
+
 # Where a managed query step is sent: the one engine this deployment runs, and
 # the only address a query step ever runs against — a plan names a binding and
 # its parameters, never a host.
@@ -384,6 +389,32 @@ run-sso:
     AIWATCHER_AUTH_REDIRECT_URL=http://localhost:5173/api/v1/auth/callback \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
+
+# IAM is oidc-only by design and refuses to start on any other auth mode rather
+# than falling back to memory, so this needs `just authentik-up` as well as
+# `just postgres-up`.
+#
+# The database is `aiwatcher_iam`, not the workflow store's `aiwatcher`: one per
+# concern, so `just postgres-reset` never takes the grants with it. Created here
+# if it is not there, because a start-up that migrates a database nobody made is
+# a confusing first failure.
+#
+# The same, with the IAM control plane: organizations, teams, projects, grants.
+run-sso-iam:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker exec aiwatcher-postgres psql -U aiwatcher -tAc \
+      "select 1 from pg_database where datname='aiwatcher_iam'" | grep -q 1 \
+      || docker exec aiwatcher-postgres createdb -U aiwatcher aiwatcher_iam
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_AUTH_MODE=oidc \
+    AIWATCHER_AUTH_ISSUER={{authentik_issuer}} \
+    AIWATCHER_AUTH_CLIENT_ID=aiwatcher \
+    AIWATCHER_AUTH_REDIRECT_URL=http://localhost:5173/api/v1/auth/callback \
+    AIWATCHER_IAM_POSTGRES_URL={{iam_postgres_url}} \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher --features aiwatcher-server/postgres
 
 # Server against a local Iggy. Run `just iggy-up` first.
 run-laser:
@@ -993,17 +1024,42 @@ authentik-up:
       if curl -sf http://localhost:9000/-/health/ready/ >/dev/null 2>&1; then
         echo "✓ authentik is up on http://localhost:9000"
         echo
-        echo "  1. finish the first-run setup: http://localhost:9000/if/flow/initial-setup/"
-        echo "  2. the blueprint has already created the provider, the application"
-        echo "     and the three groups — read the client secret from"
-        echo "     Admin → Providers → aiwatcher into .env"
-        echo "  3. put yourself in aiwatcher-admins, then: just run-sso"
+        echo "  akadmin / aiwatcher-dev — the bootstrap variables in the compose"
+        echo "  file, read once on a first start against an empty database."
+        echo
+        echo "  The blueprint (provider, application, three groups) is applied a"
+        echo "  few seconds after this, by the worker. Then:"
+        echo
+        echo "    just authentik-seed      # teacher and student"
+        echo "    just authentik-secret    # into AIWATCHER_AUTH_CLIENT_SECRET"
+        echo "    just run-sso             # or run-sso-iam, with the control plane"
+        echo
+        echo "  docs/local-sso.md is the whole path, including what it looks like"
+        echo "  when the issuer names the provider instead of the application."
         exit 0
       fi
       sleep 2
     done
     echo "✗ authentik did not come up; docker compose -f deploy/docker-compose.authentik.yml logs" >&2
     exit 1
+
+# `teacher` may create an organization; `student` may see nothing until granted.
+# Idempotent: running it again resets both passwords, which is how you recover
+# from having forgotten one.
+#
+# The two fixture people a grant needs, in the local authentik.
+authentik-seed:
+    python3 scripts/authentik-seed.py
+
+# A blueprint is a file people copy, so it deliberately holds no secret.
+#
+# The client secret authentik generated for the provider, to put in .env.
+authentik-secret:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    curl -sf -H 'Authorization: Bearer aiwatcher-dev-bootstrap' \
+      'http://localhost:9000/api/v3/providers/oauth2/?search=aiwatcher' \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["results"][0]["client_secret"])'
 
 # Stop it, keeping its database.
 authentik-down:

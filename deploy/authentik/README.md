@@ -67,7 +67,10 @@ does), by putting it in the ConfigMap the worker reads, or by pasting it into
 Admin → Customisation → Blueprints.
 
 It deliberately does not contain the client secret. Read it once from
-Admin → Providers → aiwatcher.
+Admin → Providers → aiwatcher — or, on a development machine, from
+`just authentik-secret`, which asks authentik's API with the bootstrap token
+the compose file sets. [`docs/local-sso.md`](../../docs/local-sso.md) is that
+whole path end to end, including the two people a grant needs.
 
 ## proxy, where the outpost is already there
 

@@ -31,6 +31,14 @@ x-authentik: &authentik
     # session cookie is not `Secure` under `just run-sso` — see the note on
     # AIWATCHER_AUTH_COOKIE_SECURE in crates/aiwatcher-server/src/config.rs.
     AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    # Read once, on the first start against an empty database, and the reason
+    # `just authentik-up` needs no clicking: without them the first run ends at
+    # a setup form nobody can script, and the client secret has to be copied
+    # out of the admin UI by hand. Development only — the token below is an
+    # authentik superuser API key in a file that is committed.
+    AUTHENTIK_BOOTSTRAP_PASSWORD: aiwatcher-dev
+    AUTHENTIK_BOOTSTRAP_TOKEN: aiwatcher-dev-bootstrap
+    AUTHENTIK_BOOTSTRAP_EMAIL: akadmin@localhost
   depends_on:
     postgresql:
       condition: service_healthy
