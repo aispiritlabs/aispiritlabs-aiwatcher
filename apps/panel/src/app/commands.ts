@@ -113,7 +113,7 @@ const FILTERED: Command[] = [
     group: 'Observability',
     hint: 'The runs list, narrowed to the ones that ended badly.',
     to: '/observability/runs',
-    search: { status: 'failed' },
+    search: { status: ['failed'] },
     keywords: ['errors', 'broken', 'exceptions', 'failures'],
   },
   {
@@ -124,7 +124,7 @@ const FILTERED: Command[] = [
     // heard from rather than guessing that it died.
     hint: 'Runs with no end event yet, and when each was last heard from.',
     to: '/observability/runs',
-    search: { status: 'running' },
+    search: { status: ['running'] },
     keywords: ['in flight', 'unfinished', 'open', 'stalled', 'hanging'],
   },
   {
@@ -277,6 +277,19 @@ const FILTERED: Command[] = [
     hint: 'Against a suite and a dataset, compared with a baseline.',
     to: '/evaluation',
     keywords: ['evals', 'scores', 'suite', 'baseline', 'benchmark'],
+  },
+
+  // ── Agents ─────────────────────────────────────────────────────────────────
+  {
+    id: 'agents:failing',
+    label: 'Show runs that failed, by agent',
+    group: 'Agents',
+    // Explore rather than the agents list: the question is comparative, and
+    // the pivot is what compares. The agent's own page is one click on.
+    hint: 'The run tree pivoted on the agent, over the failed runs alone.',
+    to: '/observability/explore',
+    search: { by: 'agent', status: ['failed'] },
+    keywords: ['agents', 'errors', 'broken', 'which agent', 'blame'],
   },
 ];
 

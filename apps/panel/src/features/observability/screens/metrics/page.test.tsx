@@ -148,8 +148,17 @@ it('does not count cached input twice in the token stack', async () => {
 });
 
 it('preserves agent and model filters when the window changes and explains their scope', async () => {
-  const { requests, router } = mount(metrics(), 200, '?agent_id=researcher&model=opus&window=3600');
-  await screen.findByText(/The model filter applies to LLM calls and tokens only/);
+  // The axes are the shared vocabulary's — `agent`, not the route's
+  // `agent_id` — and the translation to the route's parameters happens in
+  // `shared/lib/object-filter.ts`. What this still proves is UX-02's property:
+  // changing the period keeps the filter, and the page says what the model
+  // filter does to the numbers beside it, which on this route is *not* select
+  // the runs.
+  const { requests, router } = mount(metrics(), 200, '?agent=researcher&model=opus&window=3600');
+  await screen.findByText(/It does not select the runs/);
+  // The filter bar renders through the loading state on purpose — taking a
+  // chip off is the way out of "nothing matched" — so wait for the page.
+  await screen.findByRole('heading', { name: 'Metrics' });
   await userEvent.click(screen.getByRole('button', { name: '15m' }));
   await waitFor(() => expect(requests).toHaveBeenCalledTimes(2));
   const url = new URL((requests.mock.calls[1]![0] as Request).url);
@@ -157,10 +166,25 @@ it('preserves agent and model filters when the window changes and explains their
   expect(url.searchParams.get('agent_id')).toBe('researcher');
   expect(url.searchParams.get('model')).toBe('opus');
   expect(router.state.location.search).toMatchObject({
-    agent_id: 'researcher',
-    model: 'opus',
+    agent: ['researcher'],
+    model: ['opus'],
     window: 900,
   });
+});
+
+it('names the axes this route cannot take rather than dropping them', async () => {
+  // The Live view's rule, generalised. A workflow filter arriving from Explore
+  // is on the screen and not on the request, and the one thing a filter must
+  // not do is look applied.
+  const { requests } = mount(metrics(), 200, '?workflow=import&tool=search');
+  await screen.findByText(/Not applied here/);
+  // Twice each: once on the chip that is still on screen, once in the warning
+  // that says the request did not carry it.
+  expect(screen.getAllByText('workflow')).toHaveLength(2);
+  expect(screen.getAllByText('tool')).toHaveLength(2);
+  const url = new URL((requests.mock.calls[0]![0] as Request).url);
+  expect(url.searchParams.get('workflow')).toBeNull();
+  expect(url.searchParams.get('tool')).toBeNull();
 });
 
 it('shows an API failure instead of empty successful metrics', async () => {

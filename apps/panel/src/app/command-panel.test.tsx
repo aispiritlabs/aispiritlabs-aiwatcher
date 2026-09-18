@@ -39,7 +39,7 @@ describe('running a command', () => {
     // at applied to a different one.
     expect(navigate.mock.calls[0]?.[0]).toEqual({
       to: '/observability/runs',
-      search: { status: 'failed' },
+      search: { status: ['failed'] },
     });
   });
 

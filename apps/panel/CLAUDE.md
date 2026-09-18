@@ -20,6 +20,38 @@ followed by a full `tsc` project check.
 - Filters live in the URL, not in component state, so a link to a filtered view
   lands the reader on the same view. That includes the search boxes: the input
   holds a draft, a 250 ms debounce commits it to the search params.
+- **One filter, every table and every chart** (`src/shared/lib/object-filter.ts`).
+  The axes are the dimensions' own names plus the run's status — `agent`,
+  `runtime`, `workflow`, `session`, `variant`, `trace`, `model`, `tool`,
+  `status` — and translating one into a route's parameter happens there and
+  nowhere else. Five rules carry it. A **filter selects runs**: every axis names
+  a property a run has, directly or through its spans, which is how `RunFilter`
+  already matches model and tool. A **number is counted over the selected
+  runs**, and narrowed further only where the axis is about the thing being
+  counted — with a model chosen, LLM calls and tokens are that model's while
+  tool calls are every tool call in those runs, and `queryFor` returns that
+  sentence beside the request so a page cannot keep saying it after the route
+  stops doing it. `/metrics` is the one read that does something else, and its
+  sentence says so: its model parameter skips other models' spans and leaves
+  the run set alone (UX-02). A **view that cannot apply an axis names it** — the
+  Live view's rule, now everybody's, and the three reasons are that the route
+  has no parameter, that the word means something else here (a span's `ok |
+  error` is not a run's status) or that more values were chosen than the route
+  takes; an axis is then *not sent*, because a narrower answer than the chips
+  claim is the one failure a filter must not have. And it lives in the **URL**,
+  so it survives a move between an area's views the way the window does. A bare
+  value reads as a list of one, which is what keeps `?status=failed` working.
+- `agents` is an area rather than a pivot, and the reason is worth keeping: an
+  agent is **not an authored object** — no registry, no version, nothing
+  outliving retention — so its page never 404s on a name, it says the period
+  holds nothing under it. What separates the two reads it makes is the whole
+  design: `by_agent` in the metrics response is keyed by the agent on each
+  *span*, so it is this agent's own calls, tokens, cost and latency, while
+  `by_model` and `by_tool` are folded over every span of the runs it took part
+  in — a run where it hands work to another agent counts that agent's models
+  there, and the cards say so. Which prompts an agent uses is **not answerable**
+  from any read that exists, and the page says that too rather than counting
+  versions out of every run's spans in the browser.
 - Routes are grouped into peer work areas — Data, Models & quality,
   Applications, Workflows and Learning — described once in
   `src/app/navigation.ts`. The desktop sidebar exposes all areas; mobile
@@ -364,6 +396,17 @@ followed by a full `tsc` project check.
   express rather than emit a column that is not there: a refusal for a chip the
   builder offered reads as the reader's mistake. Its shapes are pinned per
   engine against the real engine.
+- **Never let a lineage reference be a link before it resolves.**
+  `shared/components/lineage-reference.tsx` holds the joins out of one area's
+  records into another's, and each one is admitted before it is drawn: a
+  dataset reference is asked of both registries because the spelling alone is
+  ambiguous, and a model version is admitted as 64 hex and then held against
+  the registry's own model names. That guard is not pedantry —
+  `aiwatcher.model.version` carries the registry's digest from the serving
+  profile and the provider's served model *name* from a gateway, and only the
+  first is a version of anything. The prompt half of the same idea is
+  `PromptRefLink` in `prompt-bits.tsx`, beside the registry rules it enforces.
+  A link that 404s is worse than a fact somebody has to look up.
 - **Never filter a live stream in the browser.** `Scope::Selection` narrows
   `/api/v1/events/stream` server-side, which is why `LiveEvent` carries
   `agent_id` and `service` at all: `llm.chunk` is most of the log by volume, and

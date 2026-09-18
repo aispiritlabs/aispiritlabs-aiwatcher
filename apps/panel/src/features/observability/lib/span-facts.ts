@@ -51,6 +51,21 @@ export interface FactGroup {
   facts: Fact[];
 }
 
+/**
+ * The registry version of the model that served a call.
+ *
+ * Read beside the prompt rather than among the request settings, where it sat
+ * first: a temperature is something the caller chose, and this is what
+ * answered. Both are references into a registry that outlives the log, which
+ * is what makes them the two halves of a call's lineage.
+ */
+export interface ModelReference {
+  /** `gen_ai.request.model` — the registry's name where one served the call. */
+  name?: string;
+  /** `aiwatcher.model.version`, which is a digest only from the serving profile. */
+  version: string;
+}
+
 /** The registered prompt a call ran on — a reference, never the text. */
 export interface PromptReference {
   name?: string;
@@ -78,6 +93,7 @@ export interface SpanFacts {
    */
   costUsd?: number;
   prompt?: PromptReference;
+  model?: ModelReference;
   groups: FactGroup[];
 }
 
@@ -131,7 +147,6 @@ const SETTINGS: Array<[string, string]> = [
   ['gen_ai.request.stop_sequences', 'Stop'],
   ['gen_ai.request.frequency_penalty', 'Frequency penalty'],
   ['gen_ai.request.presence_penalty', 'Presence penalty'],
-  [OWN.modelVersion, 'Model version'],
 ];
 
 export function attributesOf(span: Span): Map<string, unknown> {
@@ -205,6 +220,7 @@ export function factsOf(span: Span): SpanFacts {
     tokens: tokensOf(held),
     costUsd: count(held.get(OWN.costUsd)),
     prompt: promptOf(held),
+    model: modelOf(held),
     groups,
   };
 }
@@ -215,6 +231,12 @@ function tokensOf(held: Map<string, unknown>): TokenUsage | undefined {
   const cached = count(held.get(GENAI.cachedTokens));
   if (input === undefined && output === undefined && cached === undefined) return undefined;
   return { input: input ?? 0, output: output ?? 0, cached: cached ?? 0 };
+}
+
+function modelOf(held: Map<string, unknown>): ModelReference | undefined {
+  const version = text(held.get(OWN.modelVersion));
+  if (!version) return undefined;
+  return { name: text(held.get(GENAI.requestModel)), version };
 }
 
 function promptOf(held: Map<string, unknown>): PromptReference | undefined {

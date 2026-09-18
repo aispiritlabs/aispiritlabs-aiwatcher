@@ -1,38 +1,38 @@
-import { z } from 'zod';
-
 import type { LiveSelection } from '@/shared/lib/live';
+import {
+  filterFromSearch,
+  filterToSearch,
+  objectFilterSchema,
+  type ObjectFilter,
+  type ObjectFilterSearch,
+} from '@/shared/lib/object-filter';
 import type { AttributeSelection } from '@/features/observability/components/attribute-picker';
 import type { AttributeId } from '@/features/observability/lib/query-builder';
 
 /**
- * The attribute filter, in the URL.
+ * The shared object filter, as the two views that ask it of something other
+ * than the read model see it.
  *
- * One schema shared by the Query builder and the Live view, because they are
- * the same selection asked of two things — the read model through a Flow
- * query, and the durable log through the live stream. Two schemas would let
- * "watch this live" arrive at a page that understood half the link.
- *
- * Every filter lives in the URL for the reason every filter in this panel
- * does: a selection worth looking at twice is worth sending to somebody, and
- * a link that carries the shape but not the filter lands the reader somewhere
- * else.
+ * The vocabulary, the URL schema and the translation to a route's parameters
+ * live in `shared/lib/object-filter.ts` — one filter for every table and every
+ * chart, and the agent pages read it too, which is why it is in `shared`.
+ * What stays here is what is true of *these* two subjects and of nothing else:
+ * the query builder has no column for a variant, and the live stream carries
+ * no span-level fact at all.
  */
 
-const values = z.array(z.string()).optional();
+export const attributeSearchSchema = objectFilterSchema;
 
-export const attributeSearchSchema = {
-  agent: values,
-  runtime: values,
-  workflow: values,
-  session: values,
-  model: values,
-  tool: values,
-  trace: values,
-  status: values,
-};
+export type AttributeSearch = ObjectFilterSearch;
 
-export type AttributeSearch = z.infer<z.ZodObject<typeof attributeSearchSchema>>;
-
+/**
+ * The attributes the builder and the picker know, out of the filter's nine.
+ *
+ * `variant` is dropped rather than offered: the explorer pivots on it, but the
+ * query engines' catalog has no column for it, so a chip whose filter no
+ * engine can express is one the builder would have to drop the moment it was
+ * clicked. See `query-builder.ts`.
+ */
 const IDS: AttributeId[] = [
   'agent',
   'runtime',
@@ -45,9 +45,10 @@ const IDS: AttributeId[] = [
 ];
 
 export function selectionFromSearch(search: AttributeSearch): AttributeSelection {
+  const filter = filterFromSearch(search);
   const selection: AttributeSelection = {};
   for (const id of IDS) {
-    const chosen = search[id];
+    const chosen = filter[id];
     if (chosen && chosen.length > 0) selection[id] = chosen;
   }
   return selection;
@@ -56,17 +57,14 @@ export function selectionFromSearch(search: AttributeSearch): AttributeSelection
 /**
  * The search patch a selection is.
  *
- * Every id is written, including the empty ones as `undefined`: leaving a
- * cleared attribute out of the patch would merge the old value back in, and
- * the chip would come off the screen while the filter stayed on the query.
+ * Every axis is written, including the cleared ones as `undefined`: leaving one
+ * out of the patch would merge the old value back in, and the chip would come
+ * off the screen while the filter stayed on the query. A selection made here
+ * never carries a variant, so the patch clears one a link arrived with rather
+ * than leaving a filter on screen that this view has no chip for.
  */
 export function selectionToSearch(selection: AttributeSelection): AttributeSearch {
-  return Object.fromEntries(
-    IDS.map((id) => {
-      const chosen = (selection[id] ?? []).filter(Boolean);
-      return [id, chosen.length > 0 ? chosen : undefined];
-    }),
-  );
+  return filterToSearch(selection as ObjectFilter);
 }
 
 /**

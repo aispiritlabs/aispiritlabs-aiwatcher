@@ -4,6 +4,7 @@ import { searchSchema as learning } from '@/features/learning/screens/overview/s
 import { allCommands, fuzzyScore, search } from '@/app/commands';
 import { SECTIONS } from '@/app/navigation';
 
+import { searchSchema as agents } from '@/features/agents/screens/overview/search';
 import { searchSchema as annotationsExports } from '@/features/annotations/screens/exports/search';
 import { searchSchema as annotationsImports } from '@/features/annotations/screens/imports/search';
 import { searchSchema as annotationsLabel } from '@/features/annotations/screens/label/search';
@@ -40,6 +41,7 @@ import { searchSchema as workflows } from '@/features/workflows/screens/overview
  * and `status` on Explore, which has no such parameter at all.
  */
 const SCHEMAS: Record<string, { parse: (value: unknown) => unknown }> = {
+  '/agents': agents,
   '/annotations/exports': annotationsExports,
   '/annotations/imports': annotationsImports,
   '/annotations/label': annotationsLabel,
@@ -97,7 +99,7 @@ describe('matching a command', () => {
   });
 
   it('carries the filter, not just the page', () => {
-    expect(first('runs that failed')?.search).toEqual({ status: 'failed' });
+    expect(first('runs that failed')?.search).toEqual({ status: ['failed'] });
     expect(first('training runs in flight')?.search).toEqual({ status: 'running' });
     expect(first('compare runs by model')?.search).toEqual({ by: 'model' });
   });

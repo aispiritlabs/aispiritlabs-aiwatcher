@@ -14,8 +14,16 @@ import type {
   RunSummary,
   SpanRow,
 } from '@/api/generated/types.gen';
+import { ObjectFilterBar } from '@/features/observability/components/object-filter-bar';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
+import {
+  filterFromSearch,
+  filterToSearch,
+  queryFor,
+  type ObjectAxis,
+  type ObjectFilter,
+} from '@/shared/lib/object-filter';
 import {
   Badge,
   Button,
@@ -38,14 +46,21 @@ import {
 } from '@/shared/lib/utils';
 type Pivot = (typeof PIVOTS)[number];
 
-/** How a pivot narrows the runs list when one of its rows is opened. */
-const RUN_FILTER: Record<Exclude<Pivot, 'span'>, string> = {
-  session: 'conversation_id',
-  agent: 'agent_id',
+/**
+ * Which axis of the shared filter a pivot's row *is*.
+ *
+ * Opening a row sets that axis to the row's key rather than adding to it: a
+ * pivot on agents showing agent `b` under a filter already naming agent `a` is
+ * two agents on one axis, which no read-model route takes and which is not
+ * what clicking the row meant.
+ */
+const PIVOT_AXIS: Record<Exclude<Pivot, 'span'>, ObjectAxis> = {
+  session: 'session',
+  agent: 'agent',
   runtime: 'runtime',
   workflow: 'workflow',
-  variant: 'variant_id',
-  trace: 'trace_id',
+  variant: 'variant',
+  trace: 'trace',
   model: 'model',
   tool: 'tool',
 };
@@ -71,12 +86,39 @@ export function ExplorePage() {
     },
     [navigate],
   );
+  const filter = React.useMemo(() => filterFromSearch(search), [search]);
+  /**
+   * The two reads on this page do not take the same filter, so it says which.
+   *
+   * The tree's top level is `/dimensions/{kind}`, which narrows by agent
+   * alone; the runs under a row are `/runs`, which takes every axis. So a
+   * workflow filter leaves the rows as they were and narrows what opens under
+   * them — true, surprising, and exactly the kind of thing a filter must not
+   * leave somebody to work out from a count that did not change.
+   */
+  const treeUnapplied = React.useMemo(() => queryFor('dimensions', filter).unapplied, [filter]);
+  const notes = React.useMemo(() => {
+    const runs = queryFor('runs', filter);
+    return treeUnapplied.length === 0
+      ? runs.notes
+      : [
+          ...runs.notes,
+          'The rows above are grouped over the runs an agent filter selects; every other axis narrows the runs that open under a row, not the rows themselves.',
+        ];
+  }, [filter, treeUnapplied]);
+
   const replace = React.useCallback(
     (next: Selection) => {
-      // The window survives, because it is not part of the path: switching
-      // pivot or walking back up a level is a move inside the period being
-      // looked at, not a decision to look at a different one.
-      void navigate({ search: (previous) => ({ window: previous.window, ...next }) });
+      // The window and the filter survive, because neither is part of the
+      // path: switching pivot or walking back up a level is a move inside what
+      // is being looked at, not a decision to look at something else.
+      void navigate({
+        search: (previous) => ({
+          window: previous.window,
+          ...filterToSearch(filterFromSearch(previous)),
+          ...next,
+        }),
+      });
     },
     [navigate],
   );
@@ -119,6 +161,17 @@ export function ExplorePage() {
           </div>
         </div>
       </div>
+
+      <ObjectFilterBar
+        filter={filter}
+        onChange={(next: ObjectFilter) =>
+          void navigate({ search: (previous) => ({ ...previous, ...filterToSearch(next) }) })
+        }
+        windowSeconds={search.window ?? DEFAULT_WINDOW_SECONDS}
+        unapplied={treeUnapplied}
+        notes={notes}
+        reading="the runs under a row are them."
+      />
 
       <Breadcrumbs selection={search} onSelect={replace} />
 
@@ -256,13 +309,30 @@ function Tree({
     return () => clearTimeout(timer);
   }, [draft, find, onSelect]);
 
+  const filter = React.useMemo(() => filterFromSearch(selection), [selection]);
+  const dimensionQuery = React.useMemo(() => queryFor('dimensions', filter).query, [filter]);
+  const spanQuery = React.useMemo(() => queryFor('spans', filter).query, [filter]);
+  // Opening a row *is* that axis, so it replaces whatever the filter held for
+  // it rather than adding a second value the route could not take.
+  const runQuery = React.useMemo(
+    () =>
+      queryFor('runs', {
+        ...filter,
+        ...(pivot === 'span' || !selection.key
+          ? {}
+          : { [PIVOT_AXIS[pivot as Exclude<Pivot, 'span'>]]: [selection.key] }),
+      }).query,
+    [filter, pivot, selection.key],
+  );
+
   const dimensions = useInfiniteQuery({
-    queryKey: ['dimensions', pivot, find, windowSeconds],
+    queryKey: ['dimensions', pivot, find, windowSeconds, dimensionQuery],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listDimension({
         path: { kind: pivot as DimensionKind },
         query: {
+          ...dimensionQuery,
           search: find || undefined,
           window_seconds: windowParam(windowSeconds),
           after: pageParam,
@@ -280,11 +350,12 @@ function Tree({
   // top level. It is the one view that answers "which call was slow" without
   // knowing the run first.
   const allSpans = useInfiniteQuery({
-    queryKey: ['spans', 'flat', find, windowSeconds],
+    queryKey: ['spans', 'flat', find, windowSeconds, spanQuery],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listSpans({
         query: {
+          ...spanQuery,
           search: find || undefined,
           window_seconds: windowParam(windowSeconds),
           after: pageParam,
@@ -304,11 +375,11 @@ function Tree({
     // Windowed like the row above it: a row counting three runs that expands
     // into nine is a row nobody trusts, and the count is the thing people are
     // reading when they open it.
-    queryKey: ['runs', pivot, selection.key, windowSeconds],
+    queryKey: ['runs', pivot, selection.key, windowSeconds, runQuery],
     queryFn: async () => {
       const response = await listRuns({
         query: {
-          [RUN_FILTER[pivot as Exclude<Pivot, 'span'>]]: selection.key,
+          ...runQuery,
           window_seconds: windowParam(windowSeconds),
           limit: 100,
         },

@@ -5,8 +5,17 @@ import * as React from 'react';
 
 import { listRuns } from '@/api/generated/sdk.gen';
 import type { RunStatus, RunSummary } from '@/api/generated/types.gen';
+import { ObjectFilterBar } from '@/features/observability/components/object-filter-bar';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
+import {
+  filterFromSearch,
+  filterToSearch,
+  isEmpty,
+  queryFor,
+  toggle,
+  type ObjectFilter,
+} from '@/shared/lib/object-filter';
 import { Button, Card, EmptyState, IdChip } from '@/shared/components/ui/primitives';
 import {
   formatAge,
@@ -146,17 +155,28 @@ export function RunsPage() {
   const search = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
+  const filter = React.useMemo(() => filterFromSearch(search), [search]);
+  // The runs route takes every axis, so `unapplied` is empty unless somebody
+  // chose two values on one of them. It is still read from the same function
+  // the other views use: a page that knew it could apply everything would be a
+  // page that stopped saying so the day a second value became expressible.
+  const translated = React.useMemo(() => queryFor('runs', filter), [filter]);
+  const filterQuery = translated.query;
+
+  const setFilter = React.useCallback(
+    (next: ObjectFilter) =>
+      void navigate({ search: (previous) => ({ ...previous, ...filterToSearch(next) }) }),
+    [navigate],
+  );
 
   const query = useInfiniteQuery({
-    queryKey: ['runs', search, windowSeconds],
+    queryKey: ['runs', filterQuery, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listRuns({
         query: {
+          ...filterQuery,
           before: pageParam,
-          status: search.status,
-          conversation_id: search.conversation_id,
-          agent_id: search.agent_id,
           window_seconds: windowParam(windowSeconds),
         },
       });
@@ -198,21 +218,24 @@ export function RunsPage() {
             <Button
               key={status}
               size="sm"
-              variant={search.status === status ? 'default' : 'outline'}
-              onClick={() =>
-                void navigate({
-                  search: (previous) => ({
-                    ...previous,
-                    status: previous.status === status ? undefined : status,
-                  }),
-                })
-              }
+              aria-pressed={(filter.status ?? []).includes(status)}
+              variant={(filter.status ?? []).includes(status) ? 'default' : 'outline'}
+              onClick={() => setFilter(toggle(filter, 'status', status))}
             >
               {status}
             </Button>
           ))}
         </div>
       </div>
+
+      <ObjectFilterBar
+        filter={filter}
+        onChange={setFilter}
+        windowSeconds={windowSeconds}
+        unapplied={translated.unapplied}
+        notes={translated.notes}
+        reading="this list is those runs."
+      />
 
       {query.isError ? (
         <EmptyState
@@ -221,11 +244,13 @@ export function RunsPage() {
         />
       ) : runs.length === 0 && !query.isLoading ? (
         <EmptyState
-          title="No runs in this window"
+          title={isEmpty(filter) ? 'No runs in this window' : 'No runs match this filter'}
           hint={
-            windowSeconds
-              ? 'Nothing was active in the selected period. Widen it, or pick “all”.'
-              : 'Publish a run.started event and it will appear here.'
+            !isEmpty(filter)
+              ? 'Nothing in the period has every chosen attribute. Take one off, or widen the period.'
+              : windowSeconds
+                ? 'Nothing was active in the selected period. Widen it, or pick “all”.'
+                : 'Publish a run.started event and it will appear here.'
           }
         />
       ) : (

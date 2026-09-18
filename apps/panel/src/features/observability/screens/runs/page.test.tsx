@@ -34,3 +34,52 @@ it('loads older runs using the server cursor without replacing the first page', 
   expect(url?.searchParams.get('window_seconds')).toBe('3600');
   expect(screen.queryByRole('button', { name: 'Load more runs' })).toBeNull();
 });
+
+/**
+ * The runs route takes nine axes and this page used to send three, under the
+ * API's parameter names rather than the dimensions'. What it sends now is the
+ * shared filter, translated once in `shared/lib/object-filter.ts`.
+ */
+it('sends every axis of the shared filter, and takes one off when its chip is clicked', async () => {
+  vi.stubGlobal('scrollTo', () => {});
+  serve([
+    {
+      method: 'GET',
+      path: '/runs',
+      answer: { status: 200, body: { runs: [], total_known: 0, next_cursor: null } },
+    },
+  ]);
+  const fetchMock = vi.fn(fetch);
+  vi.stubGlobal('fetch', fetchMock);
+  const root = createRootRoute();
+  const route = createRoute({
+    getParentRoute: () => root,
+    path: '/observability/runs',
+    validateSearch: searchSchema,
+    component: RunsPage,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([route]),
+    history: createMemoryHistory({
+      initialEntries: ['/observability/runs?workflow=house-import&model=opus&session=s-1'],
+    }),
+  });
+  render(withQueries(<RouterProvider router={router} />));
+
+  await screen.findByText('No runs match this filter');
+  const first = new URL((fetchMock.mock.calls[0]![0] as Request).url);
+  expect(first.searchParams.get('workflow')).toBe('house-import');
+  expect(first.searchParams.get('model')).toBe('opus');
+  expect(first.searchParams.get('conversation_id')).toBe('s-1');
+  // A model selects the runs *and* narrows the call counters inside them, and
+  // the page says which is which rather than leaving the reader to assume.
+  expect(screen.getByText(/tool and step counters/)).toBeTruthy();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Remove the model filter opus' }));
+  // Cleared, not left as an empty list: the patch writes every axis, so the
+  // one just taken off leaves the URL rather than lingering in it.
+  expect(router.state.location.search).toEqual({
+    workflow: ['house-import'],
+    session: ['s-1'],
+  });
+});

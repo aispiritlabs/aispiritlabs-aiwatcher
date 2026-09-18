@@ -1,4 +1,5 @@
 import {
+  Bot,
   Boxes,
   BookOpen,
   Database,
@@ -156,6 +157,13 @@ export const SECTIONS: NavSection[] = [
     home: '/observability/explore',
     areas: [
       {
+        to: '/agents',
+        label: 'Agents',
+        icon: Bot,
+        blurb: 'What each agent runs on, what it calls, what it costs, and its runs.',
+        views: [],
+      },
+      {
         to: '/prompts',
         label: 'Prompts',
         icon: ScrollText,
@@ -216,6 +224,7 @@ export const SECTIONS: NavSection[] = [
  */
 const SECTION_OF: Array<[prefix: string, id: SectionId]> = [
   ['/observability', 'inference'],
+  ['/agents', 'inference'],
   ['/workflows', 'workflows'],
   ['/learning', 'learning'],
   ['/runs', 'inference'],

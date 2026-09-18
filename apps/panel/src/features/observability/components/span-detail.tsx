@@ -9,6 +9,7 @@ import {
   type Fact,
   type Span,
 } from '@/features/observability/lib/span-facts';
+import { ModelVersionReference } from '@/shared/components/lineage-reference';
 import { PromptRefLink } from '@/shared/components/prompt-bits';
 import { Badge, IdChip } from '@/shared/components/ui/primitives';
 import {
@@ -129,16 +130,34 @@ export function SpanDetail({
         <Measure label="Started" value={formatTime(span.start)} />
       </div>
 
-      {facts.prompt ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Prompt</span>
-          <PromptRefLink name={facts.prompt.name} versionId={facts.prompt.versionId} />
-          {/* A claim about the request's text can only be made by a host that
-              saw it — the gateway — so it is shown as that host's word rather
-              than as a property of the call. */}
-          {facts.prompt.verified === true ? <Badge tone="success">verified</Badge> : null}
-          {facts.prompt.verified === false ? <Badge tone="warning">not found</Badge> : null}
-          {facts.prompt.exact === true ? <Badge tone="neutral">exact</Badge> : null}
+      {/*
+       * What this call was made of, as links into the registries that outlive
+       * the log. Both joins are already in the span — a prompt reference
+       * (ADR_0011) and the registry version that served it — and until they
+       * were drawn here the way from a bad answer to the text that asked for
+       * it, or to the run that trained the model, was to read an attribute
+       * table and search another area by hand.
+       */}
+      {facts.prompt || facts.model ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          {facts.prompt ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground">Prompt</span>
+              <PromptRefLink name={facts.prompt.name} versionId={facts.prompt.versionId} />
+              {/* A claim about the request's text can only be made by a host that
+                  saw it — the gateway — so it is shown as that host's word rather
+                  than as a property of the call. */}
+              {facts.prompt.verified === true ? <Badge tone="success">verified</Badge> : null}
+              {facts.prompt.verified === false ? <Badge tone="warning">not found</Badge> : null}
+              {facts.prompt.exact === true ? <Badge tone="neutral">exact</Badge> : null}
+            </span>
+          ) : null}
+          {facts.model ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground">Model version</span>
+              <ModelVersionReference model={facts.model.name} version={facts.model.version} />
+            </span>
+          ) : null}
         </div>
       ) : null}
 

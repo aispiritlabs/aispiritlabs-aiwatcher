@@ -23,6 +23,8 @@ import { Route as TrainingRouteImport } from './routes/training'
 import { Route as WorkflowsRouteImport } from './routes/workflows'
 import { Route as AccountIndexRouteImport } from './routes/account.index'
 import { Route as AccountAccessRouteImport } from './routes/account.access'
+import { Route as AgentsIndexRouteImport } from './routes/agents.index'
+import { Route as AgentsAgentIdRouteImport } from './routes/agents.$agentId'
 import { Route as AnnotationsIndexRouteImport } from './routes/annotations.index'
 import { Route as AnnotationsExportsRouteImport } from './routes/annotations.exports'
 import { Route as AnnotationsImportsRouteImport } from './routes/annotations.imports'
@@ -116,6 +118,16 @@ const AccountAccessRoute = AccountAccessRouteImport.update({
   id: '/access',
   path: '/access',
   getParentRoute: () => AccountRoute,
+} as any)
+const AgentsIndexRoute = AgentsIndexRouteImport.update({
+  id: '/agents/',
+  path: '/agents/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsAgentIdRoute = AgentsAgentIdRouteImport.update({
+  id: '/agents/$agentId',
+  path: '/agents/$agentId',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AnnotationsIndexRoute = AnnotationsIndexRouteImport.update({
   id: '/',
@@ -247,6 +259,7 @@ export interface FileRoutesByFullPath {
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
+  '/agents/$agentId': typeof AgentsAgentIdRoute
   '/annotations/exports': typeof AnnotationsExportsRoute
   '/annotations/imports': typeof AnnotationsImportsRoute
   '/annotations/label': typeof AnnotationsLabelRoute
@@ -265,6 +278,7 @@ export interface FileRoutesByFullPath {
   '/training/models': typeof TrainingModelsRoute
   '/training/runs': typeof TrainingRunsRoute
   '/account/': typeof AccountIndexRoute
+  '/agents/': typeof AgentsIndexRoute
   '/annotations/': typeof AnnotationsIndexRoute
   '/conversations/': typeof ConversationsIndexRoute
   '/data-curation/': typeof DataCurationIndexRoute
@@ -280,6 +294,7 @@ export interface FileRoutesByTo {
   '/learning': typeof LearningRoute
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
+  '/agents/$agentId': typeof AgentsAgentIdRoute
   '/annotations/exports': typeof AnnotationsExportsRoute
   '/annotations/imports': typeof AnnotationsImportsRoute
   '/annotations/label': typeof AnnotationsLabelRoute
@@ -298,6 +313,7 @@ export interface FileRoutesByTo {
   '/training/models': typeof TrainingModelsRoute
   '/training/runs': typeof TrainingRunsRoute
   '/account': typeof AccountIndexRoute
+  '/agents': typeof AgentsIndexRoute
   '/annotations': typeof AnnotationsIndexRoute
   '/conversations': typeof ConversationsIndexRoute
   '/data-curation': typeof DataCurationIndexRoute
@@ -320,6 +336,7 @@ export interface FileRoutesById {
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
+  '/agents/$agentId': typeof AgentsAgentIdRoute
   '/annotations/exports': typeof AnnotationsExportsRoute
   '/annotations/imports': typeof AnnotationsImportsRoute
   '/annotations/label': typeof AnnotationsLabelRoute
@@ -338,6 +355,7 @@ export interface FileRoutesById {
   '/training/models': typeof TrainingModelsRoute
   '/training/runs': typeof TrainingRunsRoute
   '/account/': typeof AccountIndexRoute
+  '/agents/': typeof AgentsIndexRoute
   '/annotations/': typeof AnnotationsIndexRoute
   '/conversations/': typeof ConversationsIndexRoute
   '/data-curation/': typeof DataCurationIndexRoute
@@ -361,6 +379,7 @@ export interface FileRouteTypes {
     | '/training'
     | '/workflows'
     | '/account/access'
+    | '/agents/$agentId'
     | '/annotations/exports'
     | '/annotations/imports'
     | '/annotations/label'
@@ -379,6 +398,7 @@ export interface FileRouteTypes {
     | '/training/models'
     | '/training/runs'
     | '/account/'
+    | '/agents/'
     | '/annotations/'
     | '/conversations/'
     | '/data-curation/'
@@ -394,6 +414,7 @@ export interface FileRouteTypes {
     | '/learning'
     | '/workflows'
     | '/account/access'
+    | '/agents/$agentId'
     | '/annotations/exports'
     | '/annotations/imports'
     | '/annotations/label'
@@ -412,6 +433,7 @@ export interface FileRouteTypes {
     | '/training/models'
     | '/training/runs'
     | '/account'
+    | '/agents'
     | '/annotations'
     | '/conversations'
     | '/data-curation'
@@ -433,6 +455,7 @@ export interface FileRouteTypes {
     | '/training'
     | '/workflows'
     | '/account/access'
+    | '/agents/$agentId'
     | '/annotations/exports'
     | '/annotations/imports'
     | '/annotations/label'
@@ -451,6 +474,7 @@ export interface FileRouteTypes {
     | '/training/models'
     | '/training/runs'
     | '/account/'
+    | '/agents/'
     | '/annotations/'
     | '/conversations/'
     | '/data-curation/'
@@ -472,8 +496,10 @@ export interface RootRouteChildren {
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
   TrainingRoute: typeof TrainingRouteWithChildren
   WorkflowsRoute: typeof WorkflowsRoute
+  AgentsAgentIdRoute: typeof AgentsAgentIdRoute
   PromptsNameRoute: typeof PromptsNameRoute
   RunsRunIdRoute: typeof RunsRunIdRoute
+  AgentsIndexRoute: typeof AgentsIndexRoute
   PromptsIndexRoute: typeof PromptsIndexRoute
 }
 
@@ -576,6 +602,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/account/access'
       preLoaderRoute: typeof AccountAccessRouteImport
       parentRoute: typeof AccountRoute
+    }
+    '/agents/': {
+      id: '/agents/'
+      path: '/agents'
+      fullPath: '/agents/'
+      preLoaderRoute: typeof AgentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents/$agentId': {
+      id: '/agents/$agentId'
+      path: '/agents/$agentId'
+      fullPath: '/agents/$agentId'
+      preLoaderRoute: typeof AgentsAgentIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/annotations/': {
       id: '/annotations/'
@@ -857,8 +897,10 @@ const rootRouteChildren: RootRouteChildren = {
   ObservabilityRoute: ObservabilityRouteWithChildren,
   TrainingRoute: TrainingRouteWithChildren,
   WorkflowsRoute: WorkflowsRoute,
+  AgentsAgentIdRoute: AgentsAgentIdRoute,
   PromptsNameRoute: PromptsNameRoute,
   RunsRunIdRoute: RunsRunIdRoute,
+  AgentsIndexRoute: AgentsIndexRoute,
   PromptsIndexRoute: PromptsIndexRoute,
 }
 export const routeTree = rootRouteImport

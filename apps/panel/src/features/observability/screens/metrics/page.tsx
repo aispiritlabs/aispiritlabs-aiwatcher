@@ -1,8 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
+import * as React from 'react';
 
 import { getMetrics } from '@/api/generated/sdk.gen';
 import type { Percentiles } from '@/api/generated/types.gen';
+import { ObjectFilterBar } from '@/features/observability/components/object-filter-bar';
+import {
+  filterFromSearch,
+  filterToSearch,
+  isEmpty,
+  queryFor,
+  type ObjectFilter,
+} from '@/shared/lib/object-filter';
 import type { SeriesDef } from '@/shared/components/charts/primitives';
 import { SERIES } from '@/shared/components/charts/primitives';
 import { RankedBars, type RankedRow } from '@/shared/components/charts/ranked-bars';
@@ -50,15 +59,22 @@ export function MetricsPage() {
   // lists select by last activity. A run that began before the axis has no
   // bucket to be counted in.
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
+  const filter = React.useMemo(() => filterFromSearch(search), [search]);
+  const translated = React.useMemo(() => queryFor('metrics', filter), [filter]);
+  const filterQuery = translated.query;
+  const setFilter = React.useCallback(
+    (next: ObjectFilter) =>
+      void navigate({ search: (previous) => ({ ...previous, ...filterToSearch(next) }) }),
+    [navigate],
+  );
 
   const query = useQuery({
-    queryKey: ['metrics', windowSeconds, search.agent_id, search.model],
+    queryKey: ['metrics', windowSeconds, filterQuery],
     queryFn: async () => {
       const response = await getMetrics({
         query: {
+          ...filterQuery,
           window_seconds: windowParam(windowSeconds),
-          agent_id: search.agent_id,
-          model: search.model,
           buckets: 48,
         },
       });
@@ -67,15 +83,39 @@ export function MetricsPage() {
     },
   });
 
+  const filterBar = (
+    <ObjectFilterBar
+      filter={filter}
+      onChange={setFilter}
+      windowSeconds={windowSeconds}
+      unapplied={translated.unapplied}
+      notes={translated.notes}
+      reading="these numbers are over those runs."
+    />
+  );
+
+  // The filter stays on screen through both, because the way out of "nothing
+  // matched" is usually to take a chip off, and a control that disappears with
+  // the data leaves the reader with the back button.
   if (query.isError) {
     return (
-      <EmptyState
-        title="Could not reach the API"
-        hint="Is the aiwatcher server running? The panel proxies /api to it in development."
-      />
+      <div className="flex flex-col gap-4">
+        {filterBar}
+        <EmptyState
+          title="Could not reach the API"
+          hint="Is the aiwatcher server running? The panel proxies /api to it in development."
+        />
+      </div>
     );
   }
-  if (!query.data) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (!query.data) {
+    return (
+      <div className="flex flex-col gap-4">
+        {filterBar}
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
 
   const metrics = query.data;
   const { totals, latency, window } = metrics;
@@ -94,19 +134,12 @@ export function MetricsPage() {
           <h1 className="text-lg font-semibold">Metrics</h1>
           <p className="text-sm text-muted-foreground">
             {window.runs_considered} of {window.runs_retained} retained runs
-            {search.agent_id ? ` · agent ${search.agent_id}` : ''}
-            {search.model ? ` · model ${search.model}` : ''}
+            {isEmpty(filter) ? '' : ' matching the filter'}
           </p>
           <p className="text-xs text-muted-foreground">
             Runs are selected and grouped by start time; statuses reflect the current state. Tokens
             and call latency use retained completed spans.
           </p>
-          {search.model ? (
-            <p className="text-xs text-muted-foreground">
-              The model filter applies to LLM calls and tokens only. Run, tool and step metrics
-              cover all selected runs.
-            </p>
-          ) : null}
         </div>
         <TimeRange
           value={windowSeconds}
@@ -115,6 +148,8 @@ export function MetricsPage() {
           }
         />
       </div>
+
+      {filterBar}
 
       {truncated ? (
         <Card className="border-warning/40 bg-warning/5">

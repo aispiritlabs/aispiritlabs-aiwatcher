@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 
 import { SpanDetail } from './span-detail';
 import type { Span } from '@/features/observability/lib/span-facts';
+import { serve, withQueries } from '@/test/server';
 
 // `PromptRefLink` links into the prompt registry, and a `Link` outside a router
 // throws. What matters here is that the reference is drawn at all.
@@ -141,4 +142,78 @@ it('closes on request, because the row that opened it is above the fold', async 
 
   await userEvent.click(screen.getByRole('button', { name: 'Close' }));
   expect(onClose).toHaveBeenCalled();
+});
+
+/**
+ * The model version a call names is a link into the registry only when it is
+ * one — `aiwatcher.model.version` carries a digest from the serving profile
+ * and the provider's own model name from a gateway, and the second is a fact
+ * about the call rather than a version of anything.
+ */
+const served: Span = {
+  ...call,
+  attributes: [
+    ['gen_ai.request.model', 'floorplan-classifier'],
+    ['aiwatcher.model.version', 'c'.repeat(64)],
+  ],
+};
+
+it('links a registered model version, and holds the registry to the name', async () => {
+  serve([{ method: 'GET', path: '/models', answer: { status: 200, body: { models: [{ name: 'floorplan-classifier', labels: {}, versions: [], description: '', updated_at: '2026-09-14T12:00:00Z' }] } } }]);
+  render(
+    withQueries(
+      <SpanDetail
+        span={served}
+        events={[]}
+        runId="run-1"
+        content={false}
+        everything={false}
+        onClose={() => {}}
+      />,
+    ),
+  );
+  expect(await screen.findByText(`floorplan-classifier@${'c'.repeat(12)}`)).toBeTruthy();
+});
+
+it('does not link a version the registry has no model for', async () => {
+  serve([{ method: 'GET', path: '/models', answer: { status: 200, body: { models: [] } } }]);
+  render(
+    withQueries(
+      <SpanDetail
+        span={served}
+        events={[]}
+        runId="run-1"
+        content={false}
+        everything={false}
+        onClose={() => {}}
+      />,
+    ),
+  );
+  // The digest is still shown — it tells two calls apart — but as a copyable
+  // id rather than as a link that would 404.
+  expect(await screen.findByText('c'.repeat(12))).toBeTruthy();
+  expect(screen.queryByRole('link')).toBeNull();
+});
+
+it('reads a gateway’s served model as a fact rather than as a version', () => {
+  render(
+    withQueries(
+      <SpanDetail
+        span={{
+          ...call,
+          attributes: [
+            ['gen_ai.request.model', 'anthropic/claude'],
+            ['aiwatcher.model.version', 'claude-opus-5-20260901'],
+          ],
+        }}
+        events={[]}
+        runId="run-1"
+        content={false}
+        everything={false}
+        onClose={() => {}}
+      />,
+    ),
+  );
+  expect(screen.getByText('claude-opus-5-20260901')).toBeTruthy();
+  expect(screen.queryByRole('link')).toBeNull();
 });

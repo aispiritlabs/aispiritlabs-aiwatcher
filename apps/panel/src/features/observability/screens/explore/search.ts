@@ -1,4 +1,5 @@
 import { windowSearchSchema } from '@/shared/components/time-range';
+import { objectFilterSchema } from '@/shared/lib/object-filter';
 import { z } from 'zod';
 
 /**
@@ -36,8 +37,18 @@ export const PIVOTS = [
   'span',
 ] as const;
 
+/**
+ * The tree's position and the filter are two different things in one URL.
+ *
+ * `by` and `key` say which row is open; the object filter says which runs the
+ * whole tree is folded from. So walking up a breadcrumb or changing the pivot
+ * keeps the filter — it is the half of the question the reader already
+ * answered — while opening a row *replaces* the pivot's own axis, because that
+ * is what opening it means.
+ */
 export const searchSchema = z.object({
   ...windowSearchSchema,
+  ...objectFilterSchema,
   /** The dimension the tree is rooted on. */
   by: z.enum(PIVOTS).optional(),
   /** The selected row of that dimension. */

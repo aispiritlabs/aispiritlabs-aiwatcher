@@ -5,6 +5,7 @@ import * as React from 'react';
 import { getRun, getRunEvents } from '@/api/generated/sdk.gen';
 import type { RecordedEvent, RunStatus } from '@/api/generated/types.gen';
 import { EventFeed, type EventFeedEvent } from '@/features/observability/components/event-feed';
+import { RunLineage } from '@/features/observability/components/run-lineage';
 import { SpanDetail } from '@/features/observability/components/span-detail';
 import { Waterfall } from '@/features/observability/components/waterfall';
 import type { Span } from '@/features/observability/lib/span-facts';
@@ -212,6 +213,9 @@ export function RunPage() {
               <Named label="published by" values={[summary.published_by]} />
             ) : null}
           </div>
+          {/* The way out of the log: what this run's calls named in the two
+              registries that outlive it. */}
+          <RunLineage spans={runSpans} />
         </div>
 
         <ViewMenu
