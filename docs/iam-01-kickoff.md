@@ -229,6 +229,12 @@ Until it is picked up, one rule stands for everything built in the meantime:
 is `ProjectAuthorization` plus `<prefix>/scopes/<organization>/<project>/registry/`,
 and writing it once is the same code that retrofitting it later is not.
 
+What comes *before* it — the shortest path to testing permissions, lesson
+sharing and the new shell — is ordered, with its own prompt, in
+[`ux-migration-plan-2026-09-14.md`](ux-migration-plan-2026-09-14.md). Two
+findings shorten it: a lesson is a project plus a `GrantWindow`, and
+invitations block inviting a stranger rather than testing a permission.
+
 > Zaczynasz IAM-02 w repozytorium AIWatcher. IAM-01 jest zamknięte: dispatcher
 > stoi (`aiwatcher_server::execution::project::ProjectDispatcher`), obie blokady
 > strumienia C są zdjęte, ale **nic w `spawn` go nie buduje i nie ma

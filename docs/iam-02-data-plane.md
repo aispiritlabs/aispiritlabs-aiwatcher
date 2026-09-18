@@ -251,7 +251,9 @@ widoku, spanu ani foldu, a `auth=none` i `auth=local` są trybami lokalnymi. Nie
 opisujemy tego wdrożenia jako multi-tenant safe — i to zdanie nie zmienia się
 przez samo istnienie tego planu.
 
-**Co może pójść wcześniej, jeśli okaże się pilne.** E5 dla połowy autorskiej —
-zaproszenia, interfejs członków i okno dzielenia — nie zależy od E1–E4. Trasy
-zakresowe już sprawdzają granty, więc dzielenie promptów, datasetów, anotacji,
-treningów i ewaluacji da się otworzyć bez ruszania logu zdarzeń.
+**Co idzie wcześniej.** E5 dla połowy autorskiej — zaproszenia, interfejs
+członków i okno dzielenia — nie zależy od E1–E4. Trasy zakresowe już sprawdzają
+granty, więc dzielenie promptów, datasetów, anotacji, treningów i ewaluacji da
+się otworzyć bez ruszania logu zdarzeń. Kolejność do pierwszego testu uprawnień
+i lekcji, razem z promptem dla sesji, która ją wykona, jest w
+[planie UX](ux-migration-plan-2026-09-14.md#kolejność-do-pierwszego-testu-permissionów-i-lekcji--18092026).

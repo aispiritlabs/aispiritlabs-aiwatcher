@@ -692,3 +692,50 @@ Walidacja: `cargo test --workspace --all-targets` — **1800 testów, 0 niepowod
 **Plan na drugą połowę: [IAM-02 — data plane](iam-02-data-plane.md).** Jego bramka M1 to dokładnie to, czego dziś brakuje użytkownikowi: zalogować się, zobaczyć wyłącznie swoje projekty i słuchać wyłącznie swoich strumieni. Spina się na jednej decyzji — `EventEnvelope` niesie opcjonalny `ProjectScope`, pisany przy ingeście z poświadczenia i nigdy nie honorowany od producenta; log per projekt odrzucono, bo `AIWATCHER_LASER_PARTITIONS > 1` jest zakazane, dopóki skalarny `Checkpoint` nie stanie się kursorem per partycja. Fold zostaje **jeden**, z kluczem zakresu w wierszu — fold per tenant byłby przesłanką do rewizji ADR_0033, a nie jego realizacją.
 
 Do dzielenia projektu brakuje trzech rzeczy wymienionych wyżej w „IAM i współpraca": zaproszeń, interfejsu i odwołania sięgającego strumieni. Połowa autorska jest gotowa do dzielenia od razu po nich; obserwowalność wymaga E1–E4. **Selektora nie aktywujemy przed M1.**
+
+## Kolejność do pierwszego testu permissionów i lekcji — 18.09.2026
+
+Cel: **jak najszybciej dać się przetestować uprawnieniom, udostępnianiu lekcji i nowemu UX-owi**. To nie jest pełne IAM i nie udaje, że jest — [IAM-02](iam-02-data-plane.md) pozostaje na końcu.
+
+Dwie obserwacje z kodu skracają tę drogę bardziej, niż wynikałoby z planu:
+
+- **Lekcja to projekt plus okno grantu.** Nie ma i nie musi powstać pojęcie „lekcji" w backendzie. `GrantWindow { valid_from, edit_until, read_until }` istnieje i jest dokładnie prymitywem warsztatowym: dostęp od, edycja do, odczyt do. Wygaśnięcie edycji zrzuca rolę do Viewer, a niezależny grant stały nie znika — to już jest własność polityki, nie rzecz do zbudowania.
+- **Zaproszenia nie blokują testowania uprawnień.** Blokują zapraszanie kogoś, kto nigdy się nie logował. Dwa konta, które raz przeszły przez SSO, wystarczą: drugi `subject` odczytuje się z audytu, a grant nadaje ręcznie. Zaproszenia przesuwają się o jeden krok.
+
+| # | Krok | Co odblokowuje | Uwaga |
+|---|---|---|---|
+| 0 | `just authentik-up` + `just run-sso` | Tożsamość, a więc principal, a więc grant | **Jedyna pozycja o nieznanym koszcie — nigdy nie uruchamiana.** Cały przepływ OIDC jest w kodzie (`/api/v1/auth/login`, `/callback`, `/me`, `/logout`, `/account` w panelu). Justfile ostrzega: issuer kończy się slugiem **aplikacji**, nie nazwą providera |
+| 1 | Panel: minimalny IAM | Ręczne testowanie uprawnień bez curla | Czysty frontend. Backend gotowy i naprawdę sprawdza granty; wygenerowany klient ma 82 wpisy, których dziś nikt nie woła |
+| — | **Tu testujesz** | Dwa konta, projekt = lekcja, okno grantu = udostępnienie | Sprawdzane: widoczność cudzych projektów, `edit_until` → Viewer, `read_until` → odcięcie, odebranie grantu, suma grantów z dwóch źródeł |
+| 2 | Zaproszenia | Zapraszanie spoza już-zalogowanych | Jednorazowy, wygasający token `(scope, role, window)`, realizowany po SSO w jednej transakcji z nadaniem grantu |
+| 3 | Nowy shell UX | Krok 2 z „Kolejności wdrażania" | **Nie zależy od IAM — może iść równolegle od kroku 0** |
+| 4 | Learning UI | Warsztaty, uczestnicy, 9 slotów laboratoriów | Obszar `learning` istnieje w `navigation.ts` z placeholderem mówiącym, że zapisy i dostęp czasowy są niedostępne. Silnik treści i ocen osobno |
+| 5 | IAM-02 | Obserwowalność projektu | Na końcu, świadomie |
+
+**Czego ta ścieżka nie obejmuje, i trzeba to powiedzieć przed startem.** Uprawnienia będą przetestowane na **danych autorskich** — prompty, datasety, anotacje, treningi, ewaluacje, definicje workflow, review, kohorty, bundle, approvale, deklaracje. **Nie** na obserwowalności: przebiegi, spany, metryki i żywy strumień pozostają instancyjne do IAM-02. Udostępniona lekcja ma więc materiały, a nie ma historii wykonań ani podglądu na żywo. Selektor organizacji/projektu z kroku 1 jest **narzędziem testowym**, nie ogłoszeniem multi-tenancy.
+
+### Prompt dla sesji realizującej tę kolejność
+
+> Pracujesz w repozytorium AIWatcher nad **ścieżką do pierwszego testu uprawnień, udostępniania lekcji i nowego UX-u**. Przeczytaj `docs/ux-migration-plan-2026-09-14.md` (sekcja „Kolejność do pierwszego testu permissionów i lekcji"), `crates/aiwatcher-iam/README.md`, `apps/panel/CLAUDE.md` i instrukcje repozytorium. Zweryfikuj stan w kodzie — dokumentacja opisuje 18.09.2026 i mogła się zdezaktualizować.
+>
+> **IAM-02 (`docs/iam-02-data-plane.md`) jest świadomie ostatnie. Nie zaczynaj go.** Obowiązuje za to jedna reguła: nowy zasób autorski dostaje swoją zakresową rodzinę tras od urodzenia — `ProjectAuthorization` plus `<prefix>/scopes/<organization>/<project>/registry/`.
+>
+> Idź krokami i **nie przechodź dalej, dopóki poprzedni nie działa naprawdę**; po każdym kroku zdaj raport i powiedz, czego nie uruchomiłeś.
+>
+> **Krok 0 — SSO lokalnie.** `just authentik-up`, potem `just run-sso`. Doprowadź do stanu, w którym logujesz się w panelu i `/account` pokazuje tożsamość oraz grupy IdP tylko do odczytu. To nigdy nie było uruchamiane, więc traktuj to jak zadanie badawcze, nie konfiguracyjne: issuer kończy się slugiem **aplikacji**, nie nazwą providera; `ProviderMetadata::discover` odmawia rozjazdu z konfiguracją; ciasteczko `Secure` wywodzi się ze schematu redirect URL, więc po http nie zostanie zapisane i logowanie zapętli się bez błędu. Zapisz w `docs/` dokładne kroki, które zadziałały — następny człowiek nie ma ich skąd wziąć.
+>
+> **Krok 1 — panel: minimalny IAM.** Selektor organizacji/projektu, strona członków i grantów, formularz nadania grantu z `valid_from`/`edit_until`/`read_until`, oraz widoczne rozróżnienie: grupy IdP **nie są** zespołami. To czysty frontend nad wygenerowanym klientem; **nie zmieniaj kontraktu HTTP** i nie wołaj `just openapi` bez rzeczywistej zmiany API. Trzymaj konwencje `apps/panel/CLAUDE.md`: filtry w URL, nigdy w stanie komponentu, `src/api/generated` nietykalne, obszary opisane w `navigation.ts`.
+>
+> **Krok 1b — przetestuj uprawnienia ręcznie i opisz wynik.** Dwa konta w authentiku, oba raz przez SSO. Projekt jest lekcją, okno grantu jest udostępnieniem. Sprawdź: że B nie widzi projektów A bez grantu; że `edit_until` w przeszłości zrzuca rolę do Viewer, a nie odbiera odczytu; że `read_until` odcina; że odebranie grantu działa od razu na następnym żądaniu; że dwa niezależne granty sumują się i wygaśnięcie jednego nie zasłania drugiego; że właściciel organizacji **nie ma** domyślnego dostępu do projektu. Nieudany scenariusz zapisz jako scenariusz, nie jako usterkę do obejścia.
+>
+> **Krok 2 — zaproszenia.** Dopiero gdy krok 1b przechodzi. Jednorazowy, wygasający token związany z `(scope, role, window)`, realizowany **po** SSO w jednej transakcji tworzącej grant dla principala, który go zrealizował. Email jest wskazówką do dostarczenia, nigdy kluczem tożsamości; powtórzenie i inny odbiorca odmawiają.
+>
+> **Krok 3 — nowy shell UX.** Nie zależy od IAM i może iść równolegle od początku: przełącznik rollout/rollback, preferencje, przypięcia, dotychczasowe trasy jako adaptery.
+>
+> **Krok 4 — Learning UI.** Obszar `learning` istnieje z placeholderem. Lista i szczegół warsztatu, uczestnicy, stan dostępu, 9 slotów laboratoriów. **Brakujące kontrakty oznaczaj jako niedostępne** — żadnych wymyślonych materiałów, wyników ani postępu. Silnik treści i ocen to osobna praca.
+>
+> **Czego nie wolno.** Nie otwieraj projektowego `/start`, nie rejestruj dispatchera w produkcyjnym `spawn`, nie zakresuj logu zdarzeń ani strumieni — to jest IAM-02. Nie opisuj tego wdrożenia jako multi-tenant safe: selektor z kroku 1 jest narzędziem testowym. Nie zmieniaj istniejących migracji SQL; nowe są addytywne, z rolling upgrade i rollbackiem starego binarium.
+>
+> Pracuj na osobnej gałęzi z `main`, commituj po ścieżkach, jeden krótki konwencjonalny nagłówek, bez trailera współautora.
+>
+> **Testy na koniec każdego kroku.** Panel: `cd apps/panel && npm run test`, `npm run lint`, `npm run build` (to `check:architecture` + `vite build` + pełne `tsc -b`) — i sprawdź panel klawiaturą, przy 375 px i na szerokim ekranie, w motywie jasnym i ciemnym; żadna globalna kontrolka nie może wyjść poza viewport. Rust, jeśli tknąłeś którykolwiek crate: `cargo test --workspace --all-targets`, `cargo clippy --workspace --all-targets --all-features -- -Dwarnings`, `cargo fmt --all --check`, `git diff --check`, `python3 scripts/check-rust-boundaries.py`, `python3 scripts/lint-comments.py`. PostgreSQL wyłącznie na osobnej, jednorazowej bazie. **Jawnie wypisz, czego nie uruchomiłeś** — a w kroku 0 także to, co uruchomiłeś ręcznie i czego żaden test nie pilnuje.
