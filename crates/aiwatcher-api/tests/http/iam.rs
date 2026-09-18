@@ -101,6 +101,35 @@ impl IamFixture {
             .request(request.body(Body::from(body.to_string())).unwrap())
             .await
     }
+    /// Give this instance somewhere to put a frozen copy of a trail.
+    ///
+    /// Left out by default, because that is the deployment that has an IAM
+    /// store and no object store — and the one whose export routes have to
+    /// answer 501 rather than queue a job that could never write a shard.
+    fn with_exports(mut self) -> Self {
+        self.fixture.state.iam_audit_exports = Some(Arc::new(aiwatcher_iam::AuditExports::new(
+            Arc::new(MemoryObjectStore::new()),
+            "iam-audit",
+        )));
+        self
+    }
+
+    /// Run whatever export is queued, as the worker would.
+    async fn drain(&self, organization: &str) {
+        let exports = self.fixture.state.iam_audit_exports.clone().unwrap();
+        for (org, job) in exports
+            .claimable(time::OffsetDateTime::now_utc())
+            .await
+            .unwrap()
+        {
+            assert_eq!(org.0.to_string(), organization);
+            exports
+                .run(self.store.as_ref(), org, &job, "a test")
+                .await
+                .unwrap();
+        }
+    }
+
     async fn create(&self, cookie: &str) -> String {
         let (status, org) = self
             .request(
@@ -521,6 +550,180 @@ async fn grant(
     )
     .await;
     command(f, owner, org, json!({"type":"grant","project":project,"grantee":{"kind":"user","value":principal},"role":role,"window":window})).await["GrantCreated"]["id"].clone()
+}
+
+/// An audit export is administrator-only, needs the mutation header, and is
+/// 501 on an instance with nowhere to put one.
+#[tokio::test]
+async fn iam_audit_exports_are_administered_frozen_and_read_back() {
+    let disabled = IamFixture::new().await;
+    let cookie = disabled.cookie("owner", Role::Admin);
+    let org = disabled.create(&cookie).await;
+    let (status, body) = disabled
+        .request(
+            "POST",
+            &format!("{ROOT}/{org}/audit/exports"),
+            Some(&cookie),
+            json!({}),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert_eq!(body["code"], "iam_audit_exports_disabled");
+    drop(disabled);
+
+    let f = IamFixture::new().await.with_exports();
+    let owner = f.cookie("owner", Role::Admin);
+    let org = f.create(&owner).await;
+    let commands = format!("{ROOT}/{org}/commands");
+    let outsider = f.cookie("outsider", Role::Admin);
+    for name in ["Alpha", "Beta"] {
+        f.request(
+            "POST",
+            &commands,
+            Some(&owner),
+            json!({"type":"create_project","name":name}),
+            true,
+        )
+        .await;
+    }
+
+    let exports = format!("{ROOT}/{org}/audit/exports");
+    // A write with no `X-AIWatcher-IAM: 1` is refused before anything is
+    // queued, like every other mutation here.
+    assert_eq!(
+        f.request("POST", &exports, Some(&owner), json!({}), false)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // And an instance administrator of another organization is told it does
+    // not exist.
+    assert_eq!(
+        f.request("POST", &exports, Some(&outsider), json!({}), true)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, job) = f
+        .request(
+            "POST",
+            &exports,
+            Some(&owner),
+            json!({"reason": "a question in writing"}),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["state"], "queued");
+    assert_eq!(job["through_sequence"], 3, "three entries, pinned");
+    assert_eq!(job["cursor"], 0);
+    let job_id = job["job_id"].as_str().unwrap().to_owned();
+
+    // A retried POST joins the job it already started rather than freezing the
+    // same range twice.
+    let (_, again) = f
+        .request(
+            "POST",
+            &exports,
+            Some(&owner),
+            json!({"reason": "a question in writing"}),
+            true,
+        )
+        .await;
+    assert_eq!(again["job_id"], job_id);
+
+    // Nothing to read until it has finished.
+    let rows = format!("{exports}/{job_id}/rows");
+    assert_eq!(
+        f.request("GET", &rows, Some(&owner), Value::Null, false)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+
+    f.drain(&org).await;
+
+    let (status, done) = f
+        .request(
+            "GET",
+            &format!("{exports}/{job_id}"),
+            Some(&owner),
+            Value::Null,
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["state"], "completed");
+    assert_eq!(done["counts"]["entries"], 3);
+    assert_eq!(done["counts"]["missing"], 0);
+    assert!(done["version"].as_str().is_some(), "a content address");
+
+    let (status, page) = f
+        .request("GET", &rows, Some(&owner), Value::Null, false)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["entries"][0]["sequence"], 1);
+    assert_eq!(page["entries"][2]["action"]["type"], "command_applied");
+    assert!(page["next_offset"].is_null());
+
+    // A finished export is a record; cancelling it is a 409 rather than a
+    // silent success.
+    assert_eq!(
+        f.request(
+            "DELETE",
+            &format!("{exports}/{job_id}"),
+            Some(&owner),
+            Value::Null,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+
+    // Where the trail begins, and — with nothing swept — that it is whole.
+    let (status, bounds) = f
+        .request(
+            "GET",
+            &format!("{ROOT}/{org}/audit/bounds"),
+            Some(&owner),
+            Value::Null,
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{bounds}");
+    assert_eq!(bounds["first_sequence"], 1);
+    assert_eq!(bounds["last_sequence"], 3);
+    assert_eq!(bounds["entries"], 3);
+    assert!(bounds["watermark"].is_null());
+
+    // Ordinary membership administers nothing here.
+    let member = f.cookie("member", Role::Editor);
+    f.request(
+        "POST",
+        &commands,
+        Some(&owner),
+        json!({"type":"set_member","principal":{"provider":f.issuer,"subject":"member"},"role":"member"}),
+        true,
+    )
+    .await;
+    for (method, path) in [
+        ("GET", format!("{ROOT}/{org}/audit/bounds")),
+        ("GET", exports.clone()),
+        ("GET", format!("{exports}/{job_id}")),
+        ("GET", rows.clone()),
+    ] {
+        assert_eq!(
+            f.request(method, &path, Some(&member), Value::Null, false)
+                .await
+                .0,
+            StatusCode::FORBIDDEN,
+            "{method} {path}"
+        );
+    }
 }
 
 #[path = "project_prompts.rs"]

@@ -9,6 +9,10 @@ use tokio::sync::RwLock;
 struct AuditedOrganization {
     state: OrganizationState,
     audit: Vec<AuditEntry>,
+    /// Where a sweep moved the beginning of `audit`, when one has. The
+    /// PostgreSQL adapter keeps this in a table of its own; here it is a field
+    /// beside the entries it explains, which is the same thing under one lock.
+    watermark: Option<AuditWatermark>,
 }
 
 #[derive(Debug)]
@@ -43,6 +47,7 @@ impl IamStore for MemoryIamStore {
             organization.id,
             AuditedOrganization {
                 state,
+                watermark: None,
                 audit: vec![AuditEntry {
                     sequence: 1,
                     organization: organization.id,
@@ -77,6 +82,82 @@ impl IamStore for MemoryIamStore {
             .collect())
     }
 
+    async fn authorize_audit(&self, organization: OrganizationId, actor: &Principal) -> Result<()> {
+        self.organizations
+            .read()
+            .await
+            .get(&organization)
+            .ok_or(Error::NotFound)?
+            .state
+            .authorize_audit(actor)
+    }
+
+    async fn audit_bounds(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> Result<AuditBounds> {
+        let organizations = self.organizations.read().await;
+        let stored = organizations.get(&organization).ok_or(Error::NotFound)?;
+        stored.state.authorize_audit(actor)?;
+        Ok(AuditBounds {
+            organization,
+            first_sequence: stored.audit.first().map(|entry| entry.sequence),
+            last_sequence: stored.audit.last().map(|entry| entry.sequence),
+            entries: i64::try_from(stored.audit.len())
+                .map_err(|error| Error::Backend(error.to_string()))?,
+            watermark: stored.watermark.clone(),
+        })
+    }
+
+    async fn prune_audit(&self, retention: &AuditRetention, now: i64) -> Result<PruneReport> {
+        let cutoff = retention.cutoff(now);
+        let mut report = PruneReport {
+            cutoff,
+            ..PruneReport::default()
+        };
+        for (organization, stored) in self.organizations.write().await.iter_mut() {
+            // The newest entry is never swept, which is what keeps the next
+            // sequence correct on a trail retention has been through. The
+            // PostgreSQL adapter keeps the same invariant, for the sharper
+            // reason that a binary predating retention computes that sequence
+            // from `max(sequence)` alone.
+            let Some(top) = stored.audit.last().map(|entry| entry.sequence) else {
+                continue;
+            };
+            let removed = stored
+                .audit
+                .iter()
+                .filter(|entry| entry.occurred_at < cutoff && entry.sequence < top)
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>();
+            let Some(through) = removed.iter().copied().max() else {
+                continue;
+            };
+            stored
+                .audit
+                .retain(|entry| entry.occurred_at >= cutoff || entry.sequence >= top);
+            let count =
+                i64::try_from(removed.len()).map_err(|error| Error::Backend(error.to_string()))?;
+            let previous = stored
+                .watermark
+                .as_ref()
+                .map_or(0, |mark| mark.removed_total);
+            stored.watermark = Some(AuditWatermark {
+                organization: *organization,
+                pruned_through_sequence: through,
+                pruned_before: cutoff,
+                policy_id: retention.policy_id.clone(),
+                ttl_days: retention.ttl_days,
+                pruned_at: now,
+                removed_total: previous + count,
+            });
+            report.organizations += 1;
+            report.removed += count;
+        }
+        Ok(report)
+    }
+
     async fn organizations(&self, actor: &Principal) -> Result<Vec<Organization>> {
         actor.validate()?;
         Ok(self
@@ -103,8 +184,7 @@ impl IamStore for MemoryIamStore {
         let now = self.clock.now();
         let result = next.apply(actor, command.clone(), now)?;
         next.encode()?;
-        let sequence =
-            i64::try_from(stored.audit.len()).map_err(|e| Error::Backend(e.to_string()))? + 1;
+        let sequence = next_sequence(stored);
         stored.audit.push(AuditEntry {
             sequence,
             organization,
@@ -261,6 +341,23 @@ impl IamStore for MemoryIamStore {
     }
 }
 
+/// The next sequence, counted from the last entry rather than from how many
+/// there are.
+///
+/// Those were the same number until retention could remove the oldest. They are
+/// not now, and taking the length would reissue sequences a swept trail has
+/// already used — so a reader paging from the watermark would meet two entries
+/// with one number.
+fn next_sequence(stored: &AuditedOrganization) -> i64 {
+    stored
+        .audit
+        .last()
+        .map(|entry| entry.sequence)
+        .or_else(|| stored.watermark.as_ref().map(|w| w.pruned_through_sequence))
+        .unwrap_or(0)
+        + 1
+}
+
 fn push_audit(
     stored: &mut AuditedOrganization,
     organization: OrganizationId,
@@ -268,8 +365,7 @@ fn push_audit(
     occurred_at: i64,
     action: AuditAction,
 ) -> Result<()> {
-    let sequence =
-        i64::try_from(stored.audit.len()).map_err(|e| Error::Backend(e.to_string()))? + 1;
+    let sequence = next_sequence(stored);
     stored.audit.push(AuditEntry {
         sequence,
         organization,

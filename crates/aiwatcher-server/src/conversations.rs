@@ -72,7 +72,7 @@ pub fn spawn(
 /// "held by aiwatcher-server-7d9f-x2k" says more than a UUID. A pod that
 /// restarts keeps its name and therefore reclaims its own lease immediately,
 /// which is right: the process that held it is gone.
-fn worker_id() -> String {
+pub(crate) fn worker_id() -> String {
     std::env::var("HOSTNAME")
         .ok()
         .filter(|name| !name.is_empty())

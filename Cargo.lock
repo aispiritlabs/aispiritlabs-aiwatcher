@@ -305,6 +305,8 @@ dependencies = [
 name = "aiwatcher-iam"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-jobs",
  "async-trait",
  "hex",
  "serde",
@@ -314,6 +316,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tracing",
  "utoipa",
  "uuid",
 ]

@@ -4,14 +4,21 @@
 //! workers. Do not activate a multi-organization UI until every data plane
 //! adapter enforces the returned project scope. See this crate's README.
 
+pub mod export;
 pub mod memory;
 mod model;
 mod policy;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+pub mod retention;
 
+pub use aiwatcher_jobs::{JobState, ShardRef};
 use async_trait::async_trait;
+pub use export::{
+    AuditExportCounts, AuditExportJob, AuditExportRequest, AuditExportRowsPage, AuditExports,
+};
 pub use model::*;
+pub use retention::{AuditBounds, AuditRetention, AuditWatermark, PruneReport};
 use sha2::{Digest, Sha256};
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -49,6 +56,15 @@ pub enum Error {
     Redeemed,
     #[error("invalid IAM input: {0}")]
     Invalid(String),
+    /// The request is well formed and the current state refuses it: cancelling
+    /// an export that finished, exporting a trail that holds nothing.
+    #[error("{0}")]
+    Conflict(String),
+    /// The object store an audit export is written to. Kept as the port error
+    /// rather than flattened into a string, because it already carries whether
+    /// the job should come back for it.
+    #[error("the audit export store failed: {0}")]
+    Storage(#[from] aiwatcher_core::ports::PortError),
     #[error("unsupported or inconsistent IAM document: {0}")]
     Incompatible(String),
     #[error("IAM storage failed: {0}")]
@@ -84,6 +100,33 @@ pub trait IamStore: Debug + Send + Sync {
         after: i64,
         limit: usize,
     ) -> Result<Vec<AuditEntry>>;
+    /// Whether this principal may read this organization's trail, now.
+    ///
+    /// The same check [`IamStore::audit`] makes, asked without a page — what an
+    /// export's own routes need, since the bytes they serve are in an object
+    /// store this crate does not authorize. A fresh decision every time it is
+    /// asked, never a capability somebody holds afterwards.
+    async fn authorize_audit(&self, organization: OrganizationId, actor: &Principal) -> Result<()>;
+    /// What the trail currently holds, and where a sweep moved its beginning.
+    ///
+    /// An export pins its upper bound from `last_sequence`; a reader who finds
+    /// the history starting at 4 312 reads `watermark` to learn why.
+    async fn audit_bounds(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> Result<AuditBounds>;
+    /// Apply this deployment's audit retention to every organization.
+    ///
+    /// Takes no actor, and there is no route that reaches it. Retention is the
+    /// deployment's clock rather than anybody's request: an administrator who
+    /// could delete the record of their own administration is the one capability
+    /// an audit trail must not grant, and a caller that could name the cutoff
+    /// could name today.
+    ///
+    /// The delete and the watermark that explains it commit together, so there
+    /// is no moment at which entries are gone and nothing says so.
+    async fn prune_audit(&self, retention: &AuditRetention, now: i64) -> Result<PruneReport>;
     async fn organizations(&self, actor: &Principal) -> Result<Vec<Organization>>;
     /// Check current authorization and apply the change in one transaction.
     async fn apply(

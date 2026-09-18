@@ -56,6 +56,27 @@ impl IamStore for Flaky {
     ) -> aiwatcher_iam::Result<Vec<aiwatcher_iam::AuditEntry>> {
         self.inner.audit(organization, actor, after, limit).await
     }
+    async fn authorize_audit(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> aiwatcher_iam::Result<()> {
+        self.inner.authorize_audit(organization, actor).await
+    }
+    async fn audit_bounds(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> aiwatcher_iam::Result<aiwatcher_iam::AuditBounds> {
+        self.inner.audit_bounds(organization, actor).await
+    }
+    async fn prune_audit(
+        &self,
+        retention: &aiwatcher_iam::AuditRetention,
+        now: i64,
+    ) -> aiwatcher_iam::Result<aiwatcher_iam::PruneReport> {
+        self.inner.prune_audit(retention, now).await
+    }
     async fn organizations(
         &self,
         actor: &Principal,

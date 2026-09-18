@@ -1052,3 +1052,154 @@ pub async fn audit_is_atomic_paginated_and_administrator_only(
             .is_empty()
     );
 }
+
+/// What the trail holds, to whoever may read it and to nobody else.
+pub async fn audit_bounds_answer_administrators_and_nobody_else(
+    store: &dyn IamStore,
+    clock: &TestClock,
+) {
+    let owner = user("bounds-owner");
+    let plain = user("bounds-member");
+    let outsider = user("bounds-outsider");
+    let org = store.create_organization(&owner, "Bounds").await.unwrap();
+    clock.set(1_010);
+    member(store, org.id, &owner, &plain, OrganizationRole::Member).await;
+
+    let bounds = store.audit_bounds(org.id, &owner).await.unwrap();
+    assert_eq!(bounds.organization, org.id);
+    assert_eq!(bounds.first_sequence, Some(1));
+    assert_eq!(bounds.last_sequence, Some(2));
+    assert_eq!(bounds.entries, 2);
+    assert!(
+        bounds.watermark.is_none(),
+        "a trail nothing has swept begins where it always did"
+    );
+
+    store.authorize_audit(org.id, &owner).await.unwrap();
+    assert!(matches!(
+        store.authorize_audit(org.id, &plain).await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        store.audit_bounds(org.id, &plain).await,
+        Err(Error::Forbidden)
+    ));
+    // An outsider is told the organization does not exist, as every other read
+    // here tells them.
+    assert!(matches!(
+        store.audit_bounds(org.id, &outsider).await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        store.authorize_audit(org.id, &outsider).await,
+        Err(Error::NotFound)
+    ));
+}
+
+/// Retention removes what it may, keeps the newest entry, and says so.
+///
+/// The sweep is deliberately global — one deployment, one clock, one pass — so
+/// this scenario keeps to its own corner of a shared test database by writing
+/// its entries at seconds 1..4 and pruning with a cutoff of 4. Every other
+/// scenario here writes at 1 000 or later, which is what makes a concurrent run
+/// safe rather than lucky.
+pub async fn retention_keeps_the_newest_entry_and_records_where_the_trail_begins(
+    store: &dyn IamStore,
+    clock: &TestClock,
+) {
+    let owner = user("prune-owner");
+    let plain = user("prune-member");
+    clock.set(1);
+    let org = store.create_organization(&owner, "Swept").await.unwrap();
+    clock.set(2);
+    member(store, org.id, &owner, &plain, OrganizationRole::Member).await;
+    clock.set(3);
+    store
+        .apply(
+            org.id,
+            &owner,
+            Command::CreateTeam {
+                name: "before".into(),
+            },
+        )
+        .await
+        .unwrap();
+    clock.set(4);
+    store
+        .apply(
+            org.id,
+            &owner,
+            Command::CreateTeam {
+                name: "after".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let retention = AuditRetention::new(1, "policy-iam-audit").unwrap();
+    // A day past the fourth entry, so the cutoff lands exactly on it.
+    let now = 4 + 86_400;
+    let report = store.prune_audit(&retention, now).await.unwrap();
+    assert_eq!(report.cutoff, 4);
+    assert!(report.removed >= 3, "three entries of this trail were old");
+
+    let bounds = store.audit_bounds(org.id, &owner).await.unwrap();
+    assert_eq!(bounds.entries, 1, "the newest entry is never swept");
+    assert_eq!(bounds.first_sequence, Some(4));
+    assert_eq!(bounds.last_sequence, Some(4));
+    let mark = bounds
+        .watermark
+        .expect("a swept trail says where it begins");
+    assert_eq!(mark.pruned_through_sequence, 3);
+    assert_eq!(mark.pruned_before, 4);
+    assert_eq!(mark.policy_id, "policy-iam-audit");
+    assert_eq!(mark.ttl_days, 1);
+    assert_eq!(mark.pruned_at, now);
+    assert_eq!(mark.removed_total, 3);
+
+    let page = store.audit(org.id, &owner, 0, 100).await.unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].sequence, 4);
+
+    // The one thing a sweep must not do: let the next entry reuse a number an
+    // older one already had. A reader paging from the watermark would then meet
+    // two different acts under one sequence.
+    clock.set(now);
+    store
+        .apply(
+            org.id,
+            &owner,
+            Command::CreateTeam {
+                name: "afterwards".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let page = store.audit(org.id, &owner, 0, 100).await.unwrap();
+    assert_eq!(
+        page.iter().map(|entry| entry.sequence).collect::<Vec<_>>(),
+        vec![4, 5]
+    );
+
+    // Running again at the same moment removes nothing and moves nothing: the
+    // window is half-open, so the entry the cutoff lands exactly on is kept.
+    store.prune_audit(&retention, now).await.unwrap();
+    let mark = store
+        .audit_bounds(org.id, &owner)
+        .await
+        .unwrap()
+        .watermark
+        .expect("still swept");
+    assert_eq!(mark.pruned_through_sequence, 3);
+    assert_eq!(mark.removed_total, 3);
+
+    // A second later, entry 4 is old enough. Entry 5 stays because it is both
+    // newer than the cutoff and the newest there is.
+    store.prune_audit(&retention, now + 1).await.unwrap();
+    let bounds = store.audit_bounds(org.id, &owner).await.unwrap();
+    let mark = bounds.watermark.expect("still swept");
+    assert_eq!(mark.pruned_through_sequence, 4);
+    assert_eq!(mark.removed_total, 4);
+    assert_eq!(bounds.first_sequence, Some(5));
+    assert_eq!(bounds.entries, 1);
+}

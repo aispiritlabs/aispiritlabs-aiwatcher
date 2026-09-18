@@ -657,6 +657,25 @@ pub struct Config {
     pub auth: AuthConfig,
     /// Opt-in metadata control plane; requires OIDC and the postgres feature.
     pub iam_postgres_url: Option<String>,
+    /// Key prefix for audit exports, inside the same object store the
+    /// registries use.
+    pub iam_audit_prefix: String,
+    /// How long the IAM control plane's own mutation history is kept.
+    ///
+    /// `None` — the default, and what every existing installation does — means
+    /// nothing is ever removed. An audit trail that started shortening itself on
+    /// an upgrade would be the one change here nobody could undo, so this is
+    /// asked for rather than inherited, and a zero is refused rather than read
+    /// as "immediately".
+    pub iam_audit_retention_days: Option<u32>,
+    /// Which written policy that retention implements. Recorded on the
+    /// watermark, never interpreted.
+    pub iam_audit_policy_id: String,
+    /// How often the audit retention sweep runs. Retention is measured in days,
+    /// so a finer sweep would only read the same rows more often.
+    pub iam_audit_sweep_interval: Duration,
+    /// How often a process with no notification looks for a queued export.
+    pub iam_audit_export_poll: Duration,
     pub log_format: LogFormat,
 }
 
@@ -777,6 +796,12 @@ impl Default for Config {
             answer_limits: aiwatcher_api::state::AnswerLimits::default(),
             auth: AuthConfig::default(),
             iam_postgres_url: None,
+            iam_audit_prefix: "iam-audit".to_owned(),
+            // Nothing is removed unless a deployment says so.
+            iam_audit_retention_days: None,
+            iam_audit_policy_id: String::new(),
+            iam_audit_sweep_interval: Duration::from_secs(3_600),
+            iam_audit_export_poll: Duration::from_secs(15),
             log_format: LogFormat::default(),
         }
     }
@@ -1104,6 +1129,39 @@ impl Config {
             config.workflow_store = raw.parse()?;
         }
         config.iam_postgres_url = var("AIWATCHER_IAM_POSTGRES_URL");
+        if let Some(raw) = var("AIWATCHER_IAM_AUDIT_PREFIX") {
+            config.iam_audit_prefix = raw.trim_matches('/').to_owned();
+        }
+        if let Some(raw) = var("AIWATCHER_IAM_AUDIT_RETENTION_DAYS") {
+            let days: u32 = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_IAM_AUDIT_RETENTION_DAYS",
+                value: raw.clone(),
+                expected: "whole number of days, at least 1",
+            })?;
+            // Zero is refused rather than read as "remove everything". It is
+            // one character away from a two-digit retention, and the mistake is
+            // not recoverable — the same reading `AIWATCHER_WORKFLOW_RETENTION_DAYS`
+            // gives a zero, for a store whose loss costs far less.
+            if days == 0 {
+                return Err(ConfigError::Invalid {
+                    name: "AIWATCHER_IAM_AUDIT_RETENTION_DAYS",
+                    value: raw,
+                    expected: "at least 1 day; unset the variable to keep every entry",
+                });
+            }
+            config.iam_audit_retention_days = Some(days);
+        }
+        if let Some(raw) = var("AIWATCHER_IAM_AUDIT_POLICY_ID") {
+            config.iam_audit_policy_id = raw;
+        }
+        if let Some(raw) = var("AIWATCHER_IAM_AUDIT_SWEEP_SECONDS") {
+            config.iam_audit_sweep_interval =
+                Duration::from_secs(raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_IAM_AUDIT_SWEEP_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds",
+                })?);
+        }
         config.workflow_postgres_url = var("AIWATCHER_WORKFLOW_POSTGRES_URL");
         if let Some(raw) = var("AIWATCHER_WORKFLOW_POSTGRES_MAX_CONNECTIONS") {
             config.workflow_postgres_max_connections =

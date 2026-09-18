@@ -14,6 +14,14 @@ postgres = ["dep:sqlx"]
 openapi = ["dep:utoipa"]
 
 [dependencies]
+# The object store an audit export's shards are written to, behind the port
+# every authored registry in this workspace writes through.
+aiwatcher-core.workspace = true
+# The rules a long job over an object store keeps: the lease, the cursor, the
+# shard and the content address a finished one is named by. ADR_0022 exists so
+# that the third caller of this machine cannot quietly disagree with the first
+# two about the order a shard and its cursor are written in.
+aiwatcher-jobs.workspace = true
 async-trait.workspace = true
 hex.workspace = true
 serde.workspace = true
@@ -23,6 +31,7 @@ sqlx = { workspace = true, optional = true }
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 # `v4` for invitation tokens: a v7 is time-ordered, and a secret that carries
 # the moment it was minted is a secret with a shape.
 uuid = { workspace = true, features = ["v4"] }

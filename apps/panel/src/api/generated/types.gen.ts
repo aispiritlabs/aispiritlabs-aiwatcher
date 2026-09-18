@@ -4408,6 +4408,157 @@ export type HumanInputSpec = {
     timeout_seconds?: number | null;
 };
 
+/**
+ * What an organization's audit trail holds now.
+ *
+ * One read that answers both halves of the question a paginated audit cannot:
+ * how much is there, and — when a sweep has been through — where it begins and
+ * why. `watermark` absent means the trail is whole.
+ */
+export type IamAuditBounds = {
+    entries: number;
+    /**
+     * The lowest sequence still stored, or `None` when nothing is.
+     */
+    first_sequence?: number | null;
+    /**
+     * The highest, and what an export pins its range to.
+     */
+    last_sequence?: number | null;
+    organization: OrganizationId;
+    watermark?: null | IamAuditWatermark;
+};
+
+/**
+ * A resumable export, as it sits in the object store.
+ *
+ * This *is* the manifest. A conversation corpus earns a `name@version` and an
+ * index because a training run names one; nothing names an audit export, so a
+ * second record listing the first would be a second thing to keep in step for
+ * no reader.
+ */
+export type IamAuditExport = {
+    /**
+     * The exclusive lower bound, from the request.
+     */
+    after_sequence: number;
+    attempts?: number;
+    claimed_at?: string | null;
+    /**
+     * The worker holding this job: a pod name in a cluster. Not an owner — a
+     * lease.
+     */
+    claimed_by?: string;
+    counts?: IamAuditExportCounts;
+    created_at: string;
+    /**
+     * The highest sequence already accounted for by a written shard. The
+     * resume point, and the only field the ordering rule is about.
+     */
+    cursor?: number;
+    error?: string | null;
+    finished_at?: string | null;
+    job_id: string;
+    organization: OrganizationId;
+    request: IamAuditExportRequest;
+    request_digest: string;
+    /**
+     * Who asked, and who every page is read as. Stored because it is re-asked,
+     * not because it was once allowed.
+     */
+    requested_by: IamPrincipal;
+    shards?: Array<ShardRef>;
+    state: JobState;
+    /**
+     * The inclusive upper bound, pinned when the job was created.
+     */
+    through_sequence: number;
+    updated_at: string;
+    /**
+     * The immutable reference, once there is one.
+     */
+    version?: string | null;
+};
+
+export type IamAuditExportCounts = {
+    /**
+     * Entries written into a shard.
+     */
+    entries: number;
+    /**
+     * Sequences in the pinned range that the trail no longer held.
+     *
+     * Set once, when the job completes, from the range and what was written —
+     * sequences are contiguous within an organization, so the arithmetic is
+     * exact rather than a tally somebody has to keep in step.
+     */
+    missing: number;
+};
+
+/**
+ * What was asked for. With the pinned range below, the identity of an export.
+ */
+export type IamAuditExportRequest = {
+    /**
+     * Entries after this sequence, exclusive. Zero is "everything the trail
+     * still holds", which is the common case.
+     */
+    after_sequence?: number;
+    /**
+     * Why this was taken. Recorded on the job, never interpreted — an export
+     * of an audit trail is usually somebody answering a question in writing,
+     * and the question is worth keeping beside the answer.
+     */
+    reason?: string;
+};
+
+/**
+ * One page of a finished export's entries.
+ */
+export type IamAuditExportRowsPage = {
+    entries: Array<AuditEntry>;
+    next_offset?: number | null;
+    total: number;
+};
+
+/**
+ * Where an organization's audit trail begins, and why it does not begin at 1.
+ *
+ * Written in the same transaction as the delete it describes, so there is no
+ * moment at which rows are gone and nothing says so. A store that has never
+ * pruned an organization has no watermark for it, which reads as "the trail is
+ * whole".
+ */
+export type IamAuditWatermark = {
+    organization: OrganizationId;
+    /**
+     * The retention in force when it did, recorded because the configuration
+     * may have changed since.
+     */
+    policy_id?: string;
+    pruned_at: number;
+    /**
+     * The cutoff of the sweep that last moved this: entries older than this
+     * moment are the ones that went.
+     */
+    pruned_before: number;
+    /**
+     * The highest sequence removed so far. Everything a reader can still page
+     * begins after it.
+     *
+     * Derived from the rows actually deleted rather than from the cutoff, so a
+     * system clock that stepped backwards — leaving one old entry above a
+     * newer one — narrows this rather than claiming to have removed something
+     * still there. The next sweep takes what it left.
+     */
+    pruned_through_sequence: number;
+    /**
+     * Across every sweep, not only the last one.
+     */
+    removed_total: number;
+    ttl_days: number;
+};
+
 export type IamChange = 'Applied' | {
     TeamCreated: IamTeam;
 } | {
@@ -14440,6 +14591,169 @@ export type AuditResponses = {
 };
 
 export type AuditResponse = AuditResponses[keyof AuditResponses];
+
+export type AuditBoundsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/audit/bounds';
+};
+
+export type AuditBoundsErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AuditBoundsResponses = {
+    200: IamAuditBounds;
+};
+
+export type AuditBoundsResponse = AuditBoundsResponses[keyof AuditBoundsResponses];
+
+export type AuditExportsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/audit/exports';
+};
+
+export type AuditExportsErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AuditExportsResponses = {
+    200: Array<IamAuditExport>;
+};
+
+export type AuditExportsResponse = AuditExportsResponses[keyof AuditExportsResponses];
+
+export type CreateAuditExportData = {
+    body: IamAuditExportRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/audit/exports';
+};
+
+export type CreateAuditExportErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type CreateAuditExportResponses = {
+    202: IamAuditExport;
+};
+
+export type CreateAuditExportResponse = CreateAuditExportResponses[keyof CreateAuditExportResponses];
+
+export type CancelAuditExportData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: OrganizationId;
+        job: string;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/audit/exports/{job}';
+};
+
+export type CancelAuditExportErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type CancelAuditExportResponses = {
+    200: IamAuditExport;
+};
+
+export type CancelAuditExportResponse = CancelAuditExportResponses[keyof CancelAuditExportResponses];
+
+export type AuditExportData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+        job: string;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/audit/exports/{job}';
+};
+
+export type AuditExportErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AuditExportResponses = {
+    200: IamAuditExport;
+};
+
+export type AuditExportResponse = AuditExportResponses[keyof AuditExportResponses];
+
+export type AuditExportRowsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+        job: string;
+    };
+    query?: {
+        offset?: number;
+        limit?: number;
+    };
+    url: '/api/v1/iam/organizations/{organization}/audit/exports/{job}/rows';
+};
+
+export type AuditExportRowsErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type AuditExportRowsResponses = {
+    200: IamAuditExportRowsPage;
+};
+
+export type AuditExportRowsResponse = AuditExportRowsResponses[keyof AuditExportRowsResponses];
 
 export type ApplyData = {
     body: IamCommand;

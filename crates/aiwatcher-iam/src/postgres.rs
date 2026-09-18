@@ -100,6 +100,117 @@ impl IamStore for PostgresIamStore {
         Ok(entries)
     }
 
+    async fn authorize_audit(&self, organization: OrganizationId, actor: &Principal) -> Result<()> {
+        self.load(organization).await?.authorize_audit(actor)
+    }
+
+    async fn audit_bounds(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> Result<AuditBounds> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        // Authorization and the counts under one shared lock, as the page read
+        // above is, so a demotion cannot land between them.
+        let value: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT document FROM iam_organizations WHERE id = $1 FOR SHARE")
+                .bind(organization.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(backend)?;
+        OrganizationState::decode(organization, value.ok_or(Error::NotFound)?)?
+            .authorize_audit(actor)?;
+        let row = sqlx::query(
+            "SELECT min(sequence) AS first, max(sequence) AS last, count(*) AS entries \
+             FROM iam_audit WHERE organization_id = $1",
+        )
+        .bind(organization.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(backend)?;
+        let watermark = read_watermark(&mut tx, organization).await?;
+        tx.commit().await.map_err(backend)?;
+        Ok(AuditBounds {
+            organization,
+            first_sequence: row.try_get("first").map_err(backend)?,
+            last_sequence: row.try_get("last").map_err(backend)?,
+            entries: row.try_get("entries").map_err(backend)?,
+            watermark,
+        })
+    }
+
+    /// One statement for the delete, one for each watermark it produced, one
+    /// transaction.
+    ///
+    /// **The newest entry of an organization is never swept.** That is what
+    /// keeps `append_audit`'s `max(sequence) + 1` correct on a trail retention
+    /// has been through — including in a binary that predates retention, which
+    /// is what makes turning it on safe during a rolling upgrade and safe to
+    /// roll back from. One retained row per organization is a small price for
+    /// not reissuing a sequence number, and a trail that is empty except for a
+    /// watermark tells a reader less than one that still shows its last
+    /// administrative act.
+    async fn prune_audit(&self, retention: &AuditRetention, now: i64) -> Result<PruneReport> {
+        let cutoff = retention.cutoff(now);
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let removed = sqlx::query(
+            "WITH tops AS ( \
+                 SELECT organization_id, max(sequence) AS top FROM iam_audit \
+                 GROUP BY organization_id \
+             ), gone AS ( \
+                 DELETE FROM iam_audit AS a USING tops \
+                 WHERE tops.organization_id = a.organization_id \
+                   AND a.sequence < tops.top \
+                   AND (a.entry ->> 'occurred_at')::bigint < $1 \
+                 RETURNING a.organization_id, a.sequence \
+             ) \
+             SELECT organization_id, count(*) AS removed, max(sequence) AS through \
+             FROM gone GROUP BY organization_id",
+        )
+        .bind(cutoff)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(backend)?;
+
+        let mut report = PruneReport {
+            cutoff,
+            ..PruneReport::default()
+        };
+        for row in removed {
+            let organization: uuid::Uuid = row.try_get("organization_id").map_err(backend)?;
+            let count: i64 = row.try_get("removed").map_err(backend)?;
+            let through: i64 = row.try_get("through").map_err(backend)?;
+            sqlx::query(
+                "INSERT INTO iam_audit_retention (organization_id, pruned_through_sequence, \
+                     pruned_before, policy_id, ttl_days, pruned_at, removed_total) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (organization_id) DO UPDATE SET \
+                     pruned_through_sequence = GREATEST( \
+                         iam_audit_retention.pruned_through_sequence, \
+                         EXCLUDED.pruned_through_sequence), \
+                     pruned_before = EXCLUDED.pruned_before, \
+                     policy_id = EXCLUDED.policy_id, \
+                     ttl_days = EXCLUDED.ttl_days, \
+                     pruned_at = EXCLUDED.pruned_at, \
+                     removed_total = iam_audit_retention.removed_total + EXCLUDED.removed_total",
+            )
+            .bind(organization)
+            .bind(through)
+            .bind(cutoff)
+            .bind(&retention.policy_id)
+            .bind(i32::try_from(retention.ttl_days).map_err(|e| Error::Invalid(e.to_string()))?)
+            .bind(now)
+            .bind(count)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+            report.organizations += 1;
+            report.removed += count;
+        }
+        tx.commit().await.map_err(backend)?;
+        Ok(report)
+    }
+
     async fn organizations(&self, actor: &Principal) -> Result<Vec<Organization>> {
         actor.validate()?;
         let rows = sqlx::query("SELECT id, document FROM iam_organizations WHERE document -> 'members' @> $1::jsonb ORDER BY id")
@@ -283,6 +394,34 @@ impl IamStore for PostgresIamStore {
     }
 }
 
+async fn read_watermark(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization: OrganizationId,
+) -> Result<Option<AuditWatermark>> {
+    let row = sqlx::query(
+        "SELECT pruned_through_sequence, pruned_before, policy_id, ttl_days, pruned_at, \
+                removed_total \
+         FROM iam_audit_retention WHERE organization_id = $1",
+    )
+    .bind(organization.0)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(backend)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let ttl_days: i32 = row.try_get("ttl_days").map_err(backend)?;
+    Ok(Some(AuditWatermark {
+        organization,
+        pruned_through_sequence: row.try_get("pruned_through_sequence").map_err(backend)?,
+        pruned_before: row.try_get("pruned_before").map_err(backend)?,
+        policy_id: row.try_get("policy_id").map_err(backend)?,
+        ttl_days: u32::try_from(ttl_days).map_err(|e| Error::Incompatible(e.to_string()))?,
+        pruned_at: row.try_get("pruned_at").map_err(backend)?,
+        removed_total: row.try_get("removed_total").map_err(backend)?,
+    }))
+}
+
 /// Take the organization's write lock and read its document under it.
 async fn lock(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -364,9 +503,58 @@ async fn migrate(pool: &PgPool) -> Result<()> {
             .await
             .map_err(backend)?;
     }
+    additions(&mut tx).await?;
     tx.commit().await.map_err(backend)?;
     Ok(())
 }
+
+/// Migrations that add something no released binary reads, in their own ledger.
+///
+/// `iam_schema_migrations` records what a binary must *understand* in order to
+/// read this database, which is why a version past its own is refused rather
+/// than ignored: schema 2 changed what an audit entry means, and a binary that
+/// silently skipped it would serve a history it did not know was incomplete.
+///
+/// This is the other kind. `iam_audit_retention` and the index beside it are
+/// additive objects that nothing released selects from, and recording them in
+/// that ledger would turn every rollback into a start-up refusal — for a change
+/// the older binary cannot even see. So they have a ledger of their own, which
+/// makes them idempotent without making them a compatibility claim, and the
+/// older binary goes on reading `max(version) = 3` and starting.
+///
+/// The same reasoning is what decides what these migrations may contain: a
+/// table or an index, never a column an older binary would have to write and
+/// never a change to one it reads. The moment an addition stops being invisible
+/// it belongs in the numbered ledger, with the refusal that comes with it.
+async fn additions(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS iam_schema_additions \
+         (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(backend)?;
+    let applied: Option<String> =
+        sqlx::query_scalar("SELECT name FROM iam_schema_additions WHERE name = $1")
+            .bind(AUDIT_RETENTION)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(backend)?;
+    if applied.is_none() {
+        sqlx::raw_sql(include_str!("../migrations/0004_audit_retention.sql"))
+            .execute(&mut **tx)
+            .await
+            .map_err(backend)?;
+        sqlx::query("INSERT INTO iam_schema_additions (name) VALUES ($1)")
+            .bind(AUDIT_RETENTION)
+            .execute(&mut **tx)
+            .await
+            .map_err(backend)?;
+    }
+    Ok(())
+}
+
+const AUDIT_RETENTION: &str = "0004_audit_retention";
 
 async fn append_audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,

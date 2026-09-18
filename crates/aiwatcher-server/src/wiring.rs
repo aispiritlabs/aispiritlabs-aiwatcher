@@ -1138,6 +1138,16 @@ pub async fn build(config: Config) -> Result<Runtime> {
         answer_limits: config.answer_limits,
         auth: build_authenticator(&config).await?,
         iam: build_iam_store(&config).await?,
+        // Two halves: a trail to read and somewhere to put the copy. Absent
+        // when either is, which answers 501 rather than queueing a job that
+        // could never write a shard.
+        iam_audit_exports: registries.objects.clone().map(|store| {
+            Arc::new(aiwatcher_iam::AuditExports::new(
+                store,
+                config.iam_audit_prefix.clone(),
+            ))
+        }),
+        iam_audit_worker: Some(Arc::new(tokio::sync::Notify::new())),
         health,
     };
 

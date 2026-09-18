@@ -44,6 +44,8 @@ contract!(
     revocation_cannot_be_undone_by_rejoining,
     role_administration_and_last_owner,
     invalid_commands_have_no_effect,
+    audit_bounds_answer_administrators_and_nobody_else,
+    retention_keeps_the_newest_entry_and_records_where_the_trail_begins,
 );
 
 #[tokio::test]
@@ -429,4 +431,107 @@ async fn version_one_upgrades_without_inventing_historical_audit() {
         .execute(&admin)
         .await
         .unwrap();
+}
+
+/// The additive migration leaves a database a released binary will still start
+/// on.
+///
+/// `migrate` refuses `max(version) > 3`, and that refusal is not a bug — schema
+/// 2 changed what an audit entry means. It is also what makes the numbered
+/// ledger the wrong place to record a table nothing released selects from: a
+/// version 4 there would turn every rollback into a start-up refusal for a
+/// change the older binary cannot see.
+#[tokio::test]
+#[ignore = "needs a disposable PostgreSQL via AIWATCHER_IAM_TEST_POSTGRES_URL"]
+async fn an_addition_leaves_the_version_a_released_binary_starts_on() {
+    let clock = Arc::new(TestClock::default());
+    let (store, pool) = open(clock.clone()).await;
+    drop(store);
+
+    let version: Option<i64> = sqlx::query_scalar("SELECT max(version) FROM iam_schema_migrations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        version,
+        Some(3),
+        "the numbered ledger is what an older binary refuses on"
+    );
+    for object in ["iam_audit_retention", "iam_schema_additions"] {
+        let present: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
+            .bind(object)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(present.as_deref(), Some(object), "{object} was created");
+    }
+
+    // Applied once, however many times a replica starts.
+    let (store, pool) = open(clock).await;
+    drop(store);
+    let applied: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM iam_schema_additions WHERE name = '0004_audit_retention'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(applied, 1);
+}
+
+/// A binary that predates retention still numbers the next entry correctly on a
+/// trail retention has been through.
+///
+/// `append_audit` is unchanged by this work and reads `COALESCE(max(sequence),
+/// 0) + 1`. That statement is the old binary's too, which is why the sweep
+/// keeps each organization's newest entry: with it, the high-water mark is
+/// always still in the table, and a replica that knows nothing about watermarks
+/// cannot reissue a number. Without it, a fully swept organization would start
+/// again at 1.
+#[tokio::test]
+#[ignore = "needs a disposable PostgreSQL via AIWATCHER_IAM_TEST_POSTGRES_URL"]
+async fn a_binary_that_predates_retention_still_numbers_the_next_entry() {
+    let clock = Arc::new(TestClock::default());
+    let (store, pool) = open(clock.clone()).await;
+    let owner = user("rolling-owner");
+    // Seconds 1..3, below every other scenario's clock, so a concurrent run of
+    // the suite shares the database without sharing this sweep.
+    clock.set(1);
+    let org = store.create_organization(&owner, "Rolling").await.unwrap();
+    for (at, name) in [(2, "second"), (3, "third")] {
+        clock.set(at);
+        store
+            .apply(
+                org.id,
+                &owner,
+                Command::CreateTeam {
+                    name: name.to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let retention = AuditRetention::new(1, "policy-rolling").unwrap();
+    store.prune_audit(&retention, 3 + 86_400).await.unwrap();
+
+    // Exactly the statement the released binary runs.
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(max(sequence), 0) + 1 FROM iam_audit WHERE organization_id = $1",
+    )
+    .bind(org.id.0)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(next, 4, "the swept trail still knows where it got to");
+
+    // And an old binary's page read still deserializes: nothing new was written
+    // into `iam_audit` itself.
+    let entries = store.audit(org.id, &owner, 0, 100).await.unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
 }

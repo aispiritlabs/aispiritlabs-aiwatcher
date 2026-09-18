@@ -8,7 +8,8 @@ review registries and native cohort derivation now have project-scoped HTTP
 adapters, described below. An execution now carries a durable owner and its
 store binds to one project, its artifacts and their catalog are isolated, a
 project may declare judged and framework measurements, and four registries can
-be migrated into a project by hand (see the last section). Logs, query services,
+be migrated into a project by hand (see the last section). The audit trail now has a retention of its own and a resumable export.
+Logs, query services,
 live streams, schedules and the execution workers themselves are not yet
 isolated, and no dispatcher opens a project execution.
 No organization/project selector should be activated on the strength of this
@@ -118,9 +119,10 @@ it is not a tamper-evident ledger against database administrators.
 Audit reads require current organization owner/admin membership, checked with
 the page read under a shared lock. Pagination uses `after` (exclusive sequence,
 default 0) and `limit` (1–100, default 50). Audit storage is separate from the
-4 MiB metadata limit and grows with administrative mutations; retention/export
-is not implemented. Migration 0002 adds the table without rewriting existing
-IAM documents or inventing events for changes before audit was available.
+4 MiB metadata limit and grows with administrative mutations until a retention
+is configured — see the next section. Migration 0002
+adds the table without rewriting existing IAM documents or inventing events for
+changes before audit was available.
 
 Schema migrations use a dedicated advisory lock and `iam_schema_migrations`.
 They are atomic, repeatable at startup and independent of workflow-store
@@ -129,6 +131,113 @@ closed. Existing documents are not rewritten on read. Released migration files
 must remain immutable; future changes add a migration. Enabling the server's IAM URL runs these migrations at startup. Validation for
 this milestone used only disposable test databases; no user resource data has
 been migrated.
+
+## The audit trail's own clock, and the copy taken before it
+
+The trail is the one thing here that grows without end, and until now nothing
+removed any of it and nothing could take a copy. Both exist now, and each
+follows a precedent this repository already set.
+
+**Retention names its own clock.** `AuditRetention { ttl_days, policy_id }` is
+not the event log's retention, which is sized for a volume of telemetry; not the
+conversation archive's, which is bounded by what somebody was told; and not the
+workflow store's, which follows what redelivers. It is off unless
+`AIWATCHER_IAM_AUDIT_RETENTION_DAYS` is set — every existing installation keeps
+every entry, and a release that started shortening an audit trail on upgrade
+would be the one change here nobody could undo. A zero is refused rather than
+read as "immediately", by the configuration layer and again by the crate: "off"
+is already expressible by leaving the variable unset, and one mistyped character
+must not empty the record.
+
+**Nothing over HTTP prunes.** There is no route and there is not meant to be
+one — an administrator who could delete the record of their own administration
+is the one capability an audit trail must not grant. `IamStore::prune_audit`
+takes no actor, and the only caller is the work the `serve` role runs on a
+timer.
+
+**A gap says so.** The delete and the `AuditWatermark` that explains it commit
+in one transaction, so there is no moment at which entries are gone and nothing
+says why. `GET …/audit/bounds` returns what the trail holds — first and last
+sequence, how many — and that watermark when a sweep has moved the beginning:
+how far it removed, before which moment, under which policy, and how many
+entries in total across every pass.
+
+**The newest entry of an organization is never swept.** `append_audit` numbers
+the next entry `COALESCE(max(sequence), 0) + 1`, and that statement belongs to
+every released binary as well as this one. Keeping one row means the high-water
+mark is always still in the table, so a replica that knows nothing about
+watermarks cannot reissue a sequence number — which is what makes retention safe
+to turn on during a rolling upgrade and safe to roll back from. Without it, a
+fully swept organization would start again at 1 and a reader paging from the
+watermark would meet two different acts under one number.
+
+**An export is [ADR_0022](../../docs/ADR/ADR_0022_STAGED_IMPORT_JOBS.md)'s job,
+and this is its third caller.** `AuditExports` pins the range when the job is
+created (`through_sequence` is the highest sequence the trail then held), writes
+shards of JSONL into the object store the registries use, and moves its cursor
+**only after a shard is stored** — a crash re-reads one shard's worth of entries
+and writes byte-identical bytes, where the other order would leave a frozen copy
+missing entries nothing could tell you about. The lease is renewed per shard and
+re-checked at every boundary; the version is
+`sha256(request ‖ every shard digest)`, so the same range over an unchanged
+trail is one reference. Entries the sweep reached first are counted as `missing`
+rather than quietly absent.
+
+The job record *is* the manifest: a conversation corpus earns a `name@version`
+and an index because a training run names one, and nothing names an audit
+export. Shards go to the object store rather than back into `iam_audit`, because
+a copy kept inside the table retention empties would not be a copy.
+
+**Authorization is re-asked for every page.** The job stores the principal who
+requested it — the pair, not a decision — and reads each page through
+`IamStore::audit` as them, so an administrator demoted mid-export stops the
+export. That is `ProjectAccess`'s rule applied to the one long-running thing
+this crate has: a snapshot is not a bearer capability, and a job is a sequence
+of operations rather than one. A demotion fails the job rather than requeueing
+it, because it will be just as true on the third attempt.
+
+| Method and path under `/api/v1/iam/organizations/{organization}` | Meaning |
+| --- | --- |
+| `GET /audit/bounds` | What the trail holds, and where a sweep moved its beginning. |
+| `POST /audit/exports` | Queue one, pinning the range. 202 with the queued job; a retried request joins the job it already started. |
+| `GET /audit/exports` | Every export of this organization, newest first. |
+| `GET /audit/exports/{job}` | One job: state, cursor, shards, counts, version. |
+| `DELETE /audit/exports/{job}` | Cancel one that has not finished. A finished one is 409. |
+| `GET /audit/exports/{job}/rows?offset=0&limit=100` | The frozen entries of a completed export. |
+
+All six need current organization owner/admin membership; the two writes need
+`X-AIWatcher-IAM: 1` like every other mutation here. An instance with an IAM
+store and no object store answers `501 iam_audit_exports_disabled` on the export
+routes, naming `AIWATCHER_PROMPT_STORE` — separate from the prompt registry's
+501 because the two are fixed by different variables.
+
+### Migration 0004, and why it is not schema 4
+
+`migrate` refuses a database whose `iam_schema_migrations` reads past the
+version it knows, and that refusal is right: schema 2 changed what an audit
+entry means, and a binary that silently skipped it would serve a history it did
+not know was incomplete.
+
+`iam_audit_retention` and the index beside it are the other kind of change.
+Nothing released selects from either, so recording them in that ledger would
+turn every rollback into a start-up refusal for something the older binary
+cannot see. They are recorded in `iam_schema_additions` instead — applied once,
+idempotent, and not a compatibility claim — and `max(version)` stays at 3.
+
+That is the whole of the rolling-upgrade story, and it is deliberately narrow.
+These migrations may add a table or an index, never a column an older binary
+would have to write and never a change to one it reads; a new `AuditAction`
+variant would fail an older reader's deserialization and a new field in the
+organization document would meet `deny_unknown_fields`, so neither is here. The
+moment an addition stops being invisible it belongs in the numbered ledger, with
+the refusal that comes with it.
+
+Turning retention on is safe at any point in a rollout, because the invariant
+that protects the old binary is in the *data* — the retained newest entry — not
+in the code that reads it.
+`tests/postgres.rs` proves both halves against a real database:
+`an_addition_leaves_the_version_a_released_binary_starts_on` and
+`a_binary_that_predates_retention_still_numbers_the_next_entry`.
 
 ## Optional server API
 
@@ -164,6 +273,10 @@ than silently discarding audit semantics.
 | `DELETE /organizations/{organization}/invitations/{invitation}` | Withdraw an unredeemed offer. A redeemed one is 409. |
 | `POST /invitations/redeem` | Membership and the declared grant, for the verified caller, once. Names no organization. |
 | `GET /organizations/{organization}/audit?after=0&limit=50` | Successful mutations, organization owner/admin only. |
+| `GET /organizations/{organization}/audit/bounds` | What the trail holds, and where retention moved its beginning. |
+| `POST\|GET /organizations/{organization}/audit/exports` | Queue a frozen copy of the trail, or list them. |
+| `GET\|DELETE /organizations/{organization}/audit/exports/{job}` | One export, or cancel an unfinished one. |
+| `GET /organizations/{organization}/audit/exports/{job}/rows` | A finished export's entries, a page at a time. |
 
 All mutations require `X-AIWatcher-IAM: 1` in addition to JSON and authentication.
 This non-simple header prevents cross-origin form writes using a session cookie;

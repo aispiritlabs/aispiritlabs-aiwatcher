@@ -1,6 +1,6 @@
 {
   "production": {
-    "core": [], "jobs": [], "auth": ["iam"], "iam": [],
+    "core": [], "jobs": [], "auth": ["iam"], "iam": ["core", "jobs"],
     "bus": ["core"], "trace": ["core"], "runner": ["core"],
     "prompts": ["core", "iam"], "datasets": ["core", "iam"], "training": ["core", "iam"], "evaluation": ["core", "iam"],
     "annotations": ["core", "jobs", "iam"], "conversations": ["core", "jobs"],
