@@ -36,7 +36,14 @@ const grant = (id: string, parts: Record<string, unknown> = {}) => ({
 
 /** The three reads every rendering of this page makes, with sensible defaults. */
 function server(routes: Route[]) {
+  // A workshop with no labs is the default, so every test about grants and
+  // invitations keeps answering what it used to. A test about labs says so by
+  // serving `/labs` itself, and its route wins because this one is not added.
+  const labs: Route[] = routes.some((route) => route.path === '/labs')
+    ? []
+    : [{ method: 'GET', path: '/labs', answer: { status: 200, body: { labs: [], total: 0 } } }];
   return serve([
+    ...labs,
     { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: true } } },
     {
       method: 'GET',
@@ -399,57 +406,219 @@ it('shows an enrolment token once and never asks the server for it again', async
   );
 });
 
-it('draws nine lab slots and claims no brief, test or mark for any of them', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  server([
-    {
-      method: 'GET',
-      path: '/projects',
-      answer: {
-        status: 200,
-        body: [
-          {
-            project,
-            role: 'viewer',
-            evaluated_at: WEDNESDAY,
-            grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
-          },
-        ],
-      },
-    },
+/** The grants half of a participant's workshop page, which every lab test needs. */
+function participant(extra: Route[]) {
+  const held = {
+    project,
+    role: 'viewer',
+    evaluated_at: WEDNESDAY,
+    grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
+  };
+  return server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [held] } },
     {
       method: 'GET',
       path: '/roster',
       answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
     },
-    {
-      method: 'GET',
-      path: '/access',
-      answer: {
-        status: 200,
-        body: {
-          project,
-          role: 'viewer',
-          evaluated_at: WEDNESDAY,
-          grants: [{ grant: grant('g1', { role: 'viewer' }), role: 'viewer' }],
-        },
-      },
-    },
+    { method: 'GET', path: '/access', answer: { status: 200, body: held } },
     {
       method: 'GET',
       path: '/grants',
       answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
     },
     { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+    ...extra,
+  ]);
+}
+
+const CONTEXT = 'c'.repeat(64);
+
+const summary = (parts: Record<string, unknown> = {}) => ({
+  name: 'lab-03',
+  is_published: true,
+  versions: 2,
+  updated_at: MONDAY,
+  current: {
+    version_id: 'a'.repeat(64),
+    title: 'Answer the support questions',
+    position: 3,
+    has_tests: true,
+    published_at: MONDAY,
+  },
+  ...parts,
+});
+
+const detail = (brief: string, tests: unknown) => ({
+  head: {
+    name: 'lab-03',
+    labels: { published: 'a'.repeat(64) },
+    versions: [],
+    updated_at: MONDAY,
+  },
+  current: {
+    version_id: 'a'.repeat(64),
+    name: 'lab-03',
+    title: 'Answer the support questions',
+    brief,
+    position: 3,
+    tests,
+    published_at: MONDAY,
+  },
+});
+
+it('draws no lab slot it cannot fill', async () => {
+  // The nine empty slots are gone. A workshop with no labs says it has none;
+  // a placeholder exercise reads as one somebody forgot to write, which is the
+  // same failure the nine slots were drawn to avoid the other way round.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  participant([]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  expect(await within(labs).findByText('This workshop has no labs yet')).toBeTruthy();
+  expect(within(labs).queryAllByRole('listitem')).toHaveLength(0);
+  // Nothing on this card may be a number: a progress figure nobody measured is
+  // the fake this area exists not to draw.
+  expect(within(labs).queryByText(/%/)).toBeNull();
+});
+
+it("reads a lab's tests and marks from the server, and computes no context id", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = participant([
+    {
+      method: 'GET',
+      path: '/labs',
+      answer: { status: 200, body: { labs: [summary()], total: 1 } },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03',
+      answer: {
+        status: 200,
+        body: detail('Build an agent that answers these.', {
+          scorecard: { name: 'support-quality', version: 'b'.repeat(64) },
+          cases: 'd'.repeat(64),
+        }),
+      },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03/measurement',
+      answer: {
+        status: 200,
+        body: {
+          name: 'lab-03',
+          version_id: 'a'.repeat(64),
+          measurement: {
+            context_id: CONTEXT,
+            context: {
+              dataset: { kind: 'curation', name: 'support-cases', version: 'e'.repeat(64) },
+              case_manifest: { name: 'cases', uri: 's3://cases', digest: 'd'.repeat(64) },
+              case_count: 12,
+              split: 'test',
+              suite: { name: 'support-quality', version: 'b'.repeat(64) },
+              scorer: { name: 'aiwatcher.scoring', version: '2' },
+              input_schema: { name: 'input', uri: 's3://in', digest: '1'.repeat(64) },
+              expectations_schema: { name: 'expected', uri: 's3://out', digest: '2'.repeat(64) },
+              metrics: [
+                { name: 'exact', unit: 'ratio', direction: 'higher', aggregation: 'mean' },
+                { name: 'cost', unit: 'usd', direction: 'lower', aggregation: 'sum' },
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-results',
+      answer: {
+        status: 200,
+        body: {
+          evaluations: [
+            {
+              receipt: {
+                evaluation_id: 'student-one',
+                variant_id: 'f'.repeat(64),
+                context_id: CONTEXT,
+                committed_at: WEDNESDAY,
+                expires_at: WEDNESDAY + DAY,
+                version: '1',
+              },
+              metrics: { exact: 0.75 },
+              state: 'complete',
+              reproducible: true,
+            },
+          ],
+        },
+      },
+    },
   ]);
   await open('/learning?organization=org&project=ret');
 
   const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
-  expect(within(labs).getAllByRole('listitem')).toHaveLength(9);
-  expect(within(labs).getAllByText('no contract')).toHaveLength(9 * 4);
-  // Nothing on a lab slot may be a number: a progress figure nobody measured
-  // is the fake this area exists not to draw.
-  expect(within(labs).queryByText(/%/)).toBeNull();
+  await userEvent.click(await within(labs).findByRole('button', { name: /Answer the support/ }));
+
+  expect(await within(labs).findByText('Build an agent that answers these.')).toBeTruthy();
+  expect(within(labs).getByText(/support-quality/)).toBeTruthy();
+  expect(within(labs).getByText(/12 from/)).toBeTruthy();
+  // The direction is the card's, drawn as the server sent it and never worked
+  // out here from the metric's name.
+  expect(within(labs).getByText('higher is better')).toBeTruthy();
+  expect(within(labs).getByText('lower is better')).toBeTruthy();
+  expect(within(labs).getByText('0.75')).toBeTruthy();
+
+  // The one thing this page must not do: the results were asked for by the
+  // context id the *server* answered, never by one composed here.
+  const results = stub.calls.find((call) => call.url.endsWith('/evaluation-results'));
+  expect(results?.search).toContain(`context_id=${CONTEXT}`);
+  expect(stub.countOf('GET', '/labs/lab-03/measurement')).toBe(1);
+});
+
+it("says in the server's words why a lab has no measurement, and shows no marks", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = participant([
+    {
+      method: 'GET',
+      path: '/labs',
+      answer: {
+        status: 200,
+        body: {
+          labs: [summary({ current: { ...summary().current, has_tests: false } })],
+          total: 1,
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03',
+      answer: { status: 200, body: detail('Still being written.', null) },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03/measurement',
+      answer: {
+        status: 200,
+        body: {
+          name: 'lab-03',
+          version_id: 'a'.repeat(64),
+          unavailable: 'this lab pins no tests yet',
+        },
+      },
+    },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  await userEvent.click(await within(labs).findByRole('button', { name: /Answer the support/ }));
+
+  expect(await within(labs).findByText('this lab pins no tests yet')).toBeTruthy();
+  // No results heading at all: a lab with no measurement has no context to
+  // list marks under, and an empty "Results" would read as nobody having done
+  // the work rather than as nothing being measurable.
+  expect(within(labs).queryByText('Results')).toBeNull();
+  expect(stub.countOf('GET', '/evaluation-results')).toBe(0);
 });
 
 it('keeps the workshop being looked at in the URL', async () => {

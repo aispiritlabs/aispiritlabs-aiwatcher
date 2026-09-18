@@ -241,9 +241,20 @@ followed by a full `tsc` project check.
   is absent and one that closed has left, which is why the second section is
   "Also in this organization" rather than "the ones you administer" and why a
   reader who cannot see the roster is told what the list cannot show them. And
-  **the nine lab slots stay empty**: the brief, the tests, the evaluation and
-  the mark have no contract anywhere in this instance, and a plausible one would
-  read as working software. The invitation and redeem cards are `shared/`,
+  **a lab is mostly a reader of registries this instance already had**
+  (ADR_0034): its tests are an evaluation scorecard at a version and a derived
+  cohort, its marks are the evaluation results that share its `context_id`, and
+  the one authored thing is the brief. So `lib/labs.ts` asks four scoped routes
+  and works nothing out — the context id comes from `GET
+  .../labs/{name}/measurement` the way an approval's address comes from its own
+  route, each metric's direction comes from the card, and whether one result
+  beat another is the comparison route this screen does not call. A lab that
+  pins no tests renders the server's `unavailable` sentence, and a workshop with
+  no labs says so: the nine empty slots are gone, and drawing a placeholder
+  exercise would be the same fake they were drawn to avoid. Which lab is open is
+  the one selection here that is **not** in the URL, because it is a section of
+  the workshop's page rather than a view of its own; it moves to the URL the day
+  a lab earns a route. The invitation and redeem cards are `shared/`,
   parameterised on their framing alone, because an administrator inviting
   somebody to a project and an instructor enrolling them in a workshop are the
   same offer.

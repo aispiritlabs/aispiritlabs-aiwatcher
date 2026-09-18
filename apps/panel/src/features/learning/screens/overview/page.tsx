@@ -45,10 +45,11 @@ const routeApi = getRouteApi('/learning');
  * What that buys is a whole half of this area working on day one: who is on a
  * workshop, when their access opens, when they stop being able to change
  * anything, when it closes, and how somebody joins who has never signed in
- * here. What it does not buy is the other half — a brief to read, tests, a
- * mark. Those have no contract anywhere in this instance and are drawn as
- * empty slots, because `AreaPlaceholder`'s rule holds here too: a plausible
- * fake reads as working software.
+ * here. The other half — a brief to read, tests, a mark — is the lab registry
+ * (ADR_0034) and the evaluation registry it points at, and almost all of it
+ * was here already: a lab's tests are a scorecard version and a cohort, and a
+ * mark is a published result. `Labs` reads those; what has no contract still
+ * says so in the server's own words rather than being drawn.
  *
  * One more limit is stated on the page rather than left to be discovered. A
  * grant reaches the **authored** registries — prompts, datasets, annotations,
@@ -441,7 +442,7 @@ function Workshop({
         </p>
       ) : null}
 
-      <Labs />
+      <Labs organization={organization} project={project} />
     </div>
   );
 }

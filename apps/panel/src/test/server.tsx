@@ -22,13 +22,13 @@ export type Route = {
 
 export type Server = {
   /** Every request that reached it, in order, with what it carried. */
-  readonly calls: { method: string; url: string; body?: unknown }[];
+  readonly calls: { method: string; url: string; search: string; body?: unknown }[];
   /** How many times one route was asked. */
   countOf: (method: string, path: string) => number;
 };
 
 export function serve(routes: Route[]): Server {
-  const calls: { method: string; url: string; body?: unknown }[] = [];
+  const calls: { method: string; url: string; search: string; body?: unknown }[] = [];
   const seen = new Map<Route, number>();
 
   vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
@@ -44,6 +44,9 @@ export function serve(routes: Route[]): Server {
     calls.push({
       method,
       url: url.pathname,
+      // What a read *asked for* is often the assertion, the way a mutation's
+      // body is: an id the browser was handed rather than one it derived.
+      search: url.search,
       body: sent ? (JSON.parse(sent) as unknown) : undefined,
     });
 
