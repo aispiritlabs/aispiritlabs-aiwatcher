@@ -19,6 +19,7 @@
 //! | `/workflows` | the log | a graph rather than a run. Its rerun is the one route that asks another system to work |
 //! | `/auth` | — | about the caller. Its layer runs in front of everything |
 //! | `/events` (POST) | — | the way in for a client that cannot reach the log directly |
+//! | `/labs` | object store | a workshop's exercise: the brief, and the card and cohort it pins — see [`labs`] |
 //!
 //! ADR_0021, ADR_0022, ADR_0025, ADR_0026.
 
@@ -47,6 +48,8 @@ pub mod iam;
 pub mod imports;
 pub mod ingest;
 pub mod integrations;
+mod lab_scope;
+pub mod labs;
 pub mod live;
 pub mod metrics;
 pub mod openapi;

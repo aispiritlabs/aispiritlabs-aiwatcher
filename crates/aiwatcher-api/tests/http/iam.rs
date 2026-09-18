@@ -561,3 +561,6 @@ mod project_declarations;
 
 #[path = "project_judged.rs"]
 mod project_judged;
+
+#[path = "project_labs.rs"]
+mod project_labs;

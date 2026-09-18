@@ -52,6 +52,7 @@ aiwatcher-conversations.workspace = true
 aiwatcher-training.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-execution.workspace = true
+aiwatcher-labs.workspace = true
 aiwatcher-trace.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true

@@ -60,6 +60,11 @@ pub enum LabError {
     /// The card this lab pins measures something a lab does not pin.
     #[error("the scorecard's `{metric}` {reason}")]
     Unmeasurable { metric: String, reason: String },
+    /// A lab's tests name a card or a cohort this project does not hold.
+    /// Refused where the lab is written, rather than when somebody submits
+    /// to a slot that measures nothing.
+    #[error("tests: {0}")]
+    Unpinned(String),
 }
 
 impl From<aiwatcher_evaluation::EvaluationError> for LabError {

@@ -75,6 +75,10 @@ struct Registries {
     datasets: Option<Arc<DatasetRegistry>>,
     annotations: Option<Arc<AnnotationRegistry>>,
     training: Option<Arc<TrainingRegistry>>,
+    /// A workshop's labs (ADR_0034): the authored brief and the measurement it
+    /// pins. The same store, its own prefix, and no second switch — a lab is
+    /// authored like a prompt and needs nothing a prompt does not.
+    labs: Option<Arc<aiwatcher_labs::Registry>>,
     evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
     /// The same adapter, seen from the other side: what an operator stages is
     /// what it later admits by, and the prefix those bytes land in is its own.
@@ -188,6 +192,10 @@ async fn build_registries(
         })
     };
     let training = Arc::new(TrainingRegistry::new(Arc::clone(&store), "training"));
+    let labs = Arc::new(aiwatcher_labs::Registry::new(
+        Arc::clone(&store),
+        Default::default(),
+    ));
     let conversations = build_conversation_archive(config, &store)?;
     let mut source = crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
         .with_bundles(store.clone())
@@ -222,6 +230,7 @@ async fn build_registries(
         datasets: Some(Arc::clone(&datasets)),
         annotations: Some(Arc::clone(&annotations)),
         training: Some(Arc::clone(&training)),
+        labs: Some(labs),
         evaluations: Some(Arc::new(evaluations)),
         evaluation_bundles: Some(source),
         conversations,
@@ -1035,6 +1044,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         source,
         sink: config.ingest_enabled.then(|| Arc::clone(&sink)),
         prompts: registries.prompts,
+        labs: registries.labs,
         datasets: registries.datasets,
         query_engine: config.query_engine,
         query_step_timeout_seconds: config.query_step_timeout_seconds,

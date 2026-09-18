@@ -54,6 +54,10 @@ pub fn router(state: AppState) -> Router {
         // Training is the one of the four whose contents never came from the
         // log at all: a run is a record that grows in place. See ADR_0018.
         .merge(crate::training::router())
+        // The sixth, and the one that is mostly a reader of the others: a lab
+        // holds a brief and pins a scorecard and a cohort, and its marks are
+        // evaluation results sharing one context. See ADR_0034.
+        .merge(crate::labs::router())
         // ── Asking another system to do something ────────────────────────────
         .merge(crate::workflows::router())
         // ── Doing the work here instead ──────────────────────────────────────

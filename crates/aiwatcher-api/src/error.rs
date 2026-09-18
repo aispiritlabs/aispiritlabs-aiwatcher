@@ -54,6 +54,9 @@ pub enum ApiError {
     #[error("this instance has no training registry configured (AIWATCHER_PROMPT_STORE)")]
     TrainingRegistryDisabled,
 
+    #[error("this instance has no lab registry configured (AIWATCHER_PROMPT_STORE)")]
+    LabRegistryDisabled,
+
     /// The one registry whose absence is the *default*, and deliberately so:
     /// a deployment that has not decided how it governs conversation content
     /// must not be quietly holding any. See ADR_0021.
@@ -257,6 +260,9 @@ pub enum ApiError {
     TrainingRegistry(#[from] aiwatcher_training::Error),
 
     #[error(transparent)]
+    LabRegistry(#[from] aiwatcher_labs::LabError),
+
+    #[error(transparent)]
     ConversationArchive(#[from] aiwatcher_conversations::Error),
 
     /// A rerun the orchestrator would not take. Distinct from every other
@@ -323,6 +329,7 @@ impl ApiError {
             | Self::AnnotationRegistryDisabled
             | Self::EvaluationDisabled
             | Self::TrainingRegistryDisabled
+            | Self::LabRegistryDisabled
             | Self::ConversationArchiveDisabled => {
                 (StatusCode::NOT_IMPLEMENTED, "registry_disabled")
             }
@@ -421,6 +428,7 @@ impl ApiError {
                 _ => (StatusCode::SERVICE_UNAVAILABLE, "evidence_unavailable"),
             },
             Self::TrainingRegistry(error) => training_registry_parts(error),
+            Self::LabRegistry(error) => lab_registry_parts(error),
             Self::ConversationArchive(error) => conversation_archive_parts(error),
             // The same retryable/not split the registry makes, for the same
             // reason: an orchestrator that is down is a 503 worth repeating,
@@ -583,6 +591,35 @@ fn training_registry_parts(error: &aiwatcher_training::Error) -> (StatusCode, &'
         }
         Error::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
         Error::Corrupt { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt"),
+    }
+}
+
+/// A lab registry failure, as a status the caller can act on.
+///
+/// One outcome no other registry here has. A card that measures something a
+/// lab does not pin is a **422**, not a 400: the request is well formed and the
+/// lab is storable — what cannot be answered is the context its results would
+/// share, and the refusal names the metric that asks. A 400 would send somebody
+/// looking at their own typing for a disagreement that is in the scorecard.
+fn lab_registry_parts(error: &aiwatcher_labs::LabError) -> (StatusCode, &'static str) {
+    use aiwatcher_labs::LabError;
+    match error {
+        LabError::UnknownLab(_) | LabError::UnknownVersion { .. } => {
+            (StatusCode::NOT_FOUND, "not_found")
+        }
+        LabError::Invalid { .. } | LabError::InvalidScope(_) => {
+            (StatusCode::BAD_REQUEST, "bad_request")
+        }
+        LabError::Unmeasurable { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "lab_unmeasurable"),
+        LabError::Unpinned(_) => (StatusCode::UNPROCESSABLE_ENTITY, "lab_unpinned"),
+        LabError::Disabled => (StatusCode::NOT_IMPLEMENTED, "registry_disabled"),
+        LabError::Store(store) if store.is_retryable() => {
+            (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
+        }
+        LabError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
+        LabError::Corrupt { .. } | LabError::Encoding(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt")
+        }
     }
 }
 

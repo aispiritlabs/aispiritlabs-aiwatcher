@@ -103,6 +103,12 @@ pub struct AppState {
     /// rows each execution produced. It shares the configured object store
     /// with prompts, under a separate key prefix.
     pub datasets: Option<Arc<DatasetRegistry>>,
+    /// A workshop's labs: the authored brief and the measurement it pins
+    /// (ADR_0034). The same object store again, under its own prefix, and
+    /// `None` on the same condition as `prompts` — so a lab route answers 501
+    /// naming the variable rather than an empty list, which would be a
+    /// different problem with a different fix.
+    pub labs: Option<Arc<aiwatcher_labs::Registry>>,
 
     /// When a definition runs unattended. `None` when this deployment has no
     /// object store, which is the same condition that leaves it no definitions
@@ -341,6 +347,7 @@ impl std::fmt::Debug for AppState {
             .field("ingest_enabled", &self.sink.is_some())
             .field("prompt_registry", &self.prompts.is_some())
             .field("dataset_registry", &self.datasets.is_some())
+            .field("lab_registry", &self.labs.is_some())
             .field("annotation_registry", &self.annotations.is_some())
             .field("conversation_archive", &self.conversations.is_some())
             .field("execution_store", &self.executions.is_some())
