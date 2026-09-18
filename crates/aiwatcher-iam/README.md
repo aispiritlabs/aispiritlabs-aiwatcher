@@ -159,6 +159,10 @@ than silently discarding audit semantics.
 | `GET /organizations/{organization}/projects/{project}/access` | Fresh grant decision and its sources, including expiry. |
 | `GET /organizations/{organization}/roster` | Members, teams and every project. Organization owner/admin only. |
 | `GET /organizations/{organization}/projects/{project}/grants` | Every grant on one project, as issued. Organization admin or that project's admin. |
+| `POST /organizations/{organization}/projects/{project}/invitations` | Offer a grant to whoever holds the returned token. Same authority as issuing one. The token is returned **once**. |
+| `GET /organizations/{organization}/invitations` | Offers for projects this caller may administer. Never a token. |
+| `DELETE /organizations/{organization}/invitations/{invitation}` | Withdraw an unredeemed offer. A redeemed one is 409. |
+| `POST /invitations/redeem` | Membership and the declared grant, for the verified caller, once. Names no organization. |
 | `GET /organizations/{organization}/audit?after=0&limit=50` | Successful mutations, organization owner/admin only. |
 
 All mutations require `X-AIWatcher-IAM: 1` in addition to JSON and authentication.
@@ -188,6 +192,52 @@ Organization creation has no invitation/email or arbitrary owner field. Instance
 administrators can create organizations, but cannot read another organization
 merely because of that instance role. The API derives the actor from a verified
 OIDC session/bearer, never from a request body.
+
+## Invitations
+
+A grant names a `(provider, subject)` pair, and **nobody knows a stranger's
+subject until their provider has minted one** — so until an invitation exists,
+sharing a project means asking the person to sign in first and read their
+subject out. An invitation is the offer made to a secret instead: whoever
+presents the token becomes an ordinary member of the organization and receives
+exactly the grant the offer declared, once, in one transaction with the audit
+entry that records it.
+
+The rules, and the reason for each:
+
+- **The token exists once.** The store mints it (244 bits from two version-4
+  UUIDs) and keeps only `sha256(token)`; the plaintext is in the response that
+  created the offer and nowhere else. A stolen document yields digests.
+- **A `label` is a delivery hint, never an identity key.** It is an email
+  address or a name on a list, is never compared against anybody, and the person
+  who redeems is whoever holds the token — checking the label would be
+  authentication by an unverified string.
+- **Single use, whoever asks.** A second redemption is `Error::Redeemed` (409)
+  for the person who used it and for anybody else. There is no way to re-open
+  one; issue another.
+- **Two clocks, deliberately.** `expires_at` says how long somebody has to
+  accept; the `GrantWindow` is what they get when they do. An offer that lapsed
+  is 410 to its holder, who is the only person who can ask — telling them "it
+  lapsed" leaks nothing, since without the token there is nothing to ask with.
+- **Redemption names no organization.** Whoever holds a token does not know
+  which organization it belongs to, and a route that made them say would confirm
+  a guess. The digest finds the row through a GIN index and the same statement
+  locks it, so two people racing one offer serialize and the second is told it
+  is spent.
+- **Withdrawing a redeemed offer is refused, not silently undone.** What it
+  produced is a grant; taking that back is `RevokeGrant`.
+- **Offers are pruned thirty days after they stop mattering.** An invitation is
+  an operational record — once redeemed, the grant is what matters; once
+  lapsed, there is nothing to do with it. The lasting trace is the audit entry,
+  which is not in the aggregate and is not pruned. Without this a year of
+  workshops would fill the 4 MiB document with offers nobody can act on.
+
+Invitations live in the organization's own aggregate rather than a table of
+their own, so a redemption is one row lock over both the offer and the grant it
+becomes. The field is additive and read as absent from documents written before
+it existed; an older binary meeting a newer document fails closed on
+`deny_unknown_fields` rather than dropping the offers it cannot see. Migration
+0003 adds only the index the digest lookup needs.
 
 ## Verification
 

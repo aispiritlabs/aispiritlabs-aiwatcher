@@ -77,6 +77,38 @@ impl IamStore for Flaky {
     ) -> aiwatcher_iam::Result<Vec<aiwatcher_iam::ProjectAccess>> {
         self.inner.projects(organization, actor).await
     }
+    async fn invite(
+        &self,
+        scope: ProjectScope,
+        actor: &Principal,
+        offer: aiwatcher_iam::InvitationOffer,
+    ) -> aiwatcher_iam::Result<aiwatcher_iam::IssuedInvitation> {
+        self.inner.invite(scope, actor, offer).await
+    }
+    async fn invitations(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> aiwatcher_iam::Result<Vec<aiwatcher_iam::Invitation>> {
+        self.inner.invitations(organization, actor).await
+    }
+    async fn revoke_invitation(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+        invitation: aiwatcher_iam::InvitationId,
+    ) -> aiwatcher_iam::Result<()> {
+        self.inner
+            .revoke_invitation(organization, actor, invitation)
+            .await
+    }
+    async fn redeem(
+        &self,
+        token: &str,
+        redeemer: &Principal,
+    ) -> aiwatcher_iam::Result<aiwatcher_iam::Redeemed> {
+        self.inner.redeem(token, redeemer).await
+    }
     async fn roster(
         &self,
         organization: OrganizationId,

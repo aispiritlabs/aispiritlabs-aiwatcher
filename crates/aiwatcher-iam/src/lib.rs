@@ -12,7 +12,26 @@ pub mod postgres;
 
 use async_trait::async_trait;
 pub use model::*;
+use sha2::{Digest, Sha256};
 use std::fmt::Debug;
+use uuid::Uuid;
+
+/// A new invitation token, and nothing that can show it again.
+///
+/// 244 bits from two version-4 UUIDs rather than a dependency on a random
+/// number generator: `uuid` is already here and draws from the same system
+/// source. The plaintext is returned once, to the caller that made the offer;
+/// only [`digest_of`] is stored.
+#[must_use]
+pub fn mint_invitation_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+/// The one form of a token this crate keeps.
+#[must_use]
+pub fn digest_of(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -24,6 +43,10 @@ pub enum Error {
     Forbidden,
     #[error("an organization must retain at least one owner")]
     LastOwner,
+    #[error("the invitation has expired")]
+    Expired,
+    #[error("the invitation has already been redeemed")]
+    Redeemed,
     #[error("invalid IAM input: {0}")]
     Invalid(String),
     #[error("unsupported or inconsistent IAM document: {0}")]
@@ -86,4 +109,30 @@ pub trait IamStore: Debug + Send + Sync {
     /// Fresh policy decision; not a durable capability. Streams, jobs and
     /// later writes must recheck rather than treating it as a session grant.
     async fn access(&self, scope: ProjectScope, actor: &Principal) -> Result<ProjectAccess>;
+
+    /// Offer a grant to whoever holds the returned token. The token is minted
+    /// here, stored only as a digest, and returned exactly once.
+    async fn invite(
+        &self,
+        scope: ProjectScope,
+        actor: &Principal,
+        offer: InvitationOffer,
+    ) -> Result<IssuedInvitation>;
+    /// The offers for projects this caller may administer.
+    async fn invitations(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> Result<Vec<Invitation>>;
+    /// Withdraw an offer nobody has taken up. A redeemed one is refused.
+    async fn revoke_invitation(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+        invitation: InvitationId,
+    ) -> Result<()>;
+    /// Membership and a grant for whoever presented this token, in one
+    /// transaction, once. The redeemer's pair comes from a verified session and
+    /// is learned here; the offer never named it.
+    async fn redeem(&self, token: &str, redeemer: &Principal) -> Result<Redeemed>;
 }

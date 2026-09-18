@@ -19,6 +19,10 @@ pub enum ApiError {
     IamUnavailable,
     #[error("an organization must retain at least one owner")]
     IamLastOwner,
+    #[error("that invitation has expired")]
+    IamInvitationExpired,
+    #[error("that invitation has already been redeemed")]
+    IamInvitationRedeemed,
     #[error("evaluation: {0}")]
     Evaluation(#[from] aiwatcher_evaluation::EvaluationError),
     #[error("durable evaluations require an object store (AIWATCHER_PROMPT_STORE)")]
@@ -302,6 +306,10 @@ impl ApiError {
             Self::IamForbidden => (StatusCode::FORBIDDEN, "iam_forbidden"),
             Self::IamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "iam_unavailable"),
             Self::IamLastOwner => (StatusCode::CONFLICT, "iam_last_owner"),
+            // Gone rather than Not Found: the holder of a token is entitled to
+            // know their offer lapsed, and nobody else holds one to ask with.
+            Self::IamInvitationExpired => (StatusCode::GONE, "iam_invitation_expired"),
+            Self::IamInvitationRedeemed => (StatusCode::CONFLICT, "iam_invitation_redeemed"),
             Self::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             Self::BadRequest(_) | Self::Core(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::IngestDisabled => (StatusCode::FORBIDDEN, "ingest_disabled"),
@@ -783,6 +791,8 @@ impl From<aiwatcher_iam::Error> for ApiError {
             Error::NotFound => Self::NotFound("IAM resource".into()),
             Error::Forbidden => Self::IamForbidden,
             Error::LastOwner => Self::IamLastOwner,
+            Error::Expired => Self::IamInvitationExpired,
+            Error::Redeemed => Self::IamInvitationRedeemed,
             Error::Invalid(message) => Self::BadRequest(message),
             Error::Backend(_) | Error::Incompatible(_) => {
                 tracing::error!(%error, "IAM storage operation failed");

@@ -1,6 +1,6 @@
 //! Test/development adapter. Authorization and mutation share one lock.
 
-use crate::{policy::OrganizationState, *};
+use crate::{policy, policy::OrganizationState, *};
 use async_trait::async_trait;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -162,4 +162,127 @@ impl IamStore for MemoryIamStore {
             .state
             .access(scope, actor, self.clock.now())
     }
+
+    async fn invite(
+        &self,
+        scope: ProjectScope,
+        actor: &Principal,
+        offer: InvitationOffer,
+    ) -> Result<IssuedInvitation> {
+        let token = mint_invitation_token();
+        let mut organizations = self.organizations.write().await;
+        let stored = organizations
+            .get_mut(&scope.organization)
+            .ok_or(Error::NotFound)?;
+        let mut next = stored.state.clone();
+        let now = self.clock.now();
+        let invitation = next.invite(actor, scope.project, offer, digest_of(&token), now)?;
+        next.encode()?;
+        push_audit(
+            stored,
+            scope.organization,
+            actor,
+            now,
+            AuditAction::InvitationCreated {
+                invitation: Box::new(invitation.clone()),
+            },
+        )?;
+        stored.state = next;
+        Ok(IssuedInvitation { invitation, token })
+    }
+
+    async fn invitations(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+    ) -> Result<Vec<Invitation>> {
+        self.organizations
+            .read()
+            .await
+            .get(&organization)
+            .ok_or(Error::NotFound)?
+            .state
+            .invitations(actor, self.clock.now())
+    }
+
+    async fn revoke_invitation(
+        &self,
+        organization: OrganizationId,
+        actor: &Principal,
+        invitation: InvitationId,
+    ) -> Result<()> {
+        let mut organizations = self.organizations.write().await;
+        let stored = organizations
+            .get_mut(&organization)
+            .ok_or(Error::NotFound)?;
+        let mut next = stored.state.clone();
+        let now = self.clock.now();
+        next.revoke_invitation(actor, invitation, now)?;
+        next.encode()?;
+        push_audit(
+            stored,
+            organization,
+            actor,
+            now,
+            AuditAction::InvitationRevoked { invitation },
+        )?;
+        stored.state = next;
+        Ok(())
+    }
+
+    /// A scan across organizations, which a development adapter can afford and
+    /// the PostgreSQL one replaces with an index. The digest is what is
+    /// compared, never the token.
+    async fn redeem(&self, token: &str, redeemer: &Principal) -> Result<Redeemed> {
+        let digest = digest_of(token);
+        let mut organizations = self.organizations.write().await;
+        let id = *organizations
+            .iter()
+            .find(|(_, stored)| stored.state.holds_invitation(&digest))
+            .map(|(id, _)| id)
+            .ok_or(Error::NotFound)?;
+        let stored = organizations.get_mut(&id).ok_or(Error::NotFound)?;
+        let mut next = stored.state.clone();
+        let now = self.clock.now();
+        let redeemed = next.redeem(&digest, redeemer, now)?;
+        next.encode()?;
+        push_audit(
+            stored,
+            id,
+            redeemer,
+            now,
+            AuditAction::InvitationRedeemed {
+                invitation: invitation_id(&next, redeemed.grant)?,
+                grant: redeemed.grant,
+            },
+        )?;
+        stored.state = next;
+        Ok(redeemed)
+    }
+}
+
+fn push_audit(
+    stored: &mut AuditedOrganization,
+    organization: OrganizationId,
+    actor: &Principal,
+    occurred_at: i64,
+    action: AuditAction,
+) -> Result<()> {
+    let sequence =
+        i64::try_from(stored.audit.len()).map_err(|e| Error::Backend(e.to_string()))? + 1;
+    stored.audit.push(AuditEntry {
+        sequence,
+        organization,
+        actor: actor.clone(),
+        occurred_at,
+        action,
+    });
+    Ok(())
+}
+
+/// Which offer produced a grant, for the audit entry beside it.
+fn invitation_id(state: &policy::OrganizationState, grant: GrantId) -> Result<InvitationId> {
+    state
+        .invitation_of(grant)
+        .ok_or_else(|| Error::Backend("a redemption produced no invitation".into()))
 }

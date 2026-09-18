@@ -134,10 +134,24 @@ function granteeOf(grantee: IamGrantee): string {
 }
 
 function sentenceOf(entry: AuditEntry): string {
-  if (entry.action.type === 'organization_created') {
-    return `created the organization ${entry.action.organization.name}`;
+  switch (entry.action.type) {
+    case 'organization_created':
+      return `created the organization ${entry.action.organization.name}`;
+    case 'invitation_created':
+      return `offered ${entry.action.invitation.role} on ${short(
+        entry.action.invitation.scope.project,
+      )}${entry.action.invitation.label ? ` to ${entry.action.invitation.label}` : ''}`;
+    case 'invitation_revoked':
+      return `withdrew the invitation ${short(entry.action.invitation)}`;
+    // The one line here written by somebody who was not a member until they
+    // wrote it — which is what an invitation is for.
+    case 'invitation_redeemed':
+      return `redeemed the invitation ${short(entry.action.invitation)}, becoming ${short(
+        entry.action.grant,
+      )}`;
+    case 'command_applied':
+      return describe(entry.action.command, entry.action.change);
   }
-  return describe(entry.action.command, entry.action.change);
 }
 
 function describe(command: IamCommand, change: IamChange): string {

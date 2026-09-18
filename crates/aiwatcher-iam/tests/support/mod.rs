@@ -274,6 +274,136 @@ pub async fn a_roster_answers_administrators_and_a_project_s_grants_answer_its_a
     ));
 }
 
+pub async fn an_invitation_is_one_use_expiring_and_learns_who_took_it(
+    store: &dyn IamStore,
+    clock: &TestClock,
+) {
+    let (alice, stranger, other) = (user("owner"), user("stranger"), user("someone-else"));
+    let org = store.create_organization(&alice, "Workshop").await.unwrap();
+    let lesson = project(store, org.id, &alice).await;
+
+    let issued = store
+        .invite(
+            lesson.scope,
+            &alice,
+            InvitationOffer {
+                role: ProjectRole::Editor,
+                window: GrantWindow {
+                    valid_from: 1_000,
+                    edit_until: Some(3_000),
+                    read_until: None,
+                },
+                expires_at: 2_000,
+                label: Some("somebody@example.test".into()),
+            },
+        )
+        .await
+        .unwrap();
+    // The one moment the token exists, and it is not in the record.
+    assert_eq!(issued.token.len(), 64);
+    assert!(issued.invitation.redeemed.is_none());
+    let listed = store.invitations(org.id, &alice).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(
+        !serde_json::to_string(&listed)
+            .unwrap()
+            .contains(&issued.token),
+        "a stored invitation must not carry its own token",
+    );
+
+    // A stranger is not a member and reaches nothing — until they redeem.
+    assert!(matches!(
+        store.access(lesson.scope, &stranger).await,
+        Err(Error::NotFound)
+    ));
+    let redeemed = store.redeem(&issued.token, &stranger).await.unwrap();
+    assert_eq!(redeemed.project, lesson);
+    assert_eq!(redeemed.role, ProjectRole::Editor);
+    let access = store.access(lesson.scope, &stranger).await.unwrap();
+    assert_eq!(access.role, ProjectRole::Editor);
+    assert_eq!(access.grants.len(), 1);
+    assert_eq!(access.grants[0].grant.id, redeemed.grant);
+
+    // Once, by anybody. The second attempt is refused whoever makes it, and
+    // the first redeemer is remembered by the pair their session proved.
+    assert!(matches!(
+        store.redeem(&issued.token, &stranger).await,
+        Err(Error::Redeemed)
+    ));
+    assert!(matches!(
+        store.redeem(&issued.token, &other).await,
+        Err(Error::Redeemed)
+    ));
+    let spent = store.invitations(org.id, &alice).await.unwrap();
+    assert_eq!(
+        spent[0].redeemed.as_ref().map(|entry| &entry.principal),
+        Some(&stranger),
+    );
+    // Withdrawing a spent offer is refused rather than silently undoing it:
+    // what it produced is a grant, and that is revoked on its own.
+    assert!(matches!(
+        store
+            .revoke_invitation(org.id, &alice, issued.invitation.id)
+            .await,
+        Err(Error::Redeemed),
+    ));
+
+    // An unknown token is absent, and an expired one says so — the holder is
+    // the only person who can ask, and "it lapsed" is what they need.
+    assert!(matches!(
+        store.redeem("f".repeat(64).as_str(), &other).await,
+        Err(Error::NotFound)
+    ));
+    let lapsing = store
+        .invite(
+            lesson.scope,
+            &alice,
+            InvitationOffer {
+                role: ProjectRole::Viewer,
+                window: GrantWindow::permanent(1_000),
+                expires_at: 1_500,
+                label: None,
+            },
+        )
+        .await
+        .unwrap();
+    clock.set(1_600);
+    assert!(matches!(
+        store.redeem(&lapsing.token, &other).await,
+        Err(Error::Expired)
+    ));
+    // …and an offer nobody took can still be withdrawn.
+    store
+        .revoke_invitation(org.id, &alice, lapsing.invitation.id)
+        .await
+        .unwrap();
+
+    // Only the authority that may grant here may offer one, and a member who
+    // may not administer the project sees none of its offers.
+    assert!(matches!(
+        store
+            .invite(
+                lesson.scope,
+                &stranger,
+                InvitationOffer {
+                    role: ProjectRole::Admin,
+                    window: GrantWindow::permanent(1_600),
+                    expires_at: 9_000,
+                    label: None,
+                },
+            )
+            .await,
+        Err(Error::Forbidden),
+    ));
+    assert!(
+        store
+            .invitations(org.id, &stranger)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 pub async fn membership_is_not_project_access(store: &dyn IamStore, _: &TestClock) {
     let (alice, bob, carol) = (user("owner"), user("second-owner"), user("admin"));
     let org = store

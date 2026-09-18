@@ -27,6 +27,7 @@ id!(OrganizationId);
 id!(ProjectId);
 id!(TeamId);
 id!(GrantId);
+id!(InvitationId);
 
 /// A stable provider namespace and its subject, compared exactly. Email and
 /// display names are deliberately absent; neither is an identity key.
@@ -206,6 +207,90 @@ impl ProjectAccess {
     }
 }
 
+/// An offer of a grant to whoever holds its token, redeemable once.
+///
+/// This is what lets somebody be given access **before** they have ever signed
+/// in, which a grant cannot do: a grant names a `(provider, subject)` pair and
+/// nobody knows a stranger's subject until their provider has minted one. So
+/// the offer is made to a secret instead, and the pair is learned at the moment
+/// it is redeemed.
+///
+/// The token itself is not here and is never stored: only a SHA-256 of it is,
+/// and the plaintext exists once, in the response that created it. A `label`
+/// is a delivery hint — an email address, a name on a list — and **never an
+/// identity key**: whoever holds the token redeems it, and checking the label
+/// would be authentication by an unverified string.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamInvitation))]
+pub struct Invitation {
+    pub id: InvitationId,
+    pub scope: ProjectScope,
+    /// What redeeming it grants — the same three roles a grant carries.
+    pub role: ProjectRole,
+    /// The window the resulting grant gets, declared when the offer was made.
+    pub window: GrantWindow,
+    /// When the *offer* stops being redeemable, which is not the window's end.
+    pub expires_at: i64,
+    pub created_by: Principal,
+    pub created_at: i64,
+    /// A note about who it was sent to. Never compared against anybody.
+    pub label: Option<String>,
+    pub redeemed: Option<Redemption>,
+}
+
+/// What an invitation offers: everything its author declares, as one value.
+///
+/// One type rather than four parameters, and the same shape the HTTP body has —
+/// so a field added here is added once and refused everywhere it is not
+/// understood, rather than threaded through five signatures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamInvitationOffer))]
+pub struct InvitationOffer {
+    pub role: ProjectRole,
+    /// The window the resulting grant gets.
+    pub window: GrantWindow,
+    /// When the offer stops being redeemable, which is not the window's end.
+    pub expires_at: i64,
+    /// A note about who it was sent to. Never compared against anybody.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Who turned an offer into a grant, and which grant it became.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamRedemption))]
+pub struct Redemption {
+    pub principal: Principal,
+    pub at: i64,
+    pub grant: GrantId,
+}
+
+/// The one moment the token exists in the clear.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamIssuedInvitation))]
+pub struct IssuedInvitation {
+    pub invitation: Invitation,
+    /// Deliver this and forget it. Nothing can show it again.
+    pub token: String,
+}
+
+/// What a redeemer learns: where they now are, and what they got.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamRedeemed))]
+pub struct Redeemed {
+    pub organization: Organization,
+    pub project: Project,
+    pub role: ProjectRole,
+    pub window: GrantWindow,
+    pub grant: GrantId,
+}
+
 /// One person's standing in the organization, which is not access to anything.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -322,6 +407,19 @@ pub enum AuditAction {
     CommandApplied {
         command: Box<Command>,
         change: Change,
+    },
+    /// An offer, never its token: the record here carries only the hash, and
+    /// the hash is not in [`Invitation`].
+    InvitationCreated {
+        invitation: Box<Invitation>,
+    },
+    InvitationRevoked {
+        invitation: InvitationId,
+    },
+    /// The one entry written by somebody who was not yet a member.
+    InvitationRedeemed {
+        invitation: InvitationId,
+        grant: GrantId,
     },
 }
 

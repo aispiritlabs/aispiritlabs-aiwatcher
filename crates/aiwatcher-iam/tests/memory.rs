@@ -18,6 +18,7 @@ contract!(
     provider_subject_boundary,
     membership_is_not_project_access,
     a_roster_answers_administrators_and_a_project_s_grants_answer_its_admin,
+    an_invitation_is_one_use_expiring_and_learns_who_took_it,
     cross_organization_references_are_refused,
     timed_and_permanent_grants_are_unioned,
     timed_access_expires_without_a_new_session,

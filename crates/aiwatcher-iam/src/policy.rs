@@ -8,6 +8,15 @@ use std::collections::BTreeSet;
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+/// How long a spent or lapsed invitation stays in the aggregate.
+///
+/// An invitation is an operational record with a short life: once it is
+/// redeemed the grant is the thing that matters, and once it has expired
+/// unredeemed there is nothing to do with it. Its lasting trace is the audit
+/// entry, which is not in this document and is not pruned. Without this, a
+/// school year of workshops would fill a 4 MiB aggregate with offers nobody
+/// can act on.
+const INVITATION_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +32,16 @@ struct TeamRecord {
     members: Vec<Principal>,
 }
 
+/// The stored form of an offer: the record, plus the digest of the one secret
+/// that redeems it. The digest never leaves this module, and [`Invitation`] —
+/// which does leave — has no field for it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvitationRecord {
+    invitation: Invitation,
+    token_sha256: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OrganizationState {
@@ -32,6 +51,12 @@ pub(crate) struct OrganizationState {
     teams: Vec<TeamRecord>,
     projects: Vec<Project>,
     grants: Vec<Grant>,
+    // Additive, and read as absent from every document written before
+    // invitations existed. The other direction is refused rather than
+    // truncated: `deny_unknown_fields` means an older binary reading a newer
+    // document fails closed instead of dropping the offers it cannot see.
+    #[serde(default)]
+    invitations: Vec<InvitationRecord>,
 }
 
 impl OrganizationState {
@@ -57,6 +82,7 @@ impl OrganizationState {
             teams: vec![],
             projects: vec![],
             grants: vec![],
+            invitations: vec![],
         })
     }
 
@@ -148,6 +174,34 @@ impl OrganizationState {
                 ));
             }
         }
+        let offers: BTreeSet<_> = self
+            .invitations
+            .iter()
+            .map(|record| record.invitation.id)
+            .collect();
+        if offers.len() != self.invitations.len() {
+            return Err(Error::Incompatible("duplicate invitation IDs".into()));
+        }
+        for record in &self.invitations {
+            record.invitation.window.validate()?;
+            record.invitation.created_by.validate()?;
+            // A redeemed offer names a member and a grant that exist; an offer
+            // for a project this organization does not have could grant into
+            // somebody else's scope the moment somebody took it up.
+            if record.invitation.scope.organization != self.organization.id
+                || !projects.contains(&record.invitation.scope.project)
+                || record.token_sha256.len() != 64
+                || record
+                    .invitation
+                    .redeemed
+                    .as_ref()
+                    .is_some_and(|redemption| !members.contains(&redemption.principal))
+            {
+                return Err(Error::Incompatible(
+                    "invitation outside this organization or naming nothing".into(),
+                ));
+            }
+        }
         for grant in &self.grants {
             grant.window.validate()?;
             if grant.scope.organization != self.organization.id
@@ -163,6 +217,197 @@ impl OrganizationState {
             }
         }
         Ok(())
+    }
+
+    /// Offer an unknown person a grant, by giving a secret the right to become
+    /// one.
+    ///
+    /// The authority is the project's: whoever may issue a grant here may issue
+    /// an offer of one, because that is what it becomes. The digest arrives
+    /// already computed — this module never sees the token, and the only thing
+    /// that can be leaked from a stolen document is a hash.
+    pub fn invite(
+        &mut self,
+        actor: &Principal,
+        project: ProjectId,
+        offer: InvitationOffer,
+        token_sha256: String,
+        now: i64,
+    ) -> Result<Invitation> {
+        let scope = self.manage_project(actor, project, now)?;
+        offer.window.validate()?;
+        if offer.expires_at <= now {
+            return Err(Error::Invalid(
+                "an invitation must expire in the future".into(),
+            ));
+        }
+        if token_sha256.len() != 64 || !token_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Error::Invalid("the token digest is not a SHA-256".into()));
+        }
+        let label = offer.label.map(|value| model::name(&value)).transpose()?;
+        self.forget_spent_invitations(now);
+        let invitation = Invitation {
+            id: InvitationId::new(),
+            scope,
+            role: offer.role,
+            window: offer.window,
+            expires_at: offer.expires_at,
+            created_by: actor.clone(),
+            created_at: now,
+            label,
+            redeemed: None,
+        };
+        self.invitations.push(InvitationRecord {
+            invitation: invitation.clone(),
+            token_sha256,
+        });
+        Ok(invitation)
+    }
+
+    /// The offers for projects this caller may administer, newest first.
+    ///
+    /// Not every offer in the organization: a project admin sees their own
+    /// project's, which is the same line `project_grants` draws.
+    pub fn invitations(&self, actor: &Principal, now: i64) -> Result<Vec<Invitation>> {
+        self.member_role(actor)?;
+        let mut offers: Vec<_> = self
+            .invitations
+            .iter()
+            .filter(|record| {
+                self.manage_project(actor, record.invitation.scope.project, now)
+                    .is_ok()
+            })
+            .map(|record| record.invitation.clone())
+            .collect();
+        offers.sort_by_key(|offer| std::cmp::Reverse(offer.created_at));
+        Ok(offers)
+    }
+
+    /// Withdraw an offer nobody has taken up.
+    ///
+    /// A redeemed one is refused rather than deleted, because deleting it would
+    /// read as undoing it: what it produced is a grant, and revoking that is
+    /// [`Command::RevokeGrant`]'s job.
+    pub fn revoke_invitation(
+        &mut self,
+        actor: &Principal,
+        invitation: InvitationId,
+        now: i64,
+    ) -> Result<()> {
+        let record = self
+            .invitations
+            .iter()
+            .find(|record| record.invitation.id == invitation)
+            .ok_or(Error::NotFound)?;
+        self.manage_project(actor, record.invitation.scope.project, now)?;
+        if record.invitation.redeemed.is_some() {
+            return Err(Error::Redeemed);
+        }
+        self.invitations
+            .retain(|record| record.invitation.id != invitation);
+        Ok(())
+    }
+
+    /// Whether this organization holds the offer that digest opens.
+    ///
+    /// Asked before a redemption takes a write lock, so a token for somebody
+    /// else's organization is not a lock on this one.
+    pub fn holds_invitation(&self, token_sha256: &str) -> bool {
+        self.invitations
+            .iter()
+            .any(|record| record.token_sha256 == token_sha256)
+    }
+
+    /// Turn an offer into membership and a grant, for whoever presented it.
+    ///
+    /// The redeemer is a stranger here until this moment: they are made an
+    /// ordinary member if they are not one already, and the grant is exactly
+    /// what the offer declared. Their pair is learned now, from a verified
+    /// session — the offer never named it and the `label` on it is not
+    /// consulted, because an unverified string is not an identity.
+    pub fn redeem(
+        &mut self,
+        token_sha256: &str,
+        redeemer: &Principal,
+        now: i64,
+    ) -> Result<Redeemed> {
+        redeemer.validate()?;
+        let record = self
+            .invitations
+            .iter()
+            .find(|record| record.token_sha256 == token_sha256)
+            .ok_or(Error::NotFound)?;
+        if record.invitation.redeemed.is_some() {
+            return Err(Error::Redeemed);
+        }
+        if now >= record.invitation.expires_at {
+            return Err(Error::Expired);
+        }
+        let invitation = record.invitation.clone();
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.scope == invitation.scope)
+            .ok_or(Error::NotFound)?
+            .clone();
+        if self.member_role(redeemer).is_err() {
+            self.members.push(Member {
+                principal: redeemer.clone(),
+                role: OrganizationRole::Member,
+            });
+        }
+        let grant = Grant {
+            id: GrantId::new(),
+            scope: invitation.scope,
+            grantee: Grantee::User(redeemer.clone()),
+            role: invitation.role,
+            window: invitation.window,
+        };
+        self.grants.push(grant.clone());
+        if let Some(stored) = self
+            .invitations
+            .iter_mut()
+            .find(|record| record.invitation.id == invitation.id)
+        {
+            stored.invitation.redeemed = Some(Redemption {
+                principal: redeemer.clone(),
+                at: now,
+                grant: grant.id,
+            });
+        }
+        Ok(Redeemed {
+            organization: self.organization.clone(),
+            project,
+            role: grant.role,
+            window: grant.window,
+            grant: grant.id,
+        })
+    }
+
+    /// Which offer a redemption produced, for the audit entry beside it.
+    pub fn invitation_of(&self, grant: GrantId) -> Option<InvitationId> {
+        self.invitations
+            .iter()
+            .find(|record| {
+                record
+                    .invitation
+                    .redeemed
+                    .as_ref()
+                    .is_some_and(|redemption| redemption.grant == grant)
+            })
+            .map(|record| record.invitation.id)
+    }
+
+    /// Drop offers that can no longer do anything, a month after they stopped.
+    fn forget_spent_invitations(&mut self, now: i64) {
+        self.invitations.retain(|record| {
+            let done = record
+                .invitation
+                .redeemed
+                .as_ref()
+                .map_or(record.invitation.expires_at, |redemption| redemption.at);
+            now - done < INVITATION_RETENTION_SECONDS
+        });
     }
 
     pub fn member_role(&self, actor: &Principal) -> Result<OrganizationRole> {

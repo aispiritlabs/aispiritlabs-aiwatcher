@@ -9080,6 +9080,73 @@
         }
       }
     },
+    "/api/v1/iam/invitations/redeem": {
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Turn a token into membership and a grant, once.",
+        "description": "Any signed-in principal may call this — the token is the authority, and the\ncaller's verified pair is what the grant is written to. It names no\norganization because whoever holds one does not know which organization it\nbelongs to, and a route that made them say would leak that they had guessed\nright.",
+        "operationId": "redeem",
+        "parameters": [
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Redeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamRedeemed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "410": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/v1/iam/organizations": {
       "get": {
         "tags": [
@@ -9303,6 +9370,115 @@
         }
       }
     },
+    "/api/v1/iam/organizations/{organization}/invitations": {
+      "get": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "The offers for projects this caller may administer, newest first.",
+        "operationId": "invitations",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IamInvitation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/invitations/{invitation}": {
+      "delete": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Withdraw an offer nobody has taken up.",
+        "description": "A redeemed one answers 409 rather than disappearing: what it produced is a\ngrant, and taking that back is the revoke-grant command's job.",
+        "operationId": "revoke_invitation",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "invitation",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/InvitationId"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/v1/iam/organizations/{organization}/projects": {
       "get": {
         "tags": [
@@ -9437,6 +9613,83 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/organizations/{organization}/projects/{project}/invitations": {
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Offer a grant to somebody who may never have signed in here.",
+        "description": "A grant names a `(provider, subject)` pair, and nobody knows a stranger's\nsubject until their provider has minted one — so the offer is made to a\nsecret instead, and the pair is learned when it is redeemed. The token comes\nback once, in this response, and nothing can show it again.",
+        "operationId": "invite",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationId"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IamInvitationOffer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamIssuedInvitation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
           },
           "401": {
             "description": ""
@@ -22355,6 +22608,66 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "An offer, never its token: the record here carries only the hash, and\nthe hash is not in [`Invitation`].",
+            "required": [
+              "invitation",
+              "type"
+            ],
+            "properties": {
+              "invitation": {
+                "$ref": "#/components/schemas/IamInvitation"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invitation_created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "invitation",
+              "type"
+            ],
+            "properties": {
+              "invitation": {
+                "$ref": "#/components/schemas/InvitationId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invitation_revoked"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The one entry written by somebody who was not yet a member.",
+            "required": [
+              "invitation",
+              "grant",
+              "type"
+            ],
+            "properties": {
+              "grant": {
+                "$ref": "#/components/schemas/GrantId"
+              },
+              "invitation": {
+                "$ref": "#/components/schemas/InvitationId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invitation_redeemed"
+                ]
+              }
+            }
           }
         ]
       },
@@ -29736,6 +30049,112 @@
           }
         ]
       },
+      "IamInvitation": {
+        "type": "object",
+        "description": "An offer of a grant to whoever holds its token, redeemable once.\n\nThis is what lets somebody be given access **before** they have ever signed\nin, which a grant cannot do: a grant names a `(provider, subject)` pair and\nnobody knows a stranger's subject until their provider has minted one. So\nthe offer is made to a secret instead, and the pair is learned at the moment\nit is redeemed.\n\nThe token itself is not here and is never stored: only a SHA-256 of it is,\nand the plaintext exists once, in the response that created it. A `label`\nis a delivery hint — an email address, a name on a list — and **never an\nidentity key**: whoever holds the token redeems it, and checking the label\nwould be authentication by an unverified string.",
+        "required": [
+          "id",
+          "scope",
+          "role",
+          "window",
+          "expires_at",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IamPrincipal"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the *offer* stops being redeemable, which is not the window's end."
+          },
+          "id": {
+            "$ref": "#/components/schemas/InvitationId"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A note about who it was sent to. Never compared against anybody."
+          },
+          "redeemed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IamRedemption"
+              }
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole",
+            "description": "What redeeming it grants — the same three roles a grant carries."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/IamProjectScope"
+          },
+          "window": {
+            "$ref": "#/components/schemas/IamGrantWindow",
+            "description": "The window the resulting grant gets, declared when the offer was made."
+          }
+        }
+      },
+      "IamInvitationOffer": {
+        "type": "object",
+        "description": "What an invitation offers: everything its author declares, as one value.\n\nOne type rather than four parameters, and the same shape the HTTP body has —\nso a field added here is added once and refused everywhere it is not\nunderstood, rather than threaded through five signatures.",
+        "required": [
+          "role",
+          "window",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the offer stops being redeemable, which is not the window's end."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A note about who it was sent to. Never compared against anybody."
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          },
+          "window": {
+            "$ref": "#/components/schemas/IamGrantWindow",
+            "description": "The window the resulting grant gets."
+          }
+        },
+        "additionalProperties": false
+      },
+      "IamIssuedInvitation": {
+        "type": "object",
+        "description": "The one moment the token exists in the clear.",
+        "required": [
+          "invitation",
+          "token"
+        ],
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/IamInvitation"
+          },
+          "token": {
+            "type": "string",
+            "description": "Deliver this and forget it. Nothing can show it again."
+          }
+        }
+      },
       "IamMembership": {
         "type": "object",
         "description": "One person's standing in the organization, which is not access to anything.",
@@ -29853,6 +30272,55 @@
           },
           "project": {
             "$ref": "#/components/schemas/ProjectId"
+          }
+        }
+      },
+      "IamRedeemed": {
+        "type": "object",
+        "description": "What a redeemer learns: where they now are, and what they got.",
+        "required": [
+          "organization",
+          "project",
+          "role",
+          "window",
+          "grant"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/GrantId"
+          },
+          "organization": {
+            "$ref": "#/components/schemas/IamOrganization"
+          },
+          "project": {
+            "$ref": "#/components/schemas/IamProject"
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          },
+          "window": {
+            "$ref": "#/components/schemas/IamGrantWindow"
+          }
+        }
+      },
+      "IamRedemption": {
+        "type": "object",
+        "description": "Who turned an offer into a grant, and which grant it became.",
+        "required": [
+          "principal",
+          "at",
+          "grant"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/GrantId"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/IamPrincipal"
           }
         }
       },
@@ -30845,6 +31313,10 @@
             "description": "The role that may answer. Checked when the answer arrives."
           }
         }
+      },
+      "InvitationId": {
+        "type": "string",
+        "format": "uuid"
       },
       "JobState": {
         "type": "string",
@@ -34417,6 +34889,18 @@
             "description": "The rule ids that fired. Empty is meaningful and common: the hook ran\nand found nothing."
           }
         }
+      },
+      "Redeem": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "RegisterImageRequest": {
         "type": "object",

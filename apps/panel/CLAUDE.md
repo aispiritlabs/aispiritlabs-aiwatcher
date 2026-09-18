@@ -203,6 +203,14 @@ followed by a full `tsc` project check.
   find, and would be a second copy of the policy besides. What *is* derived from
   a server answer is which cards to draw: the roster is owner-and-admin only, so
   its 403 is the server saying this caller does not administer the organization.
+  **An invitation token is pasted, never linked.** The redeem control is a field
+  on this page rather than a `/invite/{token}` route, because a token in a URL
+  is a secret in browser history, in a referrer header and in whatever chat it
+  was pasted into — and one click instead of one paste does not buy that. It
+  also keeps the secret out of this panel's URL contract, where every other
+  parameter is something somebody may safely share. The token itself is drawn
+  once, in the response that created it; nothing re-reads it, because nothing
+  can.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.

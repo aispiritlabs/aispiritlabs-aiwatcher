@@ -122,9 +122,15 @@ display name. authentik's `sub` is a hash of the user's id (its provider's
 `sub_mode` is `hashed_user_id`), so it is stable and unguessable and it is
 **the only thing a grant can be issued to**.
 
-Somebody who has signed in reads theirs off `/account`, under Subject. Until
-invitations exist that is how a teacher gets a student's: the student signs in
-once and reads it out. The provider is the issuer URL, ending in a slash.
+Somebody who has signed in reads theirs off `/account`, under Subject, and the
+provider is the issuer URL ending in a slash. That is how a grant is written to
+somebody who is already here.
+
+For somebody who is **not** here yet there is no subject to write to, which is
+what an invitation is for: Organizations & projects → a project → *Invite
+somebody*. The token it hands back is shown once; they paste it into *Redeem an
+invitation* on their own copy of that page, and come out a member with the grant
+the offer declared.
 
 ## Resetting
 

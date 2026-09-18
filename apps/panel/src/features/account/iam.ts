@@ -5,9 +5,13 @@ import {
   apply as applyCommand,
   audit as readAudit,
   createOrganization as postOrganization,
+  invitations as readInvitations,
+  invite as postInvitation,
   organizations as readOrganizations,
   projectGrants as readProjectGrants,
   projects as readProjects,
+  redeem as postRedemption,
+  revokeInvitation as deleteInvitation,
   roster as readRoster,
 } from '@/api/generated';
 import type {
@@ -15,10 +19,16 @@ import type {
   IamChange,
   IamCommand,
   IamGrant,
+  IamGrantWindow,
+  IamInvitation,
+  IamIssuedInvitation,
   IamOrganization,
   IamProjectAccess,
+  IamProjectRole,
+  IamRedeemed,
   IamRoster,
 } from '@/api/generated';
+import { confirmDone } from '@/shared/lib/result';
 import { answerOf } from '@/shared/lib/result';
 
 /**
@@ -49,6 +59,7 @@ const auditKey = (organization: string) => ['iam', 'audit', organization] as con
 const rosterKey = (organization: string) => ['iam', 'roster', organization] as const;
 const grantsKey = (organization: string, project: string) =>
   ['iam', 'grants', organization, project] as const;
+const invitationsKey = (organization: string) => ['iam', 'invitations', organization] as const;
 
 /**
  * Required on every mutation, and harmless on a read.
@@ -215,7 +226,89 @@ export function useCommand(organization: string | undefined) {
       void client.invalidateQueries({ queryKey: rosterKey(organization) });
       void client.invalidateQueries({ queryKey: ['iam', 'access', organization] });
       void client.invalidateQueries({ queryKey: ['iam', 'grants', organization] });
+      void client.invalidateQueries({ queryKey: invitationsKey(organization) });
     },
+  });
+}
+
+/**
+ * The offers for projects this caller may administer, newest first.
+ *
+ * None of them carries its token: the plaintext existed once, in the response
+ * that created it, and nothing can show it again. What is left is a record of
+ * what was offered and whether somebody took it.
+ */
+export function useInvitations(organization: string | undefined): UseQueryResult<IamInvitation[]> {
+  return useQuery({
+    queryKey: invitationsKey(organization ?? ''),
+    enabled: Boolean(organization),
+    queryFn: async () =>
+      answerOf(
+        await readInvitations({ path: { organization: organization as string } }),
+        'the instance did not answer the invitations',
+      ),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+/** Offer a grant to somebody who may never have signed in here. */
+export function useInvite(organization: string | undefined, project: string | undefined) {
+  const client = useQueryClient();
+  return useMutation<
+    IamIssuedInvitation,
+    unknown,
+    { role: IamProjectRole; window: IamGrantWindow; expires_at: number; label?: string }
+  >({
+    mutationFn: async (body) =>
+      answerOf(
+        await postInvitation({
+          path: { organization: organization as string, project: project as string },
+          body,
+          ...MUTATION,
+        }),
+        'the invitation was not created',
+      ),
+    onSuccess: () => {
+      if (organization) void client.invalidateQueries({ queryKey: invitationsKey(organization) });
+    },
+  });
+}
+
+export function useRevokeInvitation(organization: string | undefined) {
+  const client = useQueryClient();
+  return useMutation<void, unknown, string>({
+    mutationFn: async (invitation) =>
+      confirmDone(
+        await deleteInvitation({
+          path: { organization: organization as string, invitation },
+          ...MUTATION,
+        }),
+        'the invitation was not withdrawn',
+      ),
+    onSuccess: () => {
+      if (organization) void client.invalidateQueries({ queryKey: invitationsKey(organization) });
+    },
+  });
+}
+
+/**
+ * Turn a token into membership and a grant.
+ *
+ * The one call here that names no organization: whoever holds a token does not
+ * know which one it belongs to, and does not have to. Everything this caller
+ * can see changes afterwards, so the whole IAM cache goes.
+ */
+export function useRedeem() {
+  const client = useQueryClient();
+  return useMutation<IamRedeemed, unknown, string>({
+    mutationFn: async (token) =>
+      answerOf(
+        await postRedemption({ body: { token }, ...MUTATION }),
+        'the token was not accepted',
+      ),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['iam'] }),
   });
 }
 

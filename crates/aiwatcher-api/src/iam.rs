@@ -5,14 +5,15 @@
 use crate::{ApiError, AppState, Caller, error::ApiResult};
 use aiwatcher_auth::Role;
 use aiwatcher_iam::{
-    AuditEntry, Change, Command, Grant, IamStore, Organization, OrganizationId, Principal,
-    ProjectAccess, ProjectId, ProjectScope, Roster,
+    AuditEntry, Change, Command, Grant, IamStore, Invitation, InvitationId, InvitationOffer,
+    IssuedInvitation, Organization, OrganizationId, Principal, ProjectAccess, ProjectId,
+    ProjectScope, Redeemed, Roster,
 };
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::Deserialize;
 use utoipa::OpenApi;
@@ -26,6 +27,10 @@ use utoipa::OpenApi;
     access,
     roster,
     project_grants,
+    invite,
+    invitations,
+    revoke_invitation,
+    redeem,
     audit
 ))]
 struct Api;
@@ -60,6 +65,21 @@ pub fn router() -> Router<AppState> {
             "/api/v1/iam/organizations/{organization}/projects/{project}/grants",
             get(project_grants),
         )
+        .route(
+            "/api/v1/iam/organizations/{organization}/projects/{project}/invitations",
+            post(invite),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/invitations",
+            get(invitations),
+        )
+        .route(
+            "/api/v1/iam/organizations/{organization}/invitations/{invitation}",
+            delete(revoke_invitation),
+        )
+        // Outside every organization on purpose: whoever redeems one holds a
+        // token and knows no id to put in a path.
+        .route("/api/v1/iam/invitations/redeem", post(redeem))
         .route("/api/v1/iam/organizations/{organization}/audit", get(audit))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CACHE_CONTROL,
@@ -218,6 +238,103 @@ async fn project_grants(
             )
             .await?,
     ))
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Redeem {
+    pub token: String,
+}
+
+/// Offer a grant to somebody who may never have signed in here.
+///
+/// A grant names a `(provider, subject)` pair, and nobody knows a stranger's
+/// subject until their provider has minted one — so the offer is made to a
+/// secret instead, and the pair is learned when it is redeemed. The token comes
+/// back once, in this response, and nothing can show it again.
+#[utoipa::path(post, path = "/api/v1/iam/organizations/{organization}/projects/{project}/invitations", tag = "iam",
+    request_body = InvitationOffer,
+    params(("organization" = OrganizationId, Path), ("project" = ProjectId, Path), ("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
+    responses((status = 201, body = IssuedInvitation), (status = 400), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn invite(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, project)): Path<(OrganizationId, ProjectId)>,
+    headers: HeaderMap,
+    Json(offer): Json<InvitationOffer>,
+) -> ApiResult<(StatusCode, Json<IssuedInvitation>)> {
+    let (store, actor) = context(&state, &caller)?;
+    mutation(&headers)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            store
+                .invite(
+                    ProjectScope {
+                        organization,
+                        project,
+                    },
+                    &actor,
+                    offer,
+                )
+                .await?,
+        ),
+    ))
+}
+
+/// The offers for projects this caller may administer, newest first.
+#[utoipa::path(get, path = "/api/v1/iam/organizations/{organization}/invitations", tag = "iam",
+    params(("organization" = OrganizationId, Path)),
+    responses((status = 200, body = Vec<Invitation>), (status = 401), (status = 403), (status = 404), (status = 501), (status = 503)))]
+async fn invitations(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(organization): Path<OrganizationId>,
+) -> ApiResult<Json<Vec<Invitation>>> {
+    let (store, actor) = context(&state, &caller)?;
+    Ok(Json(store.invitations(organization, &actor).await?))
+}
+
+/// Withdraw an offer nobody has taken up.
+///
+/// A redeemed one answers 409 rather than disappearing: what it produced is a
+/// grant, and taking that back is the revoke-grant command's job.
+#[utoipa::path(delete, path = "/api/v1/iam/organizations/{organization}/invitations/{invitation}", tag = "iam",
+    params(("organization" = OrganizationId, Path), ("invitation" = InvitationId, Path), ("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
+    responses((status = 204), (status = 401), (status = 403), (status = 404), (status = 409), (status = 501), (status = 503)))]
+async fn revoke_invitation(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((organization, invitation)): Path<(OrganizationId, InvitationId)>,
+    headers: HeaderMap,
+) -> ApiResult<StatusCode> {
+    let (store, actor) = context(&state, &caller)?;
+    mutation(&headers)?;
+    store
+        .revoke_invitation(organization, &actor, invitation)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Turn a token into membership and a grant, once.
+///
+/// Any signed-in principal may call this — the token is the authority, and the
+/// caller's verified pair is what the grant is written to. It names no
+/// organization because whoever holds one does not know which organization it
+/// belongs to, and a route that made them say would leak that they had guessed
+/// right.
+#[utoipa::path(post, path = "/api/v1/iam/invitations/redeem", tag = "iam", request_body = Redeem,
+    params(("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
+    responses((status = 200, body = Redeemed), (status = 400), (status = 401), (status = 403), (status = 404), (status = 409), (status = 410), (status = 501), (status = 503)))]
+async fn redeem(
+    State(state): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Json(body): Json<Redeem>,
+) -> ApiResult<Json<Redeemed>> {
+    let (store, actor) = context(&state, &caller)?;
+    mutation(&headers)?;
+    Ok(Json(store.redeem(&body.token, &actor).await?))
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]

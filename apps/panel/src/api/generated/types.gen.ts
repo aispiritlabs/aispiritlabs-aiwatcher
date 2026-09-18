@@ -755,6 +755,16 @@ export type AuditAction = {
     change: IamChange;
     command: IamCommand;
     type: 'command_applied';
+} | {
+    invitation: IamInvitation;
+    type: 'invitation_created';
+} | {
+    invitation: InvitationId;
+    type: 'invitation_revoked';
+} | {
+    grant: GrantId;
+    invitation: InvitationId;
+    type: 'invitation_redeemed';
 };
 
 /**
@@ -4475,6 +4485,79 @@ export type IamGrantee = {
 };
 
 /**
+ * An offer of a grant to whoever holds its token, redeemable once.
+ *
+ * This is what lets somebody be given access **before** they have ever signed
+ * in, which a grant cannot do: a grant names a `(provider, subject)` pair and
+ * nobody knows a stranger's subject until their provider has minted one. So
+ * the offer is made to a secret instead, and the pair is learned at the moment
+ * it is redeemed.
+ *
+ * The token itself is not here and is never stored: only a SHA-256 of it is,
+ * and the plaintext exists once, in the response that created it. A `label`
+ * is a delivery hint — an email address, a name on a list — and **never an
+ * identity key**: whoever holds the token redeems it, and checking the label
+ * would be authentication by an unverified string.
+ */
+export type IamInvitation = {
+    created_at: number;
+    created_by: IamPrincipal;
+    /**
+     * When the *offer* stops being redeemable, which is not the window's end.
+     */
+    expires_at: number;
+    id: InvitationId;
+    /**
+     * A note about who it was sent to. Never compared against anybody.
+     */
+    label?: string | null;
+    redeemed?: null | IamRedemption;
+    /**
+     * What redeeming it grants — the same three roles a grant carries.
+     */
+    role: IamProjectRole;
+    scope: IamProjectScope;
+    /**
+     * The window the resulting grant gets, declared when the offer was made.
+     */
+    window: IamGrantWindow;
+};
+
+/**
+ * What an invitation offers: everything its author declares, as one value.
+ *
+ * One type rather than four parameters, and the same shape the HTTP body has —
+ * so a field added here is added once and refused everywhere it is not
+ * understood, rather than threaded through five signatures.
+ */
+export type IamInvitationOffer = {
+    /**
+     * When the offer stops being redeemable, which is not the window's end.
+     */
+    expires_at: number;
+    /**
+     * A note about who it was sent to. Never compared against anybody.
+     */
+    label?: string | null;
+    role: IamProjectRole;
+    /**
+     * The window the resulting grant gets.
+     */
+    window: IamGrantWindow;
+};
+
+/**
+ * The one moment the token exists in the clear.
+ */
+export type IamIssuedInvitation = {
+    invitation: IamInvitation;
+    /**
+     * Deliver this and forget it. Nothing can show it again.
+     */
+    token: string;
+};
+
+/**
  * One person's standing in the organization, which is not access to anything.
  */
 export type IamMembership = {
@@ -4527,6 +4610,26 @@ export type IamProjectRole = typeof IamProjectRole[keyof typeof IamProjectRole];
 export type IamProjectScope = {
     organization: OrganizationId;
     project: ProjectId;
+};
+
+/**
+ * What a redeemer learns: where they now are, and what they got.
+ */
+export type IamRedeemed = {
+    grant: GrantId;
+    organization: IamOrganization;
+    project: IamProject;
+    role: IamProjectRole;
+    window: IamGrantWindow;
+};
+
+/**
+ * Who turned an offer into a grant, and which grant it became.
+ */
+export type IamRedemption = {
+    at: number;
+    grant: GrantId;
+    principal: IamPrincipal;
 };
 
 /**
@@ -5071,6 +5174,8 @@ export type InputRequest = {
      */
     role: string;
 };
+
+export type InvitationId = string;
 
 /**
  * Where a job is.
@@ -6982,6 +7087,10 @@ export type RedactionRecord = {
      * and found nothing.
      */
     rules?: Array<string>;
+};
+
+export type Redeem = {
+    token: string;
 };
 
 /**
@@ -13863,6 +13972,36 @@ export type GetExperimentResponses = {
 
 export type GetExperimentResponse = GetExperimentResponses[keyof GetExperimentResponses];
 
+export type RedeemData = {
+    body: Redeem;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/iam/invitations/redeem';
+};
+
+export type RedeemErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    410: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type RedeemResponses = {
+    200: IamRedeemed;
+};
+
+export type RedeemResponse = RedeemResponses[keyof RedeemResponses];
+
 export type OrganizationsData = {
     body?: never;
     path?: never;
@@ -13966,6 +14105,60 @@ export type ApplyResponses = {
 
 export type ApplyResponse = ApplyResponses[keyof ApplyResponses];
 
+export type InvitationsData = {
+    body?: never;
+    path: {
+        organization: OrganizationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/invitations';
+};
+
+export type InvitationsErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type InvitationsResponses = {
+    200: Array<IamInvitation>;
+};
+
+export type InvitationsResponse = InvitationsResponses[keyof InvitationsResponses];
+
+export type RevokeInvitationData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: OrganizationId;
+        invitation: InvitationId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/invitations/{invitation}';
+};
+
+export type RevokeInvitationErrors = {
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    409: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type RevokeInvitationResponses = {
+    204: void;
+};
+
+export type RevokeInvitationResponse = RevokeInvitationResponses[keyof RevokeInvitationResponses];
+
 export type ProjectsData = {
     body?: never;
     path: {
@@ -14034,6 +14227,37 @@ export type ProjectGrantsResponses = {
 };
 
 export type ProjectGrantsResponse = ProjectGrantsResponses[keyof ProjectGrantsResponses];
+
+export type InviteData = {
+    body: IamInvitationOffer;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: OrganizationId;
+        project: ProjectId;
+    };
+    query?: never;
+    url: '/api/v1/iam/organizations/{organization}/projects/{project}/invitations';
+};
+
+export type InviteErrors = {
+    400: unknown;
+    401: unknown;
+    403: unknown;
+    404: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type InviteResponses = {
+    201: IamIssuedInvitation;
+};
+
+export type InviteResponse = InviteResponses[keyof InviteResponses];
 
 export type RosterData = {
     body?: never;

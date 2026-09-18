@@ -13,9 +13,11 @@ import {
 } from '@/features/account/iam';
 import { GrantForm } from '@/features/account/screens/access/grant-form';
 import { History } from '@/features/account/screens/access/history';
+import { Invitations } from '@/features/account/screens/access/invitations';
 import { OrganizationAdmin } from '@/features/account/screens/access/organization-admin';
 import { People } from '@/features/account/screens/access/people';
 import { ProjectGrants } from '@/features/account/screens/access/project-grants';
+import { Redeem } from '@/features/account/screens/access/redeem';
 import {
   Badge,
   Button,
@@ -90,6 +92,8 @@ export function AccessPage() {
   return (
     <div className="flex flex-col gap-4">
       <Heading />
+
+      <Redeem onRedeemed={(organization, project) => select(organization, project)} />
 
       <Card>
         <CardHeader>
@@ -231,12 +235,19 @@ export function AccessPage() {
               />
               <ProjectGrants organization={search.organization} project={search.project} />
               {access.data?.role === 'admin' || roster.isSuccess ? (
-                <GrantForm
-                  organization={search.organization}
-                  project={search.project}
-                  issuer={issuer}
-                  grantee={grantee}
-                />
+                <>
+                  <GrantForm
+                    organization={search.organization}
+                    project={search.project}
+                    issuer={issuer}
+                    grantee={grantee}
+                  />
+                  <Invitations
+                    organization={search.organization}
+                    project={search.project}
+                    projectName={access.data?.project.name ?? 'this project'}
+                  />
+                </>
               ) : access.data ? (
                 <p className="text-xs text-muted-foreground">
                   Sharing this project needs project admin, or admin of the organization. Yours is{' '}
