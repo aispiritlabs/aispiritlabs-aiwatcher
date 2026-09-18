@@ -57,6 +57,7 @@ screen. Route files own routing; `app/` owns application composition.
 
 ```sh
 npm run check:architecture
+npm run lint
 npm run typecheck
 npm test
 npm run build
@@ -65,6 +66,10 @@ npm run build
 The architecture check is also part of `build` and `typecheck`, so future changes
 cannot quietly reintroduce dependencies from shared code into individual features
 or from feature code into route registration.
+
+`eslint.config.js` says which rules this panel keeps and why each switched-off
+one is off. Formatting is not among them: `.prettierrc` is the authority there
+and `just fmt` is what moves it.
 
 ## Navigation rollout (UX-09)
 

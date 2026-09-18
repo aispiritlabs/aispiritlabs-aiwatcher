@@ -13,6 +13,10 @@ export const START_PAGES = [
 
 /** Only internal panel links; retain the full search and hash without rewriting stored views. */
 export function isPanelHref(href: string): boolean {
+  // The control characters are the point: a stored href carrying one is what
+  // this refuses, so the rule that warns about writing one by accident has
+  // nothing to say here.
+  // eslint-disable-next-line no-control-regex
   if (!href.startsWith('/') || href.startsWith('//') || /[\\\s\u0000-\u001f]/.test(href)) return false;
   try {
     const url = new URL(href, 'https://panel.invalid');

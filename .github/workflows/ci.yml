@@ -413,6 +413,14 @@ jobs:
         run: npm ci --ignore-scripts
         working-directory: apps/panel
 
+      # Three seconds, and it answers a different question than `tsc` does:
+      # `eslint.config.js` says which rules this panel keeps, and the point of
+      # running it here is that the next violation is the only one in the
+      # output.
+      - name: lint
+        run: npm run lint
+        working-directory: apps/panel
+
       # `npm run build` is vite build followed by a full tsc project check, so
       # a type error in the panel fails here.
       - name: build and typecheck

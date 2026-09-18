@@ -151,8 +151,9 @@ export function LivePage() {
     return close;
     // `key` is the selection; `live` is the object it was computed from and
     // changes with it. Depending on the string is what makes an identical
-    // selection not reopen the connection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // selection not reopen the connection. (`react-hooks/exhaustive-deps` is
+    // off in `eslint.config.js`, with the reason and the cost of turning it
+    // on; this is one of the twenty sites it would land on.)
   }, [key]);
 
   const watching = Object.values(selection).some((values) => (values ?? []).length > 0);

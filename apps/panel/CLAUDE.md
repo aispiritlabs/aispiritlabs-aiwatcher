@@ -9,6 +9,11 @@ followed by a full `tsc` project check.
 - `apps/panel/src/api/generated` is generated. Never edit it by hand. It and
   `routeTree.gen.ts` are in `.prettierignore`: their generators emit their own
   formatting, and `just fmt` reformatting them would fight `just openapi`.
+- `eslint.config.js` holds which rules this panel keeps, and every rule that is
+  off is off *in writing*, with what it fires on. A rule with standing
+  violations would never report the next one, so a new rule arrives with its
+  call sites read rather than with a warning count. Formatting is not lint's
+  business: `.prettierrc` is the authority and `just fmt` is what moves it.
 - Runtime validation belongs only where codegen cannot reach — the SSE and
   WebSocket frames, in `src/shared/lib/live.ts`. Everything the generated SDK
   returns is already typed.

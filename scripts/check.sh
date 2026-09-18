@@ -91,9 +91,11 @@ run "Evaluation manifest contract" python3 scripts/check-evaluation-contract.py
 
 # ── Panel ────────────────────────────────────────────────────────────────────
 if [[ -d apps/panel/node_modules ]]; then
+  run "panel lint" bash -c "cd apps/panel && npm run lint"
   run "panel build + typecheck" bash -c "cd apps/panel && npm run build"
   run "panel tests" bash -c "cd apps/panel && npm run test"
 else
+  skip "panel lint" "run 'just install' first"
   skip "panel build" "run 'just install' first"
   skip "panel tests" "run 'just install' first"
 fi

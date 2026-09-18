@@ -410,7 +410,7 @@ function Workspace({
       if (command) {
         if (canvasDraft || history.gesture) return;
         if (key === 'z') {
-          event.shiftKey ? history.redo() : history.undo();
+          if (event.shiftKey) history.redo(); else history.undo();
           setSelectedId(null);
           setLinking(null);
           setProblems([]);
