@@ -66,7 +66,7 @@ it adds no second copy of anything above.
 
 ```
 Lab { name, title, position, brief, tests? }
-LabTests { scorecard: VersionReference, cases: <cohort digest>, judge? }
+LabTests { scorecard: VersionReference, cases: <cohort digest> }
 ```
 
 Four rules carry it.
@@ -83,15 +83,25 @@ let a rewrite change what an already-issued lab measures; a lab names
 `name@version`, like a scoring run does and for the same reason.
 
 **A lab answers its own context id, and nothing else computes one.** `GET
-/api/v1/labs/{name}/context` resolves the pinned card and cohort and returns the
-`EvaluationContext` every submission to that lab will publish under, its
+/api/v1/labs/{name}/measurement` resolves the pinned card and cohort and returns
+the `EvaluationContext` every submission to that lab will publish under, its
 `context_id`, and the metrics with their directions. That is the join from a lab
 to its marks, and it exists as a route because a digest over a canonicalised
 document is exactly the thing a second implementation in TypeScript would get
 subtly wrong — the precedent is `POST /api/v1/evaluation-approvals/address`,
 which exists for that reason and no other. A lab whose tests are not pinned yet
-has no context, and the route says which half is missing rather than guessing
-one.
+has no measurement, and the route says so in a sentence rather than guessing
+one — a 200 carrying a reason, because a lab being written is an ordinary state
+and not a failed read.
+
+**A judge is not a lab's to pin, and saying so is better than an id that means
+less than it looks like it does.** A judge and a calibration set are declared
+per scoring *run*, so two submissions need not have been graded by the same one
+and their results would not share a context. A lab whose card asks for either is
+refused by the name of the metric that asks (`LabError::Unmeasurable`), at the
+moment somebody writes the lab. The same holds for a card or a cohort that is
+not in this project: `LabError::Unpinned`, a 422 where the lab is written rather
+than a silence where somebody submits.
 
 **It is project-scoped from birth.** `/api/v1/orgs/{organization}/projects/{project}/labs`
 is a full peer of the legacy family from the first commit: `ProjectAuthorization`
