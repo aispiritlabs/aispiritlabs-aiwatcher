@@ -9616,6 +9616,123 @@ export type SuiteSummary = {
 };
 
 /**
+ * One thing this deployment either has or has not.
+ */
+export type SystemCapability = {
+    group: SystemCapabilityGroup;
+    /**
+     * Stable across releases. What the panel keys a row on, and what a person
+     * quotes in a ticket.
+     */
+    id: string;
+    label: string;
+    /**
+     * What this deployment does without it — one sentence, and the reason the
+     * absent case is worth reading rather than worth fixing.
+     */
+    note: string;
+    /**
+     * What it is set to, where saying so gives nothing away. Empty where the
+     * value is a credential or an address, and empty where there is nothing
+     * to set.
+     */
+    settings: Array<SystemSetting>;
+    state: SystemCapabilityState;
+    /**
+     * The variables that decide it, named the way a refusal names them, and
+     * in the order the refusal names them in.
+     */
+    variables: Array<string>;
+};
+
+/**
+ * Which half of the deployment a capability belongs to.
+ *
+ * The grouping is the reader's, not the code's: an operator asking "what does
+ * this instance reach out to" wants one answer and not five, and the same for
+ * "where does it put things" and "what can it run".
+ */
+export const SystemCapabilityGroup = {
+    IDENTITY: 'identity',
+    OBSERVABILITY: 'observability',
+    STORAGE: 'storage',
+    RUNTIME: 'runtime',
+    INTEGRATION: 'integration'
+} as const;
+
+/**
+ * Which half of the deployment a capability belongs to.
+ *
+ * The grouping is the reader's, not the code's: an operator asking "what does
+ * this instance reach out to" wants one answer and not five, and the same for
+ * "where does it put things" and "what can it run".
+ */
+export type SystemCapabilityGroup = typeof SystemCapabilityGroup[keyof typeof SystemCapabilityGroup];
+
+/**
+ * Whether this deployment has a capability at all.
+ *
+ * Two states and no third, because the question this route answers is a
+ * deployment's rather than a service's: "wired" and "not wired" are decided
+ * here, and "up" and "down" are decided somewhere this process is not.
+ */
+export const SystemCapabilityState = { CONFIGURED: 'configured', NOT_CONFIGURED: 'not_configured' } as const;
+
+/**
+ * Whether this deployment has a capability at all.
+ *
+ * Two states and no third, because the question this route answers is a
+ * deployment's rather than a service's: "wired" and "not wired" are decided
+ * here, and "up" and "down" are decided somewhere this process is not.
+ */
+export type SystemCapabilityState = typeof SystemCapabilityState[keyof typeof SystemCapabilityState];
+
+/**
+ * What this instance is: a version, and a capability at a time.
+ */
+export type SystemInventory = {
+    /**
+     * Every capability, grouped and ordered as this module lists them. A
+     * deployment's whole answer arrives at once: paging an inventory of two
+     * dozen rows would be a cursor over a list that cannot grow with data.
+     */
+    capabilities: Array<SystemCapability>;
+    /**
+     * The build serving this. The same version the OpenAPI document carries,
+     * so an operator reading a contract and an operator reading this are
+     * talking about one thing.
+     */
+    version: string;
+};
+
+/**
+ * One value of a capability that is safe to say out loud.
+ *
+ * Never a credential and never an address — see this module's header for
+ * where that line falls and why it falls there.
+ */
+export type SystemSetting = {
+    /**
+     * What this value is, as somebody reads it: `engine`, `pod runtime`,
+     * `template`.
+     */
+    name: string;
+    /**
+     * The value, rendered. A number is a string here because this is an
+     * inventory somebody reads rather than a number anybody computes with,
+     * and one shape per row is worth more to the panel than one type per
+     * setting.
+     */
+    value: string;
+    /**
+     * The variable that set it, where one did. Absent for what this process
+     * worked out rather than read — how many corpora a catalogue held, what
+     * an execution store's adapter can do.
+     */
+    variable?: string | null;
+};
+
+/**
  * Which of the four a query names.
  */
 export const TargetKind = {
@@ -19351,6 +19468,32 @@ export type ListSpansResponses = {
 };
 
 export type ListSpansResponse = ListSpansResponses[keyof ListSpansResponses];
+
+export type SystemData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/system';
+};
+
+export type SystemErrors = {
+    /**
+     * Not signed in
+     */
+    401: unknown;
+    /**
+     * Reading this needs the admin role
+     */
+    403: ErrorBody;
+};
+
+export type SystemError = SystemErrors[keyof SystemErrors];
+
+export type SystemResponses = {
+    200: SystemInventory;
+};
+
+export type SystemResponse = SystemResponses[keyof SystemResponses];
 
 export type ListTrainingRunsData = {
     body?: never;

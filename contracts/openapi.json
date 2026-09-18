@@ -20838,6 +20838,41 @@
         }
       }
     },
+    "/api/v1/system": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What this deployment has configured, and which variable decides each.",
+        "description": "`admin`, because this is an inventory of the deployment rather than help\nfor whoever is reading a run.",
+        "operationId": "system",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInventory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Reading this needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/training-runs": {
       "get": {
         "tags": [
@@ -40647,6 +40682,117 @@
           }
         }
       },
+      "SystemCapability": {
+        "type": "object",
+        "description": "One thing this deployment either has or has not.",
+        "required": [
+          "id",
+          "label",
+          "group",
+          "state",
+          "variables",
+          "settings",
+          "note"
+        ],
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/SystemCapabilityGroup"
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable across releases. What the panel keys a row on, and what a person\nquotes in a ticket."
+          },
+          "label": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "description": "What this deployment does without it — one sentence, and the reason the\nabsent case is worth reading rather than worth fixing."
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemSetting"
+            },
+            "description": "What it is set to, where saying so gives nothing away. Empty where the\nvalue is a credential or an address, and empty where there is nothing\nto set."
+          },
+          "state": {
+            "$ref": "#/components/schemas/SystemCapabilityState"
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The variables that decide it, named the way a refusal names them, and\nin the order the refusal names them in."
+          }
+        }
+      },
+      "SystemCapabilityGroup": {
+        "type": "string",
+        "description": "Which half of the deployment a capability belongs to.\n\nThe grouping is the reader's, not the code's: an operator asking \"what does\nthis instance reach out to\" wants one answer and not five, and the same for\n\"where does it put things\" and \"what can it run\".",
+        "enum": [
+          "identity",
+          "observability",
+          "storage",
+          "runtime",
+          "integration"
+        ]
+      },
+      "SystemCapabilityState": {
+        "type": "string",
+        "description": "Whether this deployment has a capability at all.\n\nTwo states and no third, because the question this route answers is a\ndeployment's rather than a service's: \"wired\" and \"not wired\" are decided\nhere, and \"up\" and \"down\" are decided somewhere this process is not.",
+        "enum": [
+          "configured",
+          "not_configured"
+        ]
+      },
+      "SystemInventory": {
+        "type": "object",
+        "description": "What this instance is: a version, and a capability at a time.",
+        "required": [
+          "version",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemCapability"
+            },
+            "description": "Every capability, grouped and ordered as this module lists them. A\ndeployment's whole answer arrives at once: paging an inventory of two\ndozen rows would be a cursor over a list that cannot grow with data."
+          },
+          "version": {
+            "type": "string",
+            "description": "The build serving this. The same version the OpenAPI document carries,\nso an operator reading a contract and an operator reading this are\ntalking about one thing."
+          }
+        }
+      },
+      "SystemSetting": {
+        "type": "object",
+        "description": "One value of a capability that is safe to say out loud.\n\nNever a credential and never an address — see this module's header for\nwhere that line falls and why it falls there.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What this value is, as somebody reads it: `engine`, `pod runtime`,\n`template`."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value, rendered. A number is a string here because this is an\ninventory somebody reads rather than a number anybody computes with,\nand one shape per row is worth more to the panel than one type per\nsetting."
+          },
+          "variable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The variable that set it, where one did. Absent for what this process\nworked out rather than read — how many corpora a catalogue held, what\nan execution store's adapter can do."
+          }
+        }
+      },
       "TargetKind": {
         "type": "string",
         "description": "Which of the four a query names.",
@@ -43084,6 +43230,10 @@
     {
       "name": "health",
       "description": "Kubernetes probes"
+    },
+    {
+      "name": "system",
+      "description": "What this instance has configured, and the variable that decides each"
     }
   ]
 }
