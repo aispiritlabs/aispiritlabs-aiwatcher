@@ -161,6 +161,7 @@ mod tests {
             variant_id: None,
             evaluation_id: None,
             published_by: None,
+            project: None,
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),

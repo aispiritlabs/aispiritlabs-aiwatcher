@@ -252,6 +252,15 @@ impl DurationHistogram {
 pub struct ObservedPeriod {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub variant_id: String,
+    /// Which project's runs these are (ADR_0033). Absent is the global side,
+    /// and every period this build has written.
+    ///
+    /// On the **top-level** record only: the slices and late entries inside it
+    /// are parts of it and carry none. A variant ID is a content address of a
+    /// declaration's pins, so one declaration made in two projects has one ID
+    /// — which is why this is in the record's key as well as on its face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     /// The period, `[from, to)`, in Unix seconds.
     pub from: i64,
     pub to: i64,
@@ -750,6 +759,7 @@ mod tests {
             variant_id: variant.map(ToOwned::to_owned),
             evaluation_id: None,
             published_by: None,
+            project: None,
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),

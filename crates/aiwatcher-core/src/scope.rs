@@ -39,9 +39,12 @@ use uuid::Uuid;
     utoipa::ToSchema,
 )]
 pub struct ProjectScope {
-    #[schema(value_type = String, format = Uuid)]
+    // `value_type` and no `format`: the `Uuid` format needs utoipa's `uuid`
+    // feature, which this crate would then carry for two strings in a contract
+    // that already describes a hundred ids as plain strings.
+    #[schema(value_type = String)]
     pub organization: Uuid,
-    #[schema(value_type = String, format = Uuid)]
+    #[schema(value_type = String)]
     pub project: Uuid,
 }
 

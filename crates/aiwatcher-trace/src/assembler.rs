@@ -562,6 +562,17 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
     if let Some(publisher) = &metadata.published_by {
         out.push(attr(own::source::PUBLISHED_BY, publisher.as_str()));
     }
+    // Computed when the span opens and never again, so the closing event does
+    // not repoint it — the same rule the read model applies to a run. Two
+    // events of one run under two credentials would otherwise let the second
+    // decide whose the first's span was.
+    if let Some(scope) = &metadata.project {
+        out.push(attr(
+            own::project::ORGANIZATION,
+            scope.organization.to_string(),
+        ));
+        out.push(attr(own::project::ID, scope.project.to_string()));
+    }
     match event.event_type.subject() {
         Subject::Llm => out.push(attr(genai::OPERATION_NAME, genai::operation::CHAT)),
         Subject::Tool => out.push(attr(genai::OPERATION_NAME, genai::operation::EXECUTE_TOOL)),

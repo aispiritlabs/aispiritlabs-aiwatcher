@@ -1354,11 +1354,15 @@ impl ActivityExecutor for TracesExecutor {
         // Of the runs not on the log, which a client counted and lost and which
         // no client opened for this result — from the asked index, which keeps
         // the counts across a restart, and from the read model without one.
+        // `None`: the global side. A project's measurement would take its
+        // scope from the execution's durable owner (ADR_0033), and no
+        // production caller constructs a bound store yet — so naming the
+        // global side here is the honest answer rather than a placeholder.
         let counts = match &self.asked {
-            Some(asked) => asked.measured_runs(&declared.run.evaluation_id).await,
+            Some(asked) => asked.measured_runs(None, &declared.run.evaluation_id).await,
             None => {
                 self.read_model
-                    .measured_runs(&declared.run.evaluation_id)
+                    .measured_runs(None, &declared.run.evaluation_id)
                     .await
             }
         };

@@ -64,6 +64,16 @@ pub struct AskedCall {
     pub caller_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_by: Option<String>,
+    /// Which project the call's run belongs to (ADR_0033), from the event that
+    /// ended it. Absent is the global side, and every call written before
+    /// projects existed.
+    ///
+    /// On the row rather than in the key: a page is named by the positions it
+    /// covers, and the log is one log, so two projects' calls share a page and
+    /// are told apart by this. A reader deciding what a step may look at reads
+    /// it; the index itself decides nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +291,7 @@ impl AskedIndex {
                     run_id: run_id.clone(),
                     caller_run_id: state.callers.get(run_id).cloned(),
                     published_by: event.metadata.published_by.clone(),
+                    project: event.metadata.project,
                     model: event.data_str("model").map(ToOwned::to_owned),
                     prompt_name: prompt
                         .as_ref()
@@ -472,8 +483,16 @@ impl AskedIndex {
 
     /// What each client counted of the runs it opened for one measurement,
     /// through the position the index has read.
-    pub async fn measured_runs(&self, evaluation_id: &str) -> Vec<MeasuredRuns> {
-        self.state.lock().await.measured.of(evaluation_id)
+    ///
+    /// `project` is the project whose measurement is being asked about —
+    /// `None` for the global side, which is every one a production caller asks
+    /// about today (ADR_0033: no production caller constructs a bound store).
+    pub async fn measured_runs(
+        &self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        evaluation_id: &str,
+    ) -> Vec<MeasuredRuns> {
+        self.state.lock().await.measured.of(project, evaluation_id)
     }
 
     /// Every call a witness said what it asked in that ended at or after
@@ -632,6 +651,7 @@ mod tests {
                 run_id: "gateway-2".to_owned(),
                 caller_run_id: Some("case-2".to_owned()),
                 published_by: Some("gateway".to_owned()),
+                project: None,
                 model: Some("gpt-4o".to_owned()),
                 prompt_name: Some("capitals".to_owned()),
                 prompt_version: Some("f".repeat(64)),
@@ -676,7 +696,7 @@ mod tests {
         let restarted = AskedIndex::new(Arc::clone(&store), "projector");
         assert_eq!(restarted.load().await, Some(2));
         assert_eq!(
-            restarted.measured_runs("e1").await,
+            restarted.measured_runs(None, "e1").await,
             [MeasuredRuns {
                 client: "worker".to_owned(),
                 attempt: Some(1),

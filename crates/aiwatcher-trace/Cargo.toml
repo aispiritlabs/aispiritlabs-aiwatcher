@@ -21,6 +21,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+# Tests alone: a project scope is two of them, and the assembler only copies
+# what a record already carries.
+uuid.workspace = true
 
 [lints]
 workspace = true

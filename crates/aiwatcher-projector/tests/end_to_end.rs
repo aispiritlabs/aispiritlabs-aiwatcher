@@ -1157,7 +1157,7 @@ async fn observed_periods_survive_a_restart_that_does_not_replay_the_log() {
     let mut runs = Vec::new();
     for from in [hour, hour + 3_600] {
         let records = store
-            .period(3_600, from, &["v1"])
+            .period(3_600, from, None, &["v1"])
             .await
             .expect("reads")
             .expect("written");
@@ -1178,10 +1178,96 @@ async fn observed_periods_survive_a_restart_that_does_not_replay_the_log() {
     let reader =
         aiwatcher_projector::PeriodOutput::new(store.clone(), "aiwatcher-projector", 3_600);
     assert_eq!(reader.load().await, Some(10));
-    let observed = reader.observe(&["v1"], hour, None).await.expect("reads");
+    let observed = reader
+        .observe(None, &["v1"], hour, None)
+        .await
+        .expect("reads");
     assert_eq!(
         (observed[0].runs, observed[0].runs_from_periods),
         (5, 4),
         "each run once, r4 from the saved state"
     );
+}
+
+/// The whole of E2 against a running pipeline: a project's events and global
+/// ones on one log, one fold, and the global answers exactly what they always
+/// were.
+#[tokio::test]
+async fn a_fold_over_a_mixture_answers_for_globals_exactly_as_it_did_before_projects() {
+    let scope = aiwatcher_core::ProjectScope::new(
+        uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+        uuid::Uuid::parse_str("0198c0de-0000-7000-8000-0000000000aa").expect("uuid"),
+    );
+    let harness = Harness::start().await;
+    let mut events = complete_run("run-global");
+    let mut scoped = complete_run("run-scoped");
+    for event in &mut scoped {
+        event.project = Some(scope);
+    }
+    let redelivery = scoped[3].clone();
+    events.extend(scoped);
+
+    harness.bus.append(events).await.expect("appends");
+    harness
+        .until("both runs are folded in", || async {
+            harness
+                .read_model
+                .run("run-scoped")
+                .await
+                .is_some_and(|detail| detail.summary.input_tokens == 812)
+        })
+        .await;
+
+    let global = harness.read_model.run("run-global").await.expect("the run");
+    let project = harness.read_model.run("run-scoped").await.expect("the run");
+    assert_eq!(global.summary.project, None, "the global side is untouched");
+    assert_eq!(project.summary.project, Some(scope));
+    assert_eq!(
+        (global.summary.input_tokens, global.summary.llm_calls),
+        (project.summary.input_tokens, project.summary.llm_calls),
+        "and the same events fold to the same figures on either side"
+    );
+
+    // A redelivery lands on the span it always did: the derivations are pure
+    // functions of `run_id` and the span key, and a project is in neither.
+    let before: Vec<aiwatcher_core::SpanId> =
+        project.spans.iter().map(|span| span.span_id).collect();
+    harness
+        .bus
+        .append(vec![redelivery])
+        .await
+        .expect("redelivers");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let after = harness.read_model.run("run-scoped").await.expect("the run");
+    assert_eq!(
+        after
+            .spans
+            .iter()
+            .map(|span| span.span_id)
+            .collect::<Vec<_>>(),
+        before,
+        "a redelivery writes no second span"
+    );
+    assert_eq!(
+        after.summary.input_tokens, 812,
+        "and inflates no count, project or not"
+    );
+
+    // One dimension fold, a row per side, and each row holding only its own.
+    let page = harness
+        .read_model
+        .dimensions(
+            aiwatcher_projector::DimensionKind::Agent,
+            &aiwatcher_projector::DimensionFilter::default(),
+        )
+        .await;
+    let rows: Vec<(Option<aiwatcher_core::ProjectScope>, u64)> = page
+        .rows
+        .iter()
+        .map(|row| (row.project, row.runs))
+        .collect();
+    assert!(rows.contains(&(None, 1)), "{rows:?}");
+    assert!(rows.contains(&(Some(scope), 1)), "{rows:?}");
+
+    harness.stop().await;
 }

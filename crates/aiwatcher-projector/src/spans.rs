@@ -52,6 +52,15 @@ pub struct SpanRow {
     pub tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_type: Option<String>,
+    /// Which project this span belongs to (ADR_0033), lifted out of the
+    /// attributes the assembler wrote from the event that opened it. Absent is
+    /// the global side, which is every span written before projects existed.
+    ///
+    /// Read from the span rather than joined to the run, so a span carries its
+    /// project wherever it is read — here, and in VictoriaTraces, where the
+    /// same two attributes ride out and nothing is tenanted by them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
 }
 
 impl SpanRow {
@@ -74,6 +83,7 @@ impl SpanRow {
                 .map(ToOwned::to_owned),
             tool: string_attr(span, genai::TOOL_NAME).map(ToOwned::to_owned),
             step_type: string_attr(span, own::span::STEP_TYPE).map(ToOwned::to_owned),
+            project: project_of(span),
         }
     }
 
@@ -82,9 +92,22 @@ impl SpanRow {
     /// Run id and span id together: a span id is derived from its trace and a
     /// key, so it is unique inside a trace but carries no promise across the
     /// whole list.
+    ///
+    /// The project is deliberately **not** in it: a span belongs to its run
+    /// and a run to one project, so the pair already names one row.
     fn cursor(&self) -> String {
         format!("{}:{}", self.run_id, self.span_id.to_hex())
     }
+}
+
+/// The project a span's attributes name, both halves or neither.
+///
+/// A span carrying one half is a span nothing wrote — the assembler writes the
+/// pair together — so it reads as global rather than as half a project.
+fn project_of(span: &CompletedSpan) -> Option<aiwatcher_core::ProjectScope> {
+    let organization = string_attr(span, own::project::ORGANIZATION)?;
+    let project = string_attr(span, own::project::ID)?;
+    aiwatcher_core::ProjectScope::parse(&format!("{organization}/{project}")).ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, utoipa::ToSchema)]

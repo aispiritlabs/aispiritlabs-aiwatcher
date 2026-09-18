@@ -364,6 +364,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -455,6 +456,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

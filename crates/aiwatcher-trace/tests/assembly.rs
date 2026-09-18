@@ -1234,3 +1234,72 @@ fn a_cost_nobody_reported_is_absent_rather_than_nought() {
 
     assert_eq!(double_attr(llm, "aiwatcher.usage.cost_usd"), None);
 }
+
+/// A span carries its run's project, from the event that opened it, and no
+/// derived id moves by a byte because of it.
+#[test]
+fn a_span_carries_its_project_and_a_project_moves_no_derived_id() {
+    let scope = |last: u8| {
+        aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+            uuid::Uuid::parse_str(&format!("0198c0de-0000-7000-8000-0000000000{last:02x}"))
+                .expect("uuid"),
+        )
+    };
+    let call = json!({ "call_id": "one", "model": "capitals" });
+    let events = |project: Option<aiwatcher_core::ProjectScope>, ends_as: Option<_>| {
+        let mut run = Run::new("run-scoped");
+        let mut events = vec![
+            run.emit(EventType::RunStarted, None, json!({})),
+            run.after(5).emit(EventType::LlmStarted, None, call.clone()),
+            run.after(40)
+                .emit(EventType::LlmCompleted, None, call.clone()),
+            run.after(5).emit(EventType::RunCompleted, None, json!({})),
+        ];
+        for event in &mut events {
+            event.metadata.project = project;
+        }
+        if let Some(ends_as) = ends_as {
+            events[2].metadata.project = ends_as;
+        }
+        events
+    };
+
+    let assembled = collect(
+        &mut SpanAssembler::default(),
+        &events(Some(scope(0xaa)), None),
+    );
+    let chat = find(&assembled.spans, "chat capitals");
+    assert_eq!(
+        string_attr(chat, "aiwatcher.project.organization"),
+        Some("0198c0de-0000-7000-8000-00000000000a")
+    );
+    assert_eq!(
+        string_attr(chat, "aiwatcher.project.id"),
+        Some("0198c0de-0000-7000-8000-0000000000aa")
+    );
+
+    // A second credential closing the call does not repoint the span: the
+    // attributes are written when it opens, the rule the read model's row
+    // follows for a run.
+    let moved = collect(
+        &mut SpanAssembler::default(),
+        &events(Some(scope(0xaa)), Some(Some(scope(0xbb)))),
+    );
+    assert_eq!(
+        string_attr(find(&moved.spans, "chat capitals"), "aiwatcher.project.id"),
+        string_attr(chat, "aiwatcher.project.id")
+    );
+
+    // ADR_0001: the derivations are pure functions of `run_id` and the span
+    // key, so every historical trace stays addressable.
+    let global = collect(&mut SpanAssembler::default(), &events(None, None));
+    let global_chat = find(&global.spans, "chat capitals");
+    assert_eq!(global_chat.trace_id, chat.trace_id);
+    assert_eq!(global_chat.span_id, chat.span_id);
+    assert_eq!(
+        string_attr(global_chat, "aiwatcher.project.id"),
+        None,
+        "and a global span gains no attribute at all"
+    );
+}

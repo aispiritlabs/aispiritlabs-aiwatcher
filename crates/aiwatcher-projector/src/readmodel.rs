@@ -91,6 +91,22 @@ pub struct RunSummary {
     /// it, and nothing here authenticated who did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_by: Option<String>,
+    /// Which project this run belongs to (ADR_0033), from the **first** event
+    /// folded into it — including when that first event carried none, which is
+    /// the global side and every run this build has held.
+    ///
+    /// Set once and never moved. A run id is a producer's text, so two
+    /// credentials can publish into one; first-seen-wins means a second cannot
+    /// take a run into its project, which is the rule ADR_0033 states for an
+    /// execution's owner in the form a fold can keep. Nothing here refuses the
+    /// second — a fold has nobody to refuse to — so what it does is leave the
+    /// run where it was.
+    ///
+    /// This row is a **fact**, not a decision: it says whose a run is, and
+    /// says nothing about who may read it. That is a grant, asked of IAM per
+    /// request, and it is IAM-02/E3's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     /// The run whose model call this run served, from `run.started`'s
     /// `caller_run_id`: a serving host saying which request it answered, so a
     /// call can be seen from the side that served it as well as the side that
@@ -174,6 +190,9 @@ impl RunSummary {
             variant_id: None,
             evaluation_id: None,
             published_by: None,
+            // Taken here rather than in `apply`, which is what makes it the
+            // first event's and immune to a second credential.
+            project: event.metadata.project,
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
@@ -663,8 +682,16 @@ impl ReadModel {
 
     /// What each client counted of the runs it opened for one measurement, at
     /// each attempt of generating its answers.
-    pub async fn measured_runs(&self, evaluation_id: &str) -> Vec<MeasuredRuns> {
-        self.state.read().await.measured.of(evaluation_id)
+    ///
+    /// `project` is the project whose measurement is being asked about —
+    /// `None` for the global side, which is every one a production caller asks
+    /// about today (ADR_0033: no production caller constructs a bound store).
+    pub async fn measured_runs(
+        &self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        evaluation_id: &str,
+    ) -> Vec<MeasuredRuns> {
+        self.state.read().await.measured.of(project, evaluation_id)
     }
 
     pub async fn list(&self, filter: &RunFilter) -> RunPage {
@@ -1007,6 +1034,7 @@ mod tests {
             variant_id: None,
             evaluation_id: None,
             published_by: None,
+            project: None,
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
@@ -1224,6 +1252,66 @@ mod tests {
         );
     }
 
+    fn scope(last: u8) -> aiwatcher_core::ProjectScope {
+        aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::parse_str("0198c0de-0000-7000-8000-00000000000a").expect("uuid"),
+            uuid::Uuid::parse_str(&format!("0198c0de-0000-7000-8000-0000000000{last:02x}"))
+                .expect("uuid"),
+        )
+    }
+
+    /// A run's project is the first event's, and a second credential
+    /// publishing into the same run id does not take it into another project.
+    #[tokio::test]
+    async fn a_run_belongs_to_the_project_its_first_event_carried_and_is_never_moved() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-18 09:00:00 UTC);
+        let source = Source::new("agent", Sdk::Python);
+        for (position, project) in [(1, Some(scope(0xaa))), (2, Some(scope(0xbb))), (3, None)] {
+            let mut event = EventEnvelope::new(EventType::RunStarted, "run-1", at, source.clone());
+            event.project = project;
+            model
+                .apply(&event.record(position, position, at, None))
+                .await;
+        }
+
+        // A run id is a producer's text, so two credentials can publish into
+        // one. First-seen-wins is what stops the second taking the run — the
+        // fold's form of the rule ADR_0033 states for an execution's owner.
+        let run = model.run("run-1").await.expect("the run").summary;
+        assert_eq!(run.project, Some(scope(0xaa)));
+        assert_eq!(run.event_count, 3, "and every event still counts in it");
+    }
+
+    /// A run published under no project reads exactly as every run this build
+    /// has ever held, and says nothing about a project in its JSON.
+    #[tokio::test]
+    async fn a_run_with_no_project_is_the_global_side_and_gains_no_field() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-18 09:00:00 UTC);
+        let event = EventEnvelope::new(
+            EventType::RunStarted,
+            "run-global",
+            at,
+            Source::new("agent", Sdk::Python),
+        );
+        model.apply(&event.record(1, 1, at, None)).await;
+
+        let run = model.run("run-global").await.expect("the run").summary;
+        assert_eq!(run.project, None);
+        assert!(
+            serde_json::to_value(&run)
+                .expect("encodes")
+                .get("project")
+                .is_none(),
+            "so no stored or served shape moves for a deployment with no projects"
+        );
+    }
+
     /// A client's count of its runs is no run of its own, and the measurement
     /// it counts for reads it beside the starts that arrived.
     #[tokio::test]
@@ -1249,7 +1337,7 @@ mod tests {
         assert!(model.run("client-worker-1").await.is_none());
         assert_eq!(model.len().await, 1);
         assert_eq!(
-            model.measured_runs("e1").await,
+            model.measured_runs(None, "e1").await,
             [crate::MeasuredRuns {
                 client: "worker-1".to_owned(),
                 attempt: Some(1),

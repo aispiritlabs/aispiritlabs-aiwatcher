@@ -31,6 +31,9 @@ aiwatcher-execution.workspace = true
 serde_json.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+# Tests alone: a project scope is two of them, and the fold reads them off the
+# record rather than making any.
+uuid.workspace = true
 
 [lints]
 workspace = true

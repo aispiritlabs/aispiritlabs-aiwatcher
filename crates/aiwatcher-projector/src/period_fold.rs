@@ -86,6 +86,10 @@ struct OpenCall {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct InFlight {
     variant_id: String,
+    /// Which project the run belongs to, from the event that opened it here —
+    /// never moved by a later one, as the read model's row is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project: Option<aiwatcher_core::ProjectScope>,
     measured: bool,
     saw_start: bool,
     started_ms: i64,
@@ -202,10 +206,31 @@ fn millis(at: time::OffsetDateTime) -> i64 {
     i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
 }
 
+/// What a period holds one variant's record under: the project and the
+/// variant.
+///
+/// A variant ID is a content address of a declaration's pins, so one
+/// declaration made in two projects has one ID — and a single key would have
+/// summed two projects' traffic into a figure belonging to neither. The scope
+/// key is `""` on the global side, so every existing record keys where it
+/// always did. Never parsed: a record carries both halves on its face.
+fn keyed(project: Option<aiwatcher_core::ProjectScope>, variant_id: &str) -> String {
+    format!(
+        "{}|{variant_id}",
+        aiwatcher_core::ProjectScope::key_of(project)
+    )
+}
+
 /// A record of nothing yet, for `[from, to)`.
-fn empty(variant_id: &str, from: i64, to: i64) -> ObservedPeriod {
+fn empty(
+    project: Option<aiwatcher_core::ProjectScope>,
+    variant_id: &str,
+    from: i64,
+    to: i64,
+) -> ObservedPeriod {
     ObservedPeriod {
         variant_id: variant_id.to_owned(),
+        project,
         from,
         to,
         complete: true,
@@ -486,6 +511,7 @@ impl PeriodFold {
                 run_id.to_owned(),
                 InFlight {
                     variant_id: variant_id.clone(),
+                    project: event.metadata.project,
                     started_ms: at,
                     ..InFlight::default()
                 },
@@ -521,7 +547,7 @@ impl PeriodFold {
                 Some(run) => self.finish(run, ok, at, end_seconds),
                 None => {
                     if let Some(variant_id) = &event.metadata.variant_id {
-                        self.finish_unseen(variant_id, ok, end_seconds);
+                        self.finish_unseen(event.metadata.project, variant_id, ok, end_seconds);
                     }
                 }
             }
@@ -591,7 +617,12 @@ impl PeriodFold {
             .occurred_at
             .min(event.metadata.ingested_at)
             .unix_timestamp();
-        let key = format!("{client} {variant_id}");
+        // The project too: two projects' clients may share a name, and their
+        // counts of one variant's runs are not one count.
+        let key = format!(
+            "{} {client} {variant_id}",
+            aiwatcher_core::ProjectScope::key_of(event.metadata.project)
+        );
         let passed = match self.run_counts.get_mut(&key) {
             Some(count) => {
                 let passed = number.saturating_sub(count.highest + 1);
@@ -638,6 +669,7 @@ impl PeriodFold {
                 ..ObservedPeriod::default()
             };
             self.place(
+                event.metadata.project,
                 variant_id,
                 event.metadata.occurred_at.unix_timestamp(),
                 &counted,
@@ -721,7 +753,13 @@ impl PeriodFold {
     /// Count one run's figures in the period it ended in and in its second —
     /// held in the oldest open period, by the one it ended in, when that one
     /// has closed.
-    fn place(&mut self, variant_id: &str, end_seconds: i64, run: &ObservedPeriod) {
+    fn place(
+        &mut self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        variant_id: &str,
+        end_seconds: i64,
+        run: &ObservedPeriod,
+    ) {
         let ended_in = self.floor_at(end_seconds);
         let open_from = ended_in
             .max(self.closed_through.unwrap_or(ended_in))
@@ -735,8 +773,8 @@ impl PeriodFold {
             .open
             .entry(open_from)
             .or_default()
-            .entry(variant_id.to_owned())
-            .or_insert_with(|| empty(variant_id, open_from, open_from + open_width));
+            .entry(keyed(project, variant_id))
+            .or_insert_with(|| empty(project, variant_id, open_from, open_from + open_width));
         if missed
             || self
                 .gap_from
@@ -749,7 +787,9 @@ impl PeriodFold {
             record
                 .late
                 .entry(ended_in)
-                .or_insert_with(|| empty("", ended_in, ended_in + ended_width))
+                // A part of the record above rather than a record of its own,
+                // so it names neither the variant nor the project.
+                .or_insert_with(|| empty(None, "", ended_in, ended_in + ended_width))
         } else {
             record
         };
@@ -757,12 +797,12 @@ impl PeriodFold {
         counted
             .slices
             .entry(u32::try_from(offset).unwrap_or(u32::MAX))
-            .or_insert_with(|| empty("", ended_in + offset, ended_in + offset + 1))
+            .or_insert_with(|| empty(None, "", ended_in + offset, ended_in + offset + 1))
             .merge(run);
     }
 
     fn finish(&mut self, run: InFlight, ok: bool, at: i64, end_seconds: i64) {
-        let mut counted = empty("", 0, 0);
+        let mut counted = empty(None, "", 0, 0);
         if run.measured {
             counted.measured_runs = 1;
         } else {
@@ -792,12 +832,18 @@ impl PeriodFold {
                 counted.complete = false;
             }
         }
-        self.place(&run.variant_id, end_seconds, &counted);
+        self.place(run.project, &run.variant_id, end_seconds, &counted);
     }
 
     /// A run naming a variant whose start this fold never tracked: counted,
     /// with no duration, and its period incomplete.
-    fn finish_unseen(&mut self, variant_id: &str, ok: bool, end_seconds: i64) {
+    fn finish_unseen(
+        &mut self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        variant_id: &str,
+        ok: bool,
+        end_seconds: i64,
+    ) {
         let counted = ObservedPeriod {
             runs: 1,
             succeeded: u64::from(ok),
@@ -806,7 +852,7 @@ impl PeriodFold {
             complete: false,
             ..ObservedPeriod::default()
         };
-        self.place(variant_id, end_seconds, &counted);
+        self.place(project, variant_id, end_seconds, &counted);
     }
 
     /// Close every period the log's clock has passed, then every hour and day
@@ -846,8 +892,10 @@ impl PeriodFold {
                     .or_default();
                 for record in variants.values() {
                     let into = rollup
-                        .entry(record.variant_id.clone())
-                        .or_insert_with(|| empty(&record.variant_id, start, start + level));
+                        .entry(keyed(record.project, &record.variant_id))
+                        .or_insert_with(|| {
+                            empty(record.project, &record.variant_id, start, start + level)
+                        });
                     into.merge(record);
                     into.merge_late(record);
                 }
@@ -995,7 +1043,8 @@ struct Window {
     stored: Vec<(i64, i64)>,
     /// The fold's own records past what the store holds.
     held: Vec<ObservedPeriod>,
-    /// Runs in flight heard from in the window, by variant.
+    /// Runs in flight heard from in the window, by variant — of the one
+    /// project the window was taken over.
     running: BTreeMap<String, u64>,
     /// Gaps in the log reaching the window that are not written down yet.
     missed: Vec<LogGap>,
@@ -1003,12 +1052,24 @@ struct Window {
 
 impl PeriodFold {
     /// What a window from `since` reads, with the fold's own records in it.
-    fn window(&self, variant_ids: &[&str], since: i64) -> Window {
+    ///
+    /// `project` is the side it is taken over — `None` for the global one,
+    /// which is every window a production caller asks for today. One
+    /// declaration made in two projects has one variant ID, so a window that
+    /// did not name a side would answer with both projects' traffic in it.
+    fn window(
+        &self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        variant_ids: &[&str],
+        since: i64,
+    ) -> Window {
         let (Some(began), Some(base_written)) = (self.began, self.base_written().or(self.began))
         else {
             return Window::default();
         };
-        let wanted = |variant: &str| variant_ids.contains(&variant);
+        let wanted = |record_project: Option<aiwatcher_core::ProjectScope>, variant: &str| {
+            record_project == project && variant_ids.contains(&variant)
+        };
         let edge = self.floor_at(since).max(began);
         let sliced = since > edge;
         let stored = self.plan(edge, base_written, sliced, i64::MAX);
@@ -1023,12 +1084,13 @@ impl PeriodFold {
                     .range(held_from..)
                     .flat_map(|(_, variants)| variants.values()),
             )
-            .filter(|record| wanted(&record.variant_id))
+            .filter(|record| wanted(record.project, &record.variant_id))
             .cloned()
             .collect();
         let mut running = BTreeMap::new();
         for run in self.runs.values() {
-            if !run.measured && run.last_ms >= since * 1_000 && wanted(&run.variant_id) {
+            if !run.measured && run.last_ms >= since * 1_000 && wanted(run.project, &run.variant_id)
+            {
                 *running.entry(run.variant_id.clone()).or_default() += 1;
             }
         }
@@ -1156,8 +1218,10 @@ impl PeriodOutput {
             for (level, from) in fold.plan(start, closed, false, rollup) {
                 for record in self.store.records(level, from).await? {
                     let into = adding
-                        .entry(record.variant_id.clone())
-                        .or_insert_with(|| empty(&record.variant_id, start, start + rollup));
+                        .entry(keyed(record.project, &record.variant_id))
+                        .or_insert_with(|| {
+                            empty(record.project, &record.variant_id, start, start + rollup)
+                        });
                     into.merge(&record);
                     into.merge_late(&record);
                 }
@@ -1273,11 +1337,12 @@ impl PeriodOutput {
     /// The store's own failure, or a written period that no longer reads.
     pub async fn observe(
         &self,
+        project: Option<aiwatcher_core::ProjectScope>,
         variant_ids: &[&str],
         since: i64,
         prices: Option<&ModelPrices>,
     ) -> Result<Vec<VariantObservations>, PortError> {
-        let window = self.fold.lock().await.window(variant_ids, since);
+        let window = self.fold.lock().await.window(project, variant_ids, since);
         let mut missed = self.store.gaps(since).await?;
         for gap in &window.missed {
             if !missed.contains(gap) {
@@ -1291,7 +1356,7 @@ impl PeriodOutput {
                 let wanted = wanted.clone();
                 async move {
                     let wanted: Vec<&str> = wanted.iter().map(String::as_str).collect();
-                    store.period(level, from, &wanted).await
+                    store.period(level, from, project, &wanted).await
                 }
             })
             .buffered(READ_AT_ONCE)
@@ -1885,7 +1950,7 @@ mod tests {
         let output = output_over(&log.events).await;
 
         let [row] = output
-            .observe(&["v1"], start + 500, None)
+            .observe(None, &["v1"], start + 500, None)
             .await
             .expect("reads")
             .try_into()
@@ -1903,7 +1968,7 @@ mod tests {
             "from the second the window starts"
         );
         let from_the_hour = output
-            .observe(&["v1"], start + 3_600, None)
+            .observe(None, &["v1"], start + 3_600, None)
             .await
             .expect("reads");
         assert_eq!(
@@ -1911,7 +1976,7 @@ mod tests {
             "r3 and r4: the late one ended before the window, wherever it arrived"
         );
         let from_after_r2 = output
-            .observe(&["v1"], start + 1_011, None)
+            .observe(None, &["v1"], start + 1_011, None)
             .await
             .expect("reads");
         assert_eq!(
@@ -1920,7 +1985,7 @@ mod tests {
         );
         assert!(!row.window_before_observations);
         let before = output
-            .observe(&["v1"], start - 86_400, None)
+            .observe(None, &["v1"], start - 86_400, None)
             .await
             .expect("reads");
         assert!(before[0].window_before_observations);
@@ -1943,7 +2008,7 @@ mod tests {
         }
 
         let [row] = output
-            .observe(&["v1"], start + 1_003, None)
+            .observe(None, &["v1"], start + 1_003, None)
             .await
             .expect("reads")
             .try_into()
@@ -2007,7 +2072,7 @@ mod tests {
         }
 
         let [row] = output
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
@@ -2031,14 +2096,14 @@ mod tests {
         );
         assert_eq!(store.gaps(start).await.expect("lists").len(), 1);
         let after = output
-            .observe(&["v1"], start + 701, None)
+            .observe(None, &["v1"], start + 701, None)
             .await
             .expect("reads");
         assert!(after[0].missed.is_empty(), "a window after the span");
 
         let unnumbered = output_over(&kept).await;
         let [row] = unnumbered
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
@@ -2090,7 +2155,7 @@ mod tests {
         }
 
         let [row] = output
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
@@ -2135,7 +2200,7 @@ mod tests {
 
         assert!(
             store
-                .period(3_600, start + 3_600, &["v1"])
+                .period(3_600, start + 3_600, None, &["v1"])
                 .await
                 .unwrap()
                 .is_some(),
@@ -2143,7 +2208,7 @@ mod tests {
         );
         assert!(
             store
-                .period(300, start + 7_200, &["v1"])
+                .period(300, start + 7_200, None, &["v1"])
                 .await
                 .unwrap()
                 .is_some(),
@@ -2151,14 +2216,14 @@ mod tests {
         );
         assert!(
             store
-                .period(300, start + 3_600, &["v1"])
+                .period(300, start + 3_600, None, &["v1"])
                 .await
                 .unwrap()
                 .is_none(),
             "never both over one span"
         );
         let [row] = fine
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
@@ -2169,7 +2234,7 @@ mod tests {
             "each run once, the one in flight across the switch included"
         );
         let after = fine
-            .observe(&["v1"], start + 7_280, None)
+            .observe(None, &["v1"], start + 7_280, None)
             .await
             .expect("reads");
         assert_eq!(
@@ -2218,7 +2283,7 @@ mod tests {
         }
 
         let [row] = second
-            .observe(&["v1"], day, None)
+            .observe(None, &["v1"], day, None)
             .await
             .expect("reads")
             .try_into()
@@ -2253,7 +2318,7 @@ mod tests {
         }
         // Nothing flushed: every closed period is still the fold's.
         let [row] = output
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
@@ -2262,7 +2327,7 @@ mod tests {
 
         assert!(output.flush(true).await);
         let [row] = output
-            .observe(&["v1"], start, None)
+            .observe(None, &["v1"], start, None)
             .await
             .expect("reads")
             .try_into()
