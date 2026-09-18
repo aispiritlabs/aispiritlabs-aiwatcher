@@ -568,8 +568,9 @@ before changing that area.
    because the image's `ENTRYPOINT` is this binary with no arguments.
 
 25. **Who may see a project is aiwatcher's question, not the provider's**
-   (`crates/aiwatcher-iam/README.md`; no ADR yet, and one is owed before the
-   cutover). The identity provider authenticates; **aiwatcher owns membership**,
+   ([ADR_0033](docs/ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md) for the storage
+   boundary; `crates/aiwatcher-iam/README.md` for the control plane). The
+   identity provider authenticates; **aiwatcher owns membership**,
    and IdP groups are never copied into teams — a principal is the exact
    `(provider, subject)` pair, and email, display name and instance role are no
    part of it. Organizations hold teams, projects and grants in one transactional
@@ -582,11 +583,25 @@ before changing that area.
    bundles, producer approvals, calibrations, declarations, artifact bytes — each
    an additive `/api/v1/orgs/{organization}/projects/{project}` family sharing the
    legacy handlers, keyed under `<prefix>/scopes/<org>/<project>/registry/`, with
-   the legacy route still serving legacy data under instance authorization. What
-   is **not** done is written down as plainly as what is: logs, streams, query and
-   notebook runtimes, workers and their credentials, scheduled jobs and migration
-   of existing resources. Until those land, no organization or project selector
-   is activated, and this deployment is not described as multi-tenant safe.
+   the legacy route still serving legacy data under instance authorization.
+   Everything that **runs** followed, as ADR_0033: `for_project(scope)` returns
+   the same backing store narrowed to one project, and the **unscoped handle
+   enforces the same rule from the other side** — the reactor, the worker, the
+   pod launcher, the timer tick, the outbox publisher and the retention sweep
+   needed no change, because the store they hold does not see a project's work.
+   An execution's `ExecutionOwnership { scope, principal, definition }` is
+   written in the transaction that creates it and never again, and never comes
+   from the plan, a parameter, `requested_by`, a worker's name or a
+   declaration's author. Absence is the global side, so nothing existing is
+   migrated; `aiwatcher-migrate` copies four registries into a named project by
+   hand, blocks the conversation archive and names eleven prefixes it will not
+   touch. None of it is authorization: a grant is IAM's answer, asked fresh,
+   before the cache lookup as well as before the work. What is **not** done is
+   written down as plainly as what is: no dispatcher and no project `/start`,
+   and logs, streams, query and notebook runtimes, worker credentials and
+   scheduled jobs are still instance-wide. Until those land, no organization or
+   project selector is activated, and this deployment is not described as
+   multi-tenant safe.
 
 ## Conventions
 
