@@ -217,12 +217,17 @@ deployment.
 
 ---
 
-## 8. Prompt for the next session
+## 8. Prompt for whenever IAM-02 is picked up
 
-IAM-01 is closed. The next session starts **IAM-02**, and
-[`iam-02-data-plane.md`](iam-02-data-plane.md) is its plan: read that first,
-this file second. The decision this prompt used to ask for — whether a
+IAM-01 is closed and **IAM-02 is deliberately last** — after the rest of the
+roadmap, not next. [`iam-02-data-plane.md`](iam-02-data-plane.md) is its plan
+and says what that costs; the decision this prompt used to ask for — whether a
 project's facts reach the event log — is **made** there, in its section 2.
+
+Until it is picked up, one rule stands for everything built in the meantime:
+**a new authored resource gets its scoped route family at birth.** The pattern
+is `ProjectAuthorization` plus `<prefix>/scopes/<organization>/<project>/registry/`,
+and writing it once is the same code that retrofitting it later is not.
 
 > Zaczynasz IAM-02 w repozytorium AIWatcher. IAM-01 jest zamknięte: dispatcher
 > stoi (`aiwatcher_server::execution::project::ProjectDispatcher`), obie blokady

@@ -10,6 +10,9 @@ obserwowalna** — log zdarzeń, projektor, read model i żywe strumienie — cz
 rdzeń produktu. Ten dokument jest planem na tę połowę i na to, co poza nią
 zostało w data plane.
 
+**Ten etap jest świadomie ostatni** — sekcja 7 mówi, co to znaczy i czego nie
+kosztuje.
+
 ---
 
 ## 1. Cel tego etapu
@@ -22,7 +25,7 @@ odebranie grantu zamyka ten strumień, a nie czeka na wygaśnięcie sesji.
 To jest **mniej** niż multi-tenancy i tak ma zostać. Poza M1 zostają świadomie:
 silniki zapytań i notebooków, poświadczenia workerów, harmonogramy, archiwum
 rozmów, zakresowy sweep retencji, kolekcja artefaktów i dzierżawa w
-VictoriaTraces/Metrics. Sekcja 9 wymienia je po nazwie — jako decyzję, nie jako
+VictoriaTraces/Metrics. Sekcja 6 wymienia je po nazwie — jako decyzję, nie jako
 przeoczenie.
 
 ---
@@ -219,3 +222,36 @@ Rozmowy. Migracja historii. I żadne z powyższych nie jest powodem, by aktywowa
 selektor organizacji/projektu przed bramką M1: **dopóki E1–E4 nie są
 zweryfikowane przez rzeczywiste HTTP, ten deployment nie jest opisywany jako
 multi-tenant safe.**
+
+---
+
+## 7. Kiedy — i co znaczy „na końcu"
+
+IAM-02 jest **odłożony na koniec roadmapy**, świadomie. To zmienia kolejność z
+`ux-migration-plan-2026-09-14.md`, gdzie IAM stał na trzecim miejscu z siedmiu.
+
+**Czego to nie kosztuje.** Nic z istniejących danych nie wymaga przeróbki, bo
+brak zakresu *jest* stroną globalną — E1 jest addytywne, identyfikatory globalne
+nie drgną co do bajtu, a E3 rekomenduje zostawić dane globalne dokładnie tam,
+gdzie są. Odłożenie nie tworzy długu w danych.
+
+**Co to kosztuje.** Każda funkcja zbudowana w międzyczasie to jedna powierzchnia
+więcej do zakresowania później, a każdy nowy rejestr to potencjalnie dwunasta
+rodzina bez adaptera migracji. Stąd jedna reguła, która obowiązuje póki IAM-02
+czeka:
+
+> **Nowy zasób autorski dostaje swoją zakresową rodzinę tras od urodzenia.**
+> Wzorzec jest gotowy — `ProjectAuthorization` plus
+> `<prefix>/scopes/<organization>/<project>/registry/` — i napisanie go od razu
+> to ten sam kod, którym dorabianie go później nie jest.
+
+**Co obowiązuje w międzyczasie.** Deployment pozostaje jednym najemcą w praktyce:
+selektor organizacji/projektu jest nieaktywny, przebieg projektu nie ma żywego
+widoku, spanu ani foldu, a `auth=none` i `auth=local` są trybami lokalnymi. Nie
+opisujemy tego wdrożenia jako multi-tenant safe — i to zdanie nie zmienia się
+przez samo istnienie tego planu.
+
+**Co może pójść wcześniej, jeśli okaże się pilne.** E5 dla połowy autorskiej —
+zaproszenia, interfejs członków i okno dzielenia — nie zależy od E1–E4. Trasy
+zakresowe już sprawdzają granty, więc dzielenie promptów, datasetów, anotacji,
+treningów i ewaluacji da się otworzyć bez ruszania logu zdarzeń.
