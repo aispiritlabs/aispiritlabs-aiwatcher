@@ -1112,3 +1112,16 @@ strumienie, które mogą iść równolegle, wraz z mapą kolizji i promptem na k
 [docs/parallel-streams-2026-09-18.md](parallel-streams-2026-09-18.md). Cztery
 startują od razu — System, FLOW-01, treść warsztatu i IAM-02/A (projekt na
 kopercie); reszta IAM-02 jest łańcuchem za nimi, z bramką M1 pośrodku.
+
+
+## IAM-02/A dowieziony — projekt na kopercie i fold, który go zna (18.09.2026)
+
+E1 i E2 z [planu data plane](iam-02-data-plane.md) są zrobione: koperta niesie
+opcjonalny `ProjectScope`, trasa ingestu nadpisuje go zakresem poświadczenia, a
+jeden fold — przebiegi, wymiary, spany, okresy, `asked`, `measured`, journal —
+trzyma klucz zakresu w wierszu. Brak znaczy stronę globalną, więc nic z
+dotychczasowych danych się nie ruszyło, a identyfikatory globalne nie drgnęły co
+do bajtu. Pomiar pamięci: 176 MB bez projektu, 183 MB z pięćdziesięcioma; limit
+512 MB zostaje. Szczegóły i to, czego etap **nie** robi, są w sekcji 8 tamtego
+planu. Następny jest IAM-02/B — odczyty i żywy strumień po grantach, czyli
+bramka M1.

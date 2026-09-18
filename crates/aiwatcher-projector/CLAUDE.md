@@ -68,3 +68,25 @@ with everything else about what the log carries; what is here is the period fold
   minute, in the object store, and a page not yet written holds the resume back
   as a closed period does. What it does not reach back to is named with its date
   and denies the exchange, rather than read as nothing asked.
+- **Never fold a project into a fold of its own.** An event carries which
+  project published it (ADR_0001 amended, ADR_0033), and **one** fold reads it,
+  with the scope in the row: a run's project is the first event's and is never
+  moved, a dimension row is `(project, key)`, a span carries it as two
+  attributes the assembler writes when the span opens, and a period's record,
+  a client's count of a measurement's runs and a witnessed call each carry it
+  too. Absence is the global side, which is every row this build has written, so
+  nothing existing moves. A fold per tenant would answer the same questions and
+  would be the premise ADR_0033 says to revisit — that one instance serves many
+  projects — rather than a dimension on the one it already has.
+- **Never let a project into a key a content address already names.** A variant
+  ID is a content address of a declaration's pins and an `evaluation_id` is a
+  published result's, so one declaration made in two projects has one ID — and a
+  map keyed by it alone sums two projects' traffic into a figure belonging to
+  neither. The scope goes in the **key** (`period_fold::keyed`, the measured
+  counts, the period store's `scopes/` segment) and on the record's face; a
+  global key stays byte for byte what it was, so a create-only write still lands
+  on the first record.
+- **Never read a project's row as permission to see it.** Every one of these is
+  a fact about whose a run is, and none is a decision about who may read it.
+  That is a grant, asked of IAM fresh per request, and it is E3's — the read
+  routes here still answer under instance authorization.

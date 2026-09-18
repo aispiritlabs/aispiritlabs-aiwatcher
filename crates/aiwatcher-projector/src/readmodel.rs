@@ -427,6 +427,26 @@ pub struct RunPage {
 /// two LLM calls, two tool calls and 24 streamed chunks per run): ~150 MB
 /// resident, of which the read model is the largest share. A release build is
 /// smaller. `just load-test` reproduces the measurement.
+///
+/// **What a project costs** (IAM-02 E2, re-measured 2026-09-18 on the same
+/// debug build and workload, 5 000 runs, one batch per run so the three are
+/// comparable):
+///
+/// | projects | resident |
+/// |---|---|
+/// | none — the global side | 176 MB |
+/// | one | 182 MB |
+/// | fifty | 183 MB |
+///
+/// The cost is **per event**, not per project: a run's row gains two uuids and
+/// each span two attributes, and the fifty-project deployment costs a megabyte
+/// more than the one-project deployment because the fold is one fold with the
+/// scope in the row rather than one fold per tenant. The 512 MB limit in
+/// `deploy/` stands on this measurement with ~2.8× headroom, so nothing there
+/// moves; what would move it is raising `max_spans_total`, as it always was.
+/// (The figures are above the older ~150 MB because the workload now posts one
+/// batch per run rather than batches of 600, which is the producer shape a
+/// scoped deployment has — one credential per project.)
 #[derive(Clone, Debug)]
 pub struct ReadModelConfig {
     /// How many runs to keep. Past it, the oldest *finished* runs are evicted

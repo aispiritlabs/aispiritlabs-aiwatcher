@@ -77,7 +77,7 @@ sprawdzeniem grantu (`ProjectAuthorization::authorize_write`, świeża decyzja n
 operację, powtórzona po odebraniu ciała), trwałe `ExecutionOwnership`, związany
 `WorkflowStore`, para artefaktów, i dispatcher.
 
-### E1 — projekt na kopercie
+### E1 — projekt na kopercie — **zrobione**
 
 - `EventEnvelope::project: Option<ProjectScope>`, serializowany, domyślnie
   nieobecny.
@@ -91,7 +91,7 @@ operację, powtórzona po odebraniu ciała), trwałe `ExecutionOwnership`, zwią
 - Testy: producent nazywający projekt jest ignorowany; token projektu A nie
   zapisze do B; koperta bez pola czyta się jak każda historyczna.
 
-### E2 — fold zna zakres
+### E2 — fold zna zakres — **zrobione**
 
 - **Jeden fold z kluczem zakresu w wierszu, nie fold per tenant.** To jest
   różnica między „dodatkowy wymiar" a „przesłanka do rewizji" z ADR_0033.
@@ -257,3 +257,41 @@ granty, więc dzielenie promptów, datasetów, anotacji, treningów i ewaluacji 
 się otworzyć bez ruszania logu zdarzeń. Kolejność do pierwszego testu uprawnień
 i lekcji, razem z promptem dla sesji, która ją wykona, jest w
 [planie UX](ux-migration-plan-2026-09-14.md#kolejność-do-pierwszego-testu-permissionów-i-lekcji--18092026).
+
+---
+
+## 8. E1 i E2 — co naprawdę stanęło (18.09.2026)
+
+Oba etapy są zrobione i zielone; kontrakt jest w
+[README IAM](../crates/aiwatcher-iam/README.md) („Połowa obserwowalna się
+zaczyna") i w [ADR_0001](ADR/ADR_0001_EVENT_ENVELOPE.md), aneks z 18.09.2026.
+
+**E1.** `EventEnvelope::project` i `RecordedMetadata::project`,
+serializowane, domyślnie nieobecne. Trasa ingestu nadpisuje pole zakresem
+poświadczenia **zawsze**, także nieobecnością. `IngestToken` niesie zakres w
+etykiecie — `name[queue]@<organizacja>/<projekt>=sekret`, przyrostek, więc
+każdy dotychczasowy token parsuje się dokładnie jak przedtem. Rola zostaje
+twardo `Editor`. `contracts/envelope.schema.json` zaktualizowany; SDK nietknięte.
+
+**E2.** Jeden fold, klucz zakresu w wierszu: `RunSummary` (projekt pierwszego
+zdarzenia, nigdy nieprzenoszony), `dimensions::compute` (wiersz to `(projekt,
+klucz)`, kursor też), `SpanRow` (z atrybutów, które asembler pisze przy
+otwarciu spanu), `period_fold` wraz z układem kluczy w object storze, `asked`,
+`measured` i journal. Identyfikatory globalne nie drgnęły co do bajtu.
+
+**Pomiar, nie założenie.** `just load-test`, debug, pełna retencja, 5 000
+przebiegów, jeden batch na przebieg: **176 MB** bez projektu, **182 MB** z
+jednym, **183 MB** z pięćdziesięcioma. Koszt jest **na zdarzenie**, nie na
+projekt — to jest różnica „jeden fold" od „fold per tenant" wyrażona w
+megabajtach. Limit 512 MB w `deploy/` zostaje; liczby są zapisane przy
+`ReadModelConfig`.
+
+**Czego to nie robi, i to jest ważniejsze niż co robi.** Żaden z tych wierszy
+nie jest decyzją o dostępie. Odczyty nadal odpowiadają pod autoryzacją
+instancji (E3), SSE i WebSocket są nietknięte (E4), selektor nieaktywny. To
+wdrożenie nadal nie jest opisywane jako multi-tenant safe.
+
+**Jedna dziura, nazwana.** Producent publikujący **prosto do brokera** niesie
+własne słowo o swoim projekcie — dokładnie tak, jak żaden rekord tam nie nazywa
+publikującego (ADR_0001). Trasa jest granicą; broker stanie się nią, gdy zacznie
+uwierzytelniać producentów, a adapter poniesie to, czego się dowiedział.

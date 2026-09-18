@@ -1396,3 +1396,56 @@ items in `docs/iam-01-kickoff.md` §3 — a scoped log path or a stated absence,
 scoped live reads, a scoped retention sweep, artifact collection, grant checks
 on every read and worker route, and a retention policy for declarations, judge
 settings and kept replies — are what a route would still be waiting on.
+
+## The observable half begins: a project on the envelope, and a fold that knows it
+
+IAM-02's E1 and E2 ([the plan](../../docs/iam-02-data-plane.md)). Everything
+above is the **authored** half — registries behind `for_project`, executions
+with a durable owner, the dispatcher. This is the first of the observable one:
+the event log, and the folds over it.
+
+**The decision, and the one place it parts from its neighbour.**
+`EventEnvelope` and `RecordedMetadata` carry an optional `ProjectScope` — two
+uuids, `aiwatcher_core`'s own, because that crate takes no dependency on a store
+and this one is a store. Absence is the global side, so no stored record moves
+and no historical read changes. `POST /api/v1/events` **always overwrites** the
+field with the publishing credential's scope, including with absence, so a body
+naming a project is discarded rather than honoured. Unlike `published_by` it is
+serialised: its reader is the projector consuming the bus, not the process that
+wrote it, and skipping it would read every project's events as global behind a
+broker. ADR_0001's amendment of 2026-09-18 is the record.
+
+The credential is an ingest token, which names its project in its label —
+`name[queue]@<organization-uuid>/<project-uuid>=secret`, a suffix, so every
+token string written before parses to exactly what it always did. It
+**narrows**, beside the queues and never like a role: `IngestToken::identity`
+still hard-codes `Editor`, so naming a project cannot make a secret in an
+agent's environment able to ask an orchestrator to run something. Every other
+credential — a session, a bearer, a proxy header, a pod's attempt credential,
+the local token, the anonymous identity — publishes globally, as each always
+has. **Which projects a person may read is a grant**, asked fresh per
+operation, and is no part of an identity.
+
+**One fold, with the scope in the row.** `RunSummary`, `dimensions::compute`,
+`SpanRow`, the period fold and its object keys, the `asked` index, the measured
+counts and the journal all carry the project; none of them is a fold of its own.
+A run's project is its **first** event's and is never moved, which is the rule
+`ExecutionOwnership` states for an execution in the form a fold can keep. Where
+a content address is already the key — a variant ID, an `evaluation_id` — the
+scope joins it, because one declaration made in two projects has one ID and a
+single key would sum their traffic into a figure belonging to neither; a global
+key stays byte for byte what it was. Global derivations do not move: `TraceId`
+and `SpanId` are pure functions of `run_id` and the span key, so every
+historical trace stays addressable.
+
+**Measured, not assumed.** `just load-test`'s workload at full retention, debug
+build, 5 000 runs: 176 MB with no project, 182 MB with one, 183 MB with fifty.
+The cost is per event rather than per project — which is what "one fold, not one
+per tenant" means in megabytes — and the 512 MB limit in `deploy/` stands on it
+unchanged, with the figures recorded beside `ReadModelConfig`.
+
+**What this is not.** None of it is authorization. Every row says whose a run is
+and nothing about who may read it; the read routes still answer under instance
+authorization, and filtering them by grant is E3. SSE and the WebSocket are
+untouched, which is E4. No organization or project selector is activated, and
+this deployment is still not described as multi-tenant safe.
