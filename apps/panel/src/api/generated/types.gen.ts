@@ -2332,6 +2332,7 @@ export type DimensionSummary = {
     last_activity_at: string;
     llm_calls: number;
     output_tokens: number;
+    project?: null | ProjectScope;
     running: number;
     /**
      * The newest event on a run in this row that has **not** ended. Absent
@@ -2793,6 +2794,7 @@ export type EventEnvelope = {
      */
     occurred_at: string;
     parent_span_id?: null | SpanId;
+    project?: null | ProjectScope;
     /**
      * Beside `run_sequence`, and on a `client.counted`: when that count began —
      * the moment the client opened the first run it counted. A reader that was
@@ -4689,6 +4691,7 @@ export type Identity = {
      */
     issuer?: string | null;
     name?: string | null;
+    project?: null | IamProjectScope;
     /**
      * The worker queues this caller may claim attempts on.
      *
@@ -6434,6 +6437,17 @@ export type ProjectPage = {
 };
 
 /**
+ * One project of one organization, as the log carries it.
+ *
+ * `Copy`, because it travels beside every event and a clone per row would be
+ * two allocations for thirty-two bytes.
+ */
+export type ProjectScope = {
+    organization: string;
+    project: string;
+};
+
+/**
  * A project as it appears in a list, with the counts a reader wants first.
  */
 export type ProjectSummary = AnnotationProject & {
@@ -7000,6 +7014,7 @@ export type RecordedMetadata = {
     message_id: MessageId;
     occurred_at: string;
     parent_span_id?: null | SpanId;
+    project?: null | ProjectScope;
     /**
      * See [`EventEnvelope::published_by`]: who the ingest route authenticated
      * this event under. Absent from an event a broker delivered, and from
@@ -7876,6 +7891,7 @@ export type RunSummary = {
      */
     nodes_run?: Array<string>;
     output_tokens: number;
+    project?: null | ProjectScope;
     /**
      * The credential the ingest route authenticated the run's start under — an
      * ingest token's name, a person's subject. Absent where a broker delivered
@@ -9040,6 +9056,7 @@ export type SpanRow = {
      */
     operation?: string | null;
     parent_span_id?: null | SpanId;
+    project?: null | ProjectScope;
     /**
      * From the map key: a `CompletedSpan` carries no run id of its own.
      */

@@ -1175,6 +1175,14 @@ export const getEvaluation = <ThrowOnError extends boolean = false>(options: Opt
  * Every event is recorded as published by that identity — the token's name or
  * the person's subject — whatever the body says, which is what lets a reader
  * tell one publisher's word from another's.
+ *
+ * The same rule decides **which project** an event belongs to, and here it is
+ * load-bearing rather than descriptive. The credential's scope is written onto
+ * every envelope in the batch, including when the credential has none, so a
+ * producer that named a project is ignored and one that named somebody else's
+ * has written nothing into it. Absence means the global log, which is what
+ * every token without a project does and what every event before this field
+ * existed is (ADR_0033 pt. 3).
  */
 export const ingest = <ThrowOnError extends boolean = false>(options: Options<IngestData, ThrowOnError>): RequestResult<IngestResponses, IngestErrors, ThrowOnError> => (options.client ?? client).post<IngestResponses, IngestErrors, ThrowOnError>({
     url: '/api/v1/events',
