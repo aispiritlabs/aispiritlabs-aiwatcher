@@ -14,6 +14,7 @@
 //! trace     run.trace_id             exactly 1
 //! model     gen_ai.request.model     0..n   (from the run's spans)
 //! tool      gen_ai.tool.name         0..n   (from the run's spans)
+//! prompt    aiwatcher.prompt.name    0..n   (from the run's spans)
 //! ```
 //!
 //! Folded from the read model, like [`crate::conversations`] and
@@ -27,7 +28,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use aiwatcher_core::attrs::genai;
+use aiwatcher_core::attrs::{aiwatcher as own, genai};
 use aiwatcher_core::ports::CompletedSpan;
 
 use crate::metrics::string_attr;
@@ -45,6 +46,14 @@ pub enum DimensionKind {
     Trace,
     Model,
     Tool,
+    /// The registered prompt a call named (ADR_0011).
+    ///
+    /// The name, not the version: the registry is keyed by name and a version
+    /// is what the prompt's own page lists, so grouping by version would put a
+    /// row under every edit of one prompt. A call that sent only a version id
+    /// contributes no key, and its run is counted in `ungrouped_runs` like any
+    /// other run with nothing for this dimension.
+    Prompt,
 }
 
 impl DimensionKind {
@@ -55,7 +64,7 @@ impl DimensionKind {
     /// dimensions that never look at it.
     #[must_use]
     pub const fn needs_spans(self) -> bool {
-        matches!(self, Self::Model | Self::Tool)
+        matches!(self, Self::Model | Self::Tool | Self::Prompt)
     }
 
     #[must_use]
@@ -69,6 +78,7 @@ impl DimensionKind {
             Self::Trace => "trace",
             Self::Model => "model",
             Self::Tool => "tool",
+            Self::Prompt => "prompt",
         }
     }
 }
@@ -80,9 +90,28 @@ pub struct DimensionFilter {
     /// grouped. See [`crate::window`] — a row whose every run falls outside the
     /// window disappears with them rather than staying behind as an empty key.
     pub window_seconds: Option<i64>,
-    /// Narrow to runs that ran this agent, whatever the dimension is. Lets the
-    /// tree stay scoped when someone arrives from an agent-filtered view.
+    /// The instant the window ends at, in seconds since the epoch.
+    ///
+    /// `None` is now, which is every ordinary read. A caller comparing two
+    /// periods pins each end, so the older half is the period it names rather
+    /// than one that slides as the page is read — [`crate::window::bounds`].
+    pub as_of: Option<i64>,
+    /// Narrow the runs before they are grouped, whatever the dimension is.
+    ///
+    /// These are the runs list's own axes, under the runs list's own names, so
+    /// one filter means one thing across every read (`crate::selection`). A
+    /// tree rooted on tools, narrowed to one workflow, is the question that
+    /// made this more than `agent_id`.
+    pub conversation_id: Option<String>,
     pub agent_id: Option<String>,
+    pub runtime: Option<String>,
+    pub workflow: Option<String>,
+    pub variant_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub model: Option<String>,
+    pub tool: Option<String>,
+    pub prompt: Option<String>,
+    pub status: Option<RunStatus>,
     /// Substring match on the key. The one control that turns a long list into
     /// the row someone is looking for.
     pub search: Option<String>,
@@ -90,6 +119,25 @@ pub struct DimensionFilter {
     /// rather than offset, because the list reorders as runs arrive.
     pub after: Option<String>,
     pub limit: Option<usize>,
+}
+
+impl DimensionFilter {
+    /// The axes this read narrows by, as the one predicate every list shares.
+    #[must_use]
+    pub fn selection(&self) -> crate::selection::RunSelection<'_> {
+        crate::selection::RunSelection {
+            conversation_id: self.conversation_id.as_deref(),
+            agent_id: self.agent_id.as_deref(),
+            runtime: self.runtime.as_deref(),
+            workflow: self.workflow.as_deref(),
+            variant_id: self.variant_id.as_deref(),
+            trace_id: self.trace_id.as_deref(),
+            model: self.model.as_deref(),
+            tool: self.tool.as_deref(),
+            prompt: self.prompt.as_deref(),
+            status: self.status,
+        }
+    }
 }
 
 /// One row of the tree's top level, whatever the dimension is.
@@ -226,6 +274,7 @@ fn keys_of(
         DimensionKind::Trace => vec![run.trace_id.to_hex()],
         DimensionKind::Model => span_keys(spans, genai::REQUEST_MODEL),
         DimensionKind::Tool => span_keys(spans, genai::TOOL_NAME),
+        DimensionKind::Prompt => span_keys(spans, own::prompt::NAME),
     }
 }
 
@@ -252,23 +301,21 @@ pub fn compute(
 ) -> DimensionPage {
     let mut grouped: HashMap<String, DimensionSummary> = HashMap::new();
     let mut ungrouped_runs = 0u64;
-    let since = crate::window::cutoff(filter.window_seconds, now);
+    let window = crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
+    let selection = filter.selection();
 
     for run in runs {
         // Outside the window the run is not ungrouped, it is not here at all —
         // counting it would put runs nobody asked about in the footer's total.
-        if since.is_some_and(|start| run.last_event_at < start) {
+        if !window.holds(run.last_event_at) {
             continue;
         }
-        if filter
-            .agent_id
-            .as_ref()
-            .is_some_and(|wanted| !run.agents.iter().any(|agent| agent == wanted))
-        {
+        let run_spans = spans.get(&run.run_id);
+        if !selection.matches(run, run_spans) {
             continue;
         }
 
-        let keys = keys_of(run, kind, spans.get(&run.run_id));
+        let keys = keys_of(run, kind, run_spans);
         if keys.is_empty() {
             ungrouped_runs += 1;
             continue;
@@ -625,5 +672,120 @@ mod tests {
 
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].key, "writer");
+    }
+
+    fn prompt_span(run_id: &str, name: Option<&str>) -> CompletedSpan {
+        let mut span = llm_span(run_id, "opus");
+        if let Some(name) = name {
+            span.attributes.push(attr(own::prompt::NAME, name));
+            span.attributes
+                .push(attr(own::prompt::VERSION_ID, "b".repeat(64).as_str()));
+        }
+        span
+    }
+
+    #[test]
+    fn the_prompt_dimension_groups_runs_by_the_registered_prompt_they_named() {
+        // The join that existed in the data and had no row: a call carries the
+        // prompt it ran on (ADR_0011) and nothing grouped by it, so "which
+        // prompts does this agent use" had to be counted by hand out of every
+        // run's spans.
+        let first = run("run-1", RunStatus::Succeeded, now());
+        let second = run("run-2", RunStatus::Failed, now());
+        let spans = HashMap::from([
+            (
+                "run-1".to_owned(),
+                vec![prompt_span("run-1", Some("planner.assistant"))],
+            ),
+            (
+                "run-2".to_owned(),
+                vec![prompt_span("run-2", Some("planner.assistant"))],
+            ),
+        ]);
+
+        let page = compute(
+            &[first, second],
+            &spans,
+            DimensionKind::Prompt,
+            &DimensionFilter::default(),
+            now(),
+        );
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.rows[0].key, "planner.assistant");
+        assert_eq!(page.rows[0].runs, 2);
+        assert_eq!(page.rows[0].failed, 1);
+        assert_eq!(page.ungrouped_runs, 0);
+    }
+
+    #[test]
+    fn a_call_that_named_only_a_version_is_ungrouped_rather_than_keyed_by_a_digest() {
+        // The registry is keyed by name, so a row keyed by a digest would be a
+        // row nothing could open. Ungrouped is the fold's own word for it.
+        let only_version = run("run-1", RunStatus::Succeeded, now());
+        let spans = HashMap::from([("run-1".to_owned(), vec![prompt_span("run-1", None)])]);
+
+        let page = compute(
+            &[only_version],
+            &spans,
+            DimensionKind::Prompt,
+            &DimensionFilter::default(),
+            now(),
+        );
+
+        assert_eq!(page.total, 0);
+        assert_eq!(page.ungrouped_runs, 1);
+    }
+
+    #[test]
+    fn a_dimension_narrows_by_every_axis_the_runs_list_takes() {
+        // Before this the fold took one axis, so "tools, in this workflow" was
+        // a question the runs list could answer and the tree could not.
+        let mut mine = run("run-1", RunStatus::Succeeded, now());
+        mine.workflow = Some("house-import".to_owned());
+        let mut other = run("run-2", RunStatus::Succeeded, now());
+        other.workflow = Some("nightly".to_owned());
+
+        let page = compute(
+            &[mine, other],
+            &HashMap::new(),
+            DimensionKind::Runtime,
+            &DimensionFilter {
+                workflow: Some("house-import".to_owned()),
+                ..DimensionFilter::default()
+            },
+            now(),
+        );
+
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].runs, 1);
+    }
+
+    #[test]
+    fn a_pinned_end_makes_the_rows_the_period_that_was_named() {
+        // What comparing two periods needs: the older half must be the hour it
+        // names rather than one that slides while the page is read.
+        let old = run(
+            "run-1",
+            RunStatus::Succeeded,
+            now() - time::Duration::hours(3),
+        );
+        let recent = run("run-2", RunStatus::Succeeded, now());
+
+        let pinned = compute(
+            &[old, recent],
+            &HashMap::new(),
+            DimensionKind::Agent,
+            &DimensionFilter {
+                window_seconds: Some(3600),
+                as_of: Some((now() - time::Duration::hours(3)).unix_timestamp()),
+                ..DimensionFilter::default()
+            },
+            now(),
+        );
+
+        assert_eq!(pinned.rows.len(), 1);
+        assert_eq!(pinned.rows[0].runs, 1);
+        assert_eq!(pinned.rows[0].started_at, now() - time::Duration::hours(3));
     }
 }

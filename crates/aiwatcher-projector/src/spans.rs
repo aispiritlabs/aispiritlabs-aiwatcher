@@ -52,6 +52,19 @@ pub struct SpanRow {
     pub tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_type: Option<String>,
+    /// The registered prompt the call named, as a reference and never its text
+    /// (ADR_0011).
+    ///
+    /// Lifted like the four above so this list can say what a call ran on and
+    /// link it: a row that names a model, a duration and an outcome, and
+    /// leaves the thing that decided what the model was asked to be found by
+    /// opening the run, is a row that stops one step short. The pair is
+    /// deliberate — the id identifies the text, the registry is keyed by the
+    /// name, and a producer may send either.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<String>,
 }
 
 impl SpanRow {
@@ -74,6 +87,8 @@ impl SpanRow {
                 .map(ToOwned::to_owned),
             tool: string_attr(span, genai::TOOL_NAME).map(ToOwned::to_owned),
             step_type: string_attr(span, own::span::STEP_TYPE).map(ToOwned::to_owned),
+            prompt_name: string_attr(span, own::prompt::NAME).map(ToOwned::to_owned),
+            prompt_version: string_attr(span, own::prompt::VERSION_ID).map(ToOwned::to_owned),
         }
     }
 
@@ -110,6 +125,10 @@ pub struct SpanFilter {
     pub tool: Option<String>,
     pub step_type: Option<String>,
     pub operation: Option<String>,
+    /// Spans that named this registered prompt. Its name, never its version:
+    /// the registry is keyed by name, and a version is what the prompt's own
+    /// page lists.
+    pub prompt: Option<String>,
     pub status: Option<SpanOutcome>,
     /// The filter that turns this list into a hunt for a problem: everything
     /// slower than a threshold, whatever it is.
@@ -180,6 +199,13 @@ fn matches(row: &SpanRow, filter: &SpanFilter) -> bool {
     {
         return false;
     }
+    if filter
+        .prompt
+        .as_ref()
+        .is_some_and(|wanted| row.prompt_name.as_ref() != Some(wanted))
+    {
+        return false;
+    }
     if let Some(outcome) = filter.status {
         let errored = matches!(row.status, SpanStatus::Error { .. });
         if (outcome == SpanOutcome::Error) != errored {
@@ -201,6 +227,7 @@ fn matches(row: &SpanRow, filter: &SpanFilter) -> bool {
             row.model.as_ref(),
             row.tool.as_ref(),
             row.step_type.as_ref(),
+            row.prompt_name.as_ref(),
         ];
         if !haystack
             .into_iter()
@@ -316,6 +343,46 @@ mod tests {
                 vec![span("run-2", "search", 120, Some("tool"))],
             ),
         ])
+    }
+
+    #[test]
+    fn a_row_carries_the_prompt_its_call_named_and_is_filterable_by_it() {
+        // A row that names a model, a duration and an outcome, and leaves the
+        // thing that decided what the model was asked to be found by opening
+        // the run, is a row that stops one step short (ADR_0011).
+        let mut called = span("run-1", "search", 100, None);
+        called
+            .attributes
+            .push(attr(own::prompt::NAME, "planner.assistant"));
+        called
+            .attributes
+            .push(attr(own::prompt::VERSION_ID, "b".repeat(64).as_str()));
+        let spans = HashMap::from([(
+            "run-1".to_owned(),
+            vec![called, span("run-1", "embed", 40, None)],
+        )]);
+
+        let all = compute(&spans, &SpanFilter::default(), now());
+        let named = all
+            .spans
+            .iter()
+            .find(|row| row.prompt_name.is_some())
+            .expect("the call that named one");
+        assert_eq!(named.prompt_name.as_deref(), Some("planner.assistant"));
+        assert_eq!(
+            named.prompt_version.as_deref(),
+            Some("b".repeat(64).as_str())
+        );
+
+        let filtered = compute(
+            &spans,
+            &SpanFilter {
+                prompt: Some("planner.assistant".to_owned()),
+                ..SpanFilter::default()
+            },
+            now(),
+        );
+        assert_eq!(filtered.total_known, 1);
     }
 
     #[test]

@@ -384,11 +384,37 @@ pub struct RunFilter {
     pub model: Option<String>,
     /// Runs that invoked this tool.
     pub tool: Option<String>,
+    /// Runs in which a call named this registered prompt.
+    ///
+    /// The prompt's *name*, never its text and never its version id: the text
+    /// is off the log on purpose (ADR_0011) and a version is what the prompt's
+    /// own page lists. Matched against the run's spans, as `model` and `tool`
+    /// are.
+    pub prompt: Option<String>,
     pub status: Option<RunStatus>,
     /// Cursor: return runs older than this one. Keyset pagination, because an
     /// offset shifts under a list that is actively growing.
     pub before: Option<String>,
     pub limit: Option<usize>,
+}
+
+impl RunFilter {
+    /// The axes this read narrows by, as the one predicate every list shares.
+    #[must_use]
+    pub fn selection(&self) -> crate::selection::RunSelection<'_> {
+        crate::selection::RunSelection {
+            conversation_id: self.conversation_id.as_deref(),
+            agent_id: self.agent_id.as_deref(),
+            runtime: self.runtime.as_deref(),
+            workflow: self.workflow.as_deref(),
+            variant_id: self.variant_id.as_deref(),
+            trace_id: self.trace_id.as_deref(),
+            model: self.model.as_deref(),
+            tool: self.tool.as_deref(),
+            prompt: self.prompt.as_deref(),
+            status: self.status,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
@@ -449,20 +475,6 @@ impl Default for ReadModelConfig {
 /// A run with no retained spans does not match: the alternative — treating
 /// "unknown" as "matches" — would put runs into a model or tool bucket they may
 /// have nothing to do with.
-fn span_attribute_matches(spans: Option<&Vec<CompletedSpan>>, key: &str, wanted: &str) -> bool {
-    spans.is_some_and(|spans| {
-        spans.iter().any(|span| {
-            span.attributes.iter().any(|(name, value)| {
-                name == key
-                    && matches!(
-                        value,
-                        aiwatcher_core::ports::AttrValue::Str(inner) if inner == wanted
-                    )
-            })
-        })
-    })
-}
-
 #[derive(Debug, Default)]
 struct State {
     runs: HashMap<String, RunSummary>,
@@ -679,6 +691,7 @@ impl ReadModel {
             crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
 
         // Newest first.
+        let selection = filter.selection();
         let mut matching: Vec<&RunSummary> = state
             .order
             .iter()
@@ -687,61 +700,7 @@ impl ReadModel {
             // Last activity, not start: a run that began before the window and
             // is still emitting is the one most worth seeing in it.
             .filter(|run| window.holds(run.last_event_at))
-            .filter(|run| {
-                filter
-                    .conversation_id
-                    .as_ref()
-                    .is_none_or(|wanted| run.conversation_id.as_ref() == Some(wanted))
-            })
-            .filter(|run| {
-                filter
-                    .agent_id
-                    .as_ref()
-                    .is_none_or(|wanted| run.agents.iter().any(|agent| agent == wanted))
-            })
-            .filter(|run| {
-                filter
-                    .runtime
-                    .as_ref()
-                    .is_none_or(|wanted| run.runtimes.iter().any(|runtime| runtime == wanted))
-            })
-            .filter(|run| {
-                filter
-                    .workflow
-                    .as_ref()
-                    .is_none_or(|wanted| run.workflow.as_ref() == Some(wanted))
-            })
-            .filter(|run| {
-                filter
-                    .variant_id
-                    .as_ref()
-                    .is_none_or(|wanted| run.variant_id.as_ref() == Some(wanted))
-            })
-            .filter(|run| {
-                filter
-                    .trace_id
-                    .as_ref()
-                    .is_none_or(|wanted| &run.trace_id.to_hex() == wanted)
-            })
-            .filter(|run| filter.status.is_none_or(|wanted| run.status == wanted))
-            .filter(|run| {
-                filter.model.as_ref().is_none_or(|wanted| {
-                    span_attribute_matches(
-                        state.spans.get(&run.run_id),
-                        aiwatcher_core::attrs::genai::REQUEST_MODEL,
-                        wanted,
-                    )
-                })
-            })
-            .filter(|run| {
-                filter.tool.as_ref().is_none_or(|wanted| {
-                    span_attribute_matches(
-                        state.spans.get(&run.run_id),
-                        aiwatcher_core::attrs::genai::TOOL_NAME,
-                        wanted,
-                    )
-                })
-            })
+            .filter(|run| selection.matches(run, state.spans.get(&run.run_id)))
             .collect();
 
         if let Some(cursor) = &filter.before

@@ -95,6 +95,7 @@ pub fn compute(
             search: filter.search.clone(),
             after: None,
             limit: filter.limit,
+            ..DimensionFilter::default()
         },
         now,
     );

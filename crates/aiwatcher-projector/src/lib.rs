@@ -31,6 +31,7 @@ pub mod periods;
 pub mod pipeline;
 pub mod readmodel;
 pub mod retry;
+pub mod selection;
 pub mod spans;
 pub mod window;
 pub mod workflows;
@@ -56,6 +57,7 @@ pub use period_fold::PeriodOutput;
 pub use periods::{JournalPage, PeriodStore};
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{NodeStep, ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
+pub use selection::RunSelection;
 pub use spans::{SpanFilter, SpanOutcome, SpanPage, SpanRow};
 pub use window::cutoff;
 pub use workflows::{

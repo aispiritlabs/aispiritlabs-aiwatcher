@@ -26,15 +26,61 @@ use crate::readmodel::{RunStatus, RunSummary};
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsFilter {
-    /// Only runs that started within this many seconds of now.
+    /// Only runs that started within this many seconds of the window's end.
     pub window_seconds: Option<i64>,
-    pub agent_id: Option<String>,
-    /// Narrows LLM calls, tokens and LLM latency only; run, tool and step
-    /// counters still cover all runs selected by the other filters.
-    pub model: Option<String>,
+    /// The instant the window ends at, in seconds since the epoch.
+    ///
+    /// `None` is now. A caller comparing two periods pins each end, which is
+    /// also what moves the timeline's x-axis: the axis runs to the window's
+    /// end, so an older half drawn against `now` would be a chart of mostly
+    /// empty buckets. See [`crate::window::bounds`].
+    pub as_of: Option<i64>,
+    /// The runs these numbers are about — the runs list's own axes, under its
+    /// own names, so one filter means one thing across every read
+    /// (`crate::selection`).
     pub conversation_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub runtime: Option<String>,
+    pub workflow: Option<String>,
+    pub variant_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub status: Option<RunStatus>,
+    /// Selects the runs that called this model, **and** narrows the counters
+    /// that are about a call: LLM calls, tokens, cost and LLM latency. Run,
+    /// tool and step counters still cover every call in those runs, because a
+    /// tool call has no model.
+    ///
+    /// Selecting the runs is new (FLOW-01) and is the one behaviour change in
+    /// this filter. Before it, "Runs: 412" beside a model-filtered token chart
+    /// counted every run in the window, so two numbers on one screen were
+    /// about two populations with a paragraph of small print between them.
+    pub model: Option<String>,
+    /// The same, for the tool half: selects the runs that invoked it and
+    /// narrows the tool counters to it.
+    pub tool: Option<String>,
+    /// The same, for the registered prompt a call named (ADR_0011).
+    pub prompt: Option<String>,
     /// Buckets in the timeline. Clamped to 6..=200.
     pub buckets: Option<usize>,
+}
+
+impl MetricsFilter {
+    /// The axes this read narrows by, as the one predicate every list shares.
+    #[must_use]
+    pub fn selection(&self) -> crate::selection::RunSelection<'_> {
+        crate::selection::RunSelection {
+            conversation_id: self.conversation_id.as_deref(),
+            agent_id: self.agent_id.as_deref(),
+            runtime: self.runtime.as_deref(),
+            workflow: self.workflow.as_deref(),
+            variant_id: self.variant_id.as_deref(),
+            trace_id: self.trace_id.as_deref(),
+            model: self.model.as_deref(),
+            tool: self.tool.as_deref(),
+            prompt: self.prompt.as_deref(),
+            status: self.status,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, utoipa::ToSchema)]
@@ -283,26 +329,18 @@ pub fn compute(
     now: OffsetDateTime,
 ) -> MetricsSummary {
     let retained = runs.len() as u64;
-    let from = filter
-        .window_seconds
-        .filter(|seconds| *seconds > 0)
-        .map(|seconds| now - time::Duration::seconds(seconds));
+    // Windowed by **start**, not by last activity: here the window is the
+    // timeline's x-axis and a run that began before it has no bucket. The rest
+    // of this crate windows on activity — `crate::window` says why.
+    let end = crate::window::at(filter.as_of).unwrap_or(now);
+    let bounds = crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
+    let from = bounds.since;
 
+    let selection = filter.selection();
     let matching: Vec<&RunSummary> = runs
         .iter()
-        .filter(|run| from.is_none_or(|start| run.started_at >= start))
-        .filter(|run| {
-            filter
-                .conversation_id
-                .as_ref()
-                .is_none_or(|wanted| run.conversation_id.as_ref() == Some(wanted))
-        })
-        .filter(|run| {
-            filter
-                .agent_id
-                .as_ref()
-                .is_none_or(|wanted| run.agents.iter().any(|agent| agent == wanted))
-        })
+        .filter(|run| bounds.holds(run.started_at))
+        .filter(|run| selection.matches(run, spans.get(&run.run_id)))
         .collect();
 
     let mut totals = Totals {
@@ -335,9 +373,9 @@ pub fn compute(
     // asked for, so an idle system does not render an empty chart of the last
     // hour.
     let earliest = matching.iter().map(|run| run.started_at).min();
-    let window_from = from.or(earliest).unwrap_or(now);
-    let mut timeline = empty_timeline(window_from, now, filter.buckets);
-    let width = (now - window_from).as_seconds_f64().max(1.0) / timeline.len() as f64;
+    let window_from = from.or(earliest).unwrap_or(end);
+    let mut timeline = empty_timeline(window_from, end, filter.buckets);
+    let width = (end - window_from).as_seconds_f64().max(1.0) / timeline.len() as f64;
 
     for run in &matching {
         let offset = (run.started_at - window_from).as_seconds_f64();
@@ -392,6 +430,13 @@ pub fn compute(
                         .unwrap_or("unknown")
                         .to_owned();
                     if filter.model.as_ref().is_some_and(|wanted| wanted != &model) {
+                        continue;
+                    }
+                    // A prompt is a property of the call, so it narrows the
+                    // call counters exactly as the model does.
+                    if filter.prompt.as_ref().is_some_and(|wanted| {
+                        string_attr(span, own::prompt::NAME) != Some(wanted.as_str())
+                    }) {
                         continue;
                     }
 
@@ -452,12 +497,19 @@ pub fn compute(
                     }
                 }
                 genai::operation::EXECUTE_TOOL => {
-                    totals.tool_calls += 1;
-                    bucket.tool_calls += 1;
-                    tool_latencies.push(elapsed);
                     let name = string_attr(span, genai::TOOL_NAME)
                         .unwrap_or("unknown")
                         .to_owned();
+                    // The model filter's rule, for the tool half: a tool
+                    // filter narrows what a tool counter counts, and leaves
+                    // the LLM and step counters over every call in the runs it
+                    // selected.
+                    if filter.tool.as_ref().is_some_and(|wanted| wanted != &name) {
+                        continue;
+                    }
+                    totals.tool_calls += 1;
+                    bucket.tool_calls += 1;
+                    tool_latencies.push(elapsed);
                     let entry = by_tool.entry(name).or_insert((0, 0, Vec::new()));
                     entry.0 += 1;
                     if failed(span) {
@@ -573,7 +625,7 @@ pub fn compute(
     MetricsSummary {
         window: MetricsWindow {
             from: window_from,
-            to: now,
+            to: end,
             runs_considered: totals.runs,
             runs_retained: retained,
             retention_limit: retention_limit as u64,
@@ -1016,7 +1068,20 @@ mod tests {
                 5000,
                 now(),
             );
-            assert_eq!(summary.totals.runs, 2, "model narrows LLM calls, not runs");
+            // FLOW-01: a model now *selects* the runs as well as narrowing
+            // the call counters. Only run `a` called anything, so a model
+            // filter leaves one run rather than both — and the run count
+            // beside the token chart is then about the same population the
+            // chart is.
+            assert_eq!(
+                summary.totals.runs,
+                match model {
+                    None => 2,
+                    Some("opus") => 1,
+                    _ => 0,
+                },
+                "a model selects the runs that called it"
+            );
             assert_eq!(
                 summary.totals.llm_calls,
                 match model {
@@ -1024,6 +1089,16 @@ mod tests {
                     Some("opus") => 1,
                     _ => 0,
                 }
+            );
+            // …and what it does *not* narrow is the tool half, because a tool
+            // call has no model.
+            assert_eq!(
+                summary.totals.tool_calls,
+                match model {
+                    Some("missing") => 0,
+                    _ => 1,
+                },
+                "a model leaves the tool counters over every call in the runs it selected"
             );
             assert_eq!(
                 summary.timeline.iter().map(|b| b.input_tokens).sum::<i64>(),
@@ -1057,12 +1132,103 @@ mod tests {
                 summary.by_model.iter().map(|m| m.input_tokens).sum::<i64>(),
                 summary.totals.input_tokens
             );
-            assert_eq!(
-                summary.timeline.last().expect("last bucket").running,
-                1,
-                "run at the right boundary is included once"
-            );
+            if model.is_none() {
+                assert_eq!(
+                    summary.timeline.last().expect("last bucket").running,
+                    1,
+                    "run at the right boundary is included once"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn a_tool_filter_narrows_the_tool_half_and_leaves_the_calls_alone() {
+        // The model rule's mirror image, and the pair is what makes the
+        // filter's one sentence true: within the runs it selected, a counter
+        // is narrowed only where the axis is about what it counts.
+        let runs = vec![run("a", RunStatus::Succeeded, now())];
+        let spans = HashMap::from([(
+            "a".to_owned(),
+            vec![
+                llm_span("a", "opus", 100, true),
+                tool_span("a", "search", 200, true),
+                tool_span("a", "fetch", 300, true),
+            ],
+        )]);
+        let summary = compute(
+            &runs,
+            &spans,
+            &MetricsFilter {
+                tool: Some("search".to_owned()),
+                ..MetricsFilter::default()
+            },
+            5000,
+            now(),
+        );
+        assert_eq!(summary.totals.runs, 1);
+        assert_eq!(summary.totals.tool_calls, 1, "the tool half is that tool's");
+        assert_eq!(summary.totals.llm_calls, 1, "the call half is every call");
+
+        let absent = compute(
+            &runs,
+            &spans,
+            &MetricsFilter {
+                tool: Some("missing".to_owned()),
+                ..MetricsFilter::default()
+            },
+            5000,
+            now(),
+        );
+        assert_eq!(
+            absent.totals.runs, 0,
+            "a tool nothing called selects no run"
+        );
+    }
+
+    #[test]
+    fn a_pinned_end_answers_the_period_it_names_rather_than_one_that_slides() {
+        // What two windows side by side need: the older half has to be the
+        // hour it names, and the timeline's axis has to end there too, or it
+        // is a chart of one bar and a lot of empty buckets.
+        let older = run(
+            "old",
+            RunStatus::Succeeded,
+            now() - time::Duration::hours(3),
+        );
+        let recent = run("new", RunStatus::Succeeded, now());
+        let runs = vec![older, recent];
+        let pinned = compute(
+            &runs,
+            &HashMap::new(),
+            &MetricsFilter {
+                window_seconds: Some(3600),
+                as_of: Some((now() - time::Duration::hours(3)).unix_timestamp()),
+                ..MetricsFilter::default()
+            },
+            5000,
+            now(),
+        );
+        assert_eq!(pinned.totals.runs, 1, "only the run inside the pinned hour");
+        assert_eq!(pinned.window.to, now() - time::Duration::hours(3));
+        assert_eq!(
+            pinned.window.from,
+            now() - time::Duration::hours(4),
+            "the axis is the hour that was named"
+        );
+
+        let relative = compute(
+            &runs,
+            &HashMap::new(),
+            &MetricsFilter {
+                window_seconds: Some(3600),
+                ..MetricsFilter::default()
+            },
+            5000,
+            now(),
+        );
+        assert_eq!(relative.totals.runs, 1);
+        assert_eq!(relative.window.to, now());
     }
 
     #[test]
@@ -1075,10 +1241,12 @@ mod tests {
         let mut haiku = llm_span("a", "haiku", 100, true);
         haiku.attributes.push(attr(own::usage::COST_USD, 0.5_f64));
         let spans = HashMap::from([("a".to_owned(), vec![opus, haiku])]);
-        for (model, expected, calls) in [
-            (None, Some(0.75), 2),
-            (Some("opus"), Some(0.25), 1),
-            (Some("missing"), None, 0),
+        for (model, expected, calls, matched) in [
+            (None, Some(0.75), 2, 1),
+            (Some("opus"), Some(0.25), 1, 1),
+            // A model nothing called now selects no run at all, so there is
+            // nothing to price rather than a run priced at nothing.
+            (Some("missing"), None, 0, 0),
         ] {
             let summary = compute(
                 &runs,
@@ -1104,7 +1272,7 @@ mod tests {
                     .iter()
                     .map(|bucket| bucket.runs)
                     .sum::<u64>(),
-                1
+                matched
             );
         }
         let evicted = compute(
