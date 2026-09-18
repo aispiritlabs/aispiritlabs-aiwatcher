@@ -5311,6 +5311,221 @@ export type Keypoint = {
 };
 
 /**
+ * An authored lab, as somebody wrote it.
+ *
+ * Everything here is part of the version: a lab that measures different work
+ * under one name is a different lab, and so is one whose brief was corrected.
+ * The *tests* are named rather than copied, which is what lets the text be
+ * fixed without every result already published being measured under something
+ * else.
+ */
+export type Lab = {
+    /**
+     * The instructions, as text. Authored, so it outlives the log — a
+     * participant reading last term's lab is the ordinary case. Nothing here
+     * or in the panel renders it as anything else: interpreting half of a
+     * syntax is worse than interpreting none, and choosing a renderer is a
+     * decision to take on purpose rather than as a side effect of drawing a
+     * lesson.
+     */
+    brief: string;
+    name: LabName;
+    /**
+     * Where it sits in the workshop. Absent for a lab nobody has placed yet;
+     * nothing here refuses two labs in one position, because a registry that
+     * answered one lab at a time cannot see the other without reading them
+     * all, and a reader sorting by position and name gets a stable order
+     * either way.
+     */
+    position?: number | null;
+    tests?: null | LabTests;
+    /**
+     * What it is called where somebody reads it.
+     */
+    title: string;
+};
+
+/**
+ * One lab, with enough to render its page in one request.
+ */
+export type LabDetail = {
+    current?: null | LabVersion;
+    head: LabHead;
+};
+
+/**
+ * What a name points at: the versions published under it, newest first, and
+ * where each label sits.
+ */
+export type LabHead = {
+    /**
+     * Where each label points. `published` is the one a participant reads.
+     */
+    labels: {
+        [key: string]: string;
+    };
+    name: LabName;
+    updated_at: number;
+    /**
+     * Newest first, capped at [`MAX_VERSIONS_INDEXED`].
+     */
+    versions: Array<LabVersionSummary>;
+};
+
+/**
+ * Which version a label points at.
+ */
+export type LabLabelBody = {
+    version_id: string;
+};
+
+/**
+ * What a lab measures, and the key its results share.
+ */
+export type LabMeasurement = {
+    /**
+     * The context a submission publishes in: the cases, the card and what
+     * each metric means.
+     */
+    context: EvaluationContext;
+    /**
+     * Its content address — what `GET /api/v1/evaluation-results` is
+     * narrowed by to list this lab's marks.
+     */
+    context_id: string;
+};
+
+/**
+ * What a lab measures, or why nothing here can say.
+ */
+export type LabMeasurementView = {
+    measurement?: null | LabMeasurement;
+    name: LabName;
+    /**
+     * Why there is none, in the server's own sentence. A lab that pins no
+     * tests yet is the ordinary state of one being written, so this is a
+     * fact about the lab rather than a failure — which is why it is a 200
+     * carrying a reason rather than a 404 a reader has to interpret.
+     */
+    unavailable?: string | null;
+    /**
+     * The version this answer is about.
+     */
+    version_id: string;
+};
+
+export type LabName = string;
+
+export type LabPage = {
+    /**
+     * By position, then by name — the order a workshop's slots are read in.
+     */
+    labs: Array<LabSummary>;
+    next_cursor?: string | null;
+    total: number;
+};
+
+/**
+ * Publish a version of a lab, and optionally move a label onto it.
+ */
+export type LabPublishRequest = Lab & {
+    /**
+     * Move this label onto the new version — `published` to make it the one
+     * participants read. Absent publishes a draft that everything can read
+     * and nothing is using, which is separate from publishing for the same
+     * reason it is in the prompt registry: writing a lesson and setting it are
+     * different decisions.
+     */
+    label?: string | null;
+    /**
+     * Why this version exists.
+     */
+    notes?: string | null;
+};
+
+/**
+ * What a publish did.
+ */
+export type LabPublished = {
+    /**
+     * `false` when this exact document was already stored. Publishing is
+     * content-addressed, so re-sending an unchanged lab is not a new version.
+     */
+    created: boolean;
+    head: LabHead;
+    version: LabVersion;
+};
+
+/**
+ * One lab as a list shows it: its name and what it is at now.
+ */
+export type LabSummary = {
+    current?: null | LabVersionSummary;
+    /**
+     * Whether a version carries the `published` label — the difference
+     * between a lab a participant is meant to read and a draft.
+     */
+    is_published: boolean;
+    name: LabName;
+    updated_at: number;
+    versions: number;
+};
+
+/**
+ * The measurement a lab's work is held to.
+ *
+ * Both halves are pinned at a version, and for the same reason a scoring run
+ * pins its card: a head would let a rewrite change what an already-issued lab
+ * measures between one participant's submission and the next.
+ */
+export type LabTests = {
+    /**
+     * The cohort, by the digest its three derived files are kept under:
+     * what `POST /api/v1/evaluation-cohorts` answered and `GET
+     * /api/v1/evaluation-cohorts/{cases}` reads back. It carries the dataset,
+     * the split and the case count, so a lab restating any of them would be
+     * free to disagree with the cases it points at.
+     */
+    cases: string;
+    /**
+     * The scorecard, as `name` and `version` — `GET
+     * /api/v1/evaluation-scorecards/{name}/versions` lists them.
+     */
+    scorecard: VersionReference;
+};
+
+/**
+ * One published version of a lab.
+ */
+export type LabVersion = Lab & {
+    author?: string | null;
+    /**
+     * Why this version exists: the commit message of a lab.
+     */
+    notes?: string | null;
+    published_at: number;
+    version_id: string;
+};
+
+/**
+ * A version as the head indexes it — enough to list, never the brief.
+ */
+export type LabVersionSummary = {
+    author?: string | null;
+    /**
+     * Whether that version pinned a measurement. The tests themselves are in
+     * the version, because a summary carrying them would be a second copy
+     * that a reader could find disagreeing with the first.
+     */
+    has_tests: boolean;
+    notes?: string | null;
+    position?: number | null;
+    published_at: number;
+    title: string;
+    version_id: string;
+};
+
+/**
  * One drawable class.
  */
 export type LabelClass = {
@@ -14282,6 +14497,191 @@ export type RosterResponses = {
 
 export type RosterResponse = RosterResponses[keyof RosterResponses];
 
+export type ListLabsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Page by name: the last name on the previous page.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/labs';
+};
+
+export type ListLabsErrors = {
+    501: ErrorBody;
+};
+
+export type ListLabsError = ListLabsErrors[keyof ListLabsErrors];
+
+export type ListLabsResponses = {
+    200: LabPage;
+};
+
+export type ListLabsResponse = ListLabsResponses[keyof ListLabsResponses];
+
+export type PublishLabData = {
+    body: LabPublishRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/labs';
+};
+
+export type PublishLabErrors = {
+    400: ErrorBody;
+    /**
+     * Its tests name something this project cannot measure
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishLabError = PublishLabErrors[keyof PublishLabErrors];
+
+export type PublishLabResponses = {
+    /**
+     * This document was already stored
+     */
+    200: LabPublished;
+    /**
+     * A new version was stored
+     */
+    201: LabPublished;
+};
+
+export type PublishLabResponse = PublishLabResponses[keyof PublishLabResponses];
+
+export type GetLabData = {
+    body?: never;
+    path: {
+        /**
+         * The lab to fetch
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Which version to read. Absent is what `published` points at, or the
+         * newest when nothing is labelled.
+         */
+        version?: string | null;
+        /**
+         * Which label to follow instead. Ignored when `version` is given.
+         */
+        label?: string | null;
+    };
+    url: '/api/v1/labs/{name}';
+};
+
+export type GetLabErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetLabError = GetLabErrors[keyof GetLabErrors];
+
+export type GetLabResponses = {
+    200: LabDetail;
+};
+
+export type GetLabResponse = GetLabResponses[keyof GetLabResponses];
+
+export type SetLabLabelData = {
+    body: LabLabelBody;
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+        /**
+         * The label to move, e.g. `published`
+         */
+        label: string;
+    };
+    query?: never;
+    url: '/api/v1/labs/{name}/labels/{label}';
+};
+
+export type SetLabLabelErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetLabLabelError = SetLabLabelErrors[keyof SetLabLabelErrors];
+
+export type SetLabLabelResponses = {
+    200: LabHead;
+};
+
+export type SetLabLabelResponse = SetLabLabelResponses[keyof SetLabLabelResponses];
+
+export type GetLabMeasurementData = {
+    body?: never;
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Which version to read. Absent is what `published` points at, or the
+         * newest when nothing is labelled.
+         */
+        version?: string | null;
+        /**
+         * Which label to follow instead. Ignored when `version` is given.
+         */
+        label?: string | null;
+    };
+    url: '/api/v1/labs/{name}/measurement';
+};
+
+export type GetLabMeasurementErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetLabMeasurementError = GetLabMeasurementErrors[keyof GetLabMeasurementErrors];
+
+export type GetLabMeasurementResponses = {
+    200: LabMeasurementView;
+};
+
+export type GetLabMeasurementResponse = GetLabMeasurementResponses[keyof GetLabMeasurementResponses];
+
+export type GetLabVersionData = {
+    body?: never;
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+        /**
+         * The version's digest
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/v1/labs/{name}/versions/{version_id}';
+};
+
+export type GetLabVersionErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetLabVersionError = GetLabVersionErrors[keyof GetLabVersionErrors];
+
+export type GetLabVersionResponses = {
+    200: LabVersion;
+};
+
+export type GetLabVersionResponse = GetLabVersionResponses[keyof GetLabVersionResponses];
+
 export type LiveWebsocketData = {
     body?: never;
     path?: never;
@@ -17194,6 +17594,313 @@ export type ProjectListScorecardVersionsResponses = {
 };
 
 export type ProjectListScorecardVersionsResponse = ProjectListScorecardVersionsResponses[keyof ProjectListScorecardVersionsResponses];
+
+export type ProjectListLabsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Page by name: the last name on the previous page.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs';
+};
+
+export type ProjectListLabsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListLabsError = ProjectListLabsErrors[keyof ProjectListLabsErrors];
+
+export type ProjectListLabsResponses = {
+    200: LabPage;
+};
+
+export type ProjectListLabsResponse = ProjectListLabsResponses[keyof ProjectListLabsResponses];
+
+export type ProjectPublishLabData = {
+    body: LabPublishRequest;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs';
+};
+
+export type ProjectPublishLabErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Its tests name something this project cannot measure
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPublishLabError = ProjectPublishLabErrors[keyof ProjectPublishLabErrors];
+
+export type ProjectPublishLabResponses = {
+    /**
+     * This document was already stored
+     */
+    200: LabPublished;
+    /**
+     * A new version was stored
+     */
+    201: LabPublished;
+};
+
+export type ProjectPublishLabResponse = ProjectPublishLabResponses[keyof ProjectPublishLabResponses];
+
+export type ProjectGetLabData = {
+    body?: never;
+    path: {
+        /**
+         * The lab to fetch
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Which version to read. Absent is what `published` points at, or the
+         * newest when nothing is labelled.
+         */
+        version?: string | null;
+        /**
+         * Which label to follow instead. Ignored when `version` is given.
+         */
+        label?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs/{name}';
+};
+
+export type ProjectGetLabErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetLabError = ProjectGetLabErrors[keyof ProjectGetLabErrors];
+
+export type ProjectGetLabResponses = {
+    200: LabDetail;
+};
+
+export type ProjectGetLabResponse = ProjectGetLabResponses[keyof ProjectGetLabResponses];
+
+export type ProjectSetLabLabelData = {
+    body: LabLabelBody;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+        /**
+         * The label to move, e.g. `published`
+         */
+        label: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs/{name}/labels/{label}';
+};
+
+export type ProjectSetLabLabelErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectSetLabLabelError = ProjectSetLabLabelErrors[keyof ProjectSetLabLabelErrors];
+
+export type ProjectSetLabLabelResponses = {
+    200: LabHead;
+};
+
+export type ProjectSetLabLabelResponse = ProjectSetLabLabelResponses[keyof ProjectSetLabLabelResponses];
+
+export type ProjectGetLabMeasurementData = {
+    body?: never;
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Which version to read. Absent is what `published` points at, or the
+         * newest when nothing is labelled.
+         */
+        version?: string | null;
+        /**
+         * Which label to follow instead. Ignored when `version` is given.
+         */
+        label?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs/{name}/measurement';
+};
+
+export type ProjectGetLabMeasurementErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetLabMeasurementError = ProjectGetLabMeasurementErrors[keyof ProjectGetLabMeasurementErrors];
+
+export type ProjectGetLabMeasurementResponses = {
+    200: LabMeasurementView;
+};
+
+export type ProjectGetLabMeasurementResponse = ProjectGetLabMeasurementResponses[keyof ProjectGetLabMeasurementResponses];
+
+export type ProjectGetLabVersionData = {
+    body?: never;
+    path: {
+        /**
+         * The lab
+         */
+        name: string;
+        /**
+         * The version's digest
+         */
+        version_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/labs/{name}/versions/{version_id}';
+};
+
+export type ProjectGetLabVersionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetLabVersionError = ProjectGetLabVersionErrors[keyof ProjectGetLabVersionErrors];
+
+export type ProjectGetLabVersionResponses = {
+    200: LabVersion;
+};
+
+export type ProjectGetLabVersionResponse = ProjectGetLabVersionResponses[keyof ProjectGetLabVersionResponses];
 
 export type ProjectListModelsData = {
     body?: never;

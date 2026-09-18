@@ -9756,6 +9756,429 @@
         }
       }
     },
+    "/api/v1/labs": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Every lab in this workshop, by position and then by name.",
+        "operationId": "list_labs",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Page by name: the last name on the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Publish a version of a lab.",
+        "description": "Idempotent on the document: `created` is `false` when this exact lab was\nalready stored, and the version that comes back is the one that was there.\n\nA lab that pins tests is refused unless both halves resolve in this\nproject's evaluation registry — a stored lab that measures nothing is a\nslot that reads as working and answers nothing when somebody submits.",
+        "operationId": "publish_lab",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This document was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPublished"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPublished"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Its tests name something this project cannot measure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/labs/{name}": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "One lab: its versions, its labels, and the brief it is at now.",
+        "operationId": "get_lab",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Which version to read. Absent is what `published` points at, or the\nnewest when nothing is labelled.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Which label to follow instead. Ignored when `version` is given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/labs/{name}/labels/{label}": {
+      "put": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Move a label onto a version that is already stored.",
+        "description": "Its own route because writing a lesson and setting it are different\ndecisions — `POST /labs` with a `label` is the shorthand for doing both at\nonce, which is what a first publish wants.",
+        "operationId": "set_lab_label",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "The label to move, e.g. `published`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabLabelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabHead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/labs/{name}/measurement": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "The context every submission to this lab publishes under.",
+        "description": "`context_id` is what `GET /api/v1/evaluation-results?context_id=…` is\nnarrowed by, so this is the whole join from a lab to its marks. It is\nanswerable before anybody has submitted, which is the point.",
+        "operationId": "get_lab_measurement",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Which version to read. Absent is what `published` points at, or the\nnewest when nothing is labelled.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Which label to follow instead. Ignored when `version` is given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabMeasurementView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/labs/{name}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "One version, with its brief.",
+        "operationId": "get_lab_version",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version's digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/live": {
       "get": {
         "tags": [
@@ -16308,6 +16731,629 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ScorecardVersions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/labs": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Every lab in this workshop, by position and then by name.",
+        "operationId": "project_list_labs",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Page by name: the last name on the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Publish a version of a lab.",
+        "description": "Idempotent on the document: `created` is `false` when this exact lab was\nalready stored, and the version that comes back is the one that was there.\n\nA lab that pins tests is refused unless both halves resolve in this\nproject's evaluation registry — a stored lab that measures nothing is a\nslot that reads as working and answers nothing when somebody submits.",
+        "operationId": "project_publish_lab",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This document was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPublished"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPublished"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "422": {
+            "description": "Its tests name something this project cannot measure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/labs/{name}": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "One lab: its versions, its labels, and the brief it is at now.",
+        "operationId": "project_get_lab",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Which version to read. Absent is what `published` points at, or the\nnewest when nothing is labelled.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Which label to follow instead. Ignored when `version` is given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/labs/{name}/labels/{label}": {
+      "put": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "Move a label onto a version that is already stored.",
+        "description": "Its own route because writing a lesson and setting it are different\ndecisions — `POST /labs` with a `label` is the shorthand for doing both at\nonce, which is what a first publish wants.",
+        "operationId": "project_set_lab_label",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "The label to move, e.g. `published`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabLabelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabHead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/labs/{name}/measurement": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "The context every submission to this lab publishes under.",
+        "description": "`context_id` is what `GET /api/v1/evaluation-results?context_id=…` is\nnarrowed by, so this is the whole join from a lab to its marks. It is\nanswerable before anybody has submitted, which is the point.",
+        "operationId": "project_get_lab_measurement",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Which version to read. Absent is what `published` points at, or the\nnewest when nothing is labelled.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Which label to follow instead. Ignored when `version` is given.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabMeasurementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/labs/{name}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "labs"
+        ],
+        "summary": "One version, with its brief.",
+        "operationId": "project_get_lab_version",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The lab",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version's digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabVersion"
                 }
               }
             }
@@ -31515,6 +32561,393 @@
           }
         }
       },
+      "Lab": {
+        "type": "object",
+        "description": "An authored lab, as somebody wrote it.\n\nEverything here is part of the version: a lab that measures different work\nunder one name is a different lab, and so is one whose brief was corrected.\nThe *tests* are named rather than copied, which is what lets the text be\nfixed without every result already published being measured under something\nelse.",
+        "required": [
+          "name",
+          "title",
+          "brief"
+        ],
+        "properties": {
+          "brief": {
+            "type": "string",
+            "description": "The instructions, as text. Authored, so it outlives the log — a\nparticipant reading last term's lab is the ordinary case. Nothing here\nor in the panel renders it as anything else: interpreting half of a\nsyntax is worse than interpreting none, and choosing a renderer is a\ndecision to take on purpose rather than as a side effect of drawing a\nlesson."
+          },
+          "name": {
+            "$ref": "#/components/schemas/LabName"
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Where it sits in the workshop. Absent for a lab nobody has placed yet;\nnothing here refuses two labs in one position, because a registry that\nanswered one lab at a time cannot see the other without reading them\nall, and a reader sorting by position and name gets a stable order\neither way.",
+            "maximum": 999,
+            "minimum": 1
+          },
+          "tests": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LabTests",
+                "description": "The measurement, when one is pinned. Absent is the ordinary state of an\ninstructor halfway through writing a lab, and it is reported as absent\nrather than filled in."
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "What it is called where somebody reads it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LabDetail": {
+        "type": "object",
+        "description": "One lab, with enough to render its page in one request.",
+        "required": [
+          "head"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LabVersion",
+                "description": "The version `published` points at, or the newest when no label has been\nmoved. Carried with its brief so the page paints without a second round\ntrip — the brief is the thing being looked at."
+              }
+            ]
+          },
+          "head": {
+            "$ref": "#/components/schemas/LabHead"
+          }
+        }
+      },
+      "LabHead": {
+        "type": "object",
+        "description": "What a name points at: the versions published under it, newest first, and\nwhere each label sits.",
+        "required": [
+          "name",
+          "versions",
+          "labels",
+          "updated_at"
+        ],
+        "properties": {
+          "labels": {
+            "type": "object",
+            "description": "Where each label points. `published` is the one a participant reads.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/LabName"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabVersionSummary"
+            },
+            "description": "Newest first, capped at [`MAX_VERSIONS_INDEXED`]."
+          }
+        }
+      },
+      "LabLabelBody": {
+        "type": "object",
+        "description": "Which version a label points at.",
+        "required": [
+          "version_id"
+        ],
+        "properties": {
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LabMeasurement": {
+        "type": "object",
+        "description": "What a lab measures, and the key its results share.",
+        "required": [
+          "context",
+          "context_id"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/EvaluationContext",
+            "description": "The context a submission publishes in: the cases, the card and what\neach metric means."
+          },
+          "context_id": {
+            "type": "string",
+            "description": "Its content address — what `GET /api/v1/evaluation-results` is\nnarrowed by to list this lab's marks."
+          }
+        }
+      },
+      "LabMeasurementView": {
+        "type": "object",
+        "description": "What a lab measures, or why nothing here can say.",
+        "required": [
+          "name",
+          "version_id"
+        ],
+        "properties": {
+          "measurement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LabMeasurement",
+                "description": "The measurement, when the lab pins one and both halves resolve."
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/LabName"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why there is none, in the server's own sentence. A lab that pins no\ntests yet is the ordinary state of one being written, so this is a\nfact about the lab rather than a failure — which is why it is a 200\ncarrying a reason rather than a 404 a reader has to interpret."
+          },
+          "version_id": {
+            "type": "string",
+            "description": "The version this answer is about."
+          }
+        }
+      },
+      "LabName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      },
+      "LabPage": {
+        "type": "object",
+        "required": [
+          "labs",
+          "total"
+        ],
+        "properties": {
+          "labs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabSummary"
+            },
+            "description": "By position, then by name — the order a workshop's slots are read in."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "LabPublishRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Lab"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Move this label onto the new version — `published` to make it the one\nparticipants read. Absent publishes a draft that everything can read\nand nothing is using, which is separate from publishing for the same\nreason it is in the prompt registry: writing a lesson and setting it are\ndifferent decisions."
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why this version exists."
+              }
+            }
+          }
+        ],
+        "description": "Publish a version of a lab, and optionally move a label onto it."
+      },
+      "LabPublished": {
+        "type": "object",
+        "description": "What a publish did.",
+        "required": [
+          "version",
+          "created",
+          "head"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "`false` when this exact document was already stored. Publishing is\ncontent-addressed, so re-sending an unchanged lab is not a new version."
+          },
+          "head": {
+            "$ref": "#/components/schemas/LabHead"
+          },
+          "version": {
+            "$ref": "#/components/schemas/LabVersion"
+          }
+        }
+      },
+      "LabSummary": {
+        "type": "object",
+        "description": "One lab as a list shows it: its name and what it is at now.",
+        "required": [
+          "name",
+          "is_published",
+          "versions",
+          "updated_at"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LabVersionSummary",
+                "description": "What `published` points at, or the newest version when nothing is\nlabelled. Absent only for a head with no versions at all."
+              }
+            ]
+          },
+          "is_published": {
+            "type": "boolean",
+            "description": "Whether a version carries the `published` label — the difference\nbetween a lab a participant is meant to read and a draft."
+          },
+          "name": {
+            "$ref": "#/components/schemas/LabName"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "LabTests": {
+        "type": "object",
+        "description": "The measurement a lab's work is held to.\n\nBoth halves are pinned at a version, and for the same reason a scoring run\npins its card: a head would let a rewrite change what an already-issued lab\nmeasures between one participant's submission and the next.",
+        "required": [
+          "scorecard",
+          "cases"
+        ],
+        "properties": {
+          "cases": {
+            "type": "string",
+            "description": "The cohort, by the digest its three derived files are kept under:\nwhat `POST /api/v1/evaluation-cohorts` answered and `GET\n/api/v1/evaluation-cohorts/{cases}` reads back. It carries the dataset,\nthe split and the case count, so a lab restating any of them would be\nfree to disagree with the cases it points at."
+          },
+          "scorecard": {
+            "$ref": "#/components/schemas/VersionReference",
+            "description": "The scorecard, as `name` and `version` — `GET\n/api/v1/evaluation-scorecards/{name}/versions` lists them."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LabVersion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Lab"
+          },
+          {
+            "type": "object",
+            "required": [
+              "version_id",
+              "published_at"
+            ],
+            "properties": {
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why this version exists: the commit message of a lab."
+              },
+              "published_at": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "version_id": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "One published version of a lab."
+      },
+      "LabVersionSummary": {
+        "type": "object",
+        "description": "A version as the head indexes it — enough to list, never the brief.",
+        "required": [
+          "version_id",
+          "title",
+          "has_tests",
+          "published_at"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_tests": {
+            "type": "boolean",
+            "description": "Whether that version pinned a measurement. The tests themselves are in\nthe version, because a summary carrying them would be a second copy\nthat a reader could find disagreeing with the first."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "published_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        }
+      },
       "LabelClass": {
         "type": "object",
         "description": "One drawable class.",
@@ -41352,6 +42785,10 @@
     {
       "name": "prompts",
       "description": "The prompt registry: versions, labels and optimisations"
+    },
+    {
+      "name": "labs",
+      "description": "A workshop's labs: the authored brief, and the scorecard and cohort it pins"
     },
     {
       "name": "datasets",
