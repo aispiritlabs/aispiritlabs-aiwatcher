@@ -229,19 +229,17 @@ async fn get_lab(
         .head(&name)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("lab {name}")))?;
-    let current = match &at.version {
+    // A version wins over a label, a label over the head's own choice, and a
+    // label pointing nowhere is an absent `current` rather than a 404 on the
+    // lab: the head is what was asked for and it is right here.
+    let version_id = match (&at.version, at.label.as_deref()) {
+        (Some(version), _) => Some(version.as_str()),
+        (None, Some(label)) => head.labels.get(label).map(String::as_str),
+        (None, None) => head.current(),
+    };
+    let current = match version_id {
         Some(version) => labs.registry.version(&name, version).await?,
-        None => match at.label.as_deref().or_else(|| head.current().map(|_| "")) {
-            Some("") => match head.current() {
-                Some(version) => labs.registry.version(&name, version).await?,
-                None => None,
-            },
-            Some(label) => match head.labels.get(label) {
-                Some(version) => labs.registry.version(&name, version).await?,
-                None => None,
-            },
-            None => None,
-        },
+        None => None,
     };
     Ok(Json(LabDetail { head, current }))
 }

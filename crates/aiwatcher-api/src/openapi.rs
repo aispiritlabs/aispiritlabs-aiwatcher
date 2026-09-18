@@ -584,6 +584,7 @@ mod tests {
             ("hubs", crate::integrations::hubs::openapi()),
             ("auth", crate::auth::openapi()),
             ("iam", crate::iam::openapi()),
+            ("labs", crate::labs::openapi()),
         ];
         let merged = operations(&ApiDoc::document());
 

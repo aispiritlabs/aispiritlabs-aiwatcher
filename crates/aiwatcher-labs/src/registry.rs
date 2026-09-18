@@ -88,8 +88,13 @@ pub struct LabSummary {
 
 #[derive(Clone, Debug, Default)]
 pub struct LabFilter {
-    /// Page by name: a lab published between two requests must not shift the
-    /// page under a reader.
+    /// The last name on the previous page, rather than a row number — so a lab
+    /// published between two requests cannot shift the page under a reader.
+    ///
+    /// The order is by position and then by name, so *moving* a lab between two
+    /// requests can still repeat or skip one. That is the honest cost of an
+    /// ordering somebody chooses: a workshop has nine labs and one page, and a
+    /// cursor that ignored position would page in an order nobody reads in.
     pub after: Option<String>,
     pub limit: Option<usize>,
 }
