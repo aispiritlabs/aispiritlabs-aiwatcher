@@ -1107,4 +1107,8 @@ jedynym „błędem" w konsoli są odpowiedzi serwera, które są odpowiedziami:
 `access` dla kogoś bez żywego grantu i 403 z `roster`/`grants` dla kogoś, kto nie
 administruje organizacją — obie narysowane zdaniem, nie czerwienią.
 
-**Cała migracja pozostaje w toku.**
+**Cała migracja pozostaje w toku.** To, co zostało, jest podzielone na
+strumienie, które mogą iść równolegle, wraz z mapą kolizji i promptem na każdy:
+[docs/parallel-streams-2026-09-18.md](parallel-streams-2026-09-18.md). Cztery
+startują od razu — System, FLOW-01, treść warsztatu i IAM-02/A (projekt na
+kopercie); reszta IAM-02 jest łańcuchem za nimi, z bramką M1 pośrodku.
