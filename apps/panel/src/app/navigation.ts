@@ -8,6 +8,7 @@ import {
   MessagesSquare,
   Radio,
   ScrollText,
+  Settings,
   Shapes,
   Sigma,
   Sparkles,
@@ -62,7 +63,13 @@ export interface NavSection {
   areas: NavArea[];
 }
 
-export type SectionId = 'feature' | 'training' | 'inference' | 'workflows' | 'learning';
+export type SectionId =
+  | 'feature'
+  | 'training'
+  | 'inference'
+  | 'workflows'
+  | 'learning'
+  | 'system';
 
 export const SECTIONS: NavSection[] = [
   {
@@ -211,6 +218,27 @@ export const SECTIONS: NavSection[] = [
       // which of the two each part is rather than one sentence covering both.
       blurb: 'Workshops, who is on them and until when; the labs are still empty slots.', views: [] }],
   },
+  {
+    id: 'system',
+    label: 'System',
+    icon: Settings,
+    blurb: 'What this deployment has wired, and the variable that decides each.',
+    home: '/system',
+    areas: [
+      {
+        to: '/system',
+        label: 'System',
+        icon: Settings,
+        // The one area that describes the deployment rather than anything it
+        // holds — and the one whose read the server answers only for an
+        // admin, which the page renders as a sentence rather than hiding the
+        // link. A link that vanished by role would make "is there a System
+        // area" a question nobody can answer from the panel.
+        blurb: 'Runtimes, integrations and instance configuration, read only.',
+        views: [],
+      },
+    ],
+  },
 ];
 
 /**
@@ -227,6 +255,7 @@ const SECTION_OF: Array<[prefix: string, id: SectionId]> = [
   ['/agents', 'inference'],
   ['/workflows', 'workflows'],
   ['/learning', 'learning'],
+  ['/system', 'system'],
   ['/runs', 'inference'],
   ['/training', 'training'],
   ['/experiments', 'training'],

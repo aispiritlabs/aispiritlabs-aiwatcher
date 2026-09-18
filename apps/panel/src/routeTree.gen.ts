@@ -19,6 +19,7 @@ import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
 import { Route as LearningRouteImport } from './routes/learning'
 import { Route as ObservabilityRouteImport } from './routes/observability'
+import { Route as SystemRouteImport } from './routes/system'
 import { Route as TrainingRouteImport } from './routes/training'
 import { Route as WorkflowsRouteImport } from './routes/workflows'
 import { Route as AccountIndexRouteImport } from './routes/account.index'
@@ -97,6 +98,11 @@ const LearningRoute = LearningRouteImport.update({
 const ObservabilityRoute = ObservabilityRouteImport.update({
   id: '/observability',
   path: '/observability',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SystemRoute = SystemRouteImport.update({
+  id: '/system',
+  path: '/system',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TrainingRoute = TrainingRouteImport.update({
@@ -256,6 +262,7 @@ export interface FileRoutesByFullPath {
   '/experiments': typeof ExperimentsRoute
   '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/system': typeof SystemRoute
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
@@ -292,6 +299,7 @@ export interface FileRoutesByTo {
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/learning': typeof LearningRoute
+  '/system': typeof SystemRoute
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
   '/agents/$agentId': typeof AgentsAgentIdRoute
@@ -333,6 +341,7 @@ export interface FileRoutesById {
   '/experiments': typeof ExperimentsRoute
   '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/system': typeof SystemRoute
   '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
   '/account/access': typeof AccountAccessRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/experiments'
     | '/learning'
     | '/observability'
+    | '/system'
     | '/training'
     | '/workflows'
     | '/account/access'
@@ -412,6 +422,7 @@ export interface FileRouteTypes {
     | '/evaluation'
     | '/experiments'
     | '/learning'
+    | '/system'
     | '/workflows'
     | '/account/access'
     | '/agents/$agentId'
@@ -452,6 +463,7 @@ export interface FileRouteTypes {
     | '/experiments'
     | '/learning'
     | '/observability'
+    | '/system'
     | '/training'
     | '/workflows'
     | '/account/access'
@@ -494,6 +506,7 @@ export interface RootRouteChildren {
   ExperimentsRoute: typeof ExperimentsRoute
   LearningRoute: typeof LearningRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
+  SystemRoute: typeof SystemRoute
   TrainingRoute: typeof TrainingRouteWithChildren
   WorkflowsRoute: typeof WorkflowsRoute
   AgentsAgentIdRoute: typeof AgentsAgentIdRoute
@@ -573,6 +586,13 @@ declare module '@tanstack/react-router' {
       path: '/observability'
       fullPath: '/observability'
       preLoaderRoute: typeof ObservabilityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/system': {
+      id: '/system'
+      path: '/system'
+      fullPath: '/system'
+      preLoaderRoute: typeof SystemRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/training': {
@@ -895,6 +915,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExperimentsRoute: ExperimentsRoute,
   LearningRoute: LearningRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
+  SystemRoute: SystemRoute,
   TrainingRoute: TrainingRouteWithChildren,
   WorkflowsRoute: WorkflowsRoute,
   AgentsAgentIdRoute: AgentsAgentIdRoute,
