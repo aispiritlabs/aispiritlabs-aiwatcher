@@ -29,10 +29,47 @@ use futures::stream::{Stream, StreamExt};
 
 use aiwatcher_core::Checkpoint;
 use aiwatcher_core::ports::LiveEvent;
-use aiwatcher_projector::LiveHub;
+use aiwatcher_projector::{LiveHub, ReadScope};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+
+/// What one subscriber is watching, and which side of the project boundary it
+/// may watch it on.
+///
+/// Two things rather than one, because they answer to different people. The
+/// [`Scope`] is the subscriber's own choice — a run, an execution, a set of
+/// agents — and it may widen it whenever it likes. The [`ReadScope`] is not its
+/// choice at all: it is what the request was admitted as, and every frame is
+/// held to it before the selection is even asked (`Subscription::admits`).
+///
+/// The filter stays on this side of the wire. `llm.chunk` is most of the log by
+/// volume, so narrowing in the browser would mean sending every project's
+/// events to every browser in order to throw them away — the same argument
+/// ADR_0004's 2026-09-11 amendment makes for the selection, with a boundary
+/// riding on it rather than a preference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Subscription {
+    pub project: ReadScope,
+    pub scope: Scope,
+}
+
+impl Subscription {
+    /// Everything on one side, unfiltered — what a subscriber that named no
+    /// selection is watching.
+    #[must_use]
+    pub const fn everything(project: ReadScope) -> Self {
+        Self {
+            project,
+            scope: Scope::Everything,
+        }
+    }
+
+    #[must_use]
+    pub fn admits(&self, event: &LiveEvent) -> bool {
+        self.project.admits(event.project) && self.scope.admits(event)
+    }
+}
 
 /// What a subscriber is watching.
 ///
@@ -57,7 +94,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn admits(&self, event: &LiveEvent) -> bool {
+    pub(crate) fn admits(&self, event: &LiveEvent) -> bool {
         match self {
             Self::Everything => true,
             Self::Run(run_id) => &event.run_id == run_id,
@@ -149,6 +186,18 @@ pub enum LiveFrame {
     /// read instead. Surfaced so the panel can say so rather than pretend the
     /// stream was continuous.
     Resynced { from: Checkpoint },
+    /// The access this stream opened under is gone — a grant revoked or
+    /// expired, or the session that opened it run out — and the connection is
+    /// closing (IAM-02 E4).
+    ///
+    /// A frame rather than a silent close, for the reason this whole module
+    /// exists: a stream that simply stops looks exactly like a stream where
+    /// nothing is happening, and "nothing looks wrong" is the failure mode
+    /// ADR_0004 was written to prevent. A consumer that does not know this
+    /// frame drops it and reconnects, and the reconnect answers 404 — so the
+    /// access is cut either way and the frame only decides whether anybody can
+    /// say why.
+    Revoked,
 }
 
 impl LiveFrame {
@@ -156,7 +205,7 @@ impl LiveFrame {
         match self {
             Self::Event(event) => Some(&event.checkpoint),
             Self::Caught { checkpoint } => Some(checkpoint),
-            Self::Resynced { .. } => None,
+            Self::Resynced { .. } | Self::Revoked => None,
         }
     }
 
@@ -168,6 +217,7 @@ impl LiveFrame {
                 Self::Event(_) => "event",
                 Self::Caught { .. } => "caught_up",
                 Self::Resynced { .. } => "resynced",
+                Self::Revoked => "revoked",
             })
             .json_data(self)?;
         Ok(match self.checkpoint() {
@@ -182,10 +232,18 @@ impl LiveFrame {
 ///
 /// Returns the frames plus the checkpoint the caller should treat as the
 /// boundary — live events at or below it were already delivered here.
+/// **The cursor does not widen the subscription.** `Last-Event-ID` is a
+/// position in the log and nothing more: the frames replayed from it are held
+/// to the same [`Subscription`] the live tail is, so resuming a stream after a
+/// grant was revoked replays nothing — and the request carrying that header
+/// has already been refused by then, because the grant is asked again on every
+/// connection (`crate::run_scope`). Two answers to one question, on purpose:
+/// the first stops the stream being reopened, the second stops the bytes
+/// moving if it ever is.
 pub async fn catch_up(
     state: &AppState,
     from: Option<&Checkpoint>,
-    scope: &Scope,
+    subscription: &Subscription,
 ) -> ApiResult<(Vec<LiveFrame>, Checkpoint)> {
     let Some(from) = from else {
         // No cursor means live only. The panel fetches history with
@@ -225,7 +283,7 @@ pub async fn catch_up(
 
     let mut boundary = from.clone();
     for event in missed {
-        if !scope.admits(&event) {
+        if !subscription.admits(&event) {
             continue;
         }
         boundary = event.checkpoint.clone();
@@ -258,11 +316,11 @@ async fn replay_from_log(state: &AppState, from: &Checkpoint) -> ApiResult<Vec<L
 pub fn live_tail(
     live: &LiveHub,
     after: Checkpoint,
-    scope: Scope,
+    subscription: Subscription,
 ) -> impl Stream<Item = LiveFrame> + Send + use<> {
     live.stream().filter_map(move |result| {
         let after = after.clone();
-        let scope = scope.clone();
+        let subscription = subscription.clone();
         async move {
             let event = match result {
                 Ok(event) => event,
@@ -278,7 +336,7 @@ pub fn live_tail(
                 // Already delivered during catch-up.
                 return None;
             }
-            if !scope.admits(&event) {
+            if !subscription.admits(&event) {
                 return None;
             }
             Some(LiveFrame::Event(Box::new(event)))
@@ -347,6 +405,7 @@ mod tests {
             workflow_id: execution.map(|_| "house-import".to_owned()),
             workflow_run_id: execution.map(ToOwned::to_owned),
             agent_id: None,
+            project: None,
             service: "planner".to_owned(),
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),
@@ -394,7 +453,11 @@ mod tests {
     #[tokio::test]
     async fn the_live_tail_skips_what_catch_up_already_delivered() {
         let hub = LiveHub::default();
-        let tail = live_tail(&hub, Checkpoint::from_global_position(2), Scope::Everything);
+        let tail = live_tail(
+            &hub,
+            Checkpoint::from_global_position(2),
+            Subscription::everything(ReadScope::Global),
+        );
         futures::pin_mut!(tail);
 
         for position in 1..=4 {
@@ -420,7 +483,10 @@ mod tests {
         let tail = live_tail(
             &hub,
             Checkpoint::beginning(),
-            Scope::Run("run-a".to_owned()),
+            Subscription {
+                project: ReadScope::Global,
+                scope: Scope::Run("run-a".to_owned()),
+            },
         );
         futures::pin_mut!(tail);
 
@@ -446,7 +512,10 @@ mod tests {
         let tail = live_tail(
             &hub,
             Checkpoint::beginning(),
-            Scope::WorkflowRun("exec-7".to_owned()),
+            Subscription {
+                project: ReadScope::Global,
+                scope: Scope::WorkflowRun("exec-7".to_owned()),
+            },
         );
         futures::pin_mut!(tail);
 

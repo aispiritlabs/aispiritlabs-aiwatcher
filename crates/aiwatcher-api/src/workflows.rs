@@ -41,7 +41,7 @@ use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::live::{StreamQuery, resume_point};
 use crate::state::AppState;
-use crate::stream::{Scope, as_sse, catch_up, live_tail};
+use crate::stream::{Scope, Subscription, as_sse, catch_up, live_tail};
 use utoipa::OpenApi;
 
 /// This module's operations, as the contract they satisfy.
@@ -192,9 +192,20 @@ async fn stream_workflow_execution(
     headers: HeaderMap,
 ) -> ApiResult<Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>> {
     let from = resume_point(&headers, query.from.as_deref())?;
-    let scope = Scope::WorkflowRun(workflow_run_id);
-    let (history, boundary) = catch_up(&state, from.as_ref(), &scope).await?;
-    let tail = live_tail(&state.live, boundary, scope);
+    // The global side, and it is a gap named rather than a decision taken
+    // here: the workflow fold has no project in its rows (IAM-02 E2 covered
+    // the runs fold, the dimensions, spans, periods, `asked`, `measured` and
+    // the journal, and not this one), so there is no scoped family of workflow
+    // routes to admit a project's execution on. Answering the global side is
+    // what fails closed until that fold is keyed — a project's execution has
+    // no live view, which is what `docs/iam-02-data-plane.md` says the
+    // pre-selector state is.
+    let subscription = Subscription {
+        project: aiwatcher_projector::ReadScope::Global,
+        scope: Scope::WorkflowRun(workflow_run_id),
+    };
+    let (history, boundary) = catch_up(&state, from.as_ref(), &subscription).await?;
+    let tail = live_tail(&state.live, boundary, subscription);
     let frames = futures::stream::iter(history).chain(tail);
 
     Ok(Sse::new(as_sse(frames)).keep_alive(

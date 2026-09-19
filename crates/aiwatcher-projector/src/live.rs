@@ -173,6 +173,7 @@ mod tests {
             workflow_id: None,
             workflow_run_id: None,
             agent_id: None,
+            project: None,
             service: "planner".to_owned(),
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),

@@ -226,6 +226,21 @@ pub struct LiveEvent {
     /// after downloading it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Which project this event belongs to, as the ingest route stamped it on
+    /// the envelope (ADR_0033, ADR_0001 amended).
+    ///
+    /// Carried for the reason above once more, and this time it is not a
+    /// convenience: the live channel is filtered **server-side**, and a
+    /// subscriber that may see one project's events cannot be served by
+    /// resolving that project to a set of run ids when it connects — the run
+    /// worth watching is the one that has not started. Narrowing in the
+    /// browser instead would mean sending every project's events to every
+    /// browser and asking it to throw the rest away, which is the mistake
+    /// `llm.chunk` makes expensive and the one a boundary must not make at all.
+    ///
+    /// Absent is the global side, which is every event this build has written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::ProjectScope>,
     pub service: String,
     pub trace_id: TraceId,
     pub span_id: SpanId,
@@ -247,6 +262,7 @@ impl From<&RecordedEvent> for LiveEvent {
             workflow_id: event.metadata.workflow_id.clone(),
             workflow_run_id: event.metadata.workflow_run_id.clone(),
             agent_id: event.metadata.agent_id.clone(),
+            project: event.metadata.project,
             service: event.metadata.source.service.clone(),
             trace_id: event.metadata.trace_id,
             span_id: event.metadata.span_id,
