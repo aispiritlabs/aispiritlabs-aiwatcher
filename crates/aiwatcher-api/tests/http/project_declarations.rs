@@ -516,6 +516,23 @@ async fn a_project_start_writes_an_owner_the_instance_cannot_reach() {
         );
     }
 
+    // The artifact routes have no scoped twin yet, and they read the
+    // **unscoped** catalog — so without a refusal they would answer an empty
+    // list for a project's run, which reads as "this produced nothing". A
+    // project member is told the run is not on that side instead.
+    assert_eq!(
+        f.request(
+            "GET",
+            &format!("/api/v1/executions/{execution}/artifacts"),
+            Some(&owner),
+            Value::Null,
+            false
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
     // Repeating it is the same run rather than a second one, and somebody with
     // no grant is told the declaration is not there.
     let (status, again) = f

@@ -96,6 +96,35 @@ fn catalog(state: &AppState) -> ApiResult<&Arc<dyn ArtifactCatalog>> {
         .ok_or(ApiError::StepArtifactsDisabled)
 }
 
+/// Refuse an execution this catalog is not the one for.
+///
+/// These two routes read the **unscoped** catalog, and a project's run writes
+/// into a catalog bound to that project — so without this the list would come
+/// back **empty** rather than refused, which reads as "this run produced
+/// nothing" and is exactly the silence ADR_0033 pt. 7 exists to prevent. There
+/// is no scoped twin of these routes yet, so what a project member gets is a
+/// refusal rather than their own rows; that is the honest half, and the other
+/// half is named in `docs/iam-02-data-plane.md`.
+///
+/// The question is asked of the workflow store, which already answers it: the
+/// unscoped handle refuses a project's execution by name and says `None` for a
+/// global one and for an id nobody has used.
+async fn on_this_side(state: &AppState, execution: &ExecutionId) -> ApiResult<()> {
+    let Some(handler) = state.executions.as_deref() else {
+        // No workflow store is no executions at all, so there is no project's
+        // run for this to be confused with.
+        return Ok(());
+    };
+    // A refusal renders 404 and a bad moment renders 503; the split is
+    // `execution_parts`' and is not repeated here.
+    handler
+        .store()
+        .ownership(execution)
+        .await
+        .map(|_| ())
+        .map_err(|error| aiwatcher_execution::HandleError::Store(error).into())
+}
+
 fn store(state: &AppState) -> ApiResult<&Arc<dyn AttemptArtifacts>> {
     state
         .artifacts
@@ -129,8 +158,10 @@ async fn run_artifacts(
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<Vec<CatalogedArtifact>>> {
+    let execution = ExecutionId::new(execution_id);
+    on_this_side(&state, &execution).await?;
     let produced = catalog(&state)?
-        .produced_by(&ExecutionId::new(execution_id))
+        .produced_by(&execution)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
     Ok(Json(produced))
@@ -166,8 +197,10 @@ async fn artifact_content(
     // artifact any execution produced. The cost is a list read per byte read,
     // and it buys the scoping: what makes a bare digest safe as the whole
     // address is that this run has to be the one that produced it.
+    let execution = ExecutionId::new(execution_id.clone());
+    on_this_side(&state, &execution).await?;
     let produced = catalog(&state)?
-        .produced_by(&ExecutionId::new(execution_id.clone()))
+        .produced_by(&execution)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
     let artifact = produced
