@@ -263,10 +263,23 @@ followed by a full `tsc` project check.
   beat another is the comparison route this screen does not call. A lab that
   pins no tests renders the server's `unavailable` sentence, and a workshop with
   no labs says so: the nine empty slots are gone, and drawing a placeholder
-  exercise would be the same fake they were drawn to avoid. Which lab is open is
-  the one selection here that is **not** in the URL, because it is a section of
-  the workshop's page rather than a view of its own; it moves to the URL the day
-  a lab earns a route. The invitation and redeem cards are `shared/`,
+  exercise would be the same fake they were drawn to avoid. Which lab is open
+  **is** in the URL, and so is the participant's own copy of its notebook: that
+  was the day a lab earned a route, because opening one runs code and working in
+  one makes a file, and both are things somebody comes back to and sends to a
+  classmate. The **notebook a lab hands out is the runtime's file, not the
+  registry's**: the lab names it and pins a `sha256`, `screens/overview/notebook.tsx`
+  reads *that revision* through `shared/lib/ml-pipeline.ts`, and when the head has
+  moved past the pin the two are said to have drifted rather than one being
+  quietly served as the other. Nothing executes because a lab was opened — the
+  live app is behind a summary somebody clicks, for the reason `EditorHost::open`
+  stages and stops. A participant never edits the lab's own file: one namespace
+  holds every notebook this instance can run, so `Work in a copy of my own`
+  mints one, and saving into the lab's would be thirty people overwriting each
+  other. Writing a lab (`screens/overview/compose.tsx`) **uploads the notebook to
+  the runtime first and pins what the runtime answered**, because a digest worked
+  out in the browser is a second content address for a file the browser does not
+  keep. The invitation and redeem cards are `shared/`,
   parameterised on their framing alone, because an administrator inviting
   somebody to a project and an instructor enrolling them in a workshop are the
   same offer.

@@ -442,7 +442,7 @@ function Workshop({
         </p>
       ) : null}
 
-      <Labs organization={organization} project={project} />
+      <Labs organization={organization} project={project} role={access?.role} />
     </div>
   );
 }

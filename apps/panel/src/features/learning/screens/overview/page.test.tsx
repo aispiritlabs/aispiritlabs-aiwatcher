@@ -680,3 +680,167 @@ it('says why there is nothing to enrol anybody in when no provider is configured
   await screen.findByText('This instance has no identity provider');
   expect(screen.queryByText('Organizations')).toBeNull();
 });
+
+const PIN = 'f'.repeat(64);
+const HEAD = '9'.repeat(64);
+
+const notebookBody = (name: string, revision: string, source: string) => ({
+  name,
+  title: 'Lab 03',
+  revision,
+  size: source.length,
+  modified_at: new Date(MONDAY * 1000).toISOString(),
+  source,
+  app_url: `/ml-pipeline/app/${name}/`,
+});
+
+/** The grants half for somebody who may write this workshop's material. */
+function instructor(extra: Route[]) {
+  const held = {
+    project,
+    role: 'editor',
+    evaluated_at: WEDNESDAY,
+    grants: [{ grant: grant('g1'), role: 'editor' }],
+  };
+  return server([
+    { method: 'GET', path: '/projects', answer: { status: 200, body: [held] } },
+    {
+      method: 'GET',
+      path: '/roster',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    { method: 'GET', path: '/access', answer: { status: 200, body: held } },
+    {
+      method: 'GET',
+      path: '/grants',
+      answer: { status: 403, body: refusal('forbidden', 'not an administrator') },
+    },
+    { method: 'GET', path: '/invitations', answer: { status: 200, body: [] } },
+    ...extra,
+  ]);
+}
+
+it('opens a lab at the notebook revision it pinned, not at the file as it is now', async () => {
+  // The lab names a file and pins a digest; the source lives in the notebook
+  // runtime. What must not happen is the panel reading the head and calling it
+  // the lab's — an edit between two participants opening the same lab would
+  // then change the exercise underneath one of them.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = participant([
+    {
+      method: 'GET',
+      path: '/labs',
+      answer: { status: 200, body: { labs: [summary()], total: 1 } },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03',
+      answer: {
+        status: 200,
+        body: (() => {
+          const body = detail('Work through the notebook.', null);
+          return {
+            ...body,
+            current: { ...body.current, notebook: { name: 'lab_03_agent', revision: PIN } },
+          };
+        })(),
+      },
+    },
+    {
+      method: 'GET',
+      path: '/labs/lab-03/measurement',
+      answer: {
+        status: 200,
+        body: {
+          name: 'lab-03',
+          version_id: 'a'.repeat(64),
+          unavailable: 'this lab pins no tests yet',
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: `/notebooks/lab_03_agent/revisions/${PIN}`,
+      answer: { status: 200, body: notebookBody('lab_03_agent', PIN, '# the exercise\n') },
+    },
+    {
+      method: 'GET',
+      path: '/notebooks/lab_03_agent',
+      answer: { status: 200, body: notebookBody('lab_03_agent', HEAD, '# edited since\n') },
+    },
+  ]);
+  await open('/learning?organization=org&project=ret&lab=lab-03');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  // The lab is open from the URL: a lab that hands out a notebook is something
+  // somebody sends a link to.
+  expect(await within(labs).findByText('Notebook')).toBeTruthy();
+  expect(within(labs).getByText('lab_03_agent')).toBeTruthy();
+
+  // The pinned source, read by its digest, and the head read only to say the
+  // two have moved apart.
+  expect(await within(labs).findByText('# the exercise')).toBeTruthy();
+  expect(within(labs).getByText('the file has been edited since')).toBeTruthy();
+  expect(stub.countOf('GET', `/notebooks/lab_03_agent/revisions/${PIN}`)).toBe(1);
+});
+
+it('publishes a lab by saving its notebook first and pinning what the runtime answered', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = instructor([
+    { method: 'GET', path: '/labs', answer: { status: 200, body: { labs: [], total: 0 } } },
+    {
+      method: 'GET',
+      path: '/evaluation-scorecards',
+      answer: { status: 200, body: { scorecards: [] } },
+    },
+    { method: 'GET', path: '/notebooks', answer: { status: 200, body: { notebooks: [] } } },
+    {
+      method: 'PUT',
+      path: '/notebooks/lab_03_agents',
+      answer: { status: 200, body: notebookBody('lab_03_agents', PIN, 'import marimo\n') },
+    },
+    { method: 'POST', path: '/labs', answer: { status: 201, body: {} } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  await userEvent.click(await within(labs).findByRole('button', { name: 'Write a lab' }));
+
+  await userEvent.type(within(labs).getByPlaceholderText('lab-03'), 'lab-03');
+  await userEvent.type(
+    within(labs).getByPlaceholderText('Answer the support questions'),
+    'Build an agent',
+  );
+  await userEvent.type(within(labs).getByRole('textbox', { name: /^Notes/ }), 'Read this first.');
+  await userEvent.upload(
+    within(labs).getByLabelText(/Upload a marimo notebook/),
+    new File(['import marimo\n'], 'Lab 03 agents.py', { type: 'text/x-python' }),
+  );
+
+  // The name is derived from the file and sanitised to the runtime's own rule;
+  // the digest is the runtime's answer and never one composed here.
+  expect(await within(labs).findByText('lab_03_agents')).toBeTruthy();
+  await userEvent.click(within(labs).getByRole('button', { name: /Publish/ }));
+
+  const published = stub.calls.find((call) => call.method === 'POST' && call.url.endsWith('/labs'));
+  expect(published?.body).toMatchObject({
+    name: 'lab-03',
+    title: 'Build an agent',
+    brief: 'Read this first.',
+    notebook: { name: 'lab_03_agents', revision: PIN },
+    label: 'published',
+  });
+  // Proved by breaking: swap the pin for a digest worked out in the browser and
+  // this is the assertion that fails.
+  expect(stub.countOf('PUT', '/notebooks/lab_03_agents')).toBe(1);
+});
+
+it('offers no way to write a lab to somebody whose grant only reads', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  participant([]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  expect(within(labs).queryByRole('button', { name: 'Write a lab' })).toBeNull();
+  expect(within(labs).getByText(/Writing a lab needs editor or admin/)).toBeTruthy();
+});

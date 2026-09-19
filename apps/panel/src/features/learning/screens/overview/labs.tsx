@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import { getRouteApi } from '@tanstack/react-router';
 
 import type {
   DurableEvaluation,
+  IamProjectRole,
   LabMeasurementView,
   LabSummary,
   LabVersion,
 } from '@/api/generated';
 import { useLab, useLabMeasurement, useLabResults, useLabs } from '@/features/learning/lib/labs';
+import { ComposeLab } from '@/features/learning/screens/overview/compose';
+import { Notebook } from '@/features/learning/screens/overview/notebook';
 import {
   Badge,
   Button,
@@ -21,6 +24,8 @@ import {
 } from '@/shared/components/ui/primitives';
 import { short } from '@/shared/lib/iam';
 import { cn } from '@/shared/lib/utils';
+
+const routeApi = getRouteApi('/learning');
 
 /**
  * A workshop's labs, and the one sentence that made them buildable.
@@ -46,7 +51,16 @@ import { cn } from '@/shared/lib/utils';
  * route — ADR_0033 opens no project `/start` until the data plane follows — so
  * that is said in words instead of drawn as a button that would be refused.
  */
-export function Labs({ organization, project }: { organization: string; project: string }) {
+export function Labs({
+  organization,
+  project,
+  role,
+}: {
+  organization: string;
+  project: string;
+  /** This caller's grant on the workshop. A viewer reads; anything more writes. */
+  role: IamProjectRole | undefined;
+}) {
   const labs = useLabs(organization, project);
   const opened = useOpenLab(labs.data);
 
@@ -72,6 +86,19 @@ export function Labs({ organization, project }: { organization: string; project:
             title="This workshop has no labs yet"
             hint="A lab is published to this project like a prompt is: a brief, and the scorecard and cohort it is measured by. Nothing is drawn here until one exists, because a placeholder lab reads as an exercise somebody forgot to write."
           />
+        ) : null}
+
+        {role === 'editor' || role === 'admin' ? (
+          <ComposeLab
+            organization={organization}
+            project={project}
+            onPublished={(name) => opened.open(name)}
+          />
+        ) : role ? (
+          <p className="text-xs text-muted-foreground">
+            Writing a lab needs editor or admin on this workshop. Yours is {role}. This hides a
+            control the server would refuse; it is not the check.
+          </p>
         ) : null}
 
         {labs.data && labs.data.length > 0 ? (
@@ -114,6 +141,8 @@ export function Labs({ organization, project }: { organization: string; project:
             organization={organization}
             project={project}
             name={opened.name}
+            mine={opened.notebook}
+            onMine={opened.work}
             onClose={() => opened.open(undefined)}
           />
         ) : null}
@@ -123,20 +152,38 @@ export function Labs({ organization, project }: { organization: string; project:
 }
 
 /**
- * Which lab is open.
+ * Which lab is open, and which copy of its notebook is being worked in.
  *
- * Deliberately component state rather than the URL, and this is the one place
- * in the panel where that is the right answer: the workshop is already in the
- * search params, and a lab is a section of that page rather than a view of its
- * own. When a lab earns a page — a submission form, a mark of your own — it
- * earns a route and the selection moves to the URL with it.
+ * Both in the URL. Which lab was component state while a lab was a section of
+ * this page and nothing else — the workshop was already in the search params,
+ * and a section is not a view. That stopped being true the day a lab handed
+ * out a notebook: opening one runs code and working in one makes a file of
+ * your own, and both are things somebody comes back to and sends to a
+ * classmate. That is what the plan meant by a lab earning a route.
+ *
+ * A name no lab in this workshop has opens nothing, so a stale link is an
+ * empty selection rather than a request for something that is not there — and
+ * changing lab puts the copy away, because a copy belongs to the exercise it
+ * was taken from.
  */
 function useOpenLab(labs: LabSummary[] | undefined) {
-  const [name, setName] = useState<string | undefined>(undefined);
-  const known = labs?.some((lab) => lab.name === name) ?? false;
+  const search = routeApi.useSearch();
+  const navigate = routeApi.useNavigate();
+  const known = labs?.some((lab) => lab.name === search.lab) ?? false;
   return {
-    name: known ? name : undefined,
-    open: (next: string | undefined) => setName((current) => (current === next ? undefined : next)),
+    name: known ? search.lab : undefined,
+    notebook: known ? search.notebook : undefined,
+    open: (next: string | undefined) =>
+      void navigate({
+        search: (current) => ({
+          ...current,
+          lab: current.lab === next ? undefined : next,
+          notebook: undefined,
+        }),
+        replace: true,
+      }),
+    work: (notebook: string | undefined) =>
+      void navigate({ search: (current) => ({ ...current, notebook }), replace: true }),
   };
 }
 
@@ -149,11 +196,15 @@ function Lab({
   organization,
   project,
   name,
+  mine,
+  onMine,
   onClose,
 }: {
   organization: string;
   project: string;
   name: string;
+  mine: string | undefined;
+  onMine: (notebook: string | undefined) => void;
   onClose: () => void;
 }) {
   const lab = useLab(organization, project, name);
@@ -182,6 +233,7 @@ function Lab({
       {lab.isError ? <Refusal error={lab.error} fallback="this lab could not be read" /> : null}
 
       <Brief current={lab.data?.current} labelled={Boolean(lab.data?.head.labels.published)} />
+      <Notebook pinned={lab.data?.current?.notebook} mine={mine} onMine={onMine} />
       <Tests view={measurement.data} pending={measurement.isPending} error={measurement.error} />
       <Marks
         results={results.data}

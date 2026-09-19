@@ -1,12 +1,26 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 
 import {
   projectGetLab,
   projectGetLabMeasurement,
   projectListLabs,
   projectListResults,
+  projectPublishLab,
 } from '@/api/generated';
-import type { DurableEvaluation, LabDetail, LabMeasurementView, LabSummary } from '@/api/generated';
+import type {
+  DurableEvaluation,
+  LabDetail,
+  LabMeasurementView,
+  LabPublished,
+  LabPublishRequest,
+  LabSummary,
+} from '@/api/generated';
 import { answerOf } from '@/shared/lib/result';
 
 /**
@@ -150,5 +164,45 @@ export function useLabResults(
         }),
         'this workshop did not answer the results measured on this lab',
       ).evaluations,
+  });
+}
+
+/**
+ * `X-AIWatcher-IAM: 1` is not a simple header, so a cross-origin form carrying
+ * only a session cookie cannot set it — which is the whole reason a scoped
+ * write requires it. It rides per call rather than on the client, so nothing
+ * else this area does silently becomes a mutation.
+ */
+const MUTATION = { headers: { 'X-AIWatcher-IAM': '1' } } as const;
+
+/**
+ * Publish a version of a lab, and optionally move a label onto it.
+ *
+ * Publishing and *setting* are separate decisions here for the same reason
+ * they are in the prompt registry: an instructor writing next week's lab while
+ * the class is on this one publishes a version with no label, and nothing they
+ * are reading moves. The form asks that question in those words.
+ *
+ * The server takes the grant decision twice — once when the request arrives and
+ * again after the body does — so a long brief cannot be uploaded through a
+ * window that closed while it was in flight. Nothing here needs to know that
+ * beyond not caching the answer.
+ */
+export function usePublishLab(
+  organization: string | undefined,
+  project: string | undefined,
+): UseMutationResult<LabPublished, Error, LabPublishRequest> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: LabPublishRequest) =>
+      answerOf(
+        await projectPublishLab({
+          path: { organization: organization as string, project: project as string },
+          body,
+          ...MUTATION,
+        }),
+        'this lab was not published',
+      ),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['learning'] }),
   });
 }
