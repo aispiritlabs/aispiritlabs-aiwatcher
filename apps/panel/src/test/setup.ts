@@ -37,3 +37,22 @@ Element.prototype.scrollIntoView ??= function scrollIntoView() {};
 // codebase. Without this every test after the first renders into a document
 // that still holds the previous one.
 afterEach(cleanup);
+
+/**
+ * And the same for what a test left in the browser's own storage.
+ *
+ * jsdom gives one `localStorage` per file, so without this a test that pinned
+ * a preference — which of the two places a marimo can be, a collapsed section,
+ * a remembered filter — hands it to the next test in that file. That reads as
+ * an ordering bug in the component and is not one; it also fails only
+ * sometimes, because whether the stale value wins depends on which query
+ * settles first.
+ */
+afterEach(() => {
+  try {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  } catch {
+    // A test that stubbed storage owns its own cleanup.
+  }
+});
