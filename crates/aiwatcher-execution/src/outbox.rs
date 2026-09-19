@@ -20,9 +20,24 @@
 //! one batch, one `append`, one mark. A sink that took the batch and then
 //! failed leaves every row in it unpublished, and the next pass re-sends the
 //! whole batch — which is the same redelivery, at a different size.
+//!
+//! ## Whose project a fact is
+//!
+//! Every envelope leaves here carrying the **store's** scope, overwritten
+//! rather than read off the row. It is the same rule `POST /api/v1/events`
+//! keeps one layer out — the scope is the boundary's word and never the
+//! writer's (ADR_0001 amended, ADR_0033) — moved to where the boundary is a
+//! bound store rather than a credential. A row is written by a decision, and a
+//! decision is a document; the store it was drained from is not.
+//!
+//! So a publisher holding the unscoped store drains global rows and stamps
+//! nothing, exactly as it always has, and one holding a project's store drains
+//! that project's and stamps it. Neither can reach the other's rows, which is
+//! `WorkflowStore::pending_outbox`'s own binding and not a rule repeated here.
 
 use aiwatcher_bus::ports::MessageSink;
 use aiwatcher_core::{EventEnvelope, MessageId};
+use aiwatcher_iam::ProjectScope;
 use time::OffsetDateTime;
 
 use crate::error::{Result, StoreError};
@@ -62,12 +77,17 @@ pub async fn publish_pending(
         return Ok(Published::default());
     }
 
+    let project = store.scope().project().map(ProjectScope::on_the_log);
     let mut envelopes = Vec::with_capacity(pending.len());
     let mut ids: Vec<MessageId> = Vec::with_capacity(pending.len());
     let mut undecodable = 0usize;
     for row in pending {
         match decode(&row) {
-            Some(envelope) => {
+            Some(mut envelope) => {
+                // Always, including with absence: a row that named a project
+                // is a row somebody wrote, and this is the one place that
+                // decides.
+                envelope.project = project;
                 ids.push(row.message_id);
                 envelopes.push(envelope);
             }
@@ -273,5 +293,71 @@ mod tests {
             1,
             "the row is still pending, so the next pass re-sends it"
         );
+    }
+
+    #[tokio::test]
+    async fn a_project_s_facts_leave_here_carrying_that_project_and_nobody_else_s() {
+        let scope = aiwatcher_iam::ProjectScope {
+            organization: aiwatcher_iam::OrganizationId(uuid::Uuid::from_bytes([0xaa; 16])),
+            project: aiwatcher_iam::ProjectId(uuid::Uuid::from_bytes([0xbb; 16])),
+        };
+        let store = store_with(vec![row("a", "execution.started")]).await;
+        let bound = std::sync::Arc::new(store)
+            .for_project(scope)
+            .expect("a bound store");
+        let sink = Arc::new(InMemoryBus::new());
+
+        let published = publish_pending(bound.as_ref(), sink.as_ref(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .expect("a pass");
+        assert_eq!(
+            published.sent, 0,
+            "a global row is not this project's to drain"
+        );
+
+        // The project's own row, drained through the store bound to it.
+        let store = MemoryWorkflowStore::new();
+        let bound = std::sync::Arc::new(store)
+            .for_project(scope)
+            .expect("a bound store");
+        bound
+            .append(
+                &execution(),
+                AppendRequest {
+                    expected_version: ExpectedVersion::NoStream,
+                    input: crate::message::PendingMessage::input(
+                        crate::WorkflowMessage::Command(crate::WorkflowCommand::PauseExecution),
+                        metadata("in-1"),
+                    ),
+                    outputs: Vec::new(),
+                    projection: projection(),
+                    outbox: vec![row("a", "execution.started")],
+                    checkpoint: None,
+                    ownership: Some(crate::ExecutionOwnership {
+                        scope,
+                        principal: aiwatcher_iam::Principal::new("https://issuer.test", "owner")
+                            .expect("a principal"),
+                        definition: crate::OwnedDefinition {
+                            kind: crate::plan::DefinitionKind::CurationPipeline,
+                            name: "import".to_owned(),
+                            revision: crate::plan::DefinitionRevision("rev-1".to_owned()),
+                            plan_id: crate::plan::PlanId("plan-1".to_owned()),
+                        },
+                    }),
+                    timers: Vec::new(),
+                    attempts: Vec::new(),
+                },
+            )
+            .await
+            .expect("an append");
+
+        publish_pending(bound.as_ref(), sink.as_ref(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .expect("a pass");
+        let sent = sink.all().await;
+        assert_eq!(sent.len(), 1);
+        // Stamped from the store, not read off the row: what the decision
+        // wrote said nothing about a project.
+        assert_eq!(sent[0].metadata.project, Some(scope.on_the_log()));
     }
 }
