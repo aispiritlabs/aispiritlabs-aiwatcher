@@ -450,7 +450,14 @@ aneks z tą datą. Trzy rzeczy, które dotykają innych strumieni:
   `/api/v1/orgs/{organization}/projects/{project}`. Kontrakt urósł o **10
   ścieżek**; nic nie zniknęło.
 - **Panel nietknięty ręcznie.** Zmienił się wyłącznie wygenerowany klient, bo
-  nic w panelu nie musi jeszcze nazywać projektu — selektor to IAM-02/C.
+  nic w panelu nie musi jeszcze nazywać projektu — selektor to IAM-02/C. Jedna
+  rzecz jest do dorobienia **razem z selektorem**, i lepiej, żeby nie została
+  odkryta: `apps/panel/src/shared/lib/live.ts` nie zna ramki `revoked`. Dziś to
+  nieosiągalne — strumień globalny nigdy jej nie dostaje — ale w chwili, w
+  której panel otworzy strumień zakresowy, odwołanie grantu zamknie połączenie,
+  `EventSource` spróbuje się wznowić, dostanie 404 i **nic tego nie narysuje**.
+  Jeden wariant w `liveFrameSchema`, jeden `addEventListener('revoked', …)`
+  i jedna faza strumienia.
 - **Zastane na `main`, naprawione osobnym commitem:** merge IAM-02/A zostawił
   `cargo test --workspace --all-targets` niekompilujące się (fikstura
   `RunSummary` bez pola `project`) i trzy pliki poza `cargo fmt --check`.
