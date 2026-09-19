@@ -40,6 +40,12 @@ workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "
 # the workflow store's: grants and executions have different lifetimes, and
 # `just postgres-reset` is something people do to the latter.
 iam_postgres_url := env_var_or_default("AIWATCHER_IAM_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher_iam")
+# The project a producer token publishes into, for the M1 gate. Empty by
+# default, which is a token that publishes globally — every producer this build
+# has ever had. `scripts/iam-permission-check.py` prints the line to set it to,
+# because the pair of ids it names is minted by the control plane and cannot be
+# known before there is one.
+m1_scope := env_var_or_default("AIWATCHER_M1_SCOPE", "")
 
 # Where a managed query step is sent: the one engine this deployment runs, and
 # the only address a query step ever runs against — a plan names a binding and
@@ -400,12 +406,22 @@ run-sso:
 # a confusing first failure.
 #
 # The same, with the IAM control plane: organizations, teams, projects, grants.
+#
+# Carries two producer tokens: `agents`, which publishes globally as every
+# producer does, and `lesson`, which publishes into whatever `AIWATCHER_M1_SCOPE`
+# names — the second half of the M1 gate, which needs runs on both sides of the
+# boundary to be able to say that a read answers one of them.
 run-sso-iam:
     #!/usr/bin/env bash
     set -euo pipefail
     docker exec aiwatcher-postgres psql -U aiwatcher -tAc \
       "select 1 from pg_database where datname='aiwatcher_iam'" | grep -q 1 \
       || docker exec aiwatcher-postgres createdb -U aiwatcher aiwatcher_iam
+    M1_TOKEN=""
+    if [ -n "{{m1_scope}}" ]; then
+      M1_TOKEN=",lesson@{{m1_scope}}=fedcba9876543210fedcba9876543210"
+      echo "producing into {{m1_scope}} as \`lesson\`"
+    fi
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \
     AIWATCHER_AUTH_MODE=oidc \
@@ -413,6 +429,7 @@ run-sso-iam:
     AIWATCHER_AUTH_CLIENT_ID=aiwatcher \
     AIWATCHER_AUTH_REDIRECT_URL=http://localhost:5173/api/v1/auth/callback \
     AIWATCHER_IAM_POSTGRES_URL={{iam_postgres_url}} \
+    AIWATCHER_AUTH_INGEST_TOKENS="agents=0123456789abcdef0123456789abcdef${M1_TOKEN:-}" \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher --features aiwatcher-server/postgres
 

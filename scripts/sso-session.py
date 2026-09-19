@@ -22,6 +22,7 @@ import argparse
 import http.cookiejar
 import json
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -121,6 +122,60 @@ def call(
             return refused.code, json.loads(raw)
         except ValueError:
             return refused.code, raw.decode(errors="replace")[:300]
+
+
+def publish(token: str, events: list[dict[str, object]]) -> tuple[int, object]:
+    """Publish a batch as a producer would: a shared secret, no session.
+
+    The one thing a browser cannot do here, and the reason the M1 gate needs
+    it: which project an event belongs to is the credential's word, never the
+    body's, and a person's session carries no project at all.
+    """
+    request = urllib.request.Request(
+        PANEL + "/api/v1/events",
+        method="POST",
+        data=json.dumps({"events": events}).encode(),
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request) as answer:
+            raw = answer.read()
+            return answer.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as refused:
+        return refused.code, refused.read().decode(errors="replace")[:300]
+
+
+def stream(session: Session, path: str, seconds: float) -> str:
+    """Follow an SSE body for a while and hand back what arrived.
+
+    A live stream does not end, so this reads until the clock runs out — or
+    until the server closes it, which is the answer the revocation question is
+    asking for. The socket timeout is shorter than the deadline so a quiet
+    stream still comes back on time; the server sends a keep-alive every
+    fifteen seconds, which is what keeps a quiet one from looking dead.
+    """
+    request = urllib.request.Request(PANEL + path)
+    request.add_header("Accept", "text/event-stream")
+    try:
+        answer = session.open(request, timeout=min(seconds, 20.0))
+    except urllib.error.HTTPError as refused:
+        return f"HTTP {refused.code}"
+    except (TimeoutError, OSError) as unreachable:
+        return f"unreachable: {unreachable}"
+    deadline = time.monotonic() + seconds
+    text = ""
+    try:
+        while time.monotonic() < deadline:
+            line = answer.readline()
+            if not line:
+                break
+            text += line.decode(errors="replace")
+    except (TimeoutError, OSError):
+        pass
+    finally:
+        answer.close()
+    return text
 
 
 def main() -> int:

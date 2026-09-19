@@ -4,18 +4,37 @@
 Every line below is a question somebody would otherwise answer by clicking as
 one person, signing out, and clicking as another — which is why nobody answers
 it twice. It needs `just authentik-up`, `just authentik-seed`, `just panel` and
-`just run-sso-iam`, and it writes only into an organization it creates itself.
+`just run-sso-iam`, and it writes only into organizations it creates itself.
 
 A lesson is a project plus a grant window: access from `valid_from`, editing
 until `edit_until`, reading until `read_until`. There is no lesson in the
 backend and there does not need to be.
 
     python3 scripts/iam-permission-check.py
+
+The last section is **M1** — "my project, my stream": the runs, spans, metrics
+and live stream of one project, and what revoking a grant does to somebody who
+is already watching. It takes about half a minute, because one of its questions
+is what happens on the next re-check of an open stream rather than on the next
+request.
+
+Two of its questions need a run on the *project* side, and only a producer's
+credential can put one there — a person's session carries no project, on
+purpose. So the first run prints the line to configure, and the second asks
+everything:
+
+    python3 scripts/iam-permission-check.py
+    AIWATCHER_M1_SCOPE=<organization>/<project> just run-sso-iam
+    AIWATCHER_M1_SCOPE=<organization>/<project> python3 scripts/iam-permission-check.py
+
+Without it those questions are reported as not asked rather than as held.
 """
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +45,10 @@ sso = import_module("sso-session")
 
 ISSUER = "http://localhost:9000/application/o/aiwatcher/"
 DAY = 86_400
+# "From the first event ever written", as the log spells it. A zero-padded
+# position rather than an empty string, because an empty `Last-Event-ID` is
+# indistinguishable from an absent one and those mean different things.
+CHECKPOINT_START = "0" * 20
 
 
 class Checks:
@@ -33,17 +56,31 @@ class Checks:
 
     def __init__(self) -> None:
         self.rows: list[tuple[bool, str, str]] = []
+        self.skips: list[tuple[str, str]] = []
 
     def that(self, held: bool, question: str, saw: object = "") -> bool:
         self.rows.append((held, question, str(saw)))
         print(f"{'ok  ' if held else 'FAIL'}  {question}" + (f"   [{saw}]" if saw else ""))
         return held
 
+    def skipped(self, question: str, why: str) -> None:
+        """A question this run could not ask, named rather than passed quietly.
+
+        Reported apart from the answers: a gate that counted an unasked
+        question as held would be the one kind of green that means nothing.
+        """
+        self.skips.append((question, why))
+        print(f"skip  {question}   [{why}]")
+
     def report(self) -> int:
         failed = [row for row in self.rows if not row[0]]
         print(f"\n{len(self.rows) - len(failed)}/{len(self.rows)} held")
         for _, question, saw in failed:
             print(f"  failed: {question}   [{saw}]")
+        if self.skips:
+            print(f"{len(self.skips)} not asked:")
+            for question, why in self.skips:
+                print(f"  skipped: {question}   [{why}]")
         return 1 if failed else 0
 
 
@@ -59,6 +96,232 @@ def grant(teacher, organization: str, project: str, subject: str, role: str, win
             "role": role,
             "window": window,
         },
+    )
+
+
+# ── M1: my project, my stream ────────────────────────────────────────────────
+#
+# Everything above is the authored half: who may administer what. This is the
+# observable half — runs, spans, metrics and the live stream — and it is the
+# gate IAM-02 calls M1. It is asked over real HTTP against a real server for
+# the reason the plan gives: a library test proves the fold, and what has to
+# hold is the deployment.
+#
+# Two sides have to exist for a read to be able to answer one of them, and only
+# a *credential* puts a run on the project side — a person's session carries no
+# project, by design. So the producer token comes from the environment, and
+# `just run-sso-iam` puts it there:
+#
+#     python3 scripts/iam-permission-check.py        # prints the line to set
+#     AIWATCHER_M1_SCOPE=<org>/<project> just run-sso-iam
+#     AIWATCHER_M1_SCOPE=<org>/<project> python3 scripts/iam-permission-check.py
+#
+# Without it the questions that need a project's own run are skipped by name
+# rather than passed quietly, and every other question still runs — including
+# the one that matters most, which is that a project read answers none of the
+# instance's runs.
+
+GLOBAL_TOKEN = "0123456789abcdef0123456789abcdef"
+PROJECT_TOKEN = "fedcba9876543210fedcba9876543210"
+
+
+def run_events(run_id: str, agent: str) -> list[dict[str, object]]:
+    """One run: a start, one model call with both ends, and an end."""
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    call = {"call_id": "c1", "provider": "anthropic", "model": "claude-opus-5"}
+    def event(event_type: str, data: dict[str, object]) -> dict[str, object]:
+        return {
+            "event_type": event_type,
+            "occurred_at": at,
+            "run_id": run_id,
+            "agent_id": agent,
+            "source": {"service": "permission-check", "sdk": "python"},
+            "data": data,
+        }
+    return [
+        event("run.started", {}),
+        event("llm.started", call),
+        event("llm.completed", {**call, "prompt_tokens": 100, "completion_tokens": 20}),
+        event("run.completed", {"status": "succeeded"}),
+    ]
+
+
+def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None:
+    scope = os.environ.get("AIWATCHER_M1_SCOPE", "").strip()
+
+    if scope:
+        org, project = scope.split("/", 1)
+        status, _ = sso.call(teacher, "GET", f"/api/v1/iam/organizations/{org}/projects/{project}/access")
+        if status != 200:
+            print(
+                f"AIWATCHER_M1_SCOPE names {scope}, which this signed-in teacher cannot open "
+                f"({status}). Unset it to mint a fresh one.",
+                file=sys.stderr,
+            )
+            return
+    else:
+        status, organization = sso.call(teacher, "POST", "/api/v1/iam/organizations", {"name": f"M1 {now}"})
+        if status != 201:
+            print(f"could not create an organization for M1: {status}", file=sys.stderr)
+            return
+        org = organization["id"]
+        _, created = sso.call(
+            teacher, "POST", f"/api/v1/iam/organizations/{org}/commands",
+            {"type": "create_project", "name": "The lesson everyone can see"},
+        )
+        project = created["ProjectCreated"]["scope"]["project"]
+        print(
+            "\n  to ask the two questions that need a run on the project side, restart\n"
+            f"  the server and this script with AIWATCHER_M1_SCOPE={org}/{project}\n"
+        )
+
+    scoped = f"/api/v1/orgs/{org}/projects/{project}"
+
+    # A marker first, only for the checkpoint its acknowledgement carries:
+    # the streams below resume from *there* rather than from the beginning of
+    # the log, because a development log holds tens of thousands of events and
+    # a replay from nought stops at `MAX_RESYNC_EVENTS` long before reaching
+    # anything published today. Asking about a scope over a replay that never
+    # arrived would be a question that passes for the wrong reason.
+    status, marker = sso.publish(GLOBAL_TOKEN, run_events(f"m1-marker-{now}", "marker"))
+    if status != 202:
+        print(f"the global producer token was refused: {status} {marker}", file=sys.stderr)
+        return
+    start = marker["last_checkpoint"]
+
+    # Two runs, one on each side. The global one is published by the token
+    # every producer has had; the project one by a token that names a project,
+    # which is the only thing that puts a run on that side.
+    status, refused = sso.publish(GLOBAL_TOKEN, run_events(f"m1-global-{now}", "researcher"))
+    if status != 202:
+        print(f"the global producer token was refused: {status} {refused}", file=sys.stderr)
+        return
+    produced = bool(scope) and sso.publish(
+        PROJECT_TOKEN, run_events(f"m1-project-{now}", "estimator")
+    )[0] == 202
+    time.sleep(1.0)
+
+    # ── The list of my projects ──────────────────────────────────────────────
+    sso.call(teacher, "POST", f"/api/v1/iam/organizations/{org}/commands",
+             {"type": "set_member", "principal": {"provider": ISSUER, "subject": student_subject},
+              "role": "member"})
+    status, _ = sso.call(student, "GET", f"{scoped}/runs")
+    checks.that(status == 404, "before a grant, a project's runs are not there — 404, not 403", status)
+
+    grant(teacher, org, project, student_subject, "viewer", {"valid_from": now - DAY})
+    status, mine = sso.call(student, "GET", f"/api/v1/iam/organizations/{org}/projects")
+    checks.that(
+        status == 200 and [entry["project"]["scope"]["project"] for entry in mine] == [project],
+        "signing in answers exactly the projects the grants say, and no others",
+        status,
+    )
+
+    # ── Runs, spans and metrics of my project alone ──────────────────────────
+    status, page = sso.call(student, "GET", f"{scoped}/runs")
+    ids = [run["run_id"] for run in page["runs"]] if status == 200 else []
+    checks.that(
+        status == 200 and f"m1-global-{now}" not in ids,
+        "a project's runs list holds none of the instance's runs",
+        f"{status} {ids}",
+    )
+    checks.that(
+        status == 200 and page["total_known"] == len(ids),
+        "and its cursor counts one side, not the instance",
+        page.get("total_known") if status == 200 else status,
+    )
+    if produced:
+        # Its own, by id — not "exactly one", because a second run of this
+        # script against the same scope publishes into the same project and a
+        # count would then fail for the wrong reason.
+        checks.that(f"m1-project-{now}" in ids, "and holds its own", ids)
+        status, spans = sso.call(student, "GET", f"{scoped}/spans")
+        checks.that(
+            status == 200
+            and spans["spans"]
+            and all(row["run_id"] in ids for row in spans["spans"]),
+            "a project's spans are its runs' spans and nobody else's",
+            f"{status} {len(spans.get('spans', [])) if status == 200 else ''}",
+        )
+        status, metrics = sso.call(student, "GET", f"{scoped}/metrics")
+        checks.that(
+            status == 200
+            and metrics["totals"]["runs"] == len(ids)
+            and metrics["window"]["runs_retained"] == len(ids),
+            "and its metrics count its own runs, with retention reported over that side",
+            f"{status} {metrics.get('totals', {}).get('runs') if status == 200 else ''} of {len(ids)}",
+        )
+        status, _ = sso.call(student, "GET", f"{scoped}/runs/m1-global-{now}")
+        checks.that(status == 404, "a run the project does not hold is a run that is not there", status)
+        status, _ = sso.call(student, "GET", f"/api/v1/runs/m1-project-{now}")
+        checks.that(status == 404, "and the instance route does not reach into the project either", status)
+    else:
+        for question in (
+            "and holds its own",
+            "a project's spans are its runs' spans and nobody else's",
+            "and its metrics count its own runs, with retention reported over that side",
+            "a run the project does not hold is a run that is not there",
+            "and the instance route does not reach into the project either",
+        ):
+            checks.skipped(question, "no producer token names a project")
+
+    # ── The live stream ──────────────────────────────────────────────────────
+    text = sso.stream(student, f"{scoped}/events/stream?from={start}", 6.0)
+    checks.that(
+        "event: caught_up" in text and f"m1-global-{now}" not in text,
+        "a project's live stream replays none of the instance's events",
+        text[:90].replace("\n", " "),
+    )
+    if produced:
+        checks.that(f"m1-project-{now}" in text, "and replays its own", text[:90].replace("\n", " "))
+    else:
+        checks.skipped("and replays its own", "no project-scoped producer token")
+
+    instance = sso.stream(student, f"/api/v1/events/stream?from={start}", 6.0)
+    checks.that(
+        "event: caught_up" in instance and f"m1-global-{now}" in instance,
+        "the instance stream still replays the instance's events, as it always has",
+        instance[:90].replace("\n", " "),
+    )
+    if produced:
+        checks.that(
+            f"m1-project-{now}" not in instance,
+            "and none of a project's — the half that makes this a boundary and not a badge",
+            instance[:90].replace("\n", " "),
+        )
+    else:
+        checks.skipped(
+            "and none of a project's — the half that makes this a boundary and not a badge",
+            "no project-scoped producer token",
+        )
+
+    # ── Revoking a grant, while somebody is watching ─────────────────────────
+    #
+    # The one question the panel could not answer before this: until now the
+    # session cookie's TTL *was* the revocation window, so a stream opened in
+    # the morning kept running all day. This waits for the re-check on purpose.
+    watched: dict[str, str] = {}
+    follower = threading.Thread(
+        target=lambda: watched.update(text=sso.stream(student, f"{scoped}/events/stream", 90.0))
+    )
+    follower.start()
+    time.sleep(2.0)
+    _, access = sso.call(student, "GET", f"/api/v1/iam/organizations/{org}/projects/{project}/access")
+    for entry in access.get("grants", []):
+        sso.call(teacher, "POST", f"/api/v1/iam/organizations/{org}/commands",
+                 {"type": "revoke_grant", "project": project, "grant": entry["grant"]["id"]})
+    follower.join(timeout=90)
+    checks.that(
+        "event: revoked" in watched.get("text", ""),
+        "revoking a grant closes the stream somebody already had open, and says why",
+        watched.get("text", "")[-60:].replace("\n", " ") or "nothing arrived",
+    )
+    status, _ = sso.call(student, "GET", f"{scoped}/runs")
+    checks.that(status == 404, "and the reads are cut with it", status)
+    resumed = sso.stream(student, f"{scoped}/events/stream?from={CHECKPOINT_START}", 4.0)
+    checks.that(
+        resumed == "HTTP 404",
+        "a resume after revocation replays nothing — Last-Event-ID is a position, not a key",
+        resumed[:60].replace("\n", " "),
     )
 
 
@@ -346,6 +609,8 @@ def main() -> int:
         "an editor may not offer a grant on the project they hold — only its admin may",
         status,
     )
+
+    m1(checks, teacher, student, student_subject, now)
 
     return checks.report()
 
