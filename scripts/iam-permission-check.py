@@ -149,11 +149,10 @@ def run_events(run_id: str, agent: str) -> list[dict[str, object]]:
 def fold_events(run_id: str, now: int) -> list[dict[str, object]]:
     """A declared graph, a step of it, and an evaluation report.
 
-    The three folds E2 did **not** key by project, published under a project's
-    own credential so the questions at the end of M1 can ask what the instance
-    routes do with them. Every one of them is a fact about a project's work,
-    and none of them carries which project it was — which is the whole reason
-    the selector may not simply scope the panel and be done.
+    The three folds E2 left unkeyed and IAM-02/D keyed, published under a
+    project's own credential. Each is a fact about a project's work, so each is
+    asked twice: on the project's own routes while the grant stands, and on the
+    instance's once it is gone.
     """
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     graph = f"m1-graph-{now}"
@@ -241,9 +240,9 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
     produced = bool(scope) and sso.publish(
         PROJECT_TOKEN, run_events(f"m1-project-{now}", "estimator")
     )[0] == 202
-    # The same project's graph, step and evaluation report — the three folds
-    # that have no project in the row. Published here and asked about at the
-    # end, once the grant is provably gone.
+    # The same project's graph, step and evaluation report. Published here,
+    # read on the project's own routes below, and asked about again at the end
+    # once the grant is provably gone.
     if produced:
         sso.publish(PROJECT_TOKEN, fold_events(f"m1-folds-{now}", now))
     time.sleep(1.0)
@@ -301,6 +300,33 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
         checks.that(status == 404, "a run the project does not hold is a run that is not there", status)
         status, _ = sso.call(student, "GET", f"/api/v1/runs/m1-project-{now}")
         checks.that(status == 404, "and the instance route does not reach into the project either", status)
+
+        # The three folds E2 left behind, now keyed: a project's graph, its
+        # traversal and its evaluation report answer on the project's own
+        # routes. The mirror of each — that the instance list holds none of
+        # them — is asked at the end, after the grant is gone, because that is
+        # the half a badge could fake.
+        status, graphs = sso.call(student, "GET", f"{scoped}/workflows")
+        names = [row.get("workflow_id") for row in graphs.get("workflows", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-graph-{now}" in names,
+            "a project's workflow graph is on the project's own catalog",
+            f"{status} {names}",
+        )
+        status, runs = sso.call(student, "GET", f"{scoped}/workflow-executions")
+        execution_ids = [row.get("workflow_run_id") for row in runs.get("executions", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-folds-{now}" in execution_ids,
+            "and its traversal is on the project's own execution list",
+            f"{status} {execution_ids}",
+        )
+        status, reports = sso.call(student, "GET", f"{scoped}/evaluations")
+        suites = [row.get("suite") for row in reports.get("evaluations", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-suite-{now}" in suites,
+            "and its evaluation report is on the project's own fold (ADR_0010's own projection)",
+            f"{status} {suites}",
+        )
     else:
         for question in (
             "and holds its own",
@@ -308,6 +334,9 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
             "and its metrics count its own runs, with retention reported over that side",
             "a run the project does not hold is a run that is not there",
             "and the instance route does not reach into the project either",
+            "a project's workflow graph is on the project's own catalog",
+            "and its traversal is on the project's own execution list",
+            "and its evaluation report is on the project's own fold (ADR_0010's own projection)",
         ):
             checks.skipped(question, "no producer token names a project")
 
@@ -371,42 +400,49 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
         resumed[:60].replace("\n", " "),
     )
 
-    # ── Where the boundary still ends, asked rather than asserted ────────────
+    # ── The other half of the same boundary ──────────────────────────────────
     #
     # The grant is gone; the reads above prove it. So every answer below is one
-    # this principal gets with no grant on that project at all — and each one
-    # is a fact about that project's work. These are not failures of E3: those
-    # folds were never keyed by project, so there is nothing for a scope to
-    # narrow and no scoped route to ask instead. They are the reason the panel's
-    # selector names its own reach rather than claiming the whole panel, and the
-    # day somebody keys them, these three questions fail and say so.
+    # this principal gets with no grant on that project at all, asked on the
+    # **instance** routes — where, before IAM-02/D, all three of these came
+    # back. Keying those folds is what turned them round, and asking them here
+    # rather than beside the positive ones is deliberate: a badge on a row
+    # could fake the project's list, and only this says the instance holds none
+    # of it.
     if produced:
         status, graphs = sso.call(student, "GET", "/api/v1/workflows")
         names = [row.get("workflow_id") for row in graphs.get("workflows", [])] if status == 200 else []
         checks.that(
-            status == 200 and f"m1-graph-{now}" in names,
-            "a project's workflow graph is still on the instance's list — that fold has no project in its row",
+            status == 200 and f"m1-graph-{now}" not in names,
+            "a project's workflow graph is on no instance list — that fold has the project in its row",
             f"{status} {f'm1-graph-{now}' in names}",
         )
         status, runs = sso.call(student, "GET", "/api/v1/workflow-executions")
         ids = [row.get("workflow_run_id") for row in runs.get("executions", [])] if status == 200 else []
         checks.that(
-            status == 200 and f"m1-folds-{now}" in ids,
-            "and so is its execution, to somebody the project itself answers 404 to",
+            status == 200 and f"m1-folds-{now}" not in ids,
+            "and neither is its execution, to somebody the project itself answers 404 to",
             f"{status} {f'm1-folds-{now}' in ids}",
         )
         status, reports = sso.call(student, "GET", "/api/v1/evaluations")
         suites = [row.get("suite") for row in reports.get("evaluations", [])] if status == 200 else []
         checks.that(
-            status == 200 and f"m1-suite-{now}" in suites,
-            "and its evaluation report, on the fold ADR_0010 gave its own projection",
+            status == 200 and f"m1-suite-{now}" not in suites,
+            "nor its evaluation report, on the fold ADR_0010 gave its own projection",
             f"{status} {f'm1-suite-{now}' in suites}",
+        )
+        status, _ = sso.call(student, "GET", f"{scoped}/workflows")
+        checks.that(
+            status == 404,
+            "and the project's own catalog is cut with the grant, like every other scoped read",
+            status,
         )
     else:
         for question in (
-            "a project's workflow graph is still on the instance's list — that fold has no project in its row",
-            "and so is its execution, to somebody the project itself answers 404 to",
-            "and its evaluation report, on the fold ADR_0010 gave its own projection",
+            "a project's workflow graph is on no instance list — that fold has the project in its row",
+            "and neither is its execution, to somebody the project itself answers 404 to",
+            "nor its evaluation report, on the fold ADR_0010 gave its own projection",
+            "and the project's own catalog is cut with the grant, like every other scoped read",
         ):
             checks.skipped(question, "no producer token names a project")
 
