@@ -43,6 +43,7 @@ mod evaluation_bundles;
 mod evaluation_scope;
 pub mod evaluations;
 mod evidence_scope;
+mod execution_scope;
 pub mod executions;
 pub mod experiments;
 pub mod health;

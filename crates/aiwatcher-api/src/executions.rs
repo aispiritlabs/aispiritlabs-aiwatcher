@@ -45,7 +45,21 @@ use aiwatcher_execution::{
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::execution_scope::RunHandle;
 use crate::state::AppState;
+
+/// Named rather than `Path<String>`, so the scoped family's `organization` and
+/// `project` need no spelling out in a handler that ignores them.
+#[derive(Deserialize)]
+struct RunPath {
+    execution_id: String,
+}
+
+#[derive(Deserialize)]
+struct StepPath {
+    execution_id: String,
+    step_id: String,
+}
 
 /// The header a caller repeats to reach the same execution twice.
 ///
@@ -60,37 +74,91 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 #[derive(OpenApi)]
 #[openapi(paths(
     start_execution,
-    get_execution,
-    execution_history,
     append_stream,
     execution_timers,
     seal_payload,
     read_payload,
     take_decider_lease,
     read_decider_lease,
-    release_decider_lease,
-    cancel_execution,
-    pause_execution,
-    resume_execution,
-    retry_step,
-    provide_input
+    release_decider_lease
 ))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    let mut api = Api::openapi();
+    api.merge(crate::project_scope::openapi(RunApi::openapi()));
+    api
+}
+
+/// The operations a person performs on one run, which have a project twin.
+///
+/// The decider's and the worker's do not, and that is the same line
+/// `RuntimeKind::outside_a_project` draws: a worker's credential names queues
+/// rather than a project, so there is nothing for a scoped lease, stream
+/// append, timer read or payload to be claimed by.
+#[derive(OpenApi)]
+#[openapi(paths(
+    get_execution,
+    execution_history,
+    cancel_execution,
+    pause_execution,
+    resume_execution,
+    retry_step,
+    provide_input
+))]
+struct RunApi;
+
+/// One run's reads and commands, served twice.
+fn run_router() -> Router<AppState> {
+    Router::new()
+        .route("/executions/{execution_id}", get(get_execution))
+        .route("/executions/{execution_id}/history", get(execution_history))
+        // The command routes. Grouped under `commands/` for the run and under
+        // the step for the two that name one, which reads correctly: pausing is
+        // done to a run, and retrying is done to a step of one.
+        .route(
+            "/executions/{execution_id}/commands/cancel",
+            post(cancel_execution),
+        )
+        .route(
+            "/executions/{execution_id}/commands/pause",
+            post(pause_execution),
+        )
+        .route(
+            "/executions/{execution_id}/commands/resume",
+            post(resume_execution),
+        )
+        .route(
+            "/executions/{execution_id}/steps/{step_id}/commands/retry",
+            post(retry_step),
+        )
+        .route(
+            "/executions/{execution_id}/steps/{step_id}/input",
+            post(provide_input),
+        )
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/executions", post(start_execution))
-        .route("/api/v1/executions/{execution_id}", get(get_execution))
-        .route(
-            "/api/v1/executions/{execution_id}/history",
-            get(execution_history),
+        .nest("/api/v1", run_router())
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            run_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
         )
+        // Instance-only. A project's run is started through
+        // `{scope}/evaluation-runs/{id}/start`, whose plan is built from a
+        // declaration; this one compiles a curation pipeline or a workflow
+        // definition, and every step either of those compiles to is one a
+        // project has no performer for (`RuntimeKind::outside_a_project`), so
+        // a scoped twin would be a route that only ever answered 422.
+        .route("/api/v1/executions", post(start_execution))
         // The hosted decider's append side. There is no `GET`
         // beside it on purpose: `…/history` already pages this stream, and a
         // second read of one run is what the guardrail against a second live
@@ -125,29 +193,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/executions/{execution_id}/decider-lease/release",
             post(release_decider_lease),
-        )
-        // The command routes. Grouped under `commands/` for the run and under
-        // the step for the two that name one, which reads correctly: pausing is
-        // done to a run, and retrying is done to a step of one.
-        .route(
-            "/api/v1/executions/{execution_id}/commands/cancel",
-            post(cancel_execution),
-        )
-        .route(
-            "/api/v1/executions/{execution_id}/commands/pause",
-            post(pause_execution),
-        )
-        .route(
-            "/api/v1/executions/{execution_id}/commands/resume",
-            post(resume_execution),
-        )
-        .route(
-            "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry",
-            post(retry_step),
-        )
-        .route(
-            "/api/v1/executions/{execution_id}/steps/{step_id}/input",
-            post(provide_input),
         )
 }
 
@@ -346,10 +391,11 @@ async fn start_execution(
     tag = "execution",
 )]
 async fn get_execution(
-    State(state): State<AppState>,
-    Path(execution_id): Path<String>,
+    run: RunHandle,
+    Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunView>> {
-    let execution = handler(&state)?
+    let execution = run
+        .handler()
         .store()
         .projection(&ExecutionId::new(execution_id.clone()))
         .await
@@ -380,14 +426,15 @@ struct HistoryQuery {
     responses((status = 200, body = ExecutionHistory), (status = 404, body = crate::error::ErrorBody),
         (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn execution_history(
-    State(state): State<AppState>,
-    Path(execution_id): Path<String>,
+    run: RunHandle,
+    Path(RunPath { execution_id }): Path<RunPath>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<ExecutionHistory>> {
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     // One over the page, so "is there more" is answered without a second read
     // and without comparing against a version that may have moved since.
-    let stream = handler(&state)?
+    let stream = run
+        .handler()
         .store()
         .load_page(
             &ExecutionId::new(execution_id.clone()),
@@ -974,6 +1021,7 @@ fn intent(command: &WorkflowCommand) -> String {
 /// route that records *who* answered cannot forget to ask.
 async fn apply<F>(
     state: &AppState,
+    run: &RunHandle,
     execution_id: &str,
     caller: &Caller,
     build: F,
@@ -981,15 +1029,14 @@ async fn apply<F>(
 where
     F: FnOnce(&Caller, &str, &RunProjection) -> ApiResult<WorkflowCommand>,
 {
-    // The floor, which every command shares. A route whose rule is stricter
-    // than this applies it in `build`, where the run has already been read —
-    // `provide_input` is the one, because which role may answer is a fact
-    // about the step's own question and not about the route.
-    let who = caller
-        .require(aiwatcher_auth::Role::Editor)?
-        .log_subject()
-        .to_owned();
-    let handler = handler(state)?;
+    // The floor, which every command shares: the instance's `editor` on the
+    // instance's own routes, and the project's `editor` grant — asked again,
+    // here — on a project's. A route whose rule is stricter than this applies
+    // it in `build`, where the run has already been read; `provide_input` is
+    // the one, because which role may answer is a fact about the step's own
+    // question and not about the route.
+    let who = run.authorize_command(caller).await?;
+    let handler = run.handler();
     let execution = ExecutionId::new(execution_id.to_owned());
 
     // Read before deciding, for two reasons that both matter. A run this
@@ -1064,13 +1111,14 @@ where
 )]
 async fn cancel_execution(
     State(state): State<AppState>,
+    run: RunHandle,
     caller: Caller,
-    Path(execution_id): Path<String>,
+    Path(RunPath { execution_id }): Path<RunPath>,
     body: Option<Json<CancelBody>>,
 ) -> ApiResult<Json<RunView>> {
     let reason = body.map(|Json(body)| body.reason).unwrap_or_default();
 
-    apply(&state, &execution_id, &caller, |_, _, _| {
+    apply(&state, &run, &execution_id, &caller, |_, _, _| {
         Ok(WorkflowCommand::CancelExecution { reason })
     })
     .await
@@ -1096,10 +1144,11 @@ async fn cancel_execution(
 )]
 async fn pause_execution(
     State(state): State<AppState>,
+    run: RunHandle,
     caller: Caller,
-    Path(execution_id): Path<String>,
+    Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_, _, _| {
+    apply(&state, &run, &execution_id, &caller, |_, _, _| {
         Ok(WorkflowCommand::PauseExecution)
     })
     .await
@@ -1121,10 +1170,11 @@ async fn pause_execution(
 )]
 async fn resume_execution(
     State(state): State<AppState>,
+    run: RunHandle,
     caller: Caller,
-    Path(execution_id): Path<String>,
+    Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_, _, _| {
+    apply(&state, &run, &execution_id, &caller, |_, _, _| {
         Ok(WorkflowCommand::ResumeExecution)
     })
     .await
@@ -1153,10 +1203,14 @@ async fn resume_execution(
 )]
 async fn retry_step(
     State(state): State<AppState>,
+    run: RunHandle,
     caller: Caller,
-    Path((execution_id, step_id)): Path<(String, String)>,
+    Path(StepPath {
+        execution_id,
+        step_id,
+    }): Path<StepPath>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_, _, _| {
+    apply(&state, &run, &execution_id, &caller, |_, _, _| {
         Ok(WorkflowCommand::RetryStep { step_id })
     })
     .await
@@ -1182,57 +1236,67 @@ async fn retry_step(
 )]
 async fn provide_input(
     State(state): State<AppState>,
+    run_handle: RunHandle,
     caller: Caller,
-    Path((execution_id, step_id)): Path<(String, String)>,
+    Path(StepPath {
+        execution_id,
+        step_id,
+    }): Path<StepPath>,
     Json(body): Json<ProvideInputBody>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |caller, who, run| {
-        // The role the *question* named, checked here because this is the one
-        // place that knows it: it comes from the pinned plan, through the
-        // step's own `awaiting`, and a route cannot know it in advance. The
-        // editor floor is already held above; a gate only ever raises it, so a
-        // step nobody is waiting on and a step asking for an editor both fall
-        // through unchanged. A gate that asked for nothing readable is a gate
-        // an editor answers.
-        if let Some(asked) = run
-            .steps
-            .iter()
-            .find(|step| step.step_id == step_id)
-            .and_then(|step| step.awaiting.as_ref())
-            && let Ok(needed) = asked.role.parse::<aiwatcher_auth::Role>()
-        {
-            caller.require(needed)?;
-        }
-        // What this deployment allows an answer to be. Checked here because
-        // this is the one door every answer comes through and the only place
-        // that holds both the configuration and the step's own history —
-        // `decide` reads no configuration and must not, or a replay would
-        // reach a different decision on an instance configured differently.
-        //
-        // A step's answers accumulate: a parked attempt is resumed by one that
-        // re-runs the work and reads all of them, so nothing takes any away.
-        // Unbounded, the only backstop is the store refusing a message that has
-        // grown too large — which arrives late, breaks the run, and names the
-        // wrong thing.
-        let given = run
-            .steps
-            .iter()
-            .find(|step| step.step_id == step_id)
-            .map_or(0, |step| step.answers.len());
-        let bytes = serde_json::to_vec(&body.response).map_or(0, |json| json.len());
-        state
-            .answer_limits
-            .admit(given, bytes)
-            .map_err(ApiError::BadRequest)?;
-        // Who answered comes from the session, never from the body. A field a
-        // caller could set would make the one record of a human decision say
-        // whatever the caller preferred it to say.
-        Ok(WorkflowCommand::ProvideInput {
-            step_id,
-            attempt: body.attempt,
-            answered_by: who.to_owned(),
-            response: body.response,
-        })
-    })
+    apply(
+        &state,
+        &run_handle,
+        &execution_id,
+        &caller,
+        |caller, who, run| {
+            // The role the *question* named, checked here because this is the one
+            // place that knows it: it comes from the pinned plan, through the
+            // step's own `awaiting`, and a route cannot know it in advance. The
+            // editor floor is already held above; a gate only ever raises it, so a
+            // step nobody is waiting on and a step asking for an editor both fall
+            // through unchanged. A gate that asked for nothing readable is a gate
+            // an editor answers.
+            if let Some(asked) = run
+                .steps
+                .iter()
+                .find(|step| step.step_id == step_id)
+                .and_then(|step| step.awaiting.as_ref())
+                && let Ok(needed) = asked.role.parse::<aiwatcher_auth::Role>()
+            {
+                caller.require(needed)?;
+            }
+            // What this deployment allows an answer to be. Checked here because
+            // this is the one door every answer comes through and the only place
+            // that holds both the configuration and the step's own history —
+            // `decide` reads no configuration and must not, or a replay would
+            // reach a different decision on an instance configured differently.
+            //
+            // A step's answers accumulate: a parked attempt is resumed by one that
+            // re-runs the work and reads all of them, so nothing takes any away.
+            // Unbounded, the only backstop is the store refusing a message that has
+            // grown too large — which arrives late, breaks the run, and names the
+            // wrong thing.
+            let given = run
+                .steps
+                .iter()
+                .find(|step| step.step_id == step_id)
+                .map_or(0, |step| step.answers.len());
+            let bytes = serde_json::to_vec(&body.response).map_or(0, |json| json.len());
+            state
+                .answer_limits
+                .admit(given, bytes)
+                .map_err(ApiError::BadRequest)?;
+            // Who answered comes from the session, never from the body. A field a
+            // caller could set would make the one record of a human decision say
+            // whatever the caller preferred it to say.
+            Ok(WorkflowCommand::ProvideInput {
+                step_id,
+                attempt: body.attempt,
+                answered_by: who.to_owned(),
+                response: body.response,
+            })
+        },
+    )
     .await
 }

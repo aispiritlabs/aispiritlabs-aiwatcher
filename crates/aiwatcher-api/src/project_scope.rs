@@ -25,6 +25,7 @@ pub(crate) fn on_the_log(scope: ProjectScope) -> aiwatcher_core::ProjectScope {
     scope.on_the_log()
 }
 
+#[derive(Clone)]
 pub(crate) struct ProjectAuthorization {
     store: Arc<dyn IamStore>,
     principal: Principal,
@@ -32,6 +33,16 @@ pub(crate) struct ProjectAuthorization {
     pub(crate) scope: ProjectScope,
 }
 impl ProjectAuthorization {
+    /// The same admission, asked for a higher role than it resolved under.
+    ///
+    /// For the caller that reads first and writes second: a run is read as a
+    /// viewer and a command on it is an editor's, and one admission answering
+    /// both keeps the scope and the principal a single reading of the path.
+    pub(crate) fn needing(mut self, role: ProjectRole) -> Self {
+        self.required_role = role;
+        self
+    }
+
     pub(crate) async fn authorize_write(&self) -> ApiResult<()> {
         self.authorize_write_role().await.map(|_| ())
     }

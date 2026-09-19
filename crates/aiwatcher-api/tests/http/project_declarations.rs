@@ -463,6 +463,59 @@ async fn a_project_start_writes_an_owner_the_instance_cannot_reach() {
         StatusCode::NOT_FOUND
     );
 
+    // The project's own routes do reach it, which is what makes the run
+    // something a person can open rather than a row in a fold.
+    let (status, view) = f
+        .request(
+            "GET",
+            &format!("{root}/executions/{execution}"),
+            Some(&owner),
+            Value::Null,
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["execution"]["execution_id"], execution.to_string());
+    assert_eq!(
+        f.request(
+            "GET",
+            &format!("{root}/executions/{execution}/history"),
+            Some(&owner),
+            Value::Null,
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    // A command on it is an editor's grant, asked again after the run is read.
+    let (status, cancelled) = f
+        .request(
+            "POST",
+            &format!("{root}/executions/{execution}/commands/cancel"),
+            Some(&owner),
+            json!({ "reason": "enough" }),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    // And an outsider reaches neither the read nor the command.
+    for (method, suffix) in [("GET", ""), ("POST", "/commands/pause")] {
+        assert_eq!(
+            f.request(
+                method,
+                &format!("{root}/executions/{execution}{suffix}"),
+                Some(&outsider),
+                Value::Null,
+                true
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND,
+            "{method} {suffix}"
+        );
+    }
+
     // Repeating it is the same run rather than a second one, and somebody with
     // no grant is told the declaration is not there.
     let (status, again) = f
