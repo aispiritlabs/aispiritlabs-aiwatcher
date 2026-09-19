@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 
 import {
   access as readAccess,
@@ -354,4 +360,50 @@ export function edgeOf(seconds: number | null | undefined, absent: string): stri
  */
 export function short(value: string, keep = 12): string {
   return value.length > keep ? `${value.slice(0, keep)}…` : value;
+}
+
+/** One project the caller holds a grant on, with the organization it is in. */
+export interface GrantedProject {
+  organization: IamOrganization;
+  access: IamProjectAccess;
+}
+
+/**
+ * Every project this caller may open, across every organization they are in.
+ *
+ * What the scope selector lists, and the one read in this file that fans out:
+ * `projects` answers per organization because that is the aggregate the
+ * control plane transacts on, and a caller in three organizations has three
+ * answers rather than one. Kept here with the rest of them so it shares their
+ * discipline — no cache, because an access answer is a decision with an
+ * `evaluated_at`, and a project somebody lost access to five minutes ago must
+ * not still be offered as somewhere to go.
+ *
+ * `settled` is the half the selector needs and a list of projects cannot
+ * carry: an instance with no organizations and a caller whose organizations
+ * have not answered yet both have no projects, and only one of them should
+ * make the selector disappear.
+ */
+export function useGrantedProjects(): { projects: GrantedProject[]; settled: boolean } {
+  const organizations = useOrganizations(true);
+  const results = useQueries({
+    queries: (organizations.data ?? []).map((organization) => ({
+      queryKey: projectsKey(organization.id),
+      queryFn: async () =>
+        answerOf(
+          await readProjects({ path: { organization: organization.id } }),
+          'the instance did not answer this organization',
+        ),
+      retry: false,
+      staleTime: 0,
+      gcTime: 0,
+    })),
+  });
+  const projects = (organizations.data ?? []).flatMap((organization, index) =>
+    (results[index]?.data ?? []).map((access) => ({ organization, access })),
+  );
+  return {
+    projects,
+    settled: !organizations.isPending && results.every((result) => !result.isPending),
+  };
 }

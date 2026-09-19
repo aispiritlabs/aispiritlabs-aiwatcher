@@ -28,7 +28,25 @@ import {
 export interface NavView {
   to: string;
   label: string;
+  /** Overrides the area's [`NavArea.reach`] where one view differs from it. */
+  reach?: Reach;
 }
+
+/**
+ * How far the selected project reaches into a screen.
+ *
+ * Written down per area because the data plane was scoped one resource
+ * boundary at a time (ADR_0033) and is not finished: 31 route families answer
+ * for one project, 33 answer for the deployment, and six do both depending on
+ * which of their routes a page calls. A panel that hid that would be the
+ * announcement the header switcher was kept out for.
+ *
+ * `project` — everything here is the selected project's and nobody else's.
+ * `instance` — nothing here narrows to a project; it answers for the whole
+ *   deployment, other projects' work included.
+ * `mixed` — some of this screen is the project's and some is not.
+ */
+export type Reach = 'project' | 'instance' | 'mixed';
 
 export interface NavArea {
   /** Where the label itself goes. A single-view area links straight at its page. */
@@ -51,6 +69,16 @@ export interface NavArea {
    * that owns it and is dropped.
    */
   carries?: 'window' | 'project';
+  /**
+   * How far a selected project reaches into this area.
+   *
+   * Every area declares one, so an area added later has to decide rather than
+   * inherit a flattering default. What decides it is the contract: a route
+   * with a twin under `/orgs/{organization}/projects/{project}` is the
+   * project's, and `shared/lib/scope.ts` holds that set with the test that
+   * keeps it honest.
+   */
+  reach: Reach;
 }
 
 export interface NavSection {
@@ -82,6 +110,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/datasets',
         label: 'Datasets',
+        reach: 'mixed',
         icon: Database,
         blurb: 'Browse datasets, versions and their sources.',
         views: [],
@@ -89,6 +118,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/data-curation/pipeline',
         label: 'Data Curation',
+        reach: 'project',
         icon: WandSparkles,
         blurb: 'Prepare data, inspect results and publish dataset versions.',
         carries: 'window',
@@ -100,19 +130,21 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/annotations/label',
         label: 'Annotations',
+        reach: 'mixed',
         icon: Shapes,
         blurb: 'Label images, review annotations and export training data.',
         carries: 'project',
         views: [
-          { to: '/annotations/label', label: 'Label' },
-          { to: '/annotations/sources', label: 'Sources' },
-          { to: '/annotations/imports', label: 'Imports' },
-          { to: '/annotations/exports', label: 'Exports' },
+          { to: '/annotations/label', label: 'Label', reach: 'project' },
+          { to: '/annotations/sources', label: 'Sources', reach: 'instance' },
+          { to: '/annotations/imports', label: 'Imports', reach: 'instance' },
+          { to: '/annotations/exports', label: 'Exports', reach: 'project' },
         ],
       },
       {
         to: '/conversations/review',
         label: 'Conversations',
+        reach: 'instance',
         icon: MessagesSquare,
         blurb: 'Review conversations and curate approved examples.',
         views: [
@@ -130,12 +162,13 @@ export const SECTIONS: NavSection[] = [
     home: '/training/models',
     areas: [
       {
-        to: '/training/models', label: 'Models', icon: Boxes,
+        to: '/training/models', label: 'Models', icon: Boxes, reach: 'project',
         blurb: 'Model versions, evaluation evidence and the data used to train them.', views: [],
       },
       {
         to: '/training/runs',
         label: 'Training',
+        reach: 'project',
         icon: Sigma,
         blurb: 'Training runs, parameters and learning curves.',
         views: [],
@@ -143,6 +176,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/experiments',
         label: 'Experiments',
+        reach: 'instance',
         icon: Sparkles,
         blurb: 'Compare variants on quality, latency and cost.',
         views: [],
@@ -150,6 +184,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/evaluation',
         label: 'Evaluation',
+        reach: 'mixed',
         icon: FlaskConical,
         blurb: 'Reports against a suite and a dataset, compared to a baseline.',
         views: [],
@@ -166,6 +201,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/agents',
         label: 'Agents',
+        reach: 'project',
         icon: Bot,
         blurb: 'What each agent runs on, what it calls, what it costs, and its runs.',
         views: [],
@@ -173,6 +209,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/prompts',
         label: 'Prompts',
+        reach: 'project',
         icon: ScrollText,
         blurb: 'Inspect prompt versions, production labels and evaluation results.',
         views: [],
@@ -180,15 +217,16 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/observability/explore',
         label: 'Observability',
+        reach: 'mixed',
         icon: Telescope,
         blurb: 'Explore run history, live events, metrics and queries.',
         carries: 'window',
         views: [
-          { to: '/observability/explore', label: 'Explore' },
-          { to: '/observability/live', label: 'Live' },
-          { to: '/observability/query', label: 'Query' },
-          { to: '/observability/metrics', label: 'Metrics' },
-          { to: '/observability/runs', label: 'Runs' },
+          { to: '/observability/explore', label: 'Explore', reach: 'project' },
+          { to: '/observability/live', label: 'Live', reach: 'project' },
+          { to: '/observability/query', label: 'Query', reach: 'instance' },
+          { to: '/observability/metrics', label: 'Metrics', reach: 'project' },
+          { to: '/observability/runs', label: 'Runs', reach: 'project' },
         ],
       },
     ],
@@ -203,6 +241,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/workflows',
         label: 'Workflows',
+        reach: 'mixed',
         icon: Workflow,
         blurb: 'Inspect workflow graphs and follow their executions.',
         views: [],
@@ -212,7 +251,7 @@ export const SECTIONS: NavSection[] = [
   {
     id: 'learning', label: 'Learning', icon: BookOpen,
     blurb: 'Workshops and practical labs.', home: '/learning',
-    areas: [{ to: '/learning', label: 'Workshops & labs', icon: BookOpen,
+    areas: [{ to: '/learning', label: 'Workshops & labs', icon: BookOpen, reach: 'project',
       // Timed access *is* available and is the grant window; what has no
       // contract is a lab's brief, its tests and its mark, and the area says
       // which of the two each part is rather than one sentence covering both.
@@ -228,6 +267,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/system',
         label: 'System',
+        reach: 'instance',
         icon: Settings,
         // The one area that describes the deployment rather than anything it
         // holds — and the one whose read the server answers only for an
@@ -282,4 +322,58 @@ export function areaOf(section: NavSection, pathname: string): NavArea | undefin
     const root = `/${area.to.split('/')[1]}`;
     return pathname === root || pathname.startsWith(`${root}/`);
   });
+}
+
+/**
+ * The object pages that sit outside every area's own path.
+ *
+ * A run has a URL of its own — `/runs/{id}`, reachable from a dimension row, a
+ * workflow and a search alike — and `areaOf` cannot find it, because no area's
+ * path is a prefix of it. `sectionOf` already knows it is Observability's;
+ * this says which of its views, which is what decides both how far a project
+ * reaches into it and where a change of project should land.
+ */
+const OBJECT_VIEW: Array<[prefix: string, view: string]> = [['/runs', '/observability/runs']];
+
+/** The area and view a path is in, following the object pages to their own. */
+function placeOf(pathname: string): { area: NavArea; view?: NavView } | undefined {
+  const own = OBJECT_VIEW.find(
+    ([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )?.[1];
+  const place = own ?? pathname;
+  const section = sectionOf(place);
+  const area = section && areaOf(section, place);
+  if (!area) return undefined;
+  const view = area.views.find(
+    (candidate) => place === candidate.to || place.startsWith(`${candidate.to}/`),
+  );
+  return { area, view };
+}
+
+/**
+ * How far a selected project reaches into the page at this path.
+ *
+ * `undefined` where the question does not arise: the root workspace, and
+ * `/account`, which is the control plane itself — the page where a scope is
+ * administered cannot be scoped by one.
+ */
+export function reachOf(pathname: string): Reach | undefined {
+  const place = placeOf(pathname);
+  return place && (place.view?.reach ?? place.area.reach);
+}
+
+/**
+ * Where a change of project should land, from where the reader is now.
+ *
+ * An area or one of its views keeps its place: "the same question, the other
+ * project" is what somebody means by switching. A page below one does not —
+ * `/runs/{id}` and `/prompts/{name}` name an object that belongs to the side
+ * it was opened on, and carrying the path across would answer "not found" for
+ * a run that exists perfectly well where it was left.
+ */
+export function landingFor(pathname: string): string {
+  const place = placeOf(pathname);
+  if (!place) return '/';
+  if (pathname === place.area.to) return pathname;
+  return place.area.views.find((candidate) => candidate.to === pathname)?.to ?? place.view?.to ?? place.area.to;
 }

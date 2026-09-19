@@ -66,6 +66,20 @@ describe('feature route integration', () => {
     });
   });
 
+  it('carries the project being read from one area to the next', async () => {
+    // `NavArea.carries` keeps a period inside Observability and an annotation
+    // project inside Annotations, and drops each at the area's edge. A scope
+    // belongs to no area: it decides which rows exist at all, so it survives
+    // every move, and the root route's middleware is what makes that true for
+    // every link in the panel rather than for the ones somebody remembered.
+    const router = await open('/observability/runs?scope=org-1/proj-1');
+    expect(router.state.location.search).toEqual({ scope: 'org-1/proj-1' });
+    await router.navigate({ to: '/workflows' });
+    expect(router.state.location.search).toEqual({ scope: 'org-1/proj-1' });
+    await router.navigate({ to: '/datasets', search: { scope: undefined } });
+    expect(router.state.location.search).toEqual({});
+  });
+
   it('opens a neutral workspace at the root', async () => {
     const router = await open('/');
     expect(router.state.location.pathname).toBe('/');

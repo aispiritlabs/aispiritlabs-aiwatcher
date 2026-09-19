@@ -18,6 +18,10 @@ vi.mock('@/shared/lib/local-views', async () => {
 });
 vi.mock('@/shared/components/appearance', () => ({ Appearance: () => null }));
 vi.mock('@/shared/components/user-menu', () => ({ UserMenu: () => null }));
+// Both read the control plane, so both need a QueryClientProvider this test
+// has no reason to stand up: what it proves is where the shell puts things.
+vi.mock('@/app/scope-selector', () => ({ ScopeSelector: () => null }));
+vi.mock('@/app/reach-notice', () => ({ ReachNotice: () => null }));
 vi.mock('@/app/command-panel', () => ({ CommandPanel: () => null, useCommandPanel: () => [false, vi.fn()] }));
 
 let storage: Map<string, string>;

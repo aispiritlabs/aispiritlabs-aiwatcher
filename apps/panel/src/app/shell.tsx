@@ -3,6 +3,8 @@ import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { Activity, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 
 import { Appearance } from '@/shared/components/appearance';
+import { ReachNotice } from '@/app/reach-notice';
+import { ScopeSelector } from '@/app/scope-selector';
 import { UserMenu } from '@/shared/components/user-menu';
 import { CommandPanel, useCommandPanel } from '@/app/command-panel';
 import { SECTIONS, areaOf, sectionOf, type NavArea, type NavSection } from '@/app/navigation';
@@ -41,7 +43,12 @@ function ShellLayout() {
     <div className="min-h-screen">
       <CommandPanel open={commandsOpen} onOpenChange={setCommandsOpen} />
       <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
-        <div className="flex items-center gap-4 px-4">
+        {/* Wraps rather than scrolls sideways. A phone has room for the logo
+            and for the controls beside it, but not for both on one line once
+            the project being read is named there — and a header that pushes
+            the page into a horizontal scroll is the one thing this layout may
+            not do. */}
+        <div className="flex flex-wrap items-center gap-x-4 px-4">
           <Link
             to="/"
             search={{ start: 'workspace' }}
@@ -51,7 +58,7 @@ function ShellLayout() {
             aiwatcher
           </Link>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex min-w-0 items-center gap-2 pb-2 sm:pb-0">
             {/* Visible as well as bound to a shortcut: a palette nobody is
                 told about is a palette nobody opens, and the hint is where
                 the shortcut gets learnt. */}
@@ -65,6 +72,7 @@ function ShellLayout() {
               <span className="hidden sm:inline">Search or jump to…</span>
               <kbd className="hidden sm:inline rounded border border-border px-1 font-mono text-[10px]">⌘K</kbd>
             </button>
+            <ScopeSelector />
             <Appearance />
             <UserMenu />
           </div>
@@ -93,6 +101,7 @@ function ShellLayout() {
             {matchedSection ? <NarrowNav section={matchedSection} pathname={pathname} showGroups={shell !== 'classic'} /> : null}
             <PinCurrentView />
             <NavigationMessage />
+            <ReachNotice />
             <Outlet />
           </div>
         </main>
