@@ -755,9 +755,7 @@ pub(crate) mod tests {
             "{keys:?}"
         );
         assert_eq!(
-            keys.iter()
-                .filter(|key| key.contains("/scopes/"))
-                .count(),
+            keys.iter().filter(|key| key.contains("/scopes/")).count(),
             2,
             "and a project's sits under a segment of its own: {keys:?}"
         );

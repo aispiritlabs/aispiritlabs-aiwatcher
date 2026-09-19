@@ -726,7 +726,10 @@ mod tests {
                 asked_normalized: vec!["b".repeat(32)],
             }]
         );
-        assert_eq!(restarted.since(None, 0).await.expect("reads").calls.len(), 2);
+        assert_eq!(
+            restarted.since(None, 0).await.expect("reads").calls.len(),
+            2
+        );
     }
 
     #[tokio::test]

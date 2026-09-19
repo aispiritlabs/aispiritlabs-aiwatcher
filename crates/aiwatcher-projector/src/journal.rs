@@ -596,12 +596,9 @@ mod tests {
         let bus = Arc::new(InMemoryBus::new());
         let mut scoped = envelope("r1", EventType::RunStarted, 1, true);
         scoped.project = Some(scope);
-        bus.append(vec![
-            scoped,
-            envelope("r2", EventType::RunStarted, 2, true),
-        ])
-        .await
-        .unwrap();
+        bus.append(vec![scoped, envelope("r2", EventType::RunStarted, 2, true)])
+            .await
+            .unwrap();
         let objects = Arc::new(MemoryObjectStore::default());
         let store = PeriodStore::new(objects);
         let journal = Arc::new(Journal::new(
