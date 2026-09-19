@@ -5,33 +5,26 @@ import { Button } from '@/shared/components/ui/primitives';
 /**
  * The period before this one, on the same filter.
  *
- * "Is this worse than it was" is the question every aggregate on a page is
- * really being read for, and until this the only way to ask it was to change
- * the window, remember six numbers and change it back. Two reads answer it,
- * and the whole design is in which instant the second one ends at.
+ * Two reads answer "is this worse than it was", and the whole design is which
+ * instant the second one ends at.
  *
  * **The baseline's end is the current window's start, as the server reported
- * it.** Not `now - window` computed here: a relative window is resolved
+ * it** — never `now - window` computed here. A relative window is resolved
  * against the server's clock (`crate::window`), so a browser running a few
  * minutes fast would ask for a period overlapping the one beside it, and the
- * overlap would be invisible in the answer. The metrics response carries the
- * window it actually used, so the second read is derived from the first and
- * the two halves are adjacent by construction.
- *
- * Minus one second, because both ends of a window are inclusive: a run that
- * started exactly at the boundary would otherwise be counted on both sides.
+ * overlap would be invisible in the answer. One second earlier, because both
+ * ends of a window are inclusive and a run on the boundary would otherwise be
+ * counted twice.
  *
  * **A relative pair, not a pinned one.** `?compare=previous` means "the period
  * before whatever this link opens on", the way `?window=3600` means the last
- * hour whenever it is opened rather than the hour it was copied. Pinning the
- * baseline to a fixed instant is a different question — one worth a control of
- * its own the day somebody needs it, and not one this parameter should quietly
- * become.
+ * hour whenever it is opened. Pinning a baseline to a fixed instant is a
+ * different question and would want a control of its own.
  *
- * **A change is never coloured here.** The panel colours a delta in exactly
- * one place, where a pinned evaluation context declares which way each metric
- * is better (`apps/panel/CLAUDE.md`). Nothing declares that about a run count
- * or a bill, so the sign is drawn and the reading is left to the reader.
+ * **A change is never coloured.** The panel colours a delta in exactly one
+ * place, where a pinned evaluation context declares which way each metric is
+ * better (`apps/panel/CLAUDE.md`). Nothing declares that about a run count or
+ * a bill, so the sign is drawn and the reading is left to the reader.
  */
 
 /** Merge into a route's search schema to give it the second period. */

@@ -5,39 +5,24 @@ import type { RunStatus } from '@/api/generated/types.gen';
 /**
  * One filter, every table and every chart.
  *
- * The panel had two filter vocabularies. Live and Query spoke the dimensions'
- * own names — `agent`, `runtime`, `workflow`, `session` — because that is what
- * `GET /api/v1/events/stream` takes and what the query engines' catalog is
- * named after. Runs and Metrics spoke the read model's parameter names —
- * `agent_id`, `conversation_id` — and between them offered four of the nine
- * axes the routes actually accept. So "the failed runs of this workflow" was
- * expressible in one view and not in the next, and moving between them dropped
- * the half of the question the reader had already answered.
- *
- * This is the vocabulary, and it is the dimensions' (ADR_0007) plus the run's
- * status. Five rules carry it; `docs/flow-01-inventory-2026-09-18.md` argues
- * them. `prompt` is the newest axis and the one the read model had to grow —
- * a span carried the registered prompt a call named and no read grouped by it,
- * so "which prompts does this agent run on" was a question with data behind it
- * and no way to ask.
+ * The vocabulary is the dimensions' (ADR_0007) plus the run's status, and the
+ * five rules below carry it. Why it exists, what the two vocabularies before
+ * it could not express, and what each axis cost to add are in
+ * `docs/flow-01-inventory-2026-09-18.md`.
  *
  * 1. **One name per axis**, the same in every URL. Translating an axis to a
  *    route's parameter happens here and nowhere else.
  * 2. **A filter selects runs.** Every axis names a property a run has —
- *    directly, or through its spans, which is how `RunFilter` already matches
- *    `model` and `tool`. Axes are conjunctive.
+ *    directly, or through its spans, which is how `RunFilter` matches `model`,
+ *    `tool` and `prompt`. Axes are conjunctive.
  * 3. **A number is counted over the selected runs**, and narrowed further only
  *    where the axis is about the thing being counted *and* the read counts
- *    something smaller than a run. On `/metrics`, which folds calls, a chosen
- *    model makes LLM calls and tokens that model's while tool calls stay every
- *    tool call in those runs, because a tool call has no model. On `/runs` and
- *    `/dimensions`, whose every figure is a run's own total, nothing below the
- *    run narrows at all — and [`queryFor`] says which of the two a page is
- *    showing.
+ *    something smaller than a run. Only `/metrics` does; `/runs` and
+ *    `/dimensions` carry the run's own totals whatever the filter says.
+ *    [`notesFor`] is that rule per read, in the words a page renders.
  * 4. **A view that cannot apply an axis says so** rather than dropping it.
- *    [`queryFor`] returns what it could not send and why, in the words the page
- *    renders. The Live view has done this since it existed; this is the same
- *    mechanism for the rest.
+ *    [`queryFor`] returns what it could not send and why. The Live view has
+ *    done this since it existed; this is the same mechanism for the rest.
  * 5. **It lives in the URL**, and it survives a move between the area's views,
  *    the way the time window already does.
  */
