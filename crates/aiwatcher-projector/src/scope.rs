@@ -1,40 +1,17 @@
-//! Which side of the project boundary one read answers on.
+//! Which side of the project boundary one read answers on (ADR_0033, amended
+//! 2026-09-19, which has the argument).
 //!
-//! E2 put the project **in the row**: a run, a dimension row, a span, a period
-//! and a journal entry each say whose they are, and absence is the global side
-//! (ADR_0033, `crate::dimensions`). That was a fact and no decision — the rows
-//! knew whose they were and every read still answered with all of them.
+//! E2 put the project in the row and decided nothing; this is the decision. A
+//! read names a side before it starts and gets that side and nothing else, in
+//! both directions — a row with one project is invisible to every other read,
+//! the global one included.
 //!
-//! This is the decision. A read names a side before it starts, and gets that
-//! side and nothing else:
-//!
-//! * [`ReadScope::Global`] is every row with no project — every run this build
-//!   has ever written, and every run a credential with no scope writes next. It
-//!   is what the routes without a project in their path answer, under instance
-//!   authorization, exactly as they always have.
-//! * [`ReadScope::Project`] is one project's rows and nothing else. It is what
-//!   `/api/v1/orgs/{organization}/projects/{project}/…` answers, after a grant
-//!   check asked of IAM on that request.
-//!
-//! **A scope is not one more axis to narrow by.** `crate::selection` holds the
-//! axes a caller chooses — a session, an agent, a model — and a caller may
-//! widen any of them by asking for less. A scope is the opposite: it decides
-//! which rows are there at all, including for the counts a fold takes *before*
-//! it narrows anything, like a dimension page's ungrouped total or the metrics
-//! summary's `runs_retained`. So it arrives as its own argument to every read
-//! rather than as a field of a filter struct that a query string fills in, and
-//! nothing a browser sends can name it.
-//!
-//! **Absence is the global side, in both directions.** A row with no project is
-//! invisible to a project read, and a row with one is invisible to a global
-//! read. The second half is what makes this a boundary rather than a label: an
-//! instance viewer who kept seeing a project's runs on `/api/v1/runs` would be
-//! reading a project they hold no grant on, and the additive route family would
-//! have added nothing.
-//!
-//! [`Self::default`] is [`Self::Global`], which is the side that fails closed:
-//! a reader that forgot to name one sees the rows that were always instance-wide
-//! and never a project's.
+//! **Not one more axis to narrow by.** `crate::selection` holds the axes a
+//! caller chooses and may widen by asking for less. A scope decides which rows
+//! are there at all, including for the counts a fold takes *before* it narrows
+//! anything (a dimension page's ungrouped total, `runs_retained`). So it is its
+//! own argument to every read rather than a field of a filter a query string
+//! fills in, and nothing a browser sends can name it.
 
 use aiwatcher_core::ProjectScope;
 
