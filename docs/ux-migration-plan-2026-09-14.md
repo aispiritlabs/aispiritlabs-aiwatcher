@@ -1398,8 +1398,16 @@ osobny obszar, a `ModelVersionReference` dołączył do `lineage-reference.tsx`.
   w **punktach**, brak wartości w przedziale wcześniejszym czyta się jako
   „nothing reported before", a nie jako zero, i zero nie jest mianownikiem.
 
-**Czego świadomie nie zrobiono.** Wykresy i rozbicia (`by_model`, `by_tool`,
-`by_step`) zostają jednookresowe — porównanie stoi przy agregatach, a strona
+- **Prompt na wierszu spanu.** Lista spanów w Explore mówiła, ile co trwało, i
+  nic o tym, co zdecydowało o odpowiedzi. Nazwa promptu stoi tam teraz jako
+  fakt, nie link — wiersz jest przyciskiem, a panel szczegółu, który się po
+  kliknięciu otwiera, linkuje wersję do rejestru.
+
+**Czego świadomie nie zrobiono.** Fala (`waterfall.tsx`) zostaje bez promptu:
+jej wiersz niesie już nazwę, rodzaj, pasek, tokeny, koszt i czas, kolumna nazwy
+ma `minmax(0, 18rem)` i przy 375 px kurczy się do zera — a odpowiedź jest jedno
+kliknięcie dalej, w panelu, który ją linkuje. Wykresy i rozbicia (`by_model`,
+`by_tool`, `by_step`) zostają jednookresowe — porównanie stoi przy agregatach, a strona
 mówi to jednym zdaniem zamiast zostawiać domysł. Drzewo Explore nie porównuje
 przedziałów: to listy stronicowane kursorem, więc wiersze dwóch okien nie
 odpowiadają sobie po kluczu bez drugiego zapytania na wiersz. `prompt` nie jest
@@ -1410,7 +1418,9 @@ dokładnie ta sama przyczyna, dla której nie ma tam `variant`. Dołożenie tych
 dwóch kolumn do katalogu i do trzech silników to osobna praca z własnymi
 testami zgodności.
 
-**Weryfikacja.** `npm run test` (487, w tym 20 nowych), `npm run build`
+**Weryfikacja.** `npm run test` (487, w tym 20 nowych; wiersz spanu w Explore
+jest jedyną zmianą bez własnego testu — ten ekran nie ma w ogóle harnessu, a
+zbudowanie go dla jednego znacznika byłoby nieproporcjonalne), `npm run build`
 (`check:architecture` + Vite + pełne `tsc -b`), `npm run lint` — zielone.
 Kontraktu **nie** regenerowano, bo nie zmieniono żadnej trasy: wszystkie
 parametry, których ten krok używa, weszły w kroku B i są już w
