@@ -110,7 +110,12 @@ export const SCOPED_ROUTES: ReadonlySet<string> = new Set([
   '/api/v1/evaluation-scorecards/{name}',
   '/api/v1/evaluation-scorecards/{name}/diff',
   '/api/v1/evaluation-scorecards/{name}/versions',
+  '/api/v1/evaluation-suites',
+  '/api/v1/evaluations',
+  '/api/v1/evaluations/{evaluation_id}',
   '/api/v1/events/stream',
+  '/api/v1/experiments',
+  '/api/v1/experiments/{context_id}',
   '/api/v1/labs',
   '/api/v1/labs/{name}',
   '/api/v1/labs/{name}/labels/{label}',
@@ -139,6 +144,11 @@ export const SCOPED_ROUTES: ReadonlySet<string> = new Set([
   '/api/v1/training-runs/{run_id}/progress',
   '/api/v1/workflow-definitions',
   '/api/v1/workflow-definitions/{name}',
+  '/api/v1/workflow-executions',
+  '/api/v1/workflow-executions/{workflow_run_id}',
+  '/api/v1/workflow-executions/{workflow_run_id}/stream',
+  '/api/v1/workflows',
+  '/api/v1/workflows/{workflow_id}',
 ]);
 
 const PREFIX = '/api/v1/';

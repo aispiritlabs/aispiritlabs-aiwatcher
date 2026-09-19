@@ -177,7 +177,7 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/experiments',
         label: 'Experiments',
-        reach: 'instance',
+        reach: 'project',
         icon: Sparkles,
         blurb: 'Compare variants on quality, latency and cost.',
         views: [],
@@ -268,6 +268,10 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/alerts',
         label: 'Alerts',
+        // Instance-wide, and deliberately: a rule is the deployment's and
+        // there is one channel for it (ADR_0035), so a project's failure is
+        // not raised on a webhook every other project's administrator reads.
+        reach: 'instance',
         icon: BellRing,
         // The one area that speaks first. It sits beside System rather than
         // inside it because a rule is a thing somebody writes, while System

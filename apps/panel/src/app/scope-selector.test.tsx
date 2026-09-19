@@ -160,11 +160,14 @@ it('sends the read to the project, with the header a scoped write is refused wit
 });
 
 it('leaves a read with no project twin exactly where it was', async () => {
+  // The deployment's own inventory: a project could never scope what this
+  // instance has wired, so the rewrite must leave it alone rather than send it
+  // to a path that does not exist.
   const server = serve([
-    { method: 'GET', path: '/workflows', answer: { status: 200, body: { workflows: [] } } },
+    { method: 'GET', path: '/system', answer: { status: 200, body: { capabilities: [] } } },
   ]);
   setActiveScope(parseScope('org-1/proj-1'));
-  const { listWorkflows } = await import('@/api/generated/sdk.gen');
-  await listWorkflows();
-  expect(server.calls.at(-1)?.url).toBe('/api/v1/workflows');
+  const { system } = await import('@/api/generated/sdk.gen');
+  await system();
+  expect(server.calls.at(-1)?.url).toBe('/api/v1/system');
 });

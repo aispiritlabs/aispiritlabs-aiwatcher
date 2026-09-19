@@ -42,10 +42,18 @@ describe('which reads can answer for one project', () => {
     // reads as "you may not see this" when the truth is "this is not a
     // project's to see".
     const scope = { organization: 'org', project: 'proj' };
-    expect(scopedPath('/api/v1/workflows', '/api/v1/workflows', scope)).toBe('/api/v1/workflows');
-    expect(scopedPath('/api/v1/evaluations', '/api/v1/evaluations', scope)).toBe(
-      '/api/v1/evaluations',
-    );
+    // The rerun asks another system to work inside the cluster, from an
+    // address this deployment configured, and the role that may ask is the
+    // instance's `admin`. It is deliberately the one workflow route with no
+    // twin — so it is the one worth naming here.
+    expect(
+      scopedPath(
+        '/api/v1/workflows/house-import/rerun',
+        '/api/v1/workflows/{workflow_id}/rerun',
+        scope,
+      ),
+    ).toBe('/api/v1/workflows/house-import/rerun');
+    expect(scopedPath('/api/v1/system', '/api/v1/system', scope)).toBe('/api/v1/system');
   });
 
   it('puts the project in front of the route the contract names, path parameters and all', () => {

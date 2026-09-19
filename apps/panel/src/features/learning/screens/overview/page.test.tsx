@@ -899,7 +899,8 @@ it('offers a workshop notebook in two places, and takes no address from the lab'
   const address = within(labs).getByLabelText(/Address/) as HTMLInputElement;
   expect(address.value).toBe('http://127.0.0.1:2718');
 
-  const open_ = (await within(labs).findAllByRole('link', { name: /open in its own tab/ }))[0];
+  const [open_] = await within(labs).findAllByRole('link', { name: /open in its own tab/ });
+  if (!open_) throw new Error('no link to open the notebook');
   expect(open_.getAttribute('href')).toBe(
     'http://127.0.0.1:2718/?file=labs%2F00_foundations%2F00_llm_workflow_map%2Fnotebook.py',
   );
@@ -916,7 +917,8 @@ it('opens the workshop notebook on this deployment when something serves one', a
   await open('/learning?organization=org&project=ret&lab=lab-03');
 
   const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
-  const open_ = (await within(labs).findAllByRole('link', { name: /open in its own tab/ }))[0];
+  const [open_] = await within(labs).findAllByRole('link', { name: /open in its own tab/ });
+  if (!open_) throw new Error('no link to open the notebook');
   expect(open_.getAttribute('href')).toBe(
     '/lab-marimo/?file=labs%2F00_foundations%2F00_llm_workflow_map%2Fnotebook.py',
   );
