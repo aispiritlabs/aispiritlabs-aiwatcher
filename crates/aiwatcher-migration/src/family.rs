@@ -55,10 +55,10 @@ pub const FAMILIES: &[Family] = &[
         default_prefix: "artifacts",
         owner: "aiwatcher-server (execution artifacts and attempt receipts)",
         support: Support::Unsupported(
-            "step outputs and attempt receipts are addressed by a canonical key that the \
-             execution catalog computes and validates on read; the scoped layout is being \
-             changed alongside the execution work, so a copy made now would be a copy under \
-             the layout of a release that has not landed",
+            "the scoped layout has landed (ADR_0033) and nobody has written the adapter. Step \
+             outputs and attempt receipts are addressed by a canonical key the execution \
+             catalog computes and validates on read, and the bytes and the manifest are \
+             written by two crates, so the owner has to answer for both halves at once",
         ),
     },
     Family {
@@ -84,7 +84,8 @@ pub const FAMILIES: &[Family] = &[
         owner: "aiwatcher-server (the evaluation source adapter)",
         support: Support::Unsupported(
             "a staged bundle is what an approval was admitted over, and the approval's own \
-             digest covers it; the scoped evaluation work is still moving both",
+             digest covers it — so bundle and approval move together or not at all, which is \
+             the evaluation registry's own move rather than a generic copier's",
         ),
     },
     Family {
@@ -92,15 +93,18 @@ pub const FAMILIES: &[Family] = &[
         default_prefix: "evaluation-judges",
         owner: "aiwatcher-evaluation",
         support: Support::Unsupported(
-            "kept judge replies and calibration sets are read back by declaration id; the \
-             scoped evaluation work is still moving that layout",
+            "kept judge replies and calibration sets are read back by declaration id. The \
+             scoped layout has landed; the adapter has not",
         ),
     },
     Family {
         name: "evaluation-reviews",
         default_prefix: "evaluation-reviews",
         owner: "aiwatcher-evaluation",
-        support: Support::Unsupported("part of the evaluation registry still being scoped"),
+        support: Support::Unsupported(
+            "case reviews are project-scoped already; nobody has written the adapter that \
+             says which of their objects go where",
+        ),
     },
     Family {
         name: "evaluation-scopes",
@@ -116,8 +120,9 @@ pub const FAMILIES: &[Family] = &[
         default_prefix: "evaluation-scorers",
         owner: "aiwatcher-evaluation",
         support: Support::Unsupported(
-            "the recorded scorer catalog and kept replies belong to the evaluation work in \
-             progress",
+            "the recorded scorer catalog is what a card is pinned against and is written by \
+             the work role for the whole deployment rather than by anybody's project, so it \
+             is not a project's to hold a copy of",
         ),
     },
     Family {
@@ -125,7 +130,7 @@ pub const FAMILIES: &[Family] = &[
         default_prefix: "evaluation-variant-artifacts",
         owner: "aiwatcher-evaluation",
         support: Support::Unsupported(
-            "bytes a variant pins by digest, staged for admission; part of the same work",
+            "bytes a variant pins by digest, staged for admission. Scoped already; no adapter",
         ),
     },
     Family {
@@ -151,7 +156,9 @@ pub const FAMILIES: &[Family] = &[
         owner: "aiwatcher-execution",
         support: Support::Unsupported(
             "a schedule is a mutable head whose tick writes slot outcomes; copying one starts \
-             a second writer for the same intention. It moves with the execution work",
+             a second writer for the same intention. A slot has no scoped form either — a \
+             bound store refuses one by name — so a project has no unattended run to copy a \
+             schedule into (ADR_0033 pt. 7)",
         ),
     },
     Family {
@@ -175,8 +182,9 @@ pub const FAMILIES: &[Family] = &[
         default_prefix: "workflows",
         owner: "aiwatcher-execution",
         support: Support::Unsupported(
-            "definition heads and revisions read by the compiler; they move with the \
-             execution work",
+            "definition heads and revisions read by the compiler. They are project-scoped \
+             already — `/workflow-definitions` answers for one project — so what is missing \
+             here is the adapter and not a decision",
         ),
     },
 ];
