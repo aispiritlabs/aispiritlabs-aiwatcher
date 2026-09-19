@@ -516,22 +516,34 @@ async fn a_project_start_writes_an_owner_the_instance_cannot_reach() {
         );
     }
 
-    // The artifact routes have no scoped twin yet, and they read the
-    // **unscoped** catalog — so without a refusal they would answer an empty
-    // list for a project's run, which reads as "this produced nothing". A
-    // project member is told the run is not on that side instead.
-    assert_eq!(
-        f.request(
-            "GET",
-            &format!("/api/v1/executions/{execution}/artifacts"),
-            Some(&owner),
-            Value::Null,
-            false
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
+    // Every instance route that names one execution, asked about a project's.
+    // The seven with a twin refuse because the unscoped store does not hold
+    // the run; the artifact pair refuses because it is *told* to, having read
+    // the same store first — without that it would answer an empty list, which
+    // reads as "this run produced nothing". None of them may answer.
+    for suffix in [
+        "",
+        "/history",
+        "/artifacts",
+        "/blocks",
+        "/timers",
+        "/decider-lease",
+        "/steps/score/context",
+    ] {
+        assert_eq!(
+            f.request(
+                "GET",
+                &format!("/api/v1/executions/{execution}{suffix}"),
+                Some(&owner),
+                Value::Null,
+                false
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND,
+            "/executions/{{id}}{suffix}"
+        );
+    }
 
     // Repeating it is the same run rather than a second one, and somebody with
     // no grant is told the declaration is not there.
