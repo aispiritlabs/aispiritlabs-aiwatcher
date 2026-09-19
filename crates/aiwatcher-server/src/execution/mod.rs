@@ -31,6 +31,7 @@ pub mod marimo;
 pub mod measure;
 pub mod pods;
 pub mod project;
+pub mod projects;
 pub mod publish;
 pub mod query;
 pub mod scheduler;
@@ -83,6 +84,12 @@ pub struct Tasks {
     /// The loop that records the scorer service's catalog for the serve role.
     /// Aborted on shutdown: it holds nothing, and the last catalog stands.
     pub scorer_catalog: Option<JoinHandle<()>>,
+    /// One loop for every project's managed work: the claim, the outbox, the
+    /// timers and the scoped sweep, each against a store bound to one project
+    /// (ADR_0033; `projects`). Absent on a deployment with no IAM, no
+    /// evaluation registry or no object store — which is every deployment that
+    /// has never made a project.
+    pub projects: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -143,6 +150,21 @@ impl Tasks {
         if let Some(task) = self.scorer_catalog {
             // One read and one overwrite; the catalog it last wrote stands.
             task.abort();
+        }
+        if let Some(task) = self.projects {
+            match tokio::time::timeout(grace, task).await {
+                Ok(Ok(())) => tracing::info!("the project dispatcher stopped"),
+                Ok(Err(error)) => tracing::error!(%error, "the project dispatcher panicked"),
+                // Waited for rather than aborted, because it holds the same
+                // three things the instance's own loops do: an attempt with a
+                // lease, an outbox row that has not reached the log, and a
+                // timer that is still due. Each is recovered the same way —
+                // the lease expires, the row stays pending, the timer stays
+                // due — and the next process to run this loop takes them up.
+                Err(_) => {
+                    tracing::warn!("the project dispatcher did not stop within the grace");
+                }
+            }
         }
         if let Some(task) = self.retention {
             match tokio::time::timeout(grace, task).await {
@@ -278,6 +300,23 @@ pub fn spawn(
             config.execution_poll,
             shutdown.clone(),
         ));
+
+        // Every project's work, in one loop, each against a store bound to one
+        // project. The four loops above hold the **unscoped** store and so see
+        // none of it — which is ADR_0033's whole point and the reason none of
+        // them needed changing when this arrived.
+        tasks.projects = projects::spawn(
+            state,
+            store,
+            sink,
+            objects,
+            projects::Settings {
+                poll: config.execution_poll,
+                retention: config.workflow_retention,
+                owner: owner_of(config, "work"),
+            },
+            shutdown,
+        );
 
         // One registry per address, merged: each executor's "no address is a
         // working state" stays local to it, and a deployment may run managed
@@ -529,8 +568,8 @@ fn spawn_outbox(
 /// deployment inside its window logs nothing. The batch bounds one transaction:
 /// turning retention on against a store with a year in it is many short
 /// deletes, not one that holds a table for a minute.
-const SWEEP_EVERY: Duration = Duration::from_secs(3_600);
-const SWEEP_BATCH: usize = 500;
+pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(3_600);
+pub(crate) const SWEEP_BATCH: usize = 500;
 
 /// Forget finished executions past the retention window.
 ///

@@ -145,6 +145,37 @@ pub struct ProjectDispatcher {
     iam: Arc<dyn IamStore>,
     judge: Option<(Arc<dyn JudgeModel>, usize)>,
     scorers: Option<(Arc<dyn ExternalScorers>, usize)>,
+    /// What the two steps around a generated answer need, where this process
+    /// holds them: the fold to read traces off, and what a witnessed answer is
+    /// held against. Absent is a working state and says so by claiming
+    /// neither, which is every other executor's rule here.
+    telemetry: Option<Telemetry>,
+}
+
+/// What a project's `cases` and `traces` steps are performed with.
+///
+/// Held as one value because the two steps are one half of one plan — a run
+/// whose answers a worker generates hands it the cases and then reads the
+/// traces of what came back — and a process that holds one without the other
+/// would claim half a run.
+#[derive(Clone)]
+pub struct Telemetry {
+    pub read_model: Arc<aiwatcher_projector::ReadModel>,
+    pub bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
+    pub witnesses: aiwatcher_evaluation::Witnesses,
+    pub prompts: Option<Arc<aiwatcher_prompts::Registry>>,
+    pub asked: Option<Arc<aiwatcher_projector::AskedIndex>>,
+    pub wait: std::time::Duration,
+}
+
+impl std::fmt::Debug for Telemetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Telemetry")
+            .field("bundles", &self.bundles.is_some())
+            .field("prompts", &self.prompts.is_some())
+            .field("asked", &self.asked.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProjectDispatcher {
@@ -185,7 +216,15 @@ impl ProjectDispatcher {
             iam: Arc::clone(iam),
             judge: None,
             scorers: None,
+            telemetry: None,
         })
+    }
+
+    /// Also claim the two steps around a worker's generated answers.
+    #[must_use]
+    pub fn reading_telemetry(mut self, telemetry: Telemetry) -> Self {
+        self.telemetry = Some(telemetry);
+        self
     }
 
     /// Also claim the measurements whose card asks a judge.
@@ -234,6 +273,10 @@ impl ProjectDispatcher {
         if self.scorers.is_some() {
             runtimes.push(RuntimeKind::ExternalEvaluation);
         }
+        if self.telemetry.is_some() {
+            runtimes.push(RuntimeKind::EvaluationCases);
+            runtimes.push(RuntimeKind::EvaluationTraces);
+        }
         runtimes
     }
 
@@ -278,6 +321,62 @@ impl ProjectDispatcher {
             .await
     }
 
+    /// Drain this project's committed facts onto the event log.
+    ///
+    /// The publisher's own rule, one project in: the envelope leaves carrying
+    /// this store's scope, stamped by `publish_pending` rather than read off
+    /// the row (ADR_0026 and ADR_0033 together). Before this, a project's
+    /// outbox had no reader at all, which is why ADR_0033's Consequences said
+    /// a project run has no live view — and why this is the line that changes
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store or the sink refused. The rows stay pending.
+    pub async fn publish_once(
+        &self,
+        sink: &dyn aiwatcher_bus::MessageSink,
+    ) -> Result<aiwatcher_execution::outbox::Published, aiwatcher_execution::StoreError> {
+        aiwatcher_execution::publish_pending(
+            self.reactor.handler().store().as_ref(),
+            sink,
+            OffsetDateTime::now_utc(),
+        )
+        .await
+    }
+
+    /// Deliver this project's due timers.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store refused. The rows stay due.
+    pub async fn fire_due_timers(
+        &self,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<aiwatcher_execution::hosted::Fired>, aiwatcher_execution::hosted::HostedError>
+    {
+        self.reactor.handler().fire_due_timers(now, limit).await
+    }
+
+    /// Forget this project's finished executions past the window.
+    ///
+    /// A **scoped** sweep, which is the gap ADR_0033's Consequences named: the
+    /// unscoped sweep answers for the global side only, so a deployment that
+    /// turned retention on reclaimed no project history at all. Keeping is
+    /// still the safe direction — a window nobody configured prunes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store refused. The rows stay.
+    pub async fn prune(
+        &self,
+        before: OffsetDateTime,
+        limit: usize,
+    ) -> Result<aiwatcher_execution::Pruned, aiwatcher_execution::StoreError> {
+        self.reactor.handler().store().prune(before, limit).await
+    }
+
     /// The executor for one claimed attempt, bound to that attempt's owner.
     ///
     /// The ownership is read again here rather than carried out of
@@ -289,6 +388,55 @@ impl ProjectDispatcher {
         claimed: &Claimed,
     ) -> Result<Arc<dyn ActivityExecutor>, ActivityError> {
         let owner = self.owner_of(&claimed.row.key.execution_id).await?;
+        // The two steps around a generated answer write this project's rows
+        // and read this project's fold, and neither publishes evidence — so
+        // what admits them is the bound registry and the byte store beside it,
+        // plus this ask, which is the second one ADR_0033 requires before
+        // anything of a project's is written.
+        if let Some(telemetry) = self.telemetry.as_ref()
+            && matches!(
+                claimed.command.step.runtime,
+                RuntimeBinding::EvaluationCases(_) | RuntimeBinding::EvaluationTraces(_)
+            )
+        {
+            editor_grant(&self.iam, owner.scope, &owner.principal).await?;
+            let evaluations = Arc::new(
+                self.evaluations
+                    .for_project_evidence(owner.scope)
+                    .map_err(|error| ActivityError::new(FailureClass::Policy, error.to_string()))?,
+            );
+            return Ok(match claimed.command.step.runtime {
+                RuntimeBinding::EvaluationCases(_) => Arc::new(super::scoring::CasesExecutor::new(
+                    evaluations,
+                    self.artifacts.artifacts().clone(),
+                ))
+                    as Arc<dyn ActivityExecutor>,
+                _ => {
+                    let mut executor = super::scoring::TracesExecutor::new(
+                        evaluations,
+                        self.artifacts.artifacts().clone(),
+                        Arc::clone(&telemetry.read_model),
+                        telemetry.wait,
+                    )
+                    // The project's own side of the fold, off the record and
+                    // from nowhere else.
+                    .reading(aiwatcher_projector::ReadScope::Project(
+                        owner.scope.on_the_log(),
+                    ))
+                    .witnessed_by(telemetry.witnesses.clone());
+                    if let Some(bundles) = &telemetry.bundles {
+                        executor = executor.reading_bundles_from(Arc::clone(bundles));
+                    }
+                    if let Some(prompts) = &telemetry.prompts {
+                        executor = executor.reading_prompts_from(Arc::clone(prompts));
+                    }
+                    if let Some(asked) = &telemetry.asked {
+                        executor = executor.reading_asked_from(Arc::clone(asked));
+                    }
+                    Arc::new(executor) as Arc<dyn ActivityExecutor>
+                }
+            });
+        }
         let (RuntimeBinding::ScoreEvaluation(spec)
         | RuntimeBinding::JudgeEvaluation(spec)
         | RuntimeBinding::ExternalEvaluation(spec)) = &claimed.command.step.runtime

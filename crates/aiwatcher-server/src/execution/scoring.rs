@@ -75,6 +75,7 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
                 evaluations: Arc::clone(evaluations),
                 artifacts: artifacts.clone(),
                 read_model: Arc::clone(&state.read_model),
+                reads: READS,
                 bundles: state.evaluation_bundles.clone(),
                 witnesses: state.witnesses.clone(),
                 prompts: state.prompts.clone(),
@@ -147,17 +148,17 @@ pub fn external(
     registry.with(Arc::new(executor))
 }
 
-/// Which side of the project boundary this step reads the log's fold on
-/// (ADR_0033, IAM-02 E3).
+/// Which side of the project boundary an instance's own step reads the log's
+/// fold on (ADR_0033, IAM-02 E3).
 ///
-/// `Global`, and it is a statement rather than a placeholder: no production
-/// wiring constructs a project-bound workflow store or a project execution, so
-/// every scoring run this binary can start is the instance's and reads the side
-/// every run has always been on. When E6 opens the project `/start` and
-/// registers the dispatcher, this becomes the scope read off the execution's
-/// durable `ExecutionOwnership` — never off the plan, a parameter,
-/// `requested_by`, a worker's name or a declaration's author, which is the rule
-/// `ProjectDispatcher` already holds itself to.
+/// `Global` for the executors this process registers instance-wide, which is
+/// the side every run of theirs has always been on. A project's step reads its
+/// own side instead, and that scope is taken off the execution's durable
+/// [`ExecutionOwnership`](aiwatcher_execution::ExecutionOwnership) by
+/// `ProjectDispatcher` — never off the plan, a parameter, `requested_by`, a
+/// worker's name or a declaration's author. It reaches this module as
+/// [`TracesExecutor::reading`], so one executor type serves both sides and
+/// neither can be built without saying which it is.
 const READS: aiwatcher_projector::ReadScope = aiwatcher_projector::ReadScope::Global;
 
 #[derive(Debug)]
@@ -813,7 +814,7 @@ async fn spelled_answers(
 
 /// How long the traces step waits for the application's telemetry to reach
 /// the log: the SDK flushes every second, and the fold follows the log closely.
-const TELEMETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const TELEMETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The step between a generation and its scoring: the run each answer names,
 /// read off this deployment's fold of the log and held to the variant's prompt
@@ -829,6 +830,8 @@ pub struct TracesExecutor {
     evaluations: Arc<Evaluations>,
     artifacts: Artifacts,
     read_model: Arc<aiwatcher_projector::ReadModel>,
+    /// The side of the boundary this step's run is on. See [`READS`].
+    reads: aiwatcher_projector::ReadScope,
     /// Where the pair's bundle is read: the declaration of a pinned workflow,
     /// which a run's own declaration is compared with.
     bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
@@ -856,12 +859,25 @@ impl TracesExecutor {
             evaluations,
             artifacts,
             read_model,
+            reads: READS,
             bundles: None,
             witnesses: aiwatcher_evaluation::Witnesses::default(),
             prompts: None,
             asked: None,
             wait,
         }
+    }
+
+    /// The same executor, reading the fold on one project's side.
+    ///
+    /// Taken from the execution's own owner by the caller that has one, which
+    /// is why this is a builder rather than an argument to `new`: a step that
+    /// forgot to say would read the global side, and that is the answer that
+    /// fails closed.
+    #[must_use]
+    pub const fn reading(mut self, scope: aiwatcher_projector::ReadScope) -> Self {
+        self.reads = scope;
+        self
     }
 
     /// Where calls asked elsewhere are read from: the index of what witnesses
@@ -926,10 +942,10 @@ impl TracesExecutor {
         &self,
         named: &std::collections::BTreeSet<&str>,
     ) -> std::collections::BTreeMap<String, TracedRun> {
-        let mut serving = self.read_model.serving(READS, named).await;
+        let mut serving = self.read_model.serving(self.reads, named).await;
         let mut runs = std::collections::BTreeMap::new();
         for run_id in named {
-            let Some(detail) = self.read_model.run(READS, run_id).await else {
+            let Some(detail) = self.read_model.run(self.reads, run_id).await else {
                 continue;
             };
             let calls = traced_calls(&detail);
@@ -1262,7 +1278,7 @@ impl ActivityExecutor for TracesExecutor {
             // started, from when it was declared, which is earlier.
             let started = self
                 .read_model
-                .workflow_execution(READS, &command.key.execution_id.to_string())
+                .workflow_execution(self.reads, &command.key.execution_id.to_string())
                 .await
                 .map(|execution| execution.summary.started_at);
             let before = i64::try_from(declared.run.settings.asked_since_seconds.unwrap_or(0))
@@ -1328,7 +1344,7 @@ impl ActivityExecutor for TracesExecutor {
                 None => match started {
                     Some(started) => witnesses.asked_elsewhere(
                         self.read_model
-                            .asked_since(READS, started - time::Duration::seconds(before))
+                            .asked_since(self.reads, started - time::Duration::seconds(before))
                             .await
                             .iter()
                             .flat_map(|detail| {
@@ -1391,7 +1407,7 @@ impl ActivityExecutor for TracesExecutor {
         let mut started = std::collections::BTreeSet::new();
         for row in rows.iter().filter(|row| !row.seen) {
             if let Some(run_id) = row.run_id.as_deref()
-                && self.read_model.run(READS, run_id).await.is_some()
+                && self.read_model.run(self.reads, run_id).await.is_some()
             {
                 started.insert(run_id.to_owned());
             }
