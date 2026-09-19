@@ -89,16 +89,20 @@ export function Stat({
   label,
   value,
   hint,
+  /** The same figure in a period before, where a page asked for one. */
+  compare,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
+  compare?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
       <span className="text-lg font-semibold tabular-nums">{value}</span>
       {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
+      {compare}
     </div>
   );
 }

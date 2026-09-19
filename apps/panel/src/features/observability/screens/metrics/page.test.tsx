@@ -62,9 +62,18 @@ function metrics(succeeded = 0, failed = 0, running = 0): MetricsSummary {
   };
 }
 
-function mount(body: unknown, status = 200, search = '') {
+function mount(body: unknown, status = 200, search = '', second?: unknown) {
   vi.stubGlobal('scrollTo', () => {});
-  serve([{ method: 'GET', path: '/metrics', answer: { status, body } }]);
+  serve([
+    {
+      method: 'GET',
+      path: '/metrics',
+      // The comparison asks the same route twice, and what makes it a
+      // comparison is that the second answer is a different period.
+      answer: (call) =>
+        call > 1 && second !== undefined ? { status: 200, body: second } : { status, body },
+    },
+  ]);
   const requests = vi.fn(fetch);
   vi.stubGlobal('fetch', requests);
   const root = createRootRoute();
@@ -200,4 +209,94 @@ it('shows an API failure instead of empty successful metrics', async () => {
   mount({ message: 'unavailable' }, 503);
   await screen.findByText('Could not reach the API');
   expect(screen.queryByText('Success rate')).toBeNull();
+});
+
+it('asks for the period before the one the server answered, not the one this clock says', async () => {
+  // The whole design of the second read. A browser running a few minutes fast
+  // would otherwise ask for a period overlapping the one beside it, and the
+  // overlap would be invisible in the answer. One second earlier than the
+  // window's own start, because both ends of a window are inclusive.
+  const earlier = metrics(1);
+  earlier.window = { ...earlier.window, from: '2026-09-14T09:00:00Z', to: '2026-09-14T10:00:00Z' };
+  const { requests } = mount(metrics(4), 200, '?window=3600&compare=previous', earlier);
+  await screen.findByText(/Compared with/);
+  const second = new URL((requests.mock.calls[1]![0] as Request).url);
+  expect(second.searchParams.get('as_of')).toBe(
+    String(Date.parse('2026-09-14T10:00:00Z') / 1000 - 1),
+  );
+  expect(second.searchParams.get('window_seconds')).toBe('3600');
+});
+
+it('carries the same filter into both periods', async () => {
+  const { requests } = mount(metrics(4), 200, '?window=3600&compare=previous&model=opus', metrics(1));
+  await screen.findByText(/Compared with/);
+  for (const call of [0, 1]) {
+    const url = new URL((requests.mock.calls[call]![0] as Request).url);
+    expect(url.searchParams.get('model')).toBe('opus');
+  }
+});
+
+it('puts each figure beside the same figure in the period before', async () => {
+  const { requests } = mount(metrics(3, 1), 200, '?window=3600&compare=previous', metrics(2, 2));
+  await screen.findByText(/Compared with/);
+  await waitFor(() => expect(requests).toHaveBeenCalledTimes(2));
+  // Four runs then and four now, so the count is unchanged while the rate
+  // moved — which is the pair a single "runs are up" headline would hide.
+  expect(tile('Runs').getByText(/was 4/)).toBeTruthy();
+  expect(tile('Runs').getByText(/unchanged/)).toBeTruthy();
+  // Points, not per cent: 50% to 75% is twenty-five points.
+  expect(tile('Success rate').getByText(/was 50% · \+25 pts/)).toBeTruthy();
+});
+
+it('says nothing was reported before rather than reading absence as nought', async () => {
+  // The cost rule, in the comparison: a period whose calls reported no price
+  // has an unknown cost, and "−100%" against it would be an invention.
+  const now = metrics(2);
+  now.totals.cost_usd = 4;
+  now.totals.costed_calls = 2;
+  mount(now, 200, '?window=3600&compare=previous', metrics(2));
+  await screen.findByText(/Compared with/);
+  expect(tile('Cost').getByText('nothing reported before')).toBeTruthy();
+});
+
+it('offers no previous period for a window of everything, and says why', async () => {
+  const { requests } = mount(metrics(1), 200, '?window=0&compare=previous');
+  await screen.findByRole('heading', { name: 'Metrics' });
+  const toggle = screen.getByRole('button', { name: 'vs previous' });
+  expect(toggle).toHaveProperty('disabled', true);
+  expect(toggle.getAttribute('title')).toMatch(/no period before it/);
+  // Asked once: there is no window to step back by, so there is no second
+  // question to ask.
+  await waitFor(() => expect(requests).toHaveBeenCalledTimes(1));
+});
+
+it('reports a failed second read rather than drawing one period as two', async () => {
+  serve([
+    {
+      method: 'GET',
+      path: '/metrics',
+      answer: (call) =>
+        call > 1
+          ? { status: 503, body: { code: 'unavailable', message: 'gone' } }
+          : { status: 200, body: metrics(2) },
+    },
+  ]);
+  vi.stubGlobal('scrollTo', () => {});
+  vi.stubGlobal('fetch', vi.fn(fetch));
+  const root = createRootRoute();
+  const route = createRoute({
+    getParentRoute: () => root,
+    path: '/observability/metrics',
+    validateSearch: searchSchema,
+    component: MetricsPage,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([route]),
+    history: createMemoryHistory({
+      initialEntries: ['/observability/metrics?window=3600&compare=previous'],
+    }),
+  });
+  render(withQueries(<RouterProvider router={router} />));
+  await screen.findByText('Could not read the previous period.');
+  expect(screen.queryByText(/^was /)).toBeNull();
 });

@@ -19,6 +19,12 @@ import {
   Stat,
 } from '@/shared/components/ui/primitives';
 import { VirtualList } from '@/shared/components/virtual-list';
+import {
+  AgainstPeriod,
+  CompareToggle,
+  endOfPeriodBefore,
+  periodLabel,
+} from '@/shared/components/period-compare';
 import { PromptNameLink } from '@/shared/components/prompt-bits';
 import {
   filterFromSearch,
@@ -113,11 +119,36 @@ export function AgentPage() {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
 
+  // The period before this one, ending where the server said this one begins —
+  // `period-compare.tsx` for why it is derived from the answer rather than
+  // from this clock.
+  const comparing = search.compare === 'previous' && windowSeconds > 0;
+  const endedAt = metrics.data ? endOfPeriodBefore(metrics.data.window.from) : undefined;
+  const before = useQuery({
+    queryKey: ['metrics', 'agent', 'before', agentId, windowSeconds, metricsFilter.query, endedAt],
+    enabled: comparing && endedAt !== undefined,
+    queryFn: async () => {
+      const response = await getMetrics({
+        query: {
+          ...metricsFilter.query,
+          window_seconds: windowParam(windowSeconds),
+          as_of: endedAt,
+          buckets: 48,
+        },
+      });
+      if (response.error) throw new Error('failed to load the previous period');
+      return response.data;
+    },
+  });
+
   const rows = React.useMemo(
     () => (runs.data?.pages ?? []).flatMap((page) => page.runs),
     [runs.data],
   );
   const mine = metrics.data?.by_agent.find((row) => row.agent_id === agentId);
+  // Its own row in the period before, which an agent that ran only now has
+  // none of — and that is a reading rather than a gap.
+  const was = comparing ? before.data?.by_agent.find((row) => row.agent_id === agentId) : undefined;
   const seen = metrics.data !== undefined && (mine !== undefined || rows.length > 0);
 
   return (
@@ -148,18 +179,47 @@ export function AgentPage() {
             </Link>
           </p>
         </div>
-        <TimeRange
-          value={windowSeconds}
-          onChange={(seconds) =>
-            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
-          }
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <TimeRange
+            value={windowSeconds}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
+          <CompareToggle
+            on={search.compare === 'previous'}
+            windowSeconds={windowSeconds}
+            onChange={(on) =>
+              void navigate({
+                search: (previous) => ({ ...previous, compare: on ? 'previous' : undefined }),
+              })
+            }
+          />
+        </div>
       </div>
 
       <FilterNotes
         notes={runsFilter.notes}
         unapplied={[...contradicted, ...metricsFilter.unapplied]}
       />
+
+      {comparing ? (
+        <p className="text-xs text-muted-foreground">
+          {before.isError ? (
+            <span className="text-danger">Could not read the previous period.</span>
+          ) : before.data ? (
+            <>
+              Compared with {periodLabel(before.data.window.from, before.data.window.to)}, on the
+              same filter.{' '}
+              {was
+                ? 'The strip below carries the change; everything under it is this period only.'
+                : 'This agent has no runs in it, so there is nothing to compare each figure with.'}
+            </>
+          ) : (
+            'Reading the previous period…'
+          )}
+        </p>
+      ) : null}
 
       {metrics.isError ? (
         <EmptyState
@@ -188,13 +248,29 @@ export function AgentPage() {
                 label="Runs"
                 value={formatCount(mine?.runs ?? 0)}
                 hint={`${formatCount(mine?.failures ?? 0)} failed`}
+                compare={<Then now={mine?.runs} was={was?.runs} format={formatCount} />}
               />
-              <Stat label="LLM calls" value={formatCount(mine?.llm_calls ?? 0)} />
-              <Stat label="Tool calls" value={formatCount(mine?.tool_calls ?? 0)} />
+              <Stat
+                label="LLM calls"
+                value={formatCount(mine?.llm_calls ?? 0)}
+                compare={<Then now={mine?.llm_calls} was={was?.llm_calls} format={formatCount} />}
+              />
+              <Stat
+                label="Tool calls"
+                value={formatCount(mine?.tool_calls ?? 0)}
+                compare={<Then now={mine?.tool_calls} was={was?.tool_calls} format={formatCount} />}
+              />
               <Stat
                 label="Tokens"
                 value={formatCount((mine?.input_tokens ?? 0) + (mine?.output_tokens ?? 0))}
                 hint={`${formatCount(mine?.input_tokens ?? 0)} in · ${formatCount(mine?.output_tokens ?? 0)} out`}
+                compare={
+                  <Then
+                    now={mine && mine.input_tokens + mine.output_tokens}
+                    was={was && was.input_tokens + was.output_tokens}
+                    format={formatCount}
+                  />
+                }
               />
               <Stat
                 label="LLM p95"
@@ -207,6 +283,13 @@ export function AgentPage() {
                   mine && mine.llm_latency.count > 0
                     ? `p50 ${formatDuration(mine.llm_latency.p50)} · ${formatCount(mine.llm_latency.count)} calls`
                     : undefined
+                }
+                compare={
+                  <Then
+                    now={mine && mine.llm_latency.count > 0 ? mine.llm_latency.p95 : null}
+                    was={was && was.llm_latency.count > 0 ? was.llm_latency.p95 : null}
+                    format={formatDuration}
+                  />
                 }
               />
               {/* A dash, never $0: an agent whose calls reported nothing has an
@@ -223,6 +306,7 @@ export function AgentPage() {
                     ? 'not reported'
                     : 'as the providers billed it'
                 }
+                compare={<Then now={mine?.cost_usd} was={was?.cost_usd} format={formatUsd} />}
               />
             </CardContent>
           </Card>
@@ -328,6 +412,27 @@ export function AgentPage() {
       )}
     </div>
   );
+}
+
+/**
+ * One figure against the period before, or nothing at all.
+ *
+ * The strip is rendered whether or not a second period was asked for, so the
+ * wrapper is what keeps six `comparing ? … : undefined` out of the markup. An
+ * agent with no row in the period before has no figure to sit beside any of
+ * them, and that is said once above the strip rather than six times inside it.
+ */
+function Then({
+  now,
+  was,
+  format,
+}: {
+  now: number | null | undefined;
+  was: number | null | undefined;
+  format: (value: number) => string;
+}) {
+  if (was === undefined) return null;
+  return <AgainstPeriod now={now} before={was} format={format} />;
 }
 
 /**

@@ -298,6 +298,23 @@ followed by a full `tsc` project check.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
+- **A second period is the one before this one, and its end is the server's**
+  (`src/shared/components/period-compare.tsx`). `?compare=previous` on Metrics
+  and on an agent's page reads the same route twice on the same filter, and the
+  baseline ends one second before the window the *first answer reported*
+  started — never `now - window` worked out here, because a relative window is
+  resolved against the server's clock and a browser running a few minutes fast
+  would ask for a period overlapping the one beside it, invisibly. One second,
+  because both ends of a window are inclusive. The pair is relative like the
+  window itself: the link means "the period before whatever this opens on", and
+  pinning a baseline to a fixed instant is a different question and would want
+  a control of its own. "All" has no period before it, so the toggle is
+  disabled and says so rather than disappearing. **A change is never coloured
+  here** — the one place the panel colours a delta is a pinned evaluation
+  context that declares a direction per metric, and nothing declares that about
+  a run count or a bill. A rate moves in *points*, an absent baseline reads as
+  "nothing reported before" rather than as nought, and a baseline of zero gets
+  no percentage, because nothing is not a denominator.
 - Every list that can grow with retention also carries the time window
   (`src/shared/components/time-range.tsx`), in the URL as `window` seconds and
   served by the API as `window_seconds`. One control, one preset list, one

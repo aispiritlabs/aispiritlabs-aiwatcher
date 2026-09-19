@@ -100,10 +100,18 @@ function mount(
   search = '',
   body: unknown = metrics(),
   prompts: { status: number; body?: unknown } = REGISTERED,
+  second?: unknown,
 ) {
   vi.stubGlobal('scrollTo', () => {});
   serve([
-    { method: 'GET', path: '/metrics', answer: { status: 200, body } },
+    {
+      method: 'GET',
+      path: '/metrics',
+      answer: (call) =>
+        call > 1 && second !== undefined
+          ? { status: 200, body: second }
+          : { status: 200, body },
+    },
     {
       method: 'GET',
       path: '/runs',
@@ -220,4 +228,33 @@ it('renders a prompt as a fact when no registry answers at all', async () => {
   await screen.findByText('Prompts it runs on');
   expect(await screen.findByText('extract-rooms')).toBeTruthy();
   expect(screen.queryByRole('link', { name: 'extract-rooms' })).toBeNull();
+});
+
+it('sets its own figures beside the period before, and asks for it by the server’s boundary', async () => {
+  const earlier = metrics();
+  earlier.by_agent = [{ ...earlier.by_agent[0]!, runs: 2, llm_calls: 3, cost_usd: 0.21 }];
+  earlier.window = { ...earlier.window, from: '2026-09-18T09:00:00Z', to: '2026-09-18T10:00:00Z' };
+  const { requests } = mount('?window=3600&compare=previous', metrics(), REGISTERED, earlier);
+  await screen.findByText(/Compared with/);
+  const second = requests.mock.calls
+    .map(([request]) => new URL((request as Request).url))
+    .filter((url) => url.pathname.endsWith('/metrics'))[1]!;
+  // The boundary is the one the first answer reported, one second earlier, so
+  // the two halves are adjacent whatever this browser's clock says.
+  expect(second.searchParams.get('as_of')).toBe(
+    String(Date.parse('2026-09-18T10:00:00Z') / 1000 - 1),
+  );
+  // Four runs now against two then, and six calls against three: the figures
+  // are the agent's own row in each period, never the totals beside them.
+  expect(screen.getByText('was 2 · +100%')).toBeTruthy();
+  expect(within(screen.getByText('Cost').parentElement!).getByText(/was \$0.21/)).toBeTruthy();
+});
+
+it('says once that an agent did not run in the period before', async () => {
+  // Six "nothing reported before" lines would be six ways of saying one fact,
+  // and the fact is about the agent rather than about any of the figures.
+  const earlier = metrics({ by_agent: [] });
+  mount('?window=3600&compare=previous', metrics(), REGISTERED, earlier);
+  await screen.findByText(/This agent has no runs in it/);
+  expect(screen.queryByText(/^was /)).toBeNull();
 });

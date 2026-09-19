@@ -1,3 +1,4 @@
+import { compareSearchSchema } from '@/shared/components/period-compare';
 import { windowSearchSchema } from '@/shared/components/time-range';
 import { objectFilterSchema } from '@/shared/lib/object-filter';
 import { z } from 'zod';
@@ -15,8 +16,13 @@ import { z } from 'zod';
  * about and then narrows the call counters to the call the axis names. It took
  * three of them when the vocabulary was written, and the page named the rest as
  * unapplied — which was honest and is now unnecessary.
+ *
+ * `compare` is the second period: the one before this one, on the same filter,
+ * so that "worse than an hour ago" is a question this page answers rather than
+ * one somebody answers by changing the window twice and remembering.
  */
 export const searchSchema = z.object({
   ...windowSearchSchema,
   ...objectFilterSchema,
+  ...compareSearchSchema,
 });
