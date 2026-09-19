@@ -15,11 +15,14 @@ pub(crate) struct ScopedRoute;
 /// Two types for one idea, and the crate boundary is the whole reason:
 /// `aiwatcher-core` takes no dependency on a store and `aiwatcher-iam` is one
 /// (`scripts/rust-boundaries.json`), so the log's form holds two uuids and
-/// knows nothing about organizations, teams or grants. This crate sees both and
-/// is the one place they meet — which is also where they are held to agreeing,
-/// by `the_two_scopes_spell_one_project_the_same_way` below.
+/// knows nothing about organizations, teams or grants. The conversion lives
+/// with the control plane's type, because the outbox publisher needs it too
+/// and a second copy is a second chance to spell it the other way round; what
+/// stays here is the name this crate's routes read and
+/// `the_two_scopes_spell_one_project_the_same_way` below, which holds all
+/// three spellings to one key.
 pub(crate) fn on_the_log(scope: ProjectScope) -> aiwatcher_core::ProjectScope {
-    aiwatcher_core::ProjectScope::new(scope.organization.0, scope.project.0)
+    scope.on_the_log()
 }
 
 pub(crate) struct ProjectAuthorization {

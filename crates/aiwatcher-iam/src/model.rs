@@ -88,7 +88,10 @@ pub struct Organization {
     pub name: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// `Ord` and `Hash` because a scope is a key: a fold groups rows by it, a
+// dispatcher keeps one entry per project, and both want a total order so two
+// runs of one loop read the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "openapi", schema(as = IamProjectScope))]
 pub struct ProjectScope {
@@ -108,6 +111,19 @@ impl ProjectScope {
     #[must_use]
     pub fn key(&self) -> String {
         format!("{}/{}", self.organization.0, self.project.0)
+    }
+
+    /// The same project as the event log carries it: two uuids and nothing
+    /// else.
+    ///
+    /// `aiwatcher-core` takes no dependency on a store and this crate is one,
+    /// so the log's form cannot be this type. This is the **one** conversion
+    /// between them — every caller that stamps a scope onto an envelope, folds
+    /// a row or resolves a route goes through it, rather than each spelling out
+    /// `.0` twice and one of them one day spelling it the other way round.
+    #[must_use]
+    pub const fn on_the_log(self) -> aiwatcher_core::ProjectScope {
+        aiwatcher_core::ProjectScope::new(self.organization.0, self.project.0)
     }
 
     /// Read [`Self::key`] back.
