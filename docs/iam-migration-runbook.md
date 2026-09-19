@@ -301,3 +301,70 @@ rest explicitly.
   by name, because the query engine and the notebook runtime read the instance
   routes with no credential and a worker's token names queues rather than a
   project. See §12 of [IAM-02](iam-02-data-plane.md).
+
+## 10. Turning a deployment into one that hosts clients (IAM-03/M0)
+
+A different operation from everything above: nothing is copied and nothing
+moves. What changes is **who a signed-in stranger is** — from a viewer of the
+whole instance to somebody holding exactly the grants they were given.
+
+Order matters in one place only, and it is the last two steps: a release that
+rolls before its producers hold tokens keeps working and stops receiving
+telemetry, which is quiet. Do those together.
+
+1. **An OIDC application at the identity provider.** Not a forward-auth proxy
+   one: in `oidc` the identity is *proved* to aiwatcher, which is what lets a
+   client outside your own organisation sign in at all. The issuer is
+   `https://<auth>/application/o/<application-slug>/` — the application slug.
+   `deploy/authentik/aiwatcher-blueprint.yaml` declares it, and where another
+   release owns the blueprint ConfigMap, apply the same objects through
+   authentik's API and keep the file as the record.
+
+2. **The enrolment flow, if invitations should open accounts.** Same blueprint:
+   an invitation stage with `continue_flow_without_invitation: false`, prompts,
+   a user-write stage that **assigns no group**, a login stage. Then a service
+   account with two permissions — add an invitation, read flows — and nothing
+   else. Check both by hand: the token must create an invitation (201) and must
+   not create a user (403).
+
+3. **A database of its own.** `CREATE DATABASE aiwatcher_iam OWNER <aiwatcher>`,
+   never the workflow store's. Different lifetimes, different blast radii: one
+   holds run history and the other holds who may see anything.
+
+4. **Four Secrets**, and none of their values in a values file:
+   `aiwatcher-auth` (client secret, session key), `aiwatcher-iam` (the DSN),
+   `aiwatcher-provision` (the service account's token) and `aiwatcher-ingest`
+   (the producer tokens, `name=secret` comma-separated).
+
+5. **The ingress loses its forward-auth middleware.** An outpost in front makes
+   a client pass *your* policy before reaching aiwatcher's own sign-in, and a
+   client is not one of your people. The `/outpost.goauthentik.io/` route goes
+   with it.
+
+6. **Every producer gets a token, and the release rolls.** Turning auth on
+   makes `POST /api/v1/events` refuse an anonymous producer; the SDKs read
+   `AIWATCHER_TOKEN` and fail open, so an application keeps running and its
+   traces stop arriving. Set the variable on every publisher *first*, then:
+
+   ```sh
+   helm upgrade aiwatcher deploy/helm/aiwatcher --reuse-values \
+     --set auth.mode=oidc --set auth.roles.defaultRole=project \
+     --set auth.oidc.issuer=… --set auth.oidc.secret.name=aiwatcher-auth \
+     --set iam.postgresSecret.name=aiwatcher-iam
+   ```
+
+7. **Ask the matrix, against the deployment.** Not only locally:
+
+   ```sh
+   AIWATCHER_URL=https://aiwatcher.example \
+   AIWATCHER_AUTHENTIK_URL=https://auth.example \
+   python3 scripts/iam-permission-check.py
+   ```
+
+   It prints an `AIWATCHER_M0_SCOPES=` line on its first run; the questions
+   that need a run inside each client's project are **reported as not asked**
+   until a producer token names one, which is a second pass with the line set.
+
+A client's ingest token comes last, because it names a project and the project
+does not exist until somebody creates it. Until then the demo reads; after it,
+`name@<organization>/<project>=secret` in `aiwatcher-ingest` and a restart.

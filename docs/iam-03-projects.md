@@ -702,19 +702,35 @@ z samego zalogowania. Teraz pyta `observer` — widz instancji bez żadnego gran
 mapowanych grup") pyta o **konsekwencję**, nie o wartość, więc trzyma się
 wdrożenia, które wybrało `viewer`, i wdrożenia, które wybrało `project`.
 
-### Czego M0 nie dowiózł
+### Wdrożenie na `vps`, i co ono pokazało
 
-**Wdrożenia na `vps`.** Kod, chart i blueprint są gotowe — chart uczy się
-`AIWATCHER_IAM_POSTGRES_URL` na własnej bazie i `AIWATCHER_AUTH_PROVISION_*`,
-odmawia jednego bez `auth.mode=oidc` i drugiego bez URL-a — a samo przełączenie
-`planner` na `oidc` jest opisane w `deploy/environments/planner.yaml` i wymaga
-czterech rzeczy, których nie da się zrobić „przy okazji": aplikacji OIDC i flow
-rejestracji w authentiku na `vps`, bazy `aiwatcher_iam` na `planner-postgres`,
-trzech Sekretów w namespace i **zdjęcia middleware'u outpostu z ingressu
-aiwatchera** — bo outpost przed aiwatcherem każe klientowi przejść politykę
-plannera, zanim dojdzie do własnego logowania aiwatchera. Bramka przebiegła
-lokalnie; przeciwko `vps` nie została uruchomiona i to jest jedyna pozycja
-z §5, która została otwarta.
+Zrobione, i bramka przebiegła tam **94/94, zero niezadanych** — te same pytania
+co lokalnie, przeciwko `https://aiwatcher.159.195.240.156.sslip.io`. Kolejność
+jest w [runbooku §10](iam-migration-runbook.md); tu to, czego się przy tym
+nauczyliśmy, bo każda z tych rzeczy kosztowała jeden nieudany krok:
+
+* **Slug aplikacji jest cudzy.** `aiwatcher` w authentiku na `vps` to aplikacja
+  *forward-auth* plannera, deklarowana w blueprintcie plannera. Wzięcie sluga
+  zostałoby nadpisane przy następnym deployu plannera, więc SSO aiwatchera
+  dostało własny: `aiwatcher-sso`, i to on jest w issuerze.
+* **`grant_types` na providerze OAuth2 jest w 2026.x domyślnie puste**, a puste
+  odmawia authorization-code z `invalid_request` — co czyta się jak pomyłka w
+  redirect URI i nią nie jest. Blueprint wymienia je teraz jawnie.
+* **RBAC zmienił kształt**: 2025.6 przypisywało uprawnienie użytkownikowi,
+  2026.8 przypisuje je **roli**, a użytkownika wkłada do roli. Konto serwisowe
+  dostaje te same dwa uprawnienia jedną i drugą drogą.
+* **`helm upgrade --reuse-values` nie zna nowych domyślnych wartości chartu** —
+  bierze za bazę wartości ostatniego wydania, więc `secretKeyRef.key` renderował
+  się pusty i API serwera odrzuciło Deployment. Klucze mają teraz `| default`
+  w szablonie, co jest poprawką dla każdego wdrożenia, nie tylko tego.
+* **Outpost przed aiwatcherem zdjęty**, razem z trasą `/outpost.goauthentik.io/`:
+  klient nie jest człowiekiem plannera i nie ma po co przechodzić jego polityki
+  przed własnym logowaniem aiwatchera.
+
+**Czego nie dowieźliśmy**: `planner-api` nadal nie ma `AIWATCHER_TOKEN`, więc
+jego telemetria trafia na 401 — SDK zawodzi otwarcie, więc planner działa, a
+ślady nie przychodzą. To jedna zmienna w Deploymencie plannera (sekret
+`aiwatcher-ingest`, klucz `AIWATCHER_TOKEN`) i należy do repozytorium plannera.
 
 ---
 

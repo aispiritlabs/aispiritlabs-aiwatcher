@@ -55,7 +55,14 @@ from importlib import import_module
 
 sso = import_module("sso-session")
 
-ISSUER = "http://localhost:9000/application/o/aiwatcher/"
+# The issuer aiwatcher is configured with — which is the `provider` half of
+# every principal, so a grant made against the wrong one names nobody. Read
+# from the deployment rather than assumed, because the application slug differs
+# between a laptop and a cluster that already had an `aiwatcher` application.
+ISSUER = os.environ.get("AIWATCHER_ISSUER", "http://localhost:9000/application/o/aiwatcher/")
+# What each fixture's password is: the username plus this, as
+# `scripts/authentik-seed.py --suffix` writes them.
+SUFFIX = os.environ.get("AIWATCHER_FIXTURE_SUFFIX", "-dev")
 DAY = 86_400
 # "From the first event ever written", as the log spells it. A zero-padded
 # position rather than an empty string, because an empty `Last-Event-ID` is
@@ -133,8 +140,11 @@ def grant(teacher, organization: str, project: str, subject: str, role: str, win
 # the one that matters most, which is that a project read answers none of the
 # instance's runs.
 
-GLOBAL_TOKEN = "0123456789abcdef0123456789abcdef"
-PROJECT_TOKEN = "fedcba9876543210fedcba9876543210"
+# What `just run-sso-iam` puts in AIWATCHER_AUTH_INGEST_TOKENS. Overridable,
+# because a deployment's producer secrets are its own and the questions that
+# need a run on each side cannot be asked without them.
+GLOBAL_TOKEN = os.environ.get("AIWATCHER_GLOBAL_TOKEN", "0123456789abcdef0123456789abcdef")
+PROJECT_TOKEN = os.environ.get("AIWATCHER_PROJECT_TOKEN", "fedcba9876543210fedcba9876543210")
 
 
 def run_events(run_id: str, agent: str) -> list[dict[str, object]]:
@@ -615,7 +625,7 @@ def m0(checks: Checks, teacher, now: int) -> None:
     sessions = {}
     for name in clients:
         try:
-            sessions[name] = sso.sign_in(name, f"{name}-dev")
+            sessions[name] = sso.sign_in(name, name + SUFFIX)
         except Exception as refused:  # noqa: BLE001 - reported, not raised
             checks.skipped(f"{name} signs in", f"{refused}")
             return
@@ -796,9 +806,9 @@ def main() -> int:
     checks = Checks()
     now = int(time.time())
 
-    teacher = sso.sign_in("teacher", "teacher-dev")
-    student = sso.sign_in("student", "student-dev")
-    observer = sso.sign_in("observer", "observer-dev")
+    teacher = sso.sign_in("teacher", "teacher" + SUFFIX)
+    student = sso.sign_in("student", "student" + SUFFIX)
+    observer = sso.sign_in("observer", "observer" + SUFFIX)
     _, teacher_identity = sso.call(teacher, "GET", "/api/v1/auth/me")
     _, student_identity = sso.call(student, "GET", "/api/v1/auth/me")
     student_subject = student_identity["subject"]
@@ -1001,7 +1011,7 @@ def main() -> int:
     )
 
     # A second person, already signed in but a stranger to this project.
-    stranger = sso.sign_in("student", "student-dev")
+    stranger = sso.sign_in("student", "student" + SUFFIX)
     status, _ = sso.call(
         stranger, "GET", f"/api/v1/iam/organizations/{org}/projects/{invited_project}/access"
     )

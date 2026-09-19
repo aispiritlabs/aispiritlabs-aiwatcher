@@ -459,20 +459,20 @@ later as "holds no object".
   valueFrom:
     secretKeyRef:
       name: {{ . }}
-      key: {{ $.Values.iam.postgresSecret.key }}
-{{- if gt (int $.Values.iam.auditRetentionDays) 0 }}
+      key: {{ $.Values.iam.postgresSecret.key | default "AIWATCHER_IAM_POSTGRES_URL" }}
+{{- if gt (int ($.Values.iam.auditRetentionDays | default 0)) 0 }}
 - { name: AIWATCHER_IAM_AUDIT_RETENTION_DAYS, value: {{ $.Values.iam.auditRetentionDays | quote }} }
 {{- end }}
 {{- end }}
 {{- with .Values.auth.provisioning.secret.name }}
 - { name: AIWATCHER_AUTH_PROVISION_URL, value: {{ required "auth.provisioning.secret.name is set but auth.provisioning.url is empty. Both halves or neither: a token pointing at nothing is a secret with nowhere to go." $.Values.auth.provisioning.url | quote }} }
-- { name: AIWATCHER_AUTH_PROVISION_FLOW, value: {{ $.Values.auth.provisioning.flow | quote }} }
-- { name: AIWATCHER_AUTH_PROVISION_TTL_SECONDS, value: {{ $.Values.auth.provisioning.ttlSeconds | quote }} }
+- { name: AIWATCHER_AUTH_PROVISION_FLOW, value: {{ $.Values.auth.provisioning.flow | default "aiwatcher-enrolment" | quote }} }
+- { name: AIWATCHER_AUTH_PROVISION_TTL_SECONDS, value: {{ $.Values.auth.provisioning.ttlSeconds | default 1800 | quote }} }
 - name: AIWATCHER_AUTH_PROVISION_TOKEN
   valueFrom:
     secretKeyRef:
       name: {{ . }}
-      key: {{ $.Values.auth.provisioning.secret.key }}
+      key: {{ $.Values.auth.provisioning.secret.key | default "AIWATCHER_AUTH_PROVISION_TOKEN" }}
 {{- end }}
 {{- if ne .Values.execution.store "none" }}
 - { name: AIWATCHER_WORKFLOW_STORE, value: {{ .Values.execution.store | quote }} }

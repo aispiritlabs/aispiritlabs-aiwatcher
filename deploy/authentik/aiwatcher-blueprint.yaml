@@ -78,6 +78,12 @@ entries:
         !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
       invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
       client_type: confidential
+      # Named rather than left to the default, which is **empty** on authentik
+      # 2026.x — and an empty list refuses the authorization-code flow with
+      # `invalid_request`, which reads as a redirect-URI mistake and is not one.
+      grant_types:
+        - authorization_code
+        - refresh_token
       client_id: aiwatcher
       # Strict, not regex. aiwatcher sends one redirect URI and only one, and a
       # pattern here is how a redirect URI stops being a check.
