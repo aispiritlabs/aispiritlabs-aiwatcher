@@ -23,25 +23,6 @@ import { Badge, Button, IdChip, Refusal, Spinner } from '@/shared/components/ui/
 import { short } from '@/shared/lib/iam';
 
 /**
- * The notebook a lab hands out, and the copy the participant works in.
- *
- * **The lab names a file and pins its digest; it never carries the source**
- * (ADR_0034), so everything here is read from the notebook runtime by that
- * pin. Three consequences are on the screen rather than hidden.
- *
- * The runtime **may not be there** — no authentication, no sandbox, bound to
- * localhost, and a deployment is free not to run one. That is a sentence and
- * the recipe that starts it, the posture the Query tab takes towards Flow.
- *
- * The live app serves the notebook's **head**, because marimo turns the
- * notebook root into apps and the revision history is kept out of it. Past the
- * pin, the two are said to have drifted and the pinned source is shown beside
- * it rather than one being served quietly as the other.
- *
- * And **nothing runs because somebody opened a lab**: the live app is a click
- * of its own, for the reason `EditorHost::open` stages and stops.
- */
-/**
  * The notebook a lab hands out.
  *
  * Which of the two shapes it is, is decided by a field rather than a flag. A
@@ -69,6 +50,18 @@ export function Notebook({
   );
 }
 
+/**
+ * A notebook this instance keeps, read at the revision the lab pinned.
+ *
+ * The runtime **may not be there** — no authentication, no sandbox, bound to
+ * localhost — which is a sentence and the recipe that starts it, the posture
+ * the Query tab takes towards Flow. Its live app serves the notebook's
+ * **head**, because marimo turns the notebook root into apps and the revision
+ * history is kept out of it, so past the pin the two are said to have drifted
+ * rather than one being served quietly as the other. And nothing runs because
+ * a lab was opened: the live app is a click of its own, for the reason
+ * `EditorHost::open` stages and stops.
+ */
 function KeptNotebook({
   pinned,
   revision,
@@ -313,13 +306,13 @@ function Mine({ name, onRelease }: { name: string; onRelease: () => void }) {
  * **Neither of them is this page running anybody's code.** One is a marimo the
  * deployment serves at `/lab-marimo` on this origin — configuration, never an
  * address out of the lab. The other is one the participant starts with the
- * lab's own command, reached on their own loopback; the same box takes the
- * address of an instructor's read-only `marimo run`, because that is the same
- * answer with a different host, and it is typed by the person looking at it.
+ * lab's own command, reached on their own loopback; the same box takes an
+ * instructor's read-only `marimo run` address, because that is the same answer
+ * with a different host, typed by the person looking at it.
  *
- * What is remembered is which of the two and what was typed — on this device,
- * per lab, because it is a fact about this machine and not about the lab. A
- * link that carried it would be telling a classmate which port to look at.
+ * Which of the two, and what was typed, are remembered on this device: facts
+ * about a machine, and a link carrying them would tell a classmate which port
+ * to look at.
  */
 function WorkshopNotebook({ pinned }: { pinned: LabNotebook }) {
   const fallbackPort = pinned.port ?? 2718;

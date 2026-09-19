@@ -3,26 +3,20 @@
  * own machine.
  *
  * A lab names a notebook; it never says where marimo is (ADR_0034, amended).
- * That is two different answers with two different owners, and this module is
- * the whole of what the panel needs to tell them apart:
+ * `/lab-marimo` on this origin is the deployment's answer, pointed by whoever
+ * deploys at `marimo edit --base-url /lab-marimo` exactly as `/ml-pipeline` is
+ * pointed at the notebook runtime — a path rather than an address the panel is
+ * told, because a URL out of stored data, opened by a browser, is the shape
+ * `AIWATCHER_WORKFLOW_RUNNER_URL` is configuration to avoid. The other answer
+ * is an address the viewer supplies: their own loopback by default, or an
+ * instructor's read-only `marimo run`.
  *
- * - **`/lab-marimo` on this origin** is what a deployment serves. Nothing here
- *   configures it and no address is ever fetched from the server — a URL that
- *   came out of stored data and was then opened by a browser is the shape
- *   `AIWATCHER_WORKFLOW_RUNNER_URL` is configuration to avoid. Whoever deploys
- *   points that path at `marimo edit --base-url /lab-marimo`, exactly as
- *   `/ml-pipeline` is pointed at the notebook runtime.
- * - **An address the viewer supplies** is the other. It defaults to their own
- *   loopback on the port the lab's command uses, and it is where an instructor
- *   sharing a read-only `marimo run` goes too. It is typed by a person, kept in
- *   that person's browser, and never sent anywhere.
- *
- * Reachability is asked differently on each side, and the difference is not
- * cosmetic. Same-origin, the proxy answers and the status is readable, so 404
- * and 5xx mean "nothing is behind that path" the way `ml-pipeline.ts` reads
- * them. Cross-origin, marimo sends no CORS headers, so no status can ever be
- * read — but an opaque response still tells us the connection was made, and a
- * rejection tells us it was not. That is exactly the one bit needed.
+ * Reachability is asked differently on each side, and that is not cosmetic.
+ * Same-origin the proxy answers and the status is readable, so 404 and 5xx mean
+ * "nothing is behind that path" the way `ml-pipeline.ts` reads them.
+ * Cross-origin marimo sends no CORS headers, so no status can be read — but an
+ * opaque response still says the connection was made and a rejection says it
+ * was not, which is the whole question.
  */
 
 /** Where a deployment serves the workshop's notebooks, on this origin. */
