@@ -287,7 +287,7 @@ async fn a_lab_hands_out_a_pinned_notebook_and_a_pin_nothing_could_resolve_is_re
     let root = base(&org, &a);
 
     let mut asked = lab("Work through the notebook, then hand in your answers.");
-    asked["notebook"] = json!({"name": "lab_03_agent", "revision": "a".repeat(64)});
+    asked["notebook"] = json!({"path": "lab_03_agent", "revision": "a".repeat(64)});
     let (status, published) = publish_lab(&f, &owner, &root, asked.clone()).await;
     assert_eq!(status, StatusCode::CREATED, "{published}");
     assert_eq!(
@@ -311,15 +311,16 @@ async fn a_lab_hands_out_a_pinned_notebook_and_a_pin_nothing_could_resolve_is_re
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{read}");
-    assert_eq!(read["current"]["notebook"]["name"], json!("lab_03_agent"));
+    assert_eq!(read["current"]["notebook"]["path"], json!("lab_03_agent"));
 
     // The runtime's own name and digest rules, refused where the lab is
     // written rather than when a participant opens a notebook that is not
     // there. The registry never reaches the notebook runtime to find out —
     // what it refuses is a pin that could not resolve anywhere.
     for pinned in [
-        json!({"name": "Lab_03", "revision": "a".repeat(64)}),
-        json!({"name": "lab_03_agent", "revision": "head"}),
+        json!({"path": "Lab_03", "revision": "a".repeat(64)}),
+        json!({"path": "lab_03_agent", "revision": "head"}),
+        json!({"path": "../../etc/passwd"}),
     ] {
         let mut refused = lab("Work through the notebook.");
         refused["notebook"] = pinned.clone();
@@ -332,4 +333,37 @@ async fn a_lab_hands_out_a_pinned_notebook_and_a_pin_nothing_could_resolve_is_re
             "the refusal names the field: {body}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_lab_hands_out_a_notebook_this_instance_never_holds_the_bytes_of() {
+    // The workshop shape (ADR_0034, amended): nine steps in a repository with
+    // its own environment, opened by the workshop's own recipe on the
+    // participant's machine. Nothing here reaches marimo, nothing here holds
+    // the file, and no URL is stored — where it runs is the deployment's
+    // question or the participant's, never the lab's.
+    let f = fixture().await;
+    let owner = f.cookie("owner", Role::Admin);
+    let org = f.create(&owner).await;
+    let a = project(&f, &owner, &org).await;
+    let root = base(&org, &a);
+
+    let mut asked = lab("Follow one failed request all the way through.");
+    asked["notebook"] = json!({
+        "path": "labs/00_foundations/00_llm_workflow_map/notebook.py",
+        "command": "just notebook foundations 00_llm_workflow_map",
+        "port": 2718,
+    });
+    let (status, published) = publish_lab(&f, &owner, &root, asked).await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    assert!(
+        published["version"]["notebook"]["revision"].is_null(),
+        "a digest this instance cannot check is not written: {published}"
+    );
+    assert_eq!(published["version"]["notebook"]["port"], json!(2718));
+    assert_eq!(
+        published["head"]["versions"][0]["has_notebook"],
+        json!(true),
+        "handing one out is handing one out, digest or no digest"
+    );
 }

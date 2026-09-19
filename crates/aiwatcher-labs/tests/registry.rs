@@ -38,8 +38,21 @@ fn lab(name: &str, brief: &str) -> Lab {
 
 fn notebook(revision: char) -> LabNotebook {
     LabNotebook {
-        name: "lab_03_agent".into(),
-        revision: std::iter::repeat_n(revision, 64).collect(),
+        path: "lab_03_agent".into(),
+        revision: Some(std::iter::repeat_n(revision, 64).collect()),
+        command: None,
+        port: None,
+    }
+}
+
+/// The other shape: a file in a workshop the participant checked out, opened
+/// by the workshop's own recipe. This instance never sees those bytes.
+fn checkout() -> LabNotebook {
+    LabNotebook {
+        path: "labs/00_foundations/00_llm_workflow_map/notebook.py".into(),
+        revision: None,
+        command: Some("just notebook foundations 00_llm_workflow_map".into()),
+        port: Some(2718),
     }
 }
 
@@ -481,8 +494,12 @@ async fn a_labs_notebook_is_part_of_what_it_is_and_a_new_pin_is_a_new_version() 
         .unwrap()
         .unwrap();
     assert_eq!(
-        stored.lab.notebook.as_ref().map(|n| n.revision.as_str()),
-        Some(notebook('a').revision.as_str()),
+        stored
+            .lab
+            .notebook
+            .as_ref()
+            .and_then(|n| n.revision.clone()),
+        notebook('a').revision,
         "and an earlier version still names the source it was written against"
     );
 }
@@ -492,26 +509,54 @@ async fn a_notebook_pin_the_runtime_could_never_resolve_is_refused_by_field() {
     let registry = registry();
 
     for (pinned, field) in [
+        // A pinned revision means the bytes are this instance's, so the path
+        // is the runtime's name for them and the runtime's rule decides.
         (
             LabNotebook {
-                name: "Lab-03".into(),
-                revision: "a".repeat(64),
+                path: "Lab-03".into(),
+                revision: Some("a".repeat(64)),
+                command: None,
+                port: None,
             },
-            "notebook.name",
+            "notebook.path",
         ),
         (
             LabNotebook {
-                name: "3_lab".into(),
-                revision: "a".repeat(64),
-            },
-            "notebook.name",
-        ),
-        (
-            LabNotebook {
-                name: "lab_03_agent".into(),
-                revision: "head".into(),
+                path: "lab_03_agent".into(),
+                revision: Some("head".into()),
+                command: None,
+                port: None,
             },
             "notebook.revision",
+        ),
+        // And a path is a path: relative, and never up out of wherever it is
+        // resolved.
+        (
+            LabNotebook {
+                path: "../../etc/passwd".into(),
+                revision: None,
+                command: None,
+                port: None,
+            },
+            "notebook.path",
+        ),
+        (
+            LabNotebook {
+                path: "labs/00_foundations/notebook.py".into(),
+                revision: None,
+                command: Some("just notebook\nrm -rf /".into()),
+                port: None,
+            },
+            "notebook.command",
+        ),
+        (
+            LabNotebook {
+                path: "labs/00_foundations/notebook.py".into(),
+                revision: None,
+                command: None,
+                port: Some(80),
+            },
+            "notebook.port",
         ),
     ] {
         let mut asked = lab("lab-03", "Build an agent.");
@@ -525,4 +570,54 @@ async fn a_notebook_pin_the_runtime_could_never_resolve_is_refused_by_field() {
             "{refused} should name {field}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_notebook_in_somebodys_checkout_is_named_and_opened_without_a_digest() {
+    // The workshop shape: nine steps in a repository with its own environment,
+    // opened by the workshop's own recipe. This instance has never seen those
+    // bytes, so it pins none — a digest it could not check would be a promise
+    // it could not keep, and what holds that file still is the workshop's own
+    // version control.
+    let registry = registry();
+    let name = LabName::parse("lab-03").unwrap();
+    let mut asked = lab("lab-03", "Follow one failed request all the way through.");
+    asked.notebook = Some(checkout());
+
+    let published = registry
+        .publish(publish(asked.clone(), Some("published")), None)
+        .await
+        .unwrap();
+    assert!(published.created);
+    assert_eq!(
+        published.head.versions.first().map(|v| v.has_notebook),
+        Some(true),
+        "handing one out is handing one out, digest or no digest"
+    );
+
+    let stored = registry
+        .version(&name, &published.version.version_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .lab
+        .notebook
+        .unwrap();
+    assert_eq!(stored.revision, None);
+    assert_eq!(stored.port, Some(2718));
+    assert_eq!(
+        stored.command.as_deref(),
+        Some("just notebook foundations 00_llm_workflow_map")
+    );
+
+    // And it is part of the version like everything else: moving the workshop's
+    // recipe is a new lab, not a quiet edit under the people already on it.
+    let mut moved = asked;
+    moved.notebook = Some(LabNotebook {
+        command: Some("just notebook foundations 00_llm_workflow_map --port 2720".into()),
+        ..checkout()
+    });
+    let again = registry.publish(publish(moved, None), None).await.unwrap();
+    assert!(again.created);
+    assert_ne!(again.version.version_id, published.version.version_id);
 }
