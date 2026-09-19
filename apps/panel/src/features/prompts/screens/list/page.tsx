@@ -103,21 +103,22 @@ export function PromptsPage() {
             an optimiser tried on it and whether the held-out split agreed.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="relative">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+          <label className="relative min-w-0 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder="Search name, description, tag"
-              className="h-9 w-72 rounded-md border border-border bg-transparent pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              aria-label="Search prompts"
+              className="h-9 w-full sm:w-72 rounded-md border border-border bg-transparent pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
             />
           </label>
           <Button disabled={create.isPending} onClick={() => {
             if (creating && !confirmDiscard()) return;
             if (!creating) publishedTarget.current = undefined;
             setCreating(!creating);
-          }} className="gap-1.5">
+          }} className="shrink-0 gap-1.5 whitespace-nowrap">
             <Plus className="h-3.5 w-3.5" />
             New prompt
           </Button>
@@ -148,7 +149,7 @@ export function PromptsPage() {
           }
         />
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-x-auto" role="region" aria-label="Prompts" tabIndex={0}>
           <table className="w-full text-sm">
             <thead className="border-b border-border bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>

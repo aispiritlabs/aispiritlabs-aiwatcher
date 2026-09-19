@@ -1065,7 +1065,7 @@ def registries(api: Api, force: bool) -> None:
         try:
             detail = step()
         except Exception as error:  # noqa: BLE001 — one step failing must not stop the rest
-            say(f"✗ {name}: {error} — {LOG.relative_to(ROOT)} has the output; tried again next start")
+            say(f"✗ {name}: {error} — {LOG} has the output; tried again next start")
             continue
         done[name] = iso(datetime.now(UTC))
         DATA.mkdir(parents=True, exist_ok=True)

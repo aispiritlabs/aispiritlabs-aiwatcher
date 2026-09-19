@@ -105,6 +105,23 @@ async fn a_signed_request_is_accepted_and_objects_round_trip() {
 
 #[tokio::test]
 #[ignore = "needs a RustFS; run `just test-rustfs`"]
+async fn empty_objects_round_trip_and_can_be_created_conditionally() {
+    let store = store("aiwatcher-test-empty").await;
+    let key = "results/000003.jsonl";
+    store
+        .put(key, Vec::new())
+        .await
+        .expect("empty result shard");
+    assert_eq!(store.get(key).await.unwrap(), Some(Vec::new()));
+    assert!(!store.create(key, b"replacement".to_vec()).await.unwrap());
+    assert_eq!(store.get(key).await.unwrap(), Some(Vec::new()));
+    store.delete(key).await.unwrap();
+    assert!(store.create(key, Vec::new()).await.unwrap());
+    assert_eq!(store.get(key).await.unwrap(), Some(Vec::new()));
+}
+
+#[tokio::test]
+#[ignore = "needs a RustFS; run `just test-rustfs`"]
 async fn the_serving_reader_signature_is_accepted_by_a_real_object_store() {
     let bucket = "aiwatcher-test-serving-reader";
     let store = store(bucket).await;

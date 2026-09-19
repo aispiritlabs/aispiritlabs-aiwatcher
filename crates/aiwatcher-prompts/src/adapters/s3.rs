@@ -209,6 +209,7 @@ impl S3ObjectStore {
             ));
         }
 
+        let is_put = method == Method::PUT;
         let mut request = self
             .http
             .request(method, url)
@@ -222,6 +223,11 @@ impl S3ObjectStore {
 
         if create {
             request = request.header("if-none-match", "*");
+        }
+        // An empty shard is still an object. Explicitly frame empty PUTs:
+        // RustFS rejects a zero-byte body without Content-Length as UnexpectedContent.
+        if is_put {
+            request = request.header(reqwest::header::CONTENT_LENGTH, body.len());
         }
         let response = request.body(body).send().await.map_err(|error| {
             // Nothing was answered, so the request may or may not have landed.

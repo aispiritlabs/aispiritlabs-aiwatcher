@@ -33,7 +33,7 @@ export type AttributeSearch = ObjectFilterSearch;
  * engine can express is one the builder would have to drop the moment it was
  * clicked. See `query-builder.ts`.
  */
-const IDS: AttributeId[] = [
+const IDS = [
   'agent',
   'runtime',
   'workflow',
@@ -42,7 +42,7 @@ const IDS: AttributeId[] = [
   'tool',
   'trace',
   'status',
-];
+] as const satisfies readonly AttributeId[];
 
 export function selectionFromSearch(search: AttributeSearch): AttributeSelection {
   const filter = filterFromSearch(search);
