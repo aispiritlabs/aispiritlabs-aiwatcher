@@ -1,3 +1,4 @@
+import { compareSearchSchema } from '@/shared/components/period-compare';
 import { windowSearchSchema } from '@/shared/components/time-range';
 import { objectFilterSchema } from '@/shared/lib/object-filter';
 import { z } from 'zod';
@@ -10,12 +11,18 @@ import { z } from 'zod';
  * list is built from. The window is bounded by retention, which the header
  * states rather than hides.
  *
- * The filter is the shared one, so arriving from a table keeps the question.
- * The metrics route takes three of its nine axes today and the page names the
- * six it could not apply — the alternative, a control that silently narrows
- * here and not there, is what this vocabulary exists to end.
+ * The filter is the shared one, so arriving from a table keeps the question,
+ * and this route takes every axis of it: it selects the runs the numbers are
+ * about and then narrows the call counters to the call the axis names. It took
+ * three of them when the vocabulary was written, and the page named the rest as
+ * unapplied — which was honest and is now unnecessary.
+ *
+ * `compare` is the second period: the one before this one, on the same filter,
+ * so that "worse than an hour ago" is a question this page answers rather than
+ * one somebody answers by changing the window twice and remembering.
  */
 export const searchSchema = z.object({
   ...windowSearchSchema,
   ...objectFilterSchema,
+  ...compareSearchSchema,
 });

@@ -272,9 +272,10 @@ before changing that area.
 
 6. **One fold slices runs every way, and every list is a cursor page**
    ([ADR_0007](docs/ADR/ADR_0007_EXPLORER_DIMENSIONS.md)).
-   `dimensions::compute` answers `session | agent | runtime | workflow | trace |
-   model | tool` with one row shape — the pivots differ only in which key a run
-   contributes. Nothing loads a whole run: `read_stream_page` pages the log,
+   `dimensions::compute` answers `session | agent | runtime | workflow |
+   variant | trace | model | tool | prompt` with one row shape — the pivots
+   differ only in which key a run contributes, and `prompt` is the one that
+   needed the span's `aiwatcher.prompt.name` lifted to be asked at all. Nothing loads a whole run: `read_stream_page` pages the log,
    `/spans` and `/dimensions` page the read model, and search runs on the server.
    The live path stays in Rust.
 

@@ -1,6 +1,8 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { AlertTriangle, Check, X } from 'lucide-react';
 
+import { listPrompts } from '@/api/generated/sdk.gen';
 import type {
   OptimizationSummary,
   PromptVersionSummary,
@@ -59,6 +61,43 @@ export function PromptRefLink({ name, versionId }: { name: unknown; versionId: u
       title={`${name} @ ${versionId}`}
     >
       {name}@{short}
+    </Link>
+  );
+}
+
+/**
+ * A prompt a fold grouped by, as a link into the registry.
+ *
+ * [`PromptRefLink`] is the other half: it starts from a call, which carries a
+ * version id, and the id is its admission. This one starts from a *name* — the
+ * key of the `prompt` dimension, lifted off `aiwatcher.prompt.name` — and a
+ * name is whatever a producer sent. Nothing says the registry holds it: the
+ * text is authored and outlives retention (ADR_0011), while the name on a span
+ * is retained telemetry, so the two halves can disagree in either direction.
+ *
+ * So the registry is asked, and a name it does not list is rendered as the
+ * fact it is — the same rule as `lineage-reference.tsx`'s, for the same reason.
+ * One page is read for every name on a screen, because a registry with more
+ * prompts than that page holds leaves a name *unresolved*, which lands on the
+ * safe side of the rule rather than on a link that 404s.
+ */
+export function PromptNameLink({ name }: { name: string }) {
+  const registry = useQuery({
+    queryKey: ['lineage-prompts'],
+    retry: false,
+    // No store configured answers 501, which `throwOnError` turns into a
+    // failure rather than an empty registry — and an unreadable registry
+    // resolves nothing, which is what the unlinked branch below means.
+    queryFn: async () => (await listPrompts({ throwOnError: true, query: { limit: 500 } })).data,
+    staleTime: 60_000,
+  });
+
+  if (!registry.data?.prompts.some((prompt) => prompt.name === name)) {
+    return <span title="No registered prompt of this name was confirmed">{name}</span>;
+  }
+  return (
+    <Link to="/prompts/$name" params={{ name }} className="text-primary hover:underline">
+      {name}
     </Link>
   );
 }

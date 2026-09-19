@@ -74,10 +74,44 @@ function metrics(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function mount(search = '', body: unknown = metrics()) {
+/** One dimension row, with the fields this page reads. */
+function row(key: string, runs: number) {
+  return {
+    key,
+    runs,
+    running: 0,
+    failures: 0,
+    llm_calls: 0,
+    tool_calls: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    first_activity_at: '2026-09-18T10:00:00Z',
+    last_activity_at: '2026-09-18T11:00:00Z',
+  };
+}
+
+const REGISTERED = {
+  status: 200,
+  body: { prompts: [{ name: 'extract-rooms' }], total: 1, next_cursor: null },
+};
+
+function mount(
+  search = '',
+  body: unknown = metrics(),
+  prompts: { status: number; body?: unknown } = REGISTERED,
+  second?: unknown,
+) {
   vi.stubGlobal('scrollTo', () => {});
   serve([
-    { method: 'GET', path: '/metrics', answer: { status: 200, body } },
+    {
+      method: 'GET',
+      path: '/metrics',
+      answer: (call) =>
+        call > 1 && second !== undefined
+          ? { status: 200, body: second }
+          : { status: 200, body },
+    },
     {
       method: 'GET',
       path: '/runs',
@@ -93,6 +127,20 @@ function mount(search = '', body: unknown = metrics()) {
       path: '/dimensions/runtime',
       answer: { status: 200, body: { kind: 'runtime', rows: [], total: 0, ungrouped_runs: 0 } },
     },
+    {
+      method: 'GET',
+      path: '/dimensions/prompt',
+      answer: {
+        status: 200,
+        body: {
+          kind: 'prompt',
+          rows: [row('extract-rooms', 4), row('retired-draft', 1)],
+          total: 2,
+          ungrouped_runs: 3,
+        },
+      },
+    },
+    { method: 'GET', path: '/prompts', answer: prompts },
   ]);
   const requests = vi.fn(fetch);
   vi.stubGlobal('fetch', requests);
@@ -136,10 +184,20 @@ it('carries a filter it arrived with into the runs it can apply it to', async ()
   await screen.findByText('What this agent did');
   expect(urlFor(requests, '/runs')?.searchParams.get('workflow')).toBe('house-import');
   expect(urlFor(requests, '/runs')?.searchParams.get('agent_id')).toBe('researcher');
-  // The metrics route has no workflow parameter, so the page says so rather
-  // than letting a chart look narrowed.
-  expect(urlFor(requests, '/metrics')?.searchParams.get('workflow')).toBeNull();
-  expect(screen.getByText(/Not applied here/)).toBeTruthy();
+  // Both reads take it now, so the strip and the list are about one population
+  // — which is what this page claims by putting them on one screen.
+  expect(urlFor(requests, '/metrics')?.searchParams.get('workflow')).toBe('house-import');
+  expect(urlFor(requests, '/metrics')?.searchParams.get('agent_id')).toBe('researcher');
+  expect(screen.queryByText(/Not applied here/)).toBeNull();
+});
+
+it('still says when an axis the page is about is contradicted', async () => {
+  // The path is the agent, so a link naming a different one is reported rather
+  // than quietly overridden — the one thing on this page a filter cannot do.
+  const { requests } = mount('?agent=planner');
+  await screen.findByText('What this agent did');
+  expect(screen.getByText(/this page is about researcher/)).toBeTruthy();
+  expect(urlFor(requests, '/runs')?.searchParams.get('agent_id')).toBe('researcher');
 });
 
 it('says the period holds nothing rather than pretending the agent is unknown', async () => {
@@ -149,8 +207,54 @@ it('says the period holds nothing rather than pretending the agent is unknown', 
   await screen.findByText('Nothing under this agent in the period');
 });
 
-it('names the prompts it cannot list instead of leaving the question out', async () => {
-  mount();
+it('lists the prompts its runs named, and links only the ones the registry holds', async () => {
+  // The name is retained telemetry and the registry is authored, so the two
+  // can disagree in either direction: `retired-draft` ran and is no longer
+  // registered. A link that 404s is worse than a fact somebody looks up.
+  const { requests } = mount();
   await screen.findByText('Prompts it runs on');
-  expect(screen.getByText(/counted in the browser/)).toBeTruthy();
+  expect(await screen.findByRole('link', { name: 'extract-rooms' })).toBeTruthy();
+  expect(screen.getByText('retired-draft').tagName).toBe('SPAN');
+  expect(screen.getByText('3 of its runs named no prompt.')).toBeTruthy();
+  // The dimension carries the page's whole filter, so this card is about the
+  // same runs as the strip above it.
+  expect(urlFor(requests, '/dimensions/prompt')?.searchParams.get('agent_id')).toBe('researcher');
+});
+
+it('renders a prompt as a fact when no registry answers at all', async () => {
+  // 501 is the store saying it is not configured. An unreadable registry
+  // resolves nothing, which is the same answer as a name it does not list.
+  mount('', metrics(), { status: 501, body: { code: 'not_configured', message: 'no store' } });
+  await screen.findByText('Prompts it runs on');
+  expect(await screen.findByText('extract-rooms')).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'extract-rooms' })).toBeNull();
+});
+
+it('sets its own figures beside the period before, and asks for it by the server’s boundary', async () => {
+  const earlier = metrics();
+  earlier.by_agent = [{ ...earlier.by_agent[0]!, runs: 2, llm_calls: 3, cost_usd: 0.21 }];
+  earlier.window = { ...earlier.window, from: '2026-09-18T09:00:00Z', to: '2026-09-18T10:00:00Z' };
+  const { requests } = mount('?window=3600&compare=previous', metrics(), REGISTERED, earlier);
+  await screen.findByText(/Compared with/);
+  const second = requests.mock.calls
+    .map(([request]) => new URL((request as Request).url))
+    .filter((url) => url.pathname.endsWith('/metrics'))[1]!;
+  // The boundary is the one the first answer reported, one second earlier, so
+  // the two halves are adjacent whatever this browser's clock says.
+  expect(second.searchParams.get('as_of')).toBe(
+    String(Date.parse('2026-09-18T10:00:00Z') / 1000 - 1),
+  );
+  // Four runs now against two then, and six calls against three: the figures
+  // are the agent's own row in each period, never the totals beside them.
+  expect(screen.getByText('was 2 · +100%')).toBeTruthy();
+  expect(within(screen.getByText('Cost').parentElement!).getByText(/was \$0.21/)).toBeTruthy();
+});
+
+it('says once that an agent did not run in the period before', async () => {
+  // Six "nothing reported before" lines would be six ways of saying one fact,
+  // and the fact is about the agent rather than about any of the figures.
+  const earlier = metrics({ by_agent: [] });
+  mount('?window=3600&compare=previous', metrics(), REGISTERED, earlier);
+  await screen.findByText(/This agent has no runs in it/);
+  expect(screen.queryByText(/^was /)).toBeNull();
 });

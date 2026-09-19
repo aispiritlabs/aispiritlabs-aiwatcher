@@ -63,6 +63,7 @@ const PIVOT_AXIS: Record<Exclude<Pivot, 'span'>, ObjectAxis> = {
   trace: 'trace',
   model: 'model',
   tool: 'tool',
+  prompt: 'prompt',
 };
 
 const TREE_PAGE = 100;
@@ -505,6 +506,8 @@ const PIVOT_FIELD: Record<Exclude<Pivot, 'span' | 'trace'>, string> = {
   variant: 'variant_id',
   model: 'gen_ai.request.model on an LLM span',
   tool: 'gen_ai.tool.name on a tool span',
+  prompt:
+    'aiwatcher.prompt.name on an LLM span — a call that sent only a version id has no key here',
 };
 
 function EmptyPivot({ pivot, find, ungrouped }: { pivot: Pivot; find: string; ungrouped: number }) {
@@ -669,6 +672,21 @@ function TreeNode({
     >
       <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dotFor(span))} />
       <span className="flex-1 truncate">{span.name}</span>
+      {/*
+       * The prompt the call named, as a fact and never as a link: the row is a
+       * button, and the pane it opens links the version into the registry
+       * (`PromptRefLink`). Without it a list of calls says how long each took
+       * and nothing about what decided its answer — which is the gap the
+       * `prompt` pivot beside it was added to close from the other end.
+       */}
+      {span.prompt_name ? (
+        <span
+          className="hidden max-w-[10rem] shrink-0 truncate rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground sm:inline-block"
+          title={`prompt ${span.prompt_name}`}
+        >
+          {span.prompt_name}
+        </span>
+      ) : null}
       {span.step_type ? (
         <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
           {span.step_type}

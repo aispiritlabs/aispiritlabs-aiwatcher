@@ -23,24 +23,30 @@ followed by a full `tsc` project check.
 - **One filter, every table and every chart** (`src/shared/lib/object-filter.ts`).
   The axes are the dimensions' own names plus the run's status — `agent`,
   `runtime`, `workflow`, `session`, `variant`, `trace`, `model`, `tool`,
-  `status` — and translating one into a route's parameter happens there and
-  nowhere else. Five rules carry it. A **filter selects runs**: every axis names
-  a property a run has, directly or through its spans, which is how `RunFilter`
-  already matches model and tool. A **number is counted over the selected
-  runs**, and narrowed further only where the axis is about the thing being
-  counted — with a model chosen, LLM calls and tokens are that model's while
-  tool calls are every tool call in those runs, and `queryFor` returns that
-  sentence beside the request so a page cannot keep saying it after the route
-  stops doing it. `/metrics` is the one read that does something else, and its
-  sentence says so: its model parameter skips other models' spans and leaves
-  the run set alone (UX-02). A **view that cannot apply an axis names it** — the
-  Live view's rule, now everybody's, and the three reasons are that the route
-  has no parameter, that the word means something else here (a span's `ok |
-  error` is not a run's status) or that more values were chosen than the route
-  takes; an axis is then *not sent*, because a narrower answer than the chips
-  claim is the one failure a filter must not have. And it lives in the **URL**,
-  so it survives a move between an area's views the way the window does. A bare
-  value reads as a list of one, which is what keeps `?status=failed` working.
+  `prompt`, `status` — and translating one into a route's parameter happens
+  there and nowhere else. Five rules carry it. A **filter selects runs**: every
+  axis names a property a run has, directly or through its spans, which is how
+  `RunFilter` already matches model, tool and prompt. A **number is counted
+  over the selected runs**, and narrowed further only where the axis is about
+  the thing being counted *and the read counts something smaller than a run*.
+  Only `/metrics` does: with a model chosen its LLM calls and tokens are that
+  model's while its tool calls are every tool call in those runs, because a tool
+  call has no model. `/runs` and `/dimensions/{kind}` count nothing below the
+  run — every figure on a row is a total folded when the run was ingested, the
+  same number whatever the filter says — so there a model axis selects and
+  narrows nothing, and the page says *that*. `queryFor` returns whichever
+  sentence is true beside the request it describes, so a page cannot keep saying
+  one after the route stops doing it; the span list says neither, because its
+  rows are the calls the chips already name. A **view that cannot apply an axis
+  names it** — the Live view's rule, now everybody's, and the three reasons are
+  that the route has no parameter (only the span list still has any: five axes
+  that are properties of a run rather than of a span), that the word means
+  something else here (a span's `ok | error` is not a run's status) or that more
+  values were chosen than the route takes; an axis is then *not sent*, because a
+  narrower answer than the chips claim is the one failure a filter must not
+  have. And it lives in the **URL**, so it survives a move between an area's
+  views the way the window does. A bare value reads as a list of one, which is
+  what keeps `?status=failed` working.
 - `agents` is an area rather than a pivot, and the reason is worth keeping: an
   agent is **not an authored object** — no registry, no version, nothing
   outliving retention — so its page never 404s on a name, it says the period
@@ -49,9 +55,15 @@ followed by a full `tsc` project check.
   *span*, so it is this agent's own calls, tokens, cost and latency, while
   `by_model` and `by_tool` are folded over every span of the runs it took part
   in — a run where it hands work to another agent counts that agent's models
-  there, and the cards say so. Which prompts an agent uses is **not answerable**
-  from any read that exists, and the page says that too rather than counting
-  versions out of every run's spans in the browser.
+  there, and the cards say so. Which prompts an agent runs on is a third read,
+  and the card that used to say it was **not answerable** is why the `prompt`
+  dimension exists: the answer was in the spans and no fold grouped by it, so
+  the only way to the list was paging every run and counting versions in the
+  browser. It is the name and never the version — the registry is keyed by name
+  and a version is what a prompt's own page lists — and the name is linked only
+  where the registry confirms it holds one, because a span's prompt name is
+  retained telemetry while the text is authored and outlives it, so the two can
+  disagree in either direction.
 - Routes are grouped into peer work areas — Data, Models & quality,
   Applications, Workflows and Learning — described once in
   `src/app/navigation.ts`. The desktop sidebar exposes all areas; mobile
@@ -286,6 +298,23 @@ followed by a full `tsc` project check.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
+- **A second period is the one before this one, and its end is the server's**
+  (`src/shared/components/period-compare.tsx`). `?compare=previous` on Metrics
+  and on an agent's page reads the same route twice on the same filter, and the
+  baseline ends one second before the window the *first answer reported*
+  started — never `now - window` worked out here, because a relative window is
+  resolved against the server's clock and a browser running a few minutes fast
+  would ask for a period overlapping the one beside it, invisibly. One second,
+  because both ends of a window are inclusive. The pair is relative like the
+  window itself: the link means "the period before whatever this opens on", and
+  pinning a baseline to a fixed instant is a different question and would want
+  a control of its own. "All" has no period before it, so the toggle is
+  disabled and says so rather than disappearing. **A change is never coloured
+  here** — the one place the panel colours a delta is a pinned evaluation
+  context that declares a direction per metric, and nothing declares that about
+  a run count or a bill. A rate moves in *points*, an absent baseline reads as
+  "nothing reported before" rather than as nought, and a baseline of zero gets
+  no percentage, because nothing is not a denominator.
 - Every list that can grow with retention also carries the time window
   (`src/shared/components/time-range.tsx`), in the URL as `window` seconds and
   served by the API as `window_seconds`. One control, one preset list, one

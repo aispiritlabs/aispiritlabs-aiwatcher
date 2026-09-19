@@ -16,7 +16,10 @@ import type { RunStatus } from '@/api/generated/types.gen';
  *
  * This is the vocabulary, and it is the dimensions' (ADR_0007) plus the run's
  * status. Five rules carry it; `docs/flow-01-inventory-2026-09-18.md` argues
- * them.
+ * them. `prompt` is the newest axis and the one the read model had to grow —
+ * a span carried the registered prompt a call named and no read grouped by it,
+ * so "which prompts does this agent run on" was a question with data behind it
+ * and no way to ask.
  *
  * 1. **One name per axis**, the same in every URL. Translating an axis to a
  *    route's parameter happens here and nowhere else.
@@ -24,9 +27,13 @@ import type { RunStatus } from '@/api/generated/types.gen';
  *    directly, or through its spans, which is how `RunFilter` already matches
  *    `model` and `tool`. Axes are conjunctive.
  * 3. **A number is counted over the selected runs**, and narrowed further only
- *    where the axis is about the thing being counted: with a model chosen, LLM
- *    calls and tokens are that model's, while tool calls are every tool call in
- *    those runs, because a tool call has no model.
+ *    where the axis is about the thing being counted *and* the read counts
+ *    something smaller than a run. On `/metrics`, which folds calls, a chosen
+ *    model makes LLM calls and tokens that model's while tool calls stay every
+ *    tool call in those runs, because a tool call has no model. On `/runs` and
+ *    `/dimensions`, whose every figure is a run's own total, nothing below the
+ *    run narrows at all — and [`queryFor`] says which of the two a page is
+ *    showing.
  * 4. **A view that cannot apply an axis says so** rather than dropping it.
  *    [`queryFor`] returns what it could not send and why, in the words the page
  *    renders. The Live view has done this since it existed; this is the same
@@ -48,6 +55,7 @@ export const OBJECT_AXES = [
   'trace',
   'model',
   'tool',
+  'prompt',
   'status',
 ] as const;
 
@@ -88,6 +96,7 @@ export const objectFilterSchema = {
   trace: values,
   model: values,
   tool: values,
+  prompt: values,
   status: values,
 };
 
@@ -143,24 +152,40 @@ export function toggle(filter: ObjectFilter, axis: ObjectAxis, value: string): O
 export type FilterTarget = 'runs' | 'spans' | 'dimensions' | 'metrics';
 
 /**
+ * The run's own axes, under the read model's parameter names.
+ *
+ * Three reads share this table because they now share a predicate: `/runs`
+ * lists the runs a filter selects, `/dimensions/{kind}` groups them and
+ * `/metrics` folds them, so a question one of them can be asked can be asked
+ * of all three. The span list is the one that differs, and differs about
+ * *what a span is* rather than about what has been implemented.
+ */
+const RUN_PARAMETERS: Record<ObjectAxis, string | null> = {
+  agent: 'agent_id',
+  runtime: 'runtime',
+  workflow: 'workflow',
+  session: 'conversation_id',
+  variant: 'variant_id',
+  trace: 'trace_id',
+  model: 'model',
+  tool: 'tool',
+  prompt: 'prompt',
+  status: 'status',
+};
+
+/**
  * Axis → the route's parameter, or why it has none.
  *
  * `null` is "this route has no parameter for it"; a string is the parameter's
  * name. The sentences for the nulls are in [`WHY_NOT`] rather than here, so
- * that adding a parameter server-side is one edit in one table.
+ * that adding a parameter server-side is one edit in one table — and that is
+ * what this table's history is. Three of the four reads took a handful of axes
+ * when it was written; the dimension and metrics rows are full now because the
+ * projector grew the rest and folds all three reads through one predicate
+ * (`crate::selection`).
  */
 const PARAMETER: Record<FilterTarget, Record<ObjectAxis, string | null>> = {
-  runs: {
-    agent: 'agent_id',
-    runtime: 'runtime',
-    workflow: 'workflow',
-    session: 'conversation_id',
-    variant: 'variant_id',
-    trace: 'trace_id',
-    model: 'model',
-    tool: 'tool',
-    status: 'status',
-  },
+  runs: RUN_PARAMETERS,
   spans: {
     agent: 'agent_id',
     runtime: null,
@@ -170,43 +195,26 @@ const PARAMETER: Record<FilterTarget, Record<ObjectAxis, string | null>> = {
     trace: 'trace_id',
     model: 'model',
     tool: 'tool',
+    prompt: 'prompt',
     // Deliberately not `status`: the span route's is `ok | error`, which is a
     // span's outcome and not the run's. A failed span inside a run that
     // succeeded is an ordinary thing, so sharing one word would make the
     // filter lie about what it selected.
     status: null,
   },
-  dimensions: {
-    agent: 'agent_id',
-    runtime: null,
-    workflow: null,
-    session: null,
-    variant: null,
-    trace: null,
-    model: null,
-    tool: null,
-    status: null,
-  },
-  metrics: {
-    agent: 'agent_id',
-    runtime: null,
-    workflow: null,
-    session: 'conversation_id',
-    variant: null,
-    trace: null,
-    model: 'model',
-    tool: null,
-    status: null,
-  },
+  dimensions: RUN_PARAMETERS,
+  metrics: RUN_PARAMETERS,
 };
 
 /**
  * Why a route cannot answer an axis, in the words the page renders.
  *
- * A fact about the read model, not an apology: `/spans` has no session because
- * a span does not name one, while `/metrics` has no runtime because nobody has
- * added the parameter yet. A reader deciding whether to switch views needs to
- * know which of the two they are looking at.
+ * A fact about the read model, not an apology — and the span list is the only
+ * read left with any. The five it names are properties of a *run*: a span does
+ * not name the session, the workflow, the runtime or the variant its run has,
+ * and its own `ok | error` is not the run's status. No parameter is coming for
+ * them, which is the opposite of the six the dimension and metrics routes were
+ * missing when this was written and now have.
  */
 const WHY_NOT: Partial<Record<FilterTarget, Partial<Record<ObjectAxis, string>>>> = {
   spans: {
@@ -215,24 +223,6 @@ const WHY_NOT: Partial<Record<FilterTarget, Partial<Record<ObjectAxis, string>>>
     session: 'a span does not name its session',
     variant: 'a span list is not narrowed by variant',
     status: 'a span carries its own outcome, not the run’s status',
-  },
-  dimensions: {
-    runtime: 'the dimension route narrows by agent alone',
-    workflow: 'the dimension route narrows by agent alone',
-    session: 'the dimension route narrows by agent alone',
-    variant: 'the dimension route narrows by agent alone',
-    trace: 'the dimension route narrows by agent alone',
-    model: 'the dimension route narrows by agent alone',
-    tool: 'the dimension route narrows by agent alone',
-    status: 'the dimension route narrows by agent alone',
-  },
-  metrics: {
-    runtime: 'the metrics route takes agent, session and model',
-    workflow: 'the metrics route takes agent, session and model',
-    variant: 'the metrics route takes agent, session and model',
-    trace: 'the metrics route takes agent, session and model',
-    tool: 'the metrics route takes agent, session and model',
-    status: 'the metrics route takes agent, session and model',
   },
 };
 
@@ -252,20 +242,24 @@ export interface Unapplied {
  * is the one worth keeping closed.
  */
 export interface TargetQuery {
-  runs: {
-    agent_id?: string;
-    runtime?: string;
-    workflow?: string;
-    conversation_id?: string;
-    variant_id?: string;
-    trace_id?: string;
-    model?: string;
-    tool?: string;
-    status?: RunStatus;
-  };
-  spans: { agent_id?: string; trace_id?: string; model?: string; tool?: string };
-  dimensions: { agent_id?: string };
-  metrics: { agent_id?: string; conversation_id?: string; model?: string };
+  runs: RunQuery;
+  spans: { agent_id?: string; trace_id?: string; model?: string; tool?: string; prompt?: string };
+  dimensions: RunQuery;
+  metrics: RunQuery;
+}
+
+/** The query [`RUN_PARAMETERS`] translates to, for the three reads that take it. */
+interface RunQuery {
+  agent_id?: string;
+  runtime?: string;
+  workflow?: string;
+  conversation_id?: string;
+  variant_id?: string;
+  trace_id?: string;
+  model?: string;
+  tool?: string;
+  prompt?: string;
+  status?: RunStatus;
 }
 
 export interface TranslatedFilter<T extends FilterTarget> {
@@ -342,34 +336,50 @@ export function queryFor<T extends FilterTarget>(
 /**
  * What the sent axes do to one read's numbers.
  *
- * The general rule is rule 3: the filter selects runs, and an axis narrows a
- * counter below the run only where it is about what that counter counts.
- * `/metrics` is the one read that does something else today — its model
- * parameter skips other models' spans and leaves the run set alone — so it
- * says that instead. The two sentences differ in what they claim about the
- * *run* count beside them, which is the difference a reader is entitled to.
+ * Rule 3, per read, because the four reads count different things and only one
+ * of them counts anything smaller than a run.
+ *
+ * `/metrics` folds the calls of the selected runs, so a call-level axis
+ * narrows the call-level counters and leaves the rest: with a model chosen,
+ * LLM calls and tokens are that model's while tool calls are every tool call
+ * in those runs, because a tool call has no model.
+ *
+ * `/runs` and `/dimensions/{kind}` count nothing below the run: every figure
+ * on a row is the run's own total, folded when the run was ingested and the
+ * same number whatever the filter says. So a model axis *selects* there and
+ * narrows nothing, and saying otherwise would put the metrics page's sentence
+ * over a list it is not true of — two numbers a reader would take for one.
+ *
+ * The span list says nothing, and that is the point: its rows *are* the calls
+ * the filter names, which is what the chips above them already claim.
  */
 function notesFor(target: FilterTarget, applied: Set<ObjectAxis>): string[] {
-  if (target === 'metrics') {
-    return applied.has('model')
-      ? [
-          'The model narrows LLM calls, tokens, cost and LLM latency. It does not select the runs, so the run, tool and step counters cover every run matching the other axes.',
-        ]
-      : [];
-  }
-  const clauses: string[] = [];
-  if (applied.has('model')) {
-    clauses.push(
-      'LLM calls, tokens, cost and LLM latency are that model’s; tool and step counters cover every call in them',
-    );
-  }
-  if (applied.has('tool')) {
-    clauses.push(
-      'tool counters are that tool’s; LLM and step counters cover every call in them',
-    );
-  }
-  return clauses.length === 0
-    ? []
-    : [`Runs are the ones matching the filter. Within them, ${clauses.join('; and ')}.`];
-}
+  // The axes a call carries. A run carries the rest, and no read narrows a run
+  // by something the run itself is.
+  const call = (['model', 'prompt', 'tool'] as const).filter((axis) => applied.has(axis));
+  if (call.length === 0 || target === 'spans') return [];
 
+  if (target === 'metrics') {
+    const clauses: string[] = [];
+    const llm = call.filter((axis) => axis !== 'tool');
+    if (llm.length > 0) {
+      clauses.push(
+        `LLM calls, tokens, cost and LLM latency are ${llm
+          .map((axis) => `that ${axis}’s`)
+          .join(' and ')}`,
+      );
+    }
+    if (applied.has('tool')) clauses.push('tool counters are that tool’s');
+    return [
+      `Runs are the ones matching the filter. Within them, ${clauses.join(
+        '; and ',
+      )}; every other counter covers every call in those runs.`,
+    ];
+  }
+
+  return [
+    `Runs are the ones matching the filter. Each row's counts are the run's own totals, over every call in it rather than only ${call
+      .map((axis) => `that ${axis}’s`)
+      .join(' and ')}.`,
+  ];
+}

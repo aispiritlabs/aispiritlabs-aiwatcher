@@ -34,6 +34,7 @@ export const PIVOTS = [
   'trace',
   'model',
   'tool',
+  'prompt',
   'span',
 ] as const;
 

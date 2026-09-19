@@ -3,7 +3,7 @@ import { getRouteApi } from '@tanstack/react-router';
 import * as React from 'react';
 
 import { getMetrics } from '@/api/generated/sdk.gen';
-import type { Percentiles } from '@/api/generated/types.gen';
+import type { MetricsSummary, Percentiles } from '@/api/generated/types.gen';
 import { ObjectFilterBar } from '@/features/observability/components/object-filter-bar';
 import {
   filterFromSearch,
@@ -16,6 +16,12 @@ import type { SeriesDef } from '@/shared/components/charts/primitives';
 import { SERIES } from '@/shared/components/charts/primitives';
 import { RankedBars, type RankedRow } from '@/shared/components/charts/ranked-bars';
 import { StackedBars } from '@/shared/components/charts/stacked-bars';
+import {
+  AgainstPeriod,
+  CompareToggle,
+  endOfPeriodBefore,
+  periodLabel,
+} from '@/shared/components/period-compare';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
 import {
   Card,
@@ -83,6 +89,29 @@ export function MetricsPage() {
     },
   });
 
+  // The second period is derived from the first rather than from this clock —
+  // `period-compare.tsx` says why — so it waits for the first to answer and
+  // ends one second before the window it reported starts.
+  const comparing = search.compare === 'previous' && windowSeconds > 0;
+  const endedAt = query.data ? endOfPeriodBefore(query.data.window.from) : undefined;
+  const before = useQuery({
+    queryKey: ['metrics', 'before', windowSeconds, filterQuery, endedAt],
+    enabled: comparing && endedAt !== undefined,
+    queryFn: async () => {
+      const response = await getMetrics({
+        query: {
+          ...filterQuery,
+          window_seconds: windowParam(windowSeconds),
+          as_of: endedAt,
+          buckets: 48,
+        },
+      });
+      if (response.error) throw new Error('failed to load the previous period');
+      return response.data;
+    },
+  });
+  const was = comparing ? before.data : undefined;
+
   const filterBar = (
     <ObjectFilterBar
       filter={filter}
@@ -124,7 +153,7 @@ export function MetricsPage() {
     (bucket) => typeof bucket.succeeded === 'number' && typeof bucket.running === 'number',
   );
   const completed = totals.succeeded + totals.failed;
-  const successRate = completed > 0 ? totals.succeeded / completed : undefined;
+  const successRate = successRateOf(totals);
   const truncated = window.runs_retained >= window.retention_limit;
 
   return (
@@ -141,15 +170,41 @@ export function MetricsPage() {
             and call latency use retained completed spans.
           </p>
         </div>
-        <TimeRange
-          value={windowSeconds}
-          onChange={(seconds) =>
-            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
-          }
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <TimeRange
+            value={windowSeconds}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
+          <CompareToggle
+            on={search.compare === 'previous'}
+            windowSeconds={windowSeconds}
+            onChange={(on) =>
+              void navigate({
+                search: (previous) => ({ ...previous, compare: on ? 'previous' : undefined }),
+              })
+            }
+          />
+        </div>
       </div>
 
       {filterBar}
+
+      {comparing ? (
+        <p className="text-xs text-muted-foreground">
+          {before.isError ? (
+            <span className="text-danger">Could not read the previous period.</span>
+          ) : was ? (
+            <>
+              Compared with {periodLabel(was.window.from, was.window.to)}, on the same filter. The
+              figures below carry the change; the charts and breakdowns are this period only.
+            </>
+          ) : (
+            'Reading the previous period…'
+          )}
+        </p>
+      ) : null}
 
       {truncated ? (
         <Card className="border-warning/40 bg-warning/5">
@@ -166,6 +221,11 @@ export function MetricsPage() {
           label="Runs"
           value={formatCount(totals.runs)}
           hint={`${totals.running} running · ${totals.step_calls} steps`}
+          compare={
+            was ? (
+              <AgainstPeriod now={totals.runs} before={was.totals.runs} format={formatCount} />
+            ) : undefined
+          }
         />
         <Tile
           label="Success rate"
@@ -180,11 +240,36 @@ export function MetricsPage() {
                   ? 'warning'
                   : 'critical'
           }
+          compare={
+            was ? (
+              // Points, not per cent: a rate that went from 75% to 80% rose by
+              // five points, and that is the sentence anybody means.
+              <AgainstPeriod
+                now={successRate}
+                before={successRateOf(was.totals)}
+                format={(value) => `${Math.round(value * 100)}%`}
+                points
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="Tokens"
           value={totals.llm_calls > 0 ? formatCount(tokens) : 'No data'}
           hint={`${formatCount(totals.input_tokens)} in · ${formatCount(totals.output_tokens)} out`}
+          compare={
+            was ? (
+              <AgainstPeriod
+                now={totals.llm_calls > 0 ? tokens : null}
+                before={
+                  was.totals.llm_calls > 0
+                    ? was.totals.input_tokens + was.totals.output_tokens
+                    : null
+                }
+                format={formatCount}
+              />
+            ) : undefined
+          }
         />
         {/*
          * A flat 0% would read as "caching is switched off" when the truth is
@@ -198,6 +283,16 @@ export function MetricsPage() {
             totals.cached_tokens > 0
               ? `${formatCount(totals.cached_tokens)} cached`
               : 'not reported'
+          }
+          compare={
+            was ? (
+              <AgainstPeriod
+                now={totals.cached_tokens > 0 ? totals.cache_hit_ratio : null}
+                before={was.totals.cached_tokens > 0 ? was.totals.cache_hit_ratio : null}
+                format={(value) => `${Math.round(value * 100)}%`}
+                points
+              />
+            ) : undefined
           }
         />
         {/*
@@ -219,11 +314,29 @@ export function MetricsPage() {
                 ? `${totals.costed_calls} of ${totals.llm_calls} calls reported`
                 : `${totals.costed_calls} calls`
           }
+          compare={
+            was ? (
+              <AgainstPeriod
+                now={totals.cost_usd}
+                before={was.totals.cost_usd}
+                format={formatUsd}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="LLM p95"
           value={latency.llm.count > 0 ? formatDuration(latency.llm.p95) : 'No data'}
           hint={`${latency.llm.count} calls`}
+          compare={
+            was ? (
+              <AgainstPeriod
+                now={latency.llm.count > 0 ? latency.llm.p95 : null}
+                before={was.latency.llm.count > 0 ? was.latency.llm.p95 : null}
+                format={formatDuration}
+              />
+            ) : undefined
+          }
         />
         <Tile
           label="First token p95"
@@ -236,6 +349,19 @@ export function MetricsPage() {
             latency.time_to_first_token.count > 0
               ? `${latency.time_to_first_token.count} streamed`
               : 'no streaming observed'
+          }
+          compare={
+            was ? (
+              <AgainstPeriod
+                now={latency.time_to_first_token.count > 0 ? latency.time_to_first_token.p95 : null}
+                before={
+                  was.latency.time_to_first_token.count > 0
+                    ? was.latency.time_to_first_token.p95
+                    : null
+                }
+                format={formatDuration}
+              />
+            ) : undefined
           }
         />
       </div>
@@ -403,11 +529,21 @@ function Tile({
   value,
   hint,
   tone,
+  /**
+   * The same figure in the period before, when one was asked for.
+   *
+   * A line of its own rather than folded into `hint`: the hint says what this
+   * number is made of and this says what it was, and a reader scanning seven
+   * tiles for the one that moved should not have to read a sentence to find
+   * it.
+   */
+  compare,
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: 'good' | 'warning' | 'critical';
+  compare?: React.ReactNode;
 }) {
   const color =
     tone === 'good'
@@ -425,9 +561,23 @@ function Tile({
           {value}
         </span>
         {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
+        {compare}
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * The share of *completed* runs that succeeded, or nothing.
+ *
+ * Extracted so the period before is read the same way as this one: a rate
+ * computed two ways in one comparison is two questions with one answer.
+ * Running runs are in neither half — UX-02, and the whole reason this is not
+ * `succeeded / runs`.
+ */
+function successRateOf(totals: MetricsSummary['totals']): number | undefined {
+  const completed = totals.succeeded + totals.failed;
+  return completed > 0 ? totals.succeeded / completed : undefined;
 }
 
 /**

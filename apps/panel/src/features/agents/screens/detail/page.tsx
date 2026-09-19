@@ -19,7 +19,19 @@ import {
   Stat,
 } from '@/shared/components/ui/primitives';
 import { VirtualList } from '@/shared/components/virtual-list';
-import { filterFromSearch, queryFor, type Unapplied } from '@/shared/lib/object-filter';
+import {
+  AgainstPeriod,
+  CompareToggle,
+  endOfPeriodBefore,
+  periodLabel,
+} from '@/shared/components/period-compare';
+import { PromptNameLink } from '@/shared/components/prompt-bits';
+import {
+  filterFromSearch,
+  queryFor,
+  type TargetQuery,
+  type Unapplied,
+} from '@/shared/lib/object-filter';
 import {
   formatAge,
   formatCount,
@@ -72,6 +84,7 @@ export function AgentPage() {
 
   const metricsFilter = React.useMemo(() => queryFor('metrics', filter), [filter]);
   const runsFilter = React.useMemo(() => queryFor('runs', filter), [filter]);
+  const dimensionFilter = React.useMemo(() => queryFor('dimensions', filter), [filter]);
 
   const metrics = useQuery({
     queryKey: ['metrics', 'agent', agentId, windowSeconds, metricsFilter.query],
@@ -106,11 +119,36 @@ export function AgentPage() {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
 
+  // The period before this one, ending where the server said this one begins —
+  // `period-compare.tsx` for why it is derived from the answer rather than
+  // from this clock.
+  const comparing = search.compare === 'previous' && windowSeconds > 0;
+  const endedAt = metrics.data ? endOfPeriodBefore(metrics.data.window.from) : undefined;
+  const before = useQuery({
+    queryKey: ['metrics', 'agent', 'before', agentId, windowSeconds, metricsFilter.query, endedAt],
+    enabled: comparing && endedAt !== undefined,
+    queryFn: async () => {
+      const response = await getMetrics({
+        query: {
+          ...metricsFilter.query,
+          window_seconds: windowParam(windowSeconds),
+          as_of: endedAt,
+          buckets: 48,
+        },
+      });
+      if (response.error) throw new Error('failed to load the previous period');
+      return response.data;
+    },
+  });
+
   const rows = React.useMemo(
     () => (runs.data?.pages ?? []).flatMap((page) => page.runs),
     [runs.data],
   );
   const mine = metrics.data?.by_agent.find((row) => row.agent_id === agentId);
+  // Its own row in the period before, which an agent that ran only now has
+  // none of — and that is a reading rather than a gap.
+  const was = comparing ? before.data?.by_agent.find((row) => row.agent_id === agentId) : undefined;
   const seen = metrics.data !== undefined && (mine !== undefined || rows.length > 0);
 
   return (
@@ -141,18 +179,47 @@ export function AgentPage() {
             </Link>
           </p>
         </div>
-        <TimeRange
-          value={windowSeconds}
-          onChange={(seconds) =>
-            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
-          }
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <TimeRange
+            value={windowSeconds}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
+          <CompareToggle
+            on={search.compare === 'previous'}
+            windowSeconds={windowSeconds}
+            onChange={(on) =>
+              void navigate({
+                search: (previous) => ({ ...previous, compare: on ? 'previous' : undefined }),
+              })
+            }
+          />
+        </div>
       </div>
 
       <FilterNotes
         notes={runsFilter.notes}
         unapplied={[...contradicted, ...metricsFilter.unapplied]}
       />
+
+      {comparing ? (
+        <p className="text-xs text-muted-foreground">
+          {before.isError ? (
+            <span className="text-danger">Could not read the previous period.</span>
+          ) : before.data ? (
+            <>
+              Compared with {periodLabel(before.data.window.from, before.data.window.to)}, on the
+              same filter.{' '}
+              {was
+                ? 'The strip below carries the change; everything under it is this period only.'
+                : 'This agent has no runs in it, so there is nothing to compare each figure with.'}
+            </>
+          ) : (
+            'Reading the previous period…'
+          )}
+        </p>
+      ) : null}
 
       {metrics.isError ? (
         <EmptyState
@@ -181,13 +248,29 @@ export function AgentPage() {
                 label="Runs"
                 value={formatCount(mine?.runs ?? 0)}
                 hint={`${formatCount(mine?.failures ?? 0)} failed`}
+                compare={<Then now={mine?.runs} was={was?.runs} format={formatCount} />}
               />
-              <Stat label="LLM calls" value={formatCount(mine?.llm_calls ?? 0)} />
-              <Stat label="Tool calls" value={formatCount(mine?.tool_calls ?? 0)} />
+              <Stat
+                label="LLM calls"
+                value={formatCount(mine?.llm_calls ?? 0)}
+                compare={<Then now={mine?.llm_calls} was={was?.llm_calls} format={formatCount} />}
+              />
+              <Stat
+                label="Tool calls"
+                value={formatCount(mine?.tool_calls ?? 0)}
+                compare={<Then now={mine?.tool_calls} was={was?.tool_calls} format={formatCount} />}
+              />
               <Stat
                 label="Tokens"
                 value={formatCount((mine?.input_tokens ?? 0) + (mine?.output_tokens ?? 0))}
                 hint={`${formatCount(mine?.input_tokens ?? 0)} in · ${formatCount(mine?.output_tokens ?? 0)} out`}
+                compare={
+                  <Then
+                    now={mine && mine.input_tokens + mine.output_tokens}
+                    was={was && was.input_tokens + was.output_tokens}
+                    format={formatCount}
+                  />
+                }
               />
               <Stat
                 label="LLM p95"
@@ -200,6 +283,13 @@ export function AgentPage() {
                   mine && mine.llm_latency.count > 0
                     ? `p50 ${formatDuration(mine.llm_latency.p50)} · ${formatCount(mine.llm_latency.count)} calls`
                     : undefined
+                }
+                compare={
+                  <Then
+                    now={mine && mine.llm_latency.count > 0 ? mine.llm_latency.p95 : null}
+                    was={was && was.llm_latency.count > 0 ? was.llm_latency.p95 : null}
+                    format={formatDuration}
+                  />
                 }
               />
               {/* A dash, never $0: an agent whose calls reported nothing has an
@@ -216,6 +306,7 @@ export function AgentPage() {
                     ? 'not reported'
                     : 'as the providers billed it'
                 }
+                compare={<Then now={mine?.cost_usd} was={was?.cost_usd} format={formatUsd} />}
               />
             </CardContent>
           </Card>
@@ -270,29 +361,21 @@ export function AgentPage() {
           </p>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <Where kind="workflow" title="Workflows it appears in" agentId={agentId} window={windowSeconds} />
-            <Where kind="runtime" title="Runtimes that produced it" agentId={agentId} window={windowSeconds} />
+            <Where
+              kind="workflow"
+              title="Workflows it appears in"
+              query={dimensionFilter.query}
+              window={windowSeconds}
+            />
+            <Where
+              kind="runtime"
+              title="Runtimes that produced it"
+              query={dimensionFilter.query}
+              window={windowSeconds}
+            />
           </div>
 
-          {/*
-           * The one thing this page cannot answer, said rather than left out.
-           * A span carries the registered prompt it ran on
-           * (`aiwatcher.prompt.*`, ADR_0011) and `SpanRow` does not lift it,
-           * and no dimension groups by it — so "which prompts does this agent
-           * use" would mean paging its runs and counting versions in the
-           * browser, which is the one thing the panel may not do.
-           */}
-          <Card className="border-dashed">
-            <CardHeader>
-              <CardTitle>Prompts it runs on</CardTitle>
-            </CardHeader>
-            <CardContent className="text-xs leading-relaxed text-muted-foreground">
-              Not answerable from a read that exists. A call carries the prompt version it ran on
-              and the span detail links it, but nothing groups runs by prompt, so this list would
-              have to be counted in the browser from every run’s spans. Open a run and its call
-              shows the version.
-            </CardContent>
-          </Card>
+          <Prompts query={dimensionFilter.query} window={windowSeconds} />
 
           <Card className="overflow-hidden">
             <CardHeader>
@@ -331,24 +414,51 @@ export function AgentPage() {
   );
 }
 
-/** One dimension's rows, narrowed to this agent's runs. */
+/**
+ * One figure against the period before, or nothing at all.
+ *
+ * The strip is rendered whether or not a second period was asked for, so the
+ * wrapper is what keeps six `comparing ? … : undefined` out of the markup. An
+ * agent with no row in the period before has no figure to sit beside any of
+ * them, and that is said once above the strip rather than six times inside it.
+ */
+function Then({
+  now,
+  was,
+  format,
+}: {
+  now: number | null | undefined;
+  was: number | null | undefined;
+  format: (value: number) => string;
+}) {
+  if (was === undefined) return null;
+  return <AgainstPeriod now={now} before={was} format={format} />;
+}
+
+/**
+ * One dimension's rows, over the runs this page is about.
+ *
+ * The whole filter rather than the agent alone: the dimension route takes
+ * every axis the runs list does, so a reader who arrived under a workflow sees
+ * the same population in this card as in the strip above and the list below.
+ */
 function Where({
   kind,
   title,
-  agentId,
+  query,
   window,
 }: {
   kind: Extract<DimensionKind, 'workflow' | 'runtime'>;
   title: string;
-  agentId: string;
+  query: TargetQuery['dimensions'];
   window: number;
 }) {
   const rows = useQuery({
-    queryKey: ['dimensions', kind, { agent: agentId, window }],
+    queryKey: ['dimensions', kind, { query, window }],
     queryFn: async () => {
       const response = await listDimension({
         path: { kind },
-        query: { agent_id: agentId, window_seconds: windowParam(window), limit: 20 },
+        query: { ...query, window_seconds: windowParam(window), limit: 20 },
       });
       if (response.error) throw new Error(`failed to load ${kind}s`);
       return response.data;
@@ -391,6 +501,83 @@ function Where({
         {rows.data?.next_cursor ? (
           <p className="text-[11px] text-muted-foreground">
             {formatCount(rows.data.total)} in the period; the first twenty are shown.
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The prompts this agent's runs ran on.
+ *
+ * The card that used to say this was not answerable. It was true when it was
+ * written: a call carried `aiwatcher.prompt.name` and nothing grouped by it,
+ * so the only way to the list was paging every run and counting versions in
+ * the browser — which is the one thing the panel may not do. The span row
+ * lifts the reference now and `prompt` is a dimension, so the answer is one
+ * read of the same shape as the two cards above it.
+ *
+ * The name, never the version: the registry is keyed by name and a version is
+ * what a prompt's own page lists, so grouping by version would put a row under
+ * every edit of one prompt. A call that sent only a version id contributes no
+ * key and its run is counted in the dimension's `ungrouped_runs`.
+ */
+function Prompts({ query, window }: { query: TargetQuery['dimensions']; window: number }) {
+  const rows = useQuery({
+    queryKey: ['dimensions', 'prompt', { query, window }],
+    queryFn: async () => {
+      const response = await listDimension({
+        path: { kind: 'prompt' },
+        query: { ...query, window_seconds: windowParam(window), limit: 20 },
+      });
+      if (response.error) throw new Error('failed to load prompts');
+      return response.data;
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Prompts it runs on</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1 text-sm">
+        {rows.isPending ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner /> Reading…
+          </p>
+        ) : rows.isError ? (
+          <p className="text-xs text-danger">Could not read the prompt list.</p>
+        ) : (rows.data?.rows.length ?? 0) === 0 ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            No call in these runs named a registered prompt. A call carries the prompt as a
+            reference and many producers send none — the text itself is never on the log (ADR_0011).
+          </p>
+        ) : (
+          rows.data?.rows.map((row: DimensionSummary) => (
+            <div
+              key={row.key}
+              className="flex items-baseline justify-between gap-3 rounded px-1 py-0.5"
+            >
+              {/* Two links, because they answer two questions: the name goes to
+                  the text the registry holds, the count to the runs that ran
+                  on it. Nested anchors would be neither. */}
+              <span className="truncate" title={row.key}>
+                <PromptNameLink name={row.key} />
+              </span>
+              <Link
+                to="/observability/explore"
+                search={{ by: 'prompt', key: row.key, window }}
+                className="shrink-0 text-xs tabular-nums text-muted-foreground hover:underline"
+              >
+                {formatCount(row.runs)} runs
+              </Link>
+            </div>
+          ))
+        )}
+        {rows.data && rows.data.ungrouped_runs > 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            {formatCount(rows.data.ungrouped_runs)} of its runs named no prompt.
           </p>
         ) : null}
       </CardContent>

@@ -71,9 +71,11 @@ it('sends every axis of the shared filter, and takes one off when its chip is cl
   expect(first.searchParams.get('workflow')).toBe('house-import');
   expect(first.searchParams.get('model')).toBe('opus');
   expect(first.searchParams.get('conversation_id')).toBe('s-1');
-  // A model selects the runs *and* narrows the call counters inside them, and
-  // the page says which is which rather than leaving the reader to assume.
-  expect(screen.getByText(/tool and step counters/)).toBeTruthy();
+  // A model selects the runs and narrows nothing inside them: every count on a
+  // row is the run's own total, folded when it was ingested. The page says so,
+  // because the metrics page's sentence is the opposite and a reader moving
+  // between the two is entitled to the difference.
+  expect(screen.getByText(/the run's own totals/)).toBeTruthy();
 
   await userEvent.click(screen.getByRole('button', { name: 'Remove the model filter opus' }));
   // Cleared, not left as an empty list: the patch writes every axis, so the
