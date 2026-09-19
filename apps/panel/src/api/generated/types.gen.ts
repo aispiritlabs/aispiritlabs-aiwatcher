@@ -5485,6 +5485,7 @@ export type Lab = {
      */
     brief: string;
     name: LabName;
+    notebook?: null | LabNotebook;
     /**
      * Where it sits in the workshop. Absent for a lab nobody has placed yet;
      * nothing here refuses two labs in one position, because a registry that
@@ -5570,6 +5571,35 @@ export type LabMeasurementView = {
 };
 
 export type LabName = string;
+
+/**
+ * The notebook a participant works in, named and pinned.
+ *
+ * **Never the source.** That file is what marimo serves as a live app, what
+ * `ml_pipeline.step` imports and what the participant edits a copy of; a copy
+ * of it in this registry would be a second source of truth for something that
+ * has to stay runnable on its own. The lab names it and pins the `sha256` it
+ * was written against — the shape a saved curation block already uses, and
+ * the rule `services/ml_pipeline/CLAUDE.md` states for one.
+ *
+ * The pin is **required**, because a lab is material several people open. A
+ * notebook resolved by its head would let an edit between two participants
+ * opening the same lab change the exercise underneath one of them, which is
+ * the reason the card is pinned at a version rather than at its head, and the
+ * reason a public block solution must pin its revision too.
+ */
+export type LabNotebook = {
+    /**
+     * Its name in the notebook runtime — what `GET /ml-pipeline/notebooks`
+     * lists and `PUT /ml-pipeline/notebooks/{name}` saves.
+     */
+    name: string;
+    /**
+     * The `sha256` of the source this lab was written against, as the runtime
+     * answered it on the save.
+     */
+    revision: string;
+};
 
 export type LabPage = {
     /**
@@ -5667,6 +5697,11 @@ export type LabVersion = Lab & {
  */
 export type LabVersionSummary = {
     author?: string | null;
+    /**
+     * Whether that version hands out a notebook — the same rule, for the same
+     * reason: which file and which revision are in the version.
+     */
+    has_notebook: boolean;
     /**
      * Whether that version pinned a measurement. The tests themselves are in
      * the version, because a summary carrying them would be a second copy

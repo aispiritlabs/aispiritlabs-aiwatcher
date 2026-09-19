@@ -35019,6 +35019,17 @@
           "name": {
             "$ref": "#/components/schemas/LabName"
           },
+          "notebook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LabNotebook",
+                "description": "The notebook the work is done in, when the lab hands one out. Absent is\na lab that is read and answered somewhere else; present, it is named\nand pinned and never copied."
+              }
+            ]
+          },
           "position": {
             "type": [
               "integer",
@@ -35175,6 +35186,25 @@
       "LabName": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      },
+      "LabNotebook": {
+        "type": "object",
+        "description": "The notebook a participant works in, named and pinned.\n\n**Never the source.** That file is what marimo serves as a live app, what\n`ml_pipeline.step` imports and what the participant edits a copy of; a copy\nof it in this registry would be a second source of truth for something that\nhas to stay runnable on its own. The lab names it and pins the `sha256` it\nwas written against — the shape a saved curation block already uses, and\nthe rule `services/ml_pipeline/CLAUDE.md` states for one.\n\nThe pin is **required**, because a lab is material several people open. A\nnotebook resolved by its head would let an edit between two participants\nopening the same lab change the exercise underneath one of them, which is\nthe reason the card is pinned at a version rather than at its head, and the\nreason a public block solution must pin its revision too.",
+        "required": [
+          "name",
+          "revision"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name in the notebook runtime — what `GET /ml-pipeline/notebooks`\nlists and `PUT /ml-pipeline/notebooks/{name}` saves."
+          },
+          "revision": {
+            "type": "string",
+            "description": "The `sha256` of the source this lab was written against, as the runtime\nanswered it on the save."
+          }
+        },
+        "additionalProperties": false
       },
       "LabPage": {
         "type": "object",
@@ -35351,6 +35381,7 @@
           "version_id",
           "title",
           "has_tests",
+          "has_notebook",
           "published_at"
         ],
         "properties": {
@@ -35359,6 +35390,10 @@
               "string",
               "null"
             ]
+          },
+          "has_notebook": {
+            "type": "boolean",
+            "description": "Whether that version hands out a notebook — the same rule, for the same\nreason: which file and which revision are in the version."
           },
           "has_tests": {
             "type": "boolean",
