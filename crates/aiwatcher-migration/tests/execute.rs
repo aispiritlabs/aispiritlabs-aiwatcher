@@ -15,6 +15,7 @@ use aiwatcher_migration::authority::{
     Admission, Fixture, FixtureAuthority, IamAuthority, Offline, TargetAuthority,
 };
 use aiwatcher_migration::execute::{Destination, Options, execute, survey};
+use aiwatcher_migration::manifest::Audience;
 use aiwatcher_migration::manifest::{BlockerKind, Checkpoint, IamCheck, Manifest, Publication};
 use aiwatcher_migration::plan::{Source, plan};
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
@@ -769,4 +770,132 @@ async fn an_empty_store_plans_to_nothing_and_copies_nothing() {
         "every family with no adapter still stands between this and a cutover"
     );
     assert!(store.list("").await.unwrap().is_empty());
+}
+
+/// A copy is not a share, and the receipt says who it *is* a share with.
+///
+/// The decision behind this: mapping data into a project grants nobody access
+/// to it, so the tool reports the live grants and creates none. An operator
+/// who reads "nobody but me" and copies anyway has decided that; one who never
+/// saw it has not.
+#[tokio::test]
+async fn a_run_reports_who_holds_a_grant_on_the_target_and_creates_none() {
+    let iam = Arc::new(aiwatcher_iam::memory::MemoryIamStore::default());
+    let owner = Principal::new("oidc", "operator").unwrap();
+    let reader = Principal::new("oidc", "reader").unwrap();
+    let organization = iam.create_organization(&owner, "Acme").await.unwrap();
+    let aiwatcher_iam::Change::ProjectCreated(project) = iam
+        .apply(
+            organization.id,
+            &owner,
+            Command::CreateProject {
+                name: "plans".to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("creating a project answers with the project");
+    };
+    let store: Arc<dyn IamStore> = iam.clone();
+    let authority = IamAuthority::new(store.clone(), owner.clone(), "memory", false);
+
+    // Just the creator's own explicit admin grant: an owner has no implicit
+    // one, and a copy made now is reachable by exactly this person.
+    let Audience::Read { holders, .. } = authority.audience(project.scope).await else {
+        panic!("the deployment's own IAM answers who holds a grant");
+    };
+    assert_eq!(
+        holders,
+        vec![aiwatcher_migration::manifest::Holder {
+            grantee: "oidc:operator".to_owned(),
+            role: ProjectRole::Admin,
+        }]
+    );
+
+    // A second grant appears, because somebody granted it — never because a
+    // migration ran.
+    iam.apply(
+        organization.id,
+        &owner,
+        Command::SetMember {
+            principal: reader.clone(),
+            role: aiwatcher_iam::OrganizationRole::Member,
+        },
+    )
+    .await
+    .unwrap();
+    iam.apply(
+        organization.id,
+        &owner,
+        Command::Grant {
+            project: project.scope.project,
+            grantee: aiwatcher_iam::Grantee::User(reader.clone()),
+            role: ProjectRole::Viewer,
+            window: aiwatcher_iam::GrantWindow::permanent(0),
+        },
+    )
+    .await
+    .unwrap();
+    let Audience::Read { holders, .. } = authority.audience(project.scope).await else {
+        panic!("still answers");
+    };
+    assert_eq!(holders.len(), 2, "{holders:?}");
+    assert!(
+        holders
+            .iter()
+            .any(|holder| holder.grantee == "oidc:reader" && holder.role == ProjectRole::Viewer)
+    );
+
+    // A window that has closed grants nothing now, and the report is about
+    // now: a list of dates would make an operator do the arithmetic.
+    let lapsed = Principal::new("oidc", "lapsed").unwrap();
+    iam.apply(
+        organization.id,
+        &owner,
+        Command::SetMember {
+            principal: lapsed.clone(),
+            role: aiwatcher_iam::OrganizationRole::Member,
+        },
+    )
+    .await
+    .unwrap();
+    iam.apply(
+        organization.id,
+        &owner,
+        Command::Grant {
+            project: project.scope.project,
+            grantee: aiwatcher_iam::Grantee::User(lapsed),
+            role: ProjectRole::Editor,
+            window: aiwatcher_iam::GrantWindow {
+                valid_from: 0,
+                edit_until: Some(1),
+                read_until: Some(2),
+            },
+        },
+    )
+    .await
+    .unwrap_or_else(|error| panic!("a lapsed grant is still a grant to issue: {error}"));
+    let Audience::Read { holders, .. } = authority.audience(project.scope).await else {
+        panic!("still answers");
+    };
+    assert!(
+        !holders.iter().any(|holder| holder.grantee == "oidc:lapsed"),
+        "a window that has closed is not a live grant: {holders:?}"
+    );
+}
+
+/// A fixture is not an authority, so it does not get to say who reaches a
+/// project either.
+#[tokio::test]
+async fn a_rehearsal_says_the_audience_is_unknown_rather_than_reporting_nobody() {
+    let target = ProjectScope {
+        organization: aiwatcher_iam::OrganizationId::new(),
+        project: aiwatcher_iam::ProjectId::new(),
+    };
+    let audience = admitting(target).audience(target).await;
+    let Audience::NotRead { reason } = audience else {
+        panic!("a fixture must not report an empty list, which reads as nobody");
+    };
+    assert!(reason.contains("IAM"), "{reason}");
 }

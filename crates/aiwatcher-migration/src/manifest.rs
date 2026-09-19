@@ -303,12 +303,59 @@ pub enum IamCheck {
     NotChecked { reason: String },
 }
 
+/// Who will reach what this run copied.
+///
+/// **A copy is not a share**, and this is where that sentence stops being
+/// prose. The tool creates no organization, team, membership or grant — §1 of
+/// the runbook says so and this does not change it. What it does is *report*:
+/// mapping an application's authored data into a project makes it reachable by
+/// whoever holds a live grant on that project and by nobody else, so a cutover
+/// declared without knowing who that is was declared without reading the
+/// consequence.
+///
+/// The precedent is `GET /api/v1/system`: a deployment's own facts are worth
+/// having in one place, and *configured* is not a secret. A grant is not a
+/// secret from the operator who already holds admin on the project — it is the
+/// answer to "who can now read this", and the only one they cannot get from
+/// the bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Audience {
+    /// The live grants on the target, as IAM answered them.
+    Read {
+        /// Principals and teams with a live grant at the moment this was read,
+        /// each with the role the window leaves them. Sorted, so two runs of
+        /// one plan read the same way.
+        holders: Vec<Holder>,
+        /// When IAM was asked. Not a capability and not durable: a grant
+        /// revoked a minute later is not reflected here, which is why the
+        /// receipt says *when*.
+        evaluated_at: i64,
+    },
+    /// Nobody was asked. A dry run with no IAM says this, and so does a run
+    /// whose authority is a fixture — which is not an authority (§2).
+    NotRead { reason: String },
+}
+
+/// One live grant on the target project, as it is reported.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Holder {
+    /// `oidc:subject` for a person, `team:<id>` for a team. The exact pair the
+    /// control plane compares, never an email address and never a group name.
+    pub grantee: String,
+    pub role: ProjectRole,
+}
+
 /// What the target held when somebody looked.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Survey {
     pub manifest_id: String,
     pub target: ProjectScope,
     pub iam: IamCheck,
+    /// Who holds a live grant on the target, read when this survey ran — so
+    /// the question "and who will be able to open this afterwards" has an
+    /// answer **before** anything is copied. See [`Audience`].
+    pub audience: Audience,
     pub absent: u64,
     pub identical: u64,
     /// Named, every one. Nothing is overwritten.
@@ -336,6 +383,9 @@ pub struct Receipt {
     pub manifest_id: String,
     pub target: ProjectScope,
     pub iam: IamCheck,
+    /// Who holds a live grant on the target, read when this run finished.
+    /// See [`Audience`]: reported, never created.
+    pub audience: Audience,
     pub publication: Publication,
     /// Objects this run copied.
     pub written: u64,

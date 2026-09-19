@@ -221,7 +221,13 @@ impl GrantWindow {
         }
         Ok(())
     }
-    pub(crate) fn role_at(self, role: ProjectRole, now: i64) -> Option<ProjectRole> {
+    /// The role this window leaves at `now`, or `None` when it grants nothing.
+    ///
+    /// `pub` for the one reader outside the policy: a migration reports who
+    /// will reach what it copied, and "who holds a grant" is a question about
+    /// windows rather than about one principal's effective role.
+    #[must_use]
+    pub fn role_at(self, role: ProjectRole, now: i64) -> Option<ProjectRole> {
         if now < self.valid_from || self.read_until.is_some_and(|end| now >= end) {
             return None;
         }

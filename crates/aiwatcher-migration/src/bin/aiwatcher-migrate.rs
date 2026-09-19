@@ -28,7 +28,7 @@ use aiwatcher_core::prompts::ObjectStore;
 use aiwatcher_iam::{OrganizationId, Principal, ProjectId, ProjectScope};
 use aiwatcher_migration::authority::{Fixture, FixtureAuthority, Offline, TargetAuthority};
 use aiwatcher_migration::execute::{Destination, Options, execute, load_checkpoint, survey};
-use aiwatcher_migration::manifest::Manifest;
+use aiwatcher_migration::manifest::{Audience, Manifest};
 use aiwatcher_migration::plan::{Source, plan};
 use aiwatcher_prompts::adapters::fs::FileObjectStore;
 
@@ -106,7 +106,45 @@ async fn do_verify(flags: &Flags) -> Result<(), Box<dyn std::error::Error>> {
     let authority = flags.authority().await?;
     let survey = survey(&store, &manifest, authority.as_ref()).await?;
     println!("{}", serde_json::to_string_pretty(&survey)?);
+    say_who_reaches_it(&survey.audience);
     Ok(())
+}
+
+/// Say, on stderr, who will be able to open what this copies.
+///
+/// On stderr and beside the JSON rather than only inside it, because it is the
+/// one consequence of a migration that nothing in the bytes shows and that no
+/// later command asks about: a project's data is reachable by whoever holds a
+/// live grant on that project, and **a copy is not a share**. The tool creates
+/// no grant; an operator reads this and decides.
+fn say_who_reaches_it(audience: &Audience) {
+    match audience {
+        Audience::Read {
+            holders,
+            evaluated_at,
+        } if holders.is_empty() => eprintln!(
+            "nobody but this operator holds a live grant on the target (read at {evaluated_at}). \
+             What is copied there is reachable by them and by nobody else until somebody grants \
+             it explicitly — this tool creates no grant"
+        ),
+        Audience::Read {
+            holders,
+            evaluated_at,
+        } => {
+            eprintln!(
+                "{} live grant(s) on the target (read at {evaluated_at}); after this copy they \
+                 reach it and nobody else does:",
+                holders.len()
+            );
+            for holder in holders {
+                eprintln!("  {} {:?}", holder.grantee, holder.role);
+            }
+        }
+        Audience::NotRead { reason } => eprintln!(
+            "who reaches the target is unknown to this run: {reason}. A cutover declared without \
+             it is a cutover declared without reading its consequence"
+        ),
+    }
 }
 
 async fn do_execute(flags: &Flags, resuming: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -160,6 +198,7 @@ async fn do_execute(flags: &Flags, resuming: bool) -> Result<(), Box<dyn std::er
     )
     .await?;
     println!("{}", serde_json::to_string_pretty(&receipt)?);
+    say_who_reaches_it(&receipt.audience);
     if !receipt.cutover_ready {
         eprintln!(
             "this run is not a cutover: {} blocker(s) stand. Nothing may be switched over or \

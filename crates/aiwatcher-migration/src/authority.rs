@@ -18,7 +18,7 @@ use std::sync::Arc;
 use aiwatcher_iam::{IamStore, Principal, ProjectRole, ProjectScope};
 use async_trait::async_trait;
 
-use crate::manifest::IamCheck;
+use crate::manifest::{Audience, Holder, IamCheck};
 use crate::{MigrationError, Result};
 
 /// Who says the target project is real.
@@ -29,6 +29,25 @@ pub trait TargetAuthority: Send + Sync + std::fmt::Debug {
     /// [`MigrationError::Authority`] when the scope is not one this authority
     /// admits for this operator, or when the store cannot be reached.
     async fn admit(&self, scope: ProjectScope) -> Result<IamCheck>;
+
+    /// Who holds a live grant on the target, for the receipt to record.
+    ///
+    /// **Read, never written.** Mapping data into a project grants nobody
+    /// access to it, and this is the half of that sentence a tool can answer:
+    /// after this copy, these principals reach it and nobody else does. An
+    /// operator who wants somebody else on the list grants it explicitly,
+    /// through the control plane, which is not this.
+    ///
+    /// The default is [`Audience::NotRead`], so an authority that cannot ask —
+    /// a fixture, an offline run — says so rather than reporting an empty list
+    /// that reads like "nobody".
+    async fn audience(&self, _scope: ProjectScope) -> Audience {
+        Audience::NotRead {
+            reason: "this run reached no authoritative IAM, so who holds a grant on the target \
+                     is unknown here"
+                .to_owned(),
+        }
+    }
 }
 
 /// The control plane, asked as one operator.
@@ -72,6 +91,45 @@ impl IamAuthority {
 
 #[async_trait]
 impl TargetAuthority for IamAuthority {
+    async fn audience(&self, scope: ProjectScope) -> Audience {
+        // Asked as the operator, who already holds admin on this project —
+        // `project_grants` refuses anybody who may not issue one, so this
+        // reads nothing they could not read from the control plane itself.
+        let grants = match self.store.project_grants(scope, &self.principal).await {
+            Ok(grants) => grants,
+            Err(error) => {
+                return Audience::NotRead {
+                    reason: format!("the grants on the target could not be read: {error}"),
+                };
+            }
+        };
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut holders: Vec<Holder> = grants
+            .into_iter()
+            // Windows come back as issued; which of them grant anything *now*
+            // is this reading's whole question, so the clock is applied here
+            // rather than reported as a list of dates somebody has to read.
+            .filter_map(|grant| {
+                let role = grant.window.role_at(grant.role, now)?;
+                Some(Holder {
+                    grantee: match grant.grantee {
+                        aiwatcher_iam::Grantee::User(principal) => {
+                            format!("{}:{}", principal.provider, principal.subject)
+                        }
+                        aiwatcher_iam::Grantee::Team(team) => format!("team:{}", team.0),
+                    },
+                    role,
+                })
+            })
+            .collect();
+        holders.sort();
+        holders.dedup();
+        Audience::Read {
+            holders,
+            evaluated_at: now,
+        }
+    }
+
     async fn admit(&self, scope: ProjectScope) -> Result<IamCheck> {
         let access =
             self.store

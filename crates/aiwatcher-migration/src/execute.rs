@@ -116,6 +116,7 @@ pub async fn survey(
         manifest_id: manifest.manifest_id.clone(),
         target: manifest.body.target,
         iam,
+        audience: authority.audience(manifest.body.target).await,
         absent,
         identical,
         conflicts,
@@ -192,6 +193,10 @@ pub async fn execute(
         manifest_id: fresh.manifest_id.clone(),
         target: fresh.body.target,
         iam: iam.clone(),
+        // Who reaches what this run is about to copy, read before it copies
+        // anything: an operator who finds the answer unacceptable stops here
+        // rather than after the bytes have moved.
+        audience: authority.audience(manifest.body.target).await,
         publication,
         written: 0,
         already_identical: 0,
