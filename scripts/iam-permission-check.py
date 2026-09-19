@@ -146,6 +146,48 @@ def run_events(run_id: str, agent: str) -> list[dict[str, object]]:
     ]
 
 
+def fold_events(run_id: str, now: int) -> list[dict[str, object]]:
+    """A declared graph, a step of it, and an evaluation report.
+
+    The three folds E2 did **not** key by project, published under a project's
+    own credential so the questions at the end of M1 can ask what the instance
+    routes do with them. Every one of them is a fact about a project's work,
+    and none of them carries which project it was — which is the whole reason
+    the selector may not simply scope the panel and be done.
+    """
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    graph = f"m1-graph-{now}"
+
+    def event(event_type: str, data: dict[str, object], **extra: object) -> dict[str, object]:
+        return {
+            "event_type": event_type,
+            "occurred_at": at,
+            "run_id": run_id,
+            "source": {"service": "permission-check", "sdk": "python"},
+            "data": data,
+            **extra,
+        }
+
+    return [
+        event(
+            "workflow.declared",
+            {
+                "workflow_id": graph,
+                "name": graph,
+                "version": "sha256:m1",
+                "nodes": [{"id": "acquire", "name": "Acquire", "kind": "chain"}],
+                "edges": [],
+            },
+            workflow_id=graph,
+            workflow_run_id=run_id,
+        ),
+        event("step.started", {"node": "acquire"}, workflow_id=graph, workflow_run_id=run_id),
+        event("step.completed", {"node": "acquire"}, workflow_id=graph, workflow_run_id=run_id),
+        event("eval.started", {"suite": f"m1-suite-{now}", "dataset": "m1@1"}),
+        event("eval.completed", {"metrics": {"mean_score": 1.0}}),
+    ]
+
+
 def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None:
     scope = os.environ.get("AIWATCHER_M1_SCOPE", "").strip()
 
@@ -199,6 +241,11 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
     produced = bool(scope) and sso.publish(
         PROJECT_TOKEN, run_events(f"m1-project-{now}", "estimator")
     )[0] == 202
+    # The same project's graph, step and evaluation report — the three folds
+    # that have no project in the row. Published here and asked about at the
+    # end, once the grant is provably gone.
+    if produced:
+        sso.publish(PROJECT_TOKEN, fold_events(f"m1-folds-{now}", now))
     time.sleep(1.0)
 
     # ── The list of my projects ──────────────────────────────────────────────
@@ -323,6 +370,45 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
         "a resume after revocation replays nothing — Last-Event-ID is a position, not a key",
         resumed[:60].replace("\n", " "),
     )
+
+    # ── Where the boundary still ends, asked rather than asserted ────────────
+    #
+    # The grant is gone; the reads above prove it. So every answer below is one
+    # this principal gets with no grant on that project at all — and each one
+    # is a fact about that project's work. These are not failures of E3: those
+    # folds were never keyed by project, so there is nothing for a scope to
+    # narrow and no scoped route to ask instead. They are the reason the panel's
+    # selector names its own reach rather than claiming the whole panel, and the
+    # day somebody keys them, these three questions fail and say so.
+    if produced:
+        status, graphs = sso.call(student, "GET", "/api/v1/workflows")
+        names = [row.get("workflow_id") for row in graphs.get("workflows", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-graph-{now}" in names,
+            "a project's workflow graph is still on the instance's list — that fold has no project in its row",
+            f"{status} {f'm1-graph-{now}' in names}",
+        )
+        status, runs = sso.call(student, "GET", "/api/v1/workflow-executions")
+        ids = [row.get("workflow_run_id") for row in runs.get("executions", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-folds-{now}" in ids,
+            "and so is its execution, to somebody the project itself answers 404 to",
+            f"{status} {f'm1-folds-{now}' in ids}",
+        )
+        status, reports = sso.call(student, "GET", "/api/v1/evaluations")
+        suites = [row.get("suite") for row in reports.get("evaluations", [])] if status == 200 else []
+        checks.that(
+            status == 200 and f"m1-suite-{now}" in suites,
+            "and its evaluation report, on the fold ADR_0010 gave its own projection",
+            f"{status} {f'm1-suite-{now}' in suites}",
+        )
+    else:
+        for question in (
+            "a project's workflow graph is still on the instance's list — that fold has no project in its row",
+            "and so is its execution, to somebody the project itself answers 404 to",
+            "and its evaluation report, on the fold ADR_0010 gave its own projection",
+        ):
+            checks.skipped(question, "no producer token names a project")
 
 
 def main() -> int:
