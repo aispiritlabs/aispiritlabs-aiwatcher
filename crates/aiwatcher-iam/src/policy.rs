@@ -255,6 +255,7 @@ impl OrganizationState {
             created_by: actor.clone(),
             created_at: now,
             label,
+            standing: offer.standing,
             redeemed: None,
         };
         self.invitations.push(InvitationRecord {
@@ -318,6 +319,47 @@ impl OrganizationState {
             .any(|record| record.token_sha256 == token_sha256)
     }
 
+    /// What this token offers, without spending it.
+    ///
+    /// The same three refusals redemption makes — absent, spent, lapsed — asked
+    /// by somebody who may have no account at all. It reads and writes nothing,
+    /// so a repeated look costs an offer nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] for a digest nobody issued or a project that has
+    /// gone, [`Error::Redeemed`] for one already taken and [`Error::Expired`]
+    /// for one that lapsed.
+    pub fn offered(&self, token_sha256: &str, now: i64) -> Result<Offered> {
+        let record = self
+            .invitations
+            .iter()
+            .find(|record| record.token_sha256 == token_sha256)
+            .ok_or(Error::NotFound)?;
+        if record.invitation.redeemed.is_some() {
+            return Err(Error::Redeemed);
+        }
+        if now >= record.invitation.expires_at {
+            return Err(Error::Expired);
+        }
+        let invitation = &record.invitation;
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.scope == invitation.scope)
+            .ok_or(Error::NotFound)?
+            .clone();
+        Ok(Offered {
+            organization: self.organization.clone(),
+            project,
+            role: invitation.role,
+            window: invitation.window,
+            standing: invitation.standing,
+            expires_at: invitation.expires_at,
+            label: invitation.label.clone(),
+        })
+    }
+
     /// Turn an offer into membership and a grant, for whoever presented it.
     ///
     /// The redeemer is a stranger here until this moment: they are made an
@@ -350,10 +392,13 @@ impl OrganizationState {
             .find(|project| project.scope == invitation.scope)
             .ok_or(Error::NotFound)?
             .clone();
+        // The offer decides what redeeming it makes somebody, and it only ever
+        // *adds*: a principal already here keeps the standing they have, so a
+        // guest offer cannot demote an admin who happened to hold a token.
         if self.member_role(redeemer).is_err() {
             self.members.push(Member {
                 principal: redeemer.clone(),
-                role: OrganizationRole::Member,
+                role: invitation.standing,
             });
         }
         let grant = Grant {
@@ -431,14 +476,12 @@ impl OrganizationState {
         }
         Ok(Roster {
             organization: self.organization.clone(),
-            members: self
-                .members
-                .iter()
-                .map(|member| Membership {
-                    principal: member.principal.clone(),
-                    role: member.role,
-                })
-                .collect(),
+            // Two lists, because a guest is not a member (D3). One list
+            // holding both would leave "is this person of this organization"
+            // to whoever reads the role off a row, which is the reading that
+            // has to be impossible rather than merely available.
+            members: memberships(&self.members, |role| role >= OrganizationRole::Member),
+            guests: memberships(&self.members, |role| role < OrganizationRole::Member),
             teams: self
                 .teams
                 .iter()
@@ -660,7 +703,13 @@ impl OrganizationState {
                 principal,
                 present,
             } => {
-                self.member_role(&principal)?;
+                // A team is a construction of the organization's own people. A
+                // guest holds project grants and is not of here, so putting one
+                // in a team would be the broad grant D3 exists to keep off
+                // them, one indirection along.
+                if self.member_role(&principal)? < OrganizationRole::Member {
+                    return Err(Error::Forbidden);
+                }
                 let record = self
                     .teams
                     .iter_mut()
@@ -734,4 +783,15 @@ impl OrganizationState {
         }
         Ok(Change::Applied)
     }
+}
+
+fn memberships(members: &[Member], wanted: impl Fn(OrganizationRole) -> bool) -> Vec<Membership> {
+    members
+        .iter()
+        .filter(|member| wanted(member.role))
+        .map(|member| Membership {
+            principal: member.principal.clone(),
+            role: member.role,
+        })
+        .collect()
 }

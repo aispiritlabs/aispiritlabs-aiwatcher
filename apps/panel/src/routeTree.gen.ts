@@ -18,6 +18,7 @@ import { Route as DataCurationRouteImport } from './routes/data-curation'
 import { Route as DatasetsRouteImport } from './routes/datasets'
 import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
+import { Route as InviteRouteImport } from './routes/invite'
 import { Route as LearningRouteImport } from './routes/learning'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as SystemRouteImport } from './routes/system'
@@ -94,6 +95,11 @@ const EvaluationRoute = EvaluationRouteImport.update({
 const ExperimentsRoute = ExperimentsRouteImport.update({
   id: '/experiments',
   path: '/experiments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteRoute = InviteRouteImport.update({
+  id: '/invite',
+  path: '/invite',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LearningRoute = LearningRouteImport.update({
@@ -267,6 +273,7 @@ export interface FileRoutesByFullPath {
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/invite': typeof InviteRoute
   '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
   '/system': typeof SystemRoute
@@ -306,6 +313,7 @@ export interface FileRoutesByTo {
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/invite': typeof InviteRoute
   '/learning': typeof LearningRoute
   '/system': typeof SystemRoute
   '/workflows': typeof WorkflowsRoute
@@ -348,6 +356,7 @@ export interface FileRoutesById {
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/invite': typeof InviteRoute
   '/learning': typeof LearningRoute
   '/observability': typeof ObservabilityRouteWithChildren
   '/system': typeof SystemRoute
@@ -393,6 +402,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/invite'
     | '/learning'
     | '/observability'
     | '/system'
@@ -432,6 +442,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/invite'
     | '/learning'
     | '/system'
     | '/workflows'
@@ -473,6 +484,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/invite'
     | '/learning'
     | '/observability'
     | '/system'
@@ -517,6 +529,7 @@ export interface RootRouteChildren {
   DatasetsRoute: typeof DatasetsRoute
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
+  InviteRoute: typeof InviteRoute
   LearningRoute: typeof LearningRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
   SystemRoute: typeof SystemRoute
@@ -592,6 +605,13 @@ declare module '@tanstack/react-router' {
       path: '/experiments'
       fullPath: '/experiments'
       preLoaderRoute: typeof ExperimentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite': {
+      id: '/invite'
+      path: '/invite'
+      fullPath: '/invite'
+      preLoaderRoute: typeof InviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/learning': {
@@ -934,6 +954,7 @@ const rootRouteChildren: RootRouteChildren = {
   DatasetsRoute: DatasetsRoute,
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,
+  InviteRoute: InviteRoute,
   LearningRoute: LearningRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
   SystemRoute: SystemRoute,

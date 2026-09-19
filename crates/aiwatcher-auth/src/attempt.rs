@@ -217,7 +217,11 @@ mod tests {
         assert_eq!(identity.attempt, Some(scope()));
         assert_eq!(identity.subject, "attempt:run-1/analyze/1");
         assert_eq!(identity.credential, Credential::Attempt);
-        assert_eq!(identity.role(), Role::Editor, "never more than an editor");
+        assert_eq!(
+            identity.role(),
+            Some(Role::Editor),
+            "never more than an editor"
+        );
         assert!(identity.expires_at.is_some());
 
         // The other role of a split deployment, given the same secret, is the

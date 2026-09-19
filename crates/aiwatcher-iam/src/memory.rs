@@ -313,6 +313,18 @@ impl IamStore for MemoryIamStore {
     /// A scan across organizations, which a development adapter can afford and
     /// the PostgreSQL one replaces with an index. The digest is what is
     /// compared, never the token.
+    async fn offered(&self, token: &str) -> Result<Offered> {
+        let digest = digest_of(token);
+        let organizations = self.organizations.read().await;
+        let now = self.clock.now();
+        organizations
+            .values()
+            .find(|stored| stored.state.holds_invitation(&digest))
+            .ok_or(Error::NotFound)?
+            .state
+            .offered(&digest, now)
+    }
+
     async fn redeem(&self, token: &str, redeemer: &Principal) -> Result<Redeemed> {
         let digest = digest_of(token);
         let mut organizations = self.organizations.write().await;

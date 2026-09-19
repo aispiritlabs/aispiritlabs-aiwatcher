@@ -13,6 +13,15 @@ pub enum AuthError {
     #[error("{0}")]
     Configuration(String),
 
+    /// The identity provider would not open its enrollment (`provisioning`).
+    ///
+    /// Not the caller's fault and not retryable: what a person clicking
+    /// "create an account" gets is a 502 and a sentence, and the provider's own
+    /// words go to the log — they name flows and service accounts, which is a
+    /// map of somebody else's system to whoever is reading.
+    #[error("the identity provider would not open an enrollment: {0}")]
+    Provisioning(String),
+
     /// The provider's discovery document could not be read.
     #[error("the identity provider at {issuer} could not be reached: {source}")]
     Discovery {
@@ -92,6 +101,7 @@ impl AuthError {
             | Self::Discovery { .. }
             | Self::IssuerMismatch { .. }
             | Self::Jwks(_)
+            | Self::Provisioning(_)
             | Self::Exchange { .. } => false,
         }
     }

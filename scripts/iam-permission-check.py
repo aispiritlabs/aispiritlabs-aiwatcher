@@ -12,11 +12,19 @@ backend and there does not need to be.
 
     python3 scripts/iam-permission-check.py
 
-The last section is **M1** — "my project, my stream": the runs, spans, metrics
-and live stream of one project, and what revoking a grant does to somebody who
-is already watching. It takes about half a minute, because one of its questions
-is what happens on the next re-check of an open stream rather than on the next
-request.
+Two sections at the end are gates. **M1** — "my project, my stream": the runs,
+spans, metrics and live stream of one project, and what revoking a grant does to
+somebody who is already watching. It takes about half a minute, because one of
+its questions is what happens on the next re-check of an open stream rather than
+on the next request. **M0** — "two clients, one organization": whether a
+question asked as one client ever answers with the other's row, or with the
+deployment's.
+
+Against a deployment rather than a laptop, point all three at it:
+
+    AIWATCHER_URL=https://aiwatcher.example \
+    AIWATCHER_AUTHENTIK_URL=https://auth.example \
+    python3 scripts/iam-permission-check.py
 
 Two of its questions need a run on the *project* side, and only a producer's
 credential can put one there — a person's session carries no project, on
@@ -32,10 +40,14 @@ Without it those questions are reported as not asked rather than as held.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -187,7 +199,22 @@ def fold_events(run_id: str, now: int) -> list[dict[str, object]]:
     ]
 
 
-def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None:
+def m1(
+    checks: Checks,
+    teacher,
+    student,
+    observer,
+    student_subject: str,
+    now: int,
+) -> None:
+    """The project half, and the instance half asked by somebody who holds one.
+
+    `observer` is an instance viewer with no grant anywhere. Before IAM-03's D4
+    that was `student` — everybody signed in held `viewer` — and the questions
+    below that are about what an **instance** read answers now need a principal
+    who can make one at all. That is the change, and it is why they are two
+    people rather than one.
+    """
     scope = os.environ.get("AIWATCHER_M1_SCOPE", "").strip()
 
     if scope:
@@ -298,7 +325,7 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
         )
         status, _ = sso.call(student, "GET", f"{scoped}/runs/m1-global-{now}")
         checks.that(status == 404, "a run the project does not hold is a run that is not there", status)
-        status, _ = sso.call(student, "GET", f"/api/v1/runs/m1-project-{now}")
+        status, _ = sso.call(observer, "GET", f"/api/v1/runs/m1-project-{now}")
         checks.that(status == 404, "and the instance route does not reach into the project either", status)
 
         # The three folds E2 left behind, now keyed: a project's graph, its
@@ -352,7 +379,7 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
     else:
         checks.skipped("and replays its own", "no project-scoped producer token")
 
-    instance = sso.stream(student, f"/api/v1/events/stream?from={start}", 6.0)
+    instance = sso.stream(observer, f"/api/v1/events/stream?from={start}", 6.0)
     checks.that(
         "event: caught_up" in instance and f"m1-global-{now}" in instance,
         "the instance stream still replays the instance's events, as it always has",
@@ -410,21 +437,21 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
     # could fake the project's list, and only this says the instance holds none
     # of it.
     if produced:
-        status, graphs = sso.call(student, "GET", "/api/v1/workflows")
+        status, graphs = sso.call(observer, "GET", "/api/v1/workflows")
         names = [row.get("workflow_id") for row in graphs.get("workflows", [])] if status == 200 else []
         checks.that(
             status == 200 and f"m1-graph-{now}" not in names,
             "a project's workflow graph is on no instance list — that fold has the project in its row",
             f"{status} {f'm1-graph-{now}' in names}",
         )
-        status, runs = sso.call(student, "GET", "/api/v1/workflow-executions")
+        status, runs = sso.call(observer, "GET", "/api/v1/workflow-executions")
         ids = [row.get("workflow_run_id") for row in runs.get("executions", [])] if status == 200 else []
         checks.that(
             status == 200 and f"m1-folds-{now}" not in ids,
             "and neither is its execution, to somebody the project itself answers 404 to",
             f"{status} {f'm1-folds-{now}' in ids}",
         )
-        status, reports = sso.call(student, "GET", "/api/v1/evaluations")
+        status, reports = sso.call(observer, "GET", "/api/v1/evaluations")
         suites = [row.get("suite") for row in reports.get("evaluations", [])] if status == 200 else []
         checks.that(
             status == 200 and f"m1-suite-{now}" not in suites,
@@ -447,19 +474,350 @@ def m1(checks: Checks, teacher, student, student_subject: str, now: int) -> None
             checks.skipped(question, "no producer token names a project")
 
 
+# ── M0: two clients, two projects, one organization ──────────────────────────
+#
+# The gate IAM-03 calls M0, and it asks one thing in two directions: **no
+# question a client asks answers with somebody else's row**. Somebody else is
+# the other client, and it is also the deployment — a client on a shared
+# instance holds no instance role at all (D4), so the unassigned side is as much
+# not-theirs as the other project is.
+#
+# The instance half is walked from `contracts/openapi.json` rather than from a
+# list written here, for the reason the panel's `SCOPED_ROUTES` is: a
+# hand-written list goes stale in the direction nobody notices, which is the
+# route somebody added last week. Against a deployment the checkout's contract
+# may be ahead of what is running; a path that is not there answers 404, which
+# is the same "no data" this is asking about.
+#
+# Like M1, two of the questions need a run on each client's side, and only a
+# *credential* puts one there. So the first run prints the line and the second
+# asks everything:
+#
+#     python3 scripts/iam-permission-check.py
+#     AIWATCHER_M0_SCOPES=client-a=<org>/<a>,client-b=<org>/<b> just run-sso-iam
+#     AIWATCHER_M0_SCOPES=… python3 scripts/iam-permission-check.py
+
+CONTRACT = Path(__file__).resolve().parent.parent / "contracts" / "openapi.json"
+
+
+def instance_reads() -> list[str]:
+    """Every instance path in the contract a GET can be asked of as it stands.
+
+    Parameterless, because a path parameter this made up would be refused for
+    being made up and would say nothing about the boundary. What is left is the
+    lists — which is what a client would land on.
+    """
+    if not CONTRACT.exists():
+        return []
+    document = json.loads(CONTRACT.read_text())
+    return sorted(
+        path
+        for path, item in document["paths"].items()
+        if "get" in item
+        and "{" not in path
+        and path.startswith("/api/v1/")
+        and not path.startswith("/api/v1/auth/")
+        and not path.startswith("/api/v1/iam/")
+    )
+
+
+def client_token(name: str) -> str:
+    """The same secret `just run-sso-iam` derives, so the two agree by rule."""
+    return hashlib.sha256(name.encode()).hexdigest()[:32]
+
+
+def public(path: str, body: dict[str, object]) -> tuple[int, dict]:
+    """A call with no session at all, which is what the two open routes take."""
+    request = urllib.request.Request(
+        sso.PANEL + path,
+        method="POST",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request) as answer:
+            return answer.status, json.loads(answer.read() or b"{}")
+    except urllib.error.HTTPError as refused:
+        return refused.code, json.loads(refused.read() or b"{}")
+
+
+def newcomer(checks: Checks, teacher, org: str, project: str, now: int) -> None:
+    """Somebody with a link, no account, and no way to be given one by hand.
+
+    The whole of D5, asked end to end, because the half that decides it is
+    **not in this repository**: an enrolment flow that put a new account in
+    `aiwatcher-viewers` would give every client a role on the whole deployment
+    and nothing here would fail. So this makes a real account through the
+    provider's own flow and asks what it came out holding.
+    """
+    status, offer = sso.call(
+        teacher,
+        "POST",
+        f"/api/v1/iam/organizations/{org}/projects/{project}/invitations",
+        {"role": "viewer", "window": {"valid_from": now - DAY},
+         "expires_at": now + DAY, "label": f"newcomer-{now}@example.test"},
+    )
+    if status != 201:
+        checks.skipped("somebody with no account is enrolled by their invitation",
+                       f"the offer was refused: {status}")
+        return
+    status, enrolment = public("/api/v1/iam/invitations/enrollment", {"token": offer["token"]})
+    if status == 501:
+        for question in (
+            "somebody with no account is enrolled by their invitation",
+            "and the account it made holds no instance role",
+            "and the grant it redeems is the one the offer declared",
+        ):
+            checks.skipped(question, "AIWATCHER_AUTH_PROVISION_URL is not configured")
+        return
+    checks.that(
+        status == 200 and enrolment.get("url", "").startswith(
+            os.environ.get("AIWATCHER_AUTHENTIK_URL", "http://localhost:9000").rstrip("/")
+        ),
+        "somebody with no account is enrolled by their invitation",
+        f"{status} {enrolment.get('url', enrolment)[:70]}",
+    )
+    if status != 200:
+        return
+
+    username = f"newcomer-{now}"
+    try:
+        session = sso.enrol(enrolment["url"], username, f"{username}@example.test", "a-long-enough-password")
+    except Exception as refused:  # noqa: BLE001 - reported, not raised
+        checks.skipped("and the account it made holds no instance role", str(refused)[:120])
+        return
+    status, identity = sso.call(session, "GET", "/api/v1/auth/me")
+    checks.that(
+        # `groups` is absent rather than empty when there are none, which is
+        # the answer this is looking for either way.
+        status == 200 and identity["roles"] == [] and not identity.get("groups"),
+        "and the account it made holds no instance role and no group of this deployment's",
+        f"{status} roles={identity.get('roles')} groups={identity.get('groups', [])}",
+    )
+    status, redeemed = sso.call(session, "POST", "/api/v1/iam/invitations/redeem",
+                                {"token": offer["token"]})
+    checks.that(
+        status == 200 and redeemed["role"] == "viewer"
+        and redeemed["project"]["scope"]["project"] == project,
+        "and the grant it redeems is the one the offer declared",
+        f"{status} {redeemed.get('role')}",
+    )
+
+
+def m0(checks: Checks, teacher, now: int) -> None:
+    scopes = {}
+    for entry in os.environ.get("AIWATCHER_M0_SCOPES", "").split(","):
+        if "=" in entry:
+            name, scope = entry.split("=", 1)
+            scopes[name.strip()] = scope.strip()
+
+    clients = ["client-a", "client-b"]
+    sessions = {}
+    for name in clients:
+        try:
+            sessions[name] = sso.sign_in(name, f"{name}-dev")
+        except Exception as refused:  # noqa: BLE001 - reported, not raised
+            checks.skipped(f"{name} signs in", f"{refused}")
+            return
+    subjects = {
+        name: sso.call(session, "GET", "/api/v1/auth/me")[1]["subject"]
+        for name, session in sessions.items()
+    }
+
+    # Every client holds no instance role. This is D4's whole premise, and it
+    # is configuration outside this repository — an enrolment flow that put a
+    # new account in `aiwatcher-viewers` would undo the isolation with nothing
+    # here failing — so it is asked rather than assumed.
+    roles = {
+        name: sso.call(session, "GET", "/api/v1/auth/me")[1]["roles"]
+        for name, session in sessions.items()
+    }
+    checks.that(
+        all(not held for held in roles.values()),
+        "a client signs in holding no instance role at all",
+        roles,
+    )
+
+    if scopes:
+        org = next(iter(scopes.values())).split("/", 1)[0]
+        status, _ = sso.call(teacher, "GET", f"/api/v1/iam/organizations/{org}/roster")
+        if status != 200:
+            print(f"AIWATCHER_M0_SCOPES names {org}, which this teacher cannot administer "
+                  f"({status}). Unset it to mint fresh ones.", file=sys.stderr)
+            return
+        projects = {name: scope.split("/", 1)[1] for name, scope in scopes.items()}
+    else:
+        status, organization = sso.call(
+            teacher, "POST", "/api/v1/iam/organizations", {"name": f"AI Spirit {now}"}
+        )
+        if status != 201:
+            print(f"could not create the shared organization: {status}", file=sys.stderr)
+            return
+        org = organization["id"]
+        projects = {}
+        for name in clients:
+            _, created = sso.call(
+                teacher, "POST", f"/api/v1/iam/organizations/{org}/commands",
+                {"type": "create_project", "name": f"Demo for {name}"},
+            )
+            projects[name] = created["ProjectCreated"]["scope"]["project"]
+        line = ",".join(f"{name}={org}/{projects[name]}" for name in clients)
+        print(f"\n  to ask the questions that need each client's own run, restart\n"
+              f"  the server and this script with AIWATCHER_M0_SCOPES={line}\n")
+
+    # An invitation, because that is how a client who has never signed in gets
+    # in — and a guest, because a client is not a colleague (D3).
+    for name in clients:
+        status, offer = sso.call(
+            teacher,
+            "POST",
+            f"/api/v1/iam/organizations/{org}/projects/{projects[name]}/invitations",
+            {"role": "editor", "window": {"valid_from": now - DAY},
+             "expires_at": now + DAY, "label": f"{name}@localhost"},
+        )
+        if status != 201:
+            checks.skipped(f"{name} is invited as a guest", f"the offer was refused: {status}")
+            continue
+        if name == clients[0]:
+            # What a stranger sees before they have an account: the terms, with
+            # no session at all, and looking costs the offer nothing.
+            status, offered = public("/api/v1/iam/invitations/preview", {"token": offer["token"]})
+            checks.that(
+                status == 200 and offered.get("standing") == "guest"
+                and offered.get("project", {}).get("scope", {}).get("project") == projects[name],
+                "an invitation reads its own terms to somebody with no session and no account",
+                f"{status} {offered.get('standing')}",
+            )
+        status, redeemed = sso.call(
+            sessions[name], "POST", "/api/v1/iam/invitations/redeem", {"token": offer["token"]}
+        )
+        checks.that(
+            status == 200 and redeemed["role"] == "editor",
+            f"{name} redeems an invitation and holds an editor grant on their project",
+            status,
+        )
+
+    newcomer(checks, teacher, org, projects[clients[0]], now)
+
+    roster_status, roster = sso.call(teacher, "GET", f"/api/v1/iam/organizations/{org}/roster")
+    guests = {entry["principal"]["subject"] for entry in roster.get("guests", [])}
+    members = {entry["principal"]["subject"] for entry in roster.get("members", [])}
+    checks.that(
+        roster_status == 200
+        and all(subjects[name] in guests for name in clients)
+        and not any(subjects[name] in members for name in clients),
+        "and is a guest in the roster, not a member of it",
+        f"{roster_status} {len(guests)} guest(s), {len(members)} member(s)",
+    )
+
+    # One run per client, each published by that client's own token.
+    produced = {}
+    for name in clients:
+        if name not in scopes:
+            continue
+        status, _ = sso.publish(client_token(name), run_events(f"m0-{name}-{now}", name))
+        produced[name] = status == 202
+        if not produced[name]:
+            print(f"the {name} producer token was refused: {status}", file=sys.stderr)
+    time.sleep(1.0)
+
+    # ── Each client's own project, and the other's ───────────────────────────
+    for name, other in [(clients[0], clients[1]), (clients[1], clients[0])]:
+        session = sessions[name]
+        mine = f"/api/v1/orgs/{org}/projects/{projects[name]}"
+        theirs = f"/api/v1/orgs/{org}/projects/{projects[other]}"
+
+        status, listed = sso.call(session, "GET", f"/api/v1/iam/organizations/{org}/projects")
+        checks.that(
+            status == 200
+            and [entry["project"]["scope"]["project"] for entry in listed] == [projects[name]],
+            f"{name} sees exactly one project in the shared organization",
+            f"{status} {len(listed) if status == 200 else ''}",
+        )
+        status, _ = sso.call(session, "GET", f"/api/v1/iam/organizations/{org}/roster")
+        checks.that(
+            status == 403,
+            f"{name} cannot read the roster — a guest administers nothing",
+            status,
+        )
+
+        if produced.get(name) and produced.get(other):
+            status, page = sso.call(session, "GET", f"{mine}/runs")
+            ids = [run["run_id"] for run in page["runs"]] if status == 200 else []
+            checks.that(
+                status == 200 and f"m0-{name}-{now}" in ids and f"m0-{other}-{now}" not in ids,
+                f"{name}'s runs are {name}'s, and hold none of {other}'s",
+                f"{status} {ids}",
+            )
+            status, _ = sso.call(session, "GET", f"{mine}/runs/m0-{other}-{now}")
+            checks.that(status == 404, f"{other}'s run is not in {name}'s project", status)
+        else:
+            for question in (
+                f"{name}'s runs are {name}'s, and hold none of {other}'s",
+                f"{other}'s run is not in {name}'s project",
+            ):
+                checks.skipped(question, "no producer token names each client's project")
+
+        # Every scoped family, asked about the other client's project. Not the
+        # whole contract: one route per store is what proves the resolver, and
+        # the resolver is one.
+        for family in ["runs", "spans", "metrics", "workflows", "evaluations",
+                       "prompts", "datasets", "training-runs", "labs",
+                       "evaluation-results", "annotation-projects"]:
+            status, _ = sso.call(session, "GET", f"{theirs}/{family}")
+            checks.that(
+                status == 404,
+                f"{name} asking for {other}'s {family} is told there is no such project",
+                status,
+            )
+
+        # ── The deployment's own side ────────────────────────────────────────
+        answered = []
+        for path in instance_reads():
+            status, _ = sso.call(session, "GET", path)
+            if 200 <= status < 300:
+                answered.append(f"{status} {path}")
+        checks.that(
+            not answered,
+            f"and no instance route answers {name} at all "
+            f"({len(instance_reads())} asked from the contract)",
+            answered[:3] or "none answered",
+        )
+
+        status, stream_text = sso.call(session, "GET", "/api/v1/live/snapshot")
+        checks.that(
+            status != 200,
+            f"{name} does not reach the instance's live snapshot either",
+            status,
+        )
+
+
 def main() -> int:
     checks = Checks()
     now = int(time.time())
 
     teacher = sso.sign_in("teacher", "teacher-dev")
     student = sso.sign_in("student", "student-dev")
+    observer = sso.sign_in("observer", "observer-dev")
     _, teacher_identity = sso.call(teacher, "GET", "/api/v1/auth/me")
     _, student_identity = sso.call(student, "GET", "/api/v1/auth/me")
     student_subject = student_identity["subject"]
     checks.that(
-        teacher_identity["roles"] == ["admin"] and student_identity["roles"] == ["viewer"],
-        "the two fixtures come back with the instance roles their groups map to",
-        f"{teacher_identity['roles']} / {student_identity['roles']}",
+        teacher_identity["roles"] == ["admin"],
+        "a group this deployment maps is the instance role somebody holds",
+        teacher_identity["roles"],
+    )
+    # And its other half, which is what AIWATCHER_AUTH_DEFAULT_ROLE decides.
+    # Asked as a consequence rather than as a value, so the same question holds
+    # against a deployment that chose either: whoever holds no instance role
+    # reaches no instance route, and whoever holds `viewer` reaches them all.
+    unmapped = student_identity["roles"]
+    status, _ = sso.call(student, "GET", "/api/v1/runs")
+    checks.that(
+        (status == 200) == bool(unmapped),
+        "and somebody in no mapped group reaches the deployment's own runs only if "
+        "AIWATCHER_AUTH_DEFAULT_ROLE gave them a role",
+        f"{unmapped or 'no role'} → {status}",
     )
 
     status, _ = sso.call(student, "POST", "/api/v1/iam/organizations", {"name": "Not mine"})
@@ -732,7 +1090,8 @@ def main() -> int:
         status,
     )
 
-    m1(checks, teacher, student, student_subject, now)
+    m1(checks, teacher, student, observer, student_subject, now)
+    m0(checks, teacher, now)
 
     return checks.report()
 

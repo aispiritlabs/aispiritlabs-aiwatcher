@@ -67,6 +67,12 @@ pub fn router() -> Router<AppState> {
 /// getting a 401 from it is exactly what tells the panel to render its sign-in
 /// screen, and an anonymous body would make "signed out" indistinguishable
 /// from "signed in as nobody".
+///
+/// The two invitation routes are here because the person they exist for has no
+/// account yet and cannot get one without them (IAM-03 D5). Their credential is
+/// the token in the body: 244 bits, kept as a digest, and the only thing either
+/// answers about. Neither writes; the redemption that does still needs a
+/// verified session, because that is where the pair a grant names comes from.
 fn is_public(path: &str) -> bool {
     matches!(
         path,
@@ -79,7 +85,27 @@ fn is_public(path: &str) -> bool {
             // Public so that signing out of an already-expired session still
             // clears the cookie instead of answering 401 and leaving it set.
             | "/api/v1/auth/logout"
+            | "/api/v1/iam/invitations/preview"
+            | "/api/v1/iam/invitations/enrollment"
     )
+}
+
+/// Reachable by somebody who holds no role on this instance (IAM-03 D4).
+///
+/// Two families, and neither answers for anything this deployment holds. The
+/// sign-in family says **who the caller is** — a client refused by `/auth/me`
+/// would be told it was signed out while holding a valid session, which is the
+/// sign-in loop `is_public` already avoids one step earlier. The IAM family
+/// authorizes **itself**, per principal, and answers which organizations and
+/// projects a caller may open: without it the scope selector has nothing to
+/// show and a client cannot reach the one route family that is theirs.
+///
+/// A prefix rather than a list of paths, so a route added to either family is
+/// covered by the rule that already describes it. Everything else is
+/// instance-wide by default, which is the direction the one somebody forgets
+/// should fail in.
+fn reaches_without_an_instance_role(path: &str) -> bool {
+    path.starts_with("/api/v1/auth/") || path.starts_with("/api/v1/iam/")
 }
 
 /// Where a launched pod's credential opens: its attempt's worker routes and
@@ -180,13 +206,62 @@ where
 {
     type Rejection = ApiError;
 
+    /// The identity the layer established — refused on an instance route when
+    /// it holds no instance role (IAM-03 D4).
+    ///
+    /// Here rather than in the layer, and the reason is the marker: a project
+    /// route is one that carries [`ScopedRoute`], inserted by the nested
+    /// router that serves it, and the layer runs before routing so it cannot
+    /// see one. Reading it here is the same question
+    /// `project_scope::resolve_required` already asks, in the same place, so
+    /// there is no table of paths to drift from the routes it guards.
+    ///
+    /// What this does *not* decide is which project: the marker says a scope
+    /// is in the path and a grant is still asked of IAM, fresh, by the route.
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        parts
+        let identity = parts
             .extensions
             .get::<Identity>()
             .cloned()
-            .map(Caller)
-            .ok_or(ApiError::Unauthenticated)
+            .ok_or(ApiError::Unauthenticated)?;
+        if identity.role().is_none()
+            && parts
+                .extensions
+                .get::<crate::project_scope::ScopedRoute>()
+                .is_none()
+            && !reaches_without_an_instance_role(parts.uri.path())
+        {
+            return Err(ApiError::InstanceRoleRequired);
+        }
+        Ok(Caller(identity))
+    }
+}
+
+/// A read this deployment's own routes may answer at all.
+///
+/// [`Caller`] without the identity, for the handlers that check no role and
+/// have no project twin. Reads check no role on purpose — the answer differs
+/// per handler and a table of paths in a middleware drifts — but "no role
+/// check" became "no caller check" for the fifteen routes that never asked for
+/// the caller at all, and after D4 that is the difference between a client of
+/// one project and a reader of the unassigned side.
+///
+/// Named rather than written `_: Caller`, because an extractor whose value
+/// nothing reads looks like a leftover unless its name says what it decided.
+/// Declared **before** the request is parsed, so the refusal is the boundary's
+/// rather than a query parameter's — `instance_reach.rs` holds every operation
+/// in the contract to that.
+#[derive(Debug)]
+pub struct InstanceRead;
+
+impl<S> FromRequestParts<S> for InstanceRead
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Caller::from_request_parts(parts, state).await.map(|_| Self)
     }
 }
 

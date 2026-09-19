@@ -38,6 +38,7 @@ are a separate integration step.
 | Organization owner | Manage all memberships; create teams/projects; manage project grants. |
 | Organization admin | Manage ordinary members and teams; create projects; manage project grants. Cannot promote or change admins/owners. |
 | Organization member | Membership alone provides no project access or organization administration. |
+| Organization guest | Project grants and nothing else. Not a member: no team takes one, a grant naming the organization does not reach one, and the roster lists them apart. Made by redeeming an offer, which says `guest` unless it asks for a colleague. |
 | Project admin | Manage grants for that project to existing organization members or teams. |
 | Project editor | Project write role; cannot manage grants. |
 | Project viewer | Project read role. |
@@ -332,6 +333,18 @@ The rules, and the reason for each:
   accept; the `GrantWindow` is what they get when they do. An offer that lapsed
   is 410 to its holder, who is the only person who can ask — telling them "it
   lapsed" leaks nothing, since without the token there is nothing to ask with.
+- **An offer says what it makes somebody, and the narrower answer is the
+  default.** `InvitationOffer.standing` is `guest` or `member`, and `guest`
+  unless the offer says otherwise: a client invited to one demo project must
+  not become a colleague whom the next broad grant sweeps up. It only ever
+  adds — a principal already here keeps the standing they hold, so an offer
+  cannot demote an admin who happened to be handed a token.
+- **An offer reads its own terms to somebody with no account.** `offered`
+  answers the organization, the project, the role, the window, the standing and
+  the expiry to whoever presents the token, spends nothing, and takes no
+  session — because the person it exists for has none and, in the case it
+  exists for, cannot get one without first deciding whether to. It makes the
+  same three refusals redemption makes: absent, spent, lapsed.
 - **Redemption names no organization.** Whoever holds a token does not know
   which organization it belongs to, and a route that made them say would confirm
   a guess. The digest finds the row through a GIN index and the same statement

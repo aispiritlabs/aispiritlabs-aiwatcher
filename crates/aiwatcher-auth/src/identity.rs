@@ -260,15 +260,34 @@ impl Identity {
         }
     }
 
-    /// The highest role this identity holds.
+    /// The highest role this identity holds on the **instance**, if any.
+    ///
+    /// `None` is a signed-in caller with no instance role: real, verified, and
+    /// entitled to nothing this deployment holds outside a project it has a
+    /// grant on. It used to read as [`Role::Viewer`], which is the whole of
+    /// what IAM-03's D4 changes — an empty list meant the lowest role, so a
+    /// mapping that deliberately resolved to nothing admitted everybody to the
+    /// unassigned side. Every constructor in this crate names its roles
+    /// explicitly, so the only way to hold none is
+    /// [`RoleMapping::resolve`] being told to say so.
     #[must_use]
-    pub fn role(&self) -> Role {
-        self.roles.iter().copied().max().unwrap_or(Role::Viewer)
+    pub fn role(&self) -> Option<Role> {
+        self.roles.iter().copied().max()
+    }
+
+    /// What to print where a role is being reported rather than checked.
+    ///
+    /// `"project"` rather than `"none"` for a caller with no instance role,
+    /// because that is the value that produced it and because "none" is
+    /// already this configuration's word for refusing the login outright.
+    #[must_use]
+    pub fn role_name(&self) -> &'static str {
+        self.role().map_or("project", Role::as_str)
     }
 
     #[must_use]
     pub fn can(&self, needed: Role) -> bool {
-        self.role().satisfies(needed)
+        self.role().is_some_and(|held| held.satisfies(needed))
     }
 
     /// What to put in a log line. Never the email or the group list: an access
@@ -294,11 +313,56 @@ pub struct RoleMapping {
     /// switch, separate from "what may they do once they have".
     pub required_groups: Vec<String>,
     /// What an authenticated caller in none of the mapped groups gets.
-    /// `Some(Viewer)` by default: an identity provider that let somebody
-    /// through has already made the "may this person see aiwatcher" decision,
-    /// and a login that succeeds and then shows nothing reads as a broken
-    /// deployment. `None` refuses them instead.
-    pub default_role: Option<Role>,
+    pub default_role: DefaultRole,
+}
+
+/// What a caller the group mapping did not name is admitted as.
+///
+/// Three answers to one question, because a deployment that hosts clients has
+/// a third: the two that existed said "give them the lowest role" and "refuse
+/// the login", and neither is "let them in, holding nothing of this
+/// instance's" (IAM-03 D4). It is not a `Role` with a fourth variant, because
+/// a role is what a check compares against and two of these are not that.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultRole {
+    /// An instance role, held on everything this deployment's own routes
+    /// answer. [`Role::Viewer`] by default: an identity provider that let
+    /// somebody through has already made the "may this person see aiwatcher"
+    /// decision, and a login that succeeds and then shows nothing reads as a
+    /// broken deployment.
+    Instance(Role),
+    /// Signed in, with **no** instance role. The instance's own routes refuse
+    /// them and a project's routes answer on a grant — so a client on a shared
+    /// deployment sees their project and never the unassigned side.
+    Project,
+    /// Refused outright: the "who may sign in at all" switch, separate from
+    /// "what may they do once they have". Kept as the meaning of `none`,
+    /// because a deployment that already set it would otherwise be quietly
+    /// admitting everybody it used to turn away.
+    Refused,
+}
+
+impl DefaultRole {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Instance(role) => role.as_str(),
+            Self::Project => "project",
+            Self::Refused => "none",
+        }
+    }
+}
+
+impl std::str::FromStr for DefaultRole {
+    type Err = UnknownRole;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => Ok(Self::Refused),
+            "project" | "projects" => Ok(Self::Project),
+            other => other.parse::<Role>().map(Self::Instance),
+        }
+    }
 }
 
 impl Default for RoleMapping {
@@ -308,7 +372,7 @@ impl Default for RoleMapping {
             editor_groups: vec!["aiwatcher-editors".to_owned()],
             viewer_groups: vec!["aiwatcher-viewers".to_owned()],
             required_groups: Vec::new(),
-            default_role: Some(Role::Viewer),
+            default_role: DefaultRole::Instance(Role::Viewer),
         }
     }
 }
@@ -348,10 +412,13 @@ impl RoleMapping {
 
         if roles.is_empty() {
             match self.default_role {
-                Some(role) => {
+                DefaultRole::Instance(role) => {
                     roles.insert(role);
                 }
-                None => {
+                // An empty list, deliberately: signed in and holding nothing
+                // of this instance's. `Identity::role` answers `None` for it.
+                DefaultRole::Project => {}
+                DefaultRole::Refused => {
                     return Err(NotEntitled {
                         subject: subject.to_owned(),
                     });
@@ -425,10 +492,47 @@ mod tests {
     #[test]
     fn refusing_the_default_role_refuses_an_unmapped_user() {
         let mapping = RoleMapping {
-            default_role: None,
+            default_role: DefaultRole::Refused,
             ..RoleMapping::default()
         };
         assert!(mapping.resolve("alice", &groups(&["everyone"])).is_err());
+    }
+
+    #[test]
+    fn a_project_default_signs_somebody_in_holding_no_instance_role() {
+        // The difference D4 turns on. `Refused` is a login that does not
+        // happen; this is a login that does, whose caller holds nothing the
+        // instance's own routes answer for.
+        let mapping = RoleMapping {
+            default_role: DefaultRole::Project,
+            ..RoleMapping::default()
+        };
+        let roles = mapping
+            .resolve("client", &groups(&["everyone"]))
+            .expect("signed in");
+        assert!(roles.is_empty());
+
+        let identity = Identity {
+            roles,
+            ..Identity::anonymous()
+        };
+        assert_eq!(identity.role(), None);
+        assert!(!identity.can(Role::Viewer), "not even the lowest one");
+        assert_eq!(identity.role_name(), "project");
+    }
+
+    #[test]
+    fn a_mapped_group_still_answers_under_a_project_default() {
+        // The default is what somebody *unmapped* gets. An operator on the
+        // same deployment is in a group, and that group still decides.
+        let mapping = RoleMapping {
+            default_role: DefaultRole::Project,
+            ..RoleMapping::default()
+        };
+        let roles = mapping
+            .resolve("operator", &groups(&["aiwatcher-admins"]))
+            .expect("signed in");
+        assert_eq!(roles, vec![Role::Admin]);
     }
 
     #[test]
@@ -437,7 +541,7 @@ mod tests {
             roles: vec![Role::Viewer, Role::Admin],
             ..Identity::anonymous()
         };
-        assert_eq!(identity.role(), Role::Admin);
+        assert_eq!(identity.role(), Some(Role::Admin));
         assert!(identity.can(Role::Editor));
     }
 

@@ -173,7 +173,7 @@ mod tests {
         )
         .expect("an identity");
         assert_eq!(identity.subject, "alice");
-        assert_eq!(identity.role(), Role::Viewer);
+        assert_eq!(identity.role(), Some(Role::Viewer));
     }
 
     #[test]

@@ -622,6 +622,102 @@ przed M7.
 
 ---
 
+## 8a. M0 — co stanęło (19.09.2026)
+
+Kontrakt dla D4 i D5 jest w [ADR_0013](ADR/ADR_0013_SINGLE_SIGN_ON.md), aneks
+z 19.09; D3 jest w [README IAM](../crates/aiwatcher-iam/README.md).
+
+### D4, i dlaczego wyszło węziej, niż wyglądało
+
+`AIWATCHER_AUTH_DEFAULT_ROLE` ma czwartą wartość `project`,
+`Identity::role()` zwraca `Option<Role>`, a odmowa siedzi w
+`Caller::from_request_parts` — poza `ScopedRoute`, czyli czyta ten sam
+znacznik co `project_scope::resolve_required`, bo warstwa uwierzytelniająca
+biegnie **przed routingiem** i żadnego znacznika nie widzi. Wyjątki są dwie
+rodziny: `/api/v1/auth/` (odmowa `me` zgłasza ważną sesję jako wylogowaną) i
+`/api/v1/iam/` (autoryzuje sama siebie i bez niej klient nie zobaczy swojego
+projektu). Odmowa to **403 `instance_role_required`**, nie 404: trasa jest w
+kontrakcie każdego aiwatchera, więc nie ma czego chować, a panel musi odróżnić
+„to nie twoje" od „tego wdrożenia nie ma".
+
+Najciekawsze jest to, co zmierzył test. `instance_reach.rs` przechodzi **każdą**
+operację z `contracts/openapi.json` i pyta o nią principalem bez roli
+instancyjnej. Odmowa w ekstraktorze `Caller` okazała się niemal totalna —
+prawie wszystko i tak idzie przez `project_scope::resolve` — ale **piętnaście
+tras nie brało `Caller` w ogóle** i odpowiadało dalej: cztery w `imports`,
+cztery w `conversations`, para w `artifacts`, trzy w `context`, dwie w
+`schedules`, cztery w `hubs`, `execution_timers`, `decider-lease` i
+`annotation-sources`. Dostały `InstanceRead` — `Caller` bez tożsamości, nazwany
+po tym, co rozstrzyga — i test trzyma teraz dwie własności naraz: nic poza
+dwiema rodzinami nie odpowiada, **i** każda operacja instancyjna odmawia
+*po granicy*, a nie z powodu źle zgadniętego parametru. To druga własność jest
+regułą o handlerach: **caller przed sparsowaniem żądania**.
+
+**Zależność z promptu sprawdzona i zamknięta, nie nazwana na ekranie.** Trasy
+artefaktów przebiegu dostały bliźniaka: `for_project` na porcie
+`ArtifactCatalog` (i na `AttemptArtifacts`, bo bajty i katalog wiążą się razem
+albo wcale), `RunArtifacts` wiążące trzy magazyny z jednej odpowiedzi
+`RunHandle`, i para tras pod `{SCOPE}/executions/{id}/artifacts`. Domyślna
+implementacja portu **odmawia po nazwie** — adapter bez formy projektowej mówi
+to, zamiast odpowiadać stroną wdrożenia (ADR_0033 pkt 7).
+
+### D3 i D5
+
+`OrganizationRole::Guest` jest **poniżej** `Member` (kolejność wariantów to
+kolejność, którą czyta każdy check), `InvitationOffer.standing` domyślnie
+`guest`, zespół gościa nie przyjmuje, a roster ma dwie listy zamiast jednej z
+rolą w wierszu — bo „czy ten człowiek jest stąd" ma być nie do przeczytania
+źle, a nie tylko możliwe do przeczytania dobrze.
+
+D5 to dwie trasy publiczne (`preview`, `enrollment`), port provisioningu z
+adapterem authentika i strona `/invite` czytająca token z **fragmentu**.
+Blueprint dokłada flow `aiwatcher-enrolment` (etap zaproszenia wymagany, żaden
+etap nie nadaje grupy), a `authentik-seed` konto serwisowe z dwoma
+uprawnieniami: dodać zaproszenie i przeczytać flow. Sprawdzone ręcznie wobec
+prawdziwego authentika: token **tworzy zaproszenie (201)**, **nie utworzy
+użytkownika (403)**.
+
+### Bramka M0
+
+`scripts/iam-permission-check.py` urosło z 51 pytań do **94** i przebiegło
+**94/94**, zero niezadanych, na żywym serwerze (`just authentik-up`,
+`authentik-seed`, `postgres-up`, `run-sso-iam`, `panel`, dwa przebiegi z
+`AIWATCHER_M1_SCOPE` i `AIWATCHER_M0_SCOPES`). Nowe pytania, po rodzajach:
+
+* klient loguje się **bez żadnej roli instancyjnej**, redeemuje zaproszenie i
+  jest w rosterze gościem, nie członkiem;
+* przebiegi klienta A to jego przebiegi i **żaden** z klienta B, w obie strony;
+* jedenaście rodzin zakresowych zapytanych o projekt drugiego klienta →
+  **404**, każda;
+* **żadna trasa instancyjna nie odpowiada klientowi** — 60 ścieżek wziętych z
+  kontraktu, nie z listy pisanej ręcznie;
+* i cały łańcuch D5: oferta czyta swoje warunki komuś **bez sesji**, konto
+  powstaje w authentiku przez jego własny flow, wraca **bez roli i bez grupy**,
+  a redeem daje dokładnie ten grant, który oferta deklarowała.
+
+Dwa pytania z M1 trzeba było przepisać, i to jest zmiana wartościowa sama w
+sobie: pytały o stronę instancyjną **studentem**, który przed D4 miał `viewer`
+z samego zalogowania. Teraz pyta `observer` — widz instancji bez żadnego grantu
+— czyli principal, o którym te pytania naprawdę są. Trzecie („człowiek spoza
+mapowanych grup") pyta o **konsekwencję**, nie o wartość, więc trzyma się
+wdrożenia, które wybrało `viewer`, i wdrożenia, które wybrało `project`.
+
+### Czego M0 nie dowiózł
+
+**Wdrożenia na `vps`.** Kod, chart i blueprint są gotowe — chart uczy się
+`AIWATCHER_IAM_POSTGRES_URL` na własnej bazie i `AIWATCHER_AUTH_PROVISION_*`,
+odmawia jednego bez `auth.mode=oidc` i drugiego bez URL-a — a samo przełączenie
+`planner` na `oidc` jest opisane w `deploy/environments/planner.yaml` i wymaga
+czterech rzeczy, których nie da się zrobić „przy okazji": aplikacji OIDC i flow
+rejestracji w authentiku na `vps`, bazy `aiwatcher_iam` na `planner-postgres`,
+trzech Sekretów w namespace i **zdjęcia middleware'u outpostu z ingressu
+aiwatchera** — bo outpost przed aiwatcherem każe klientowi przejść politykę
+plannera, zanim dojdzie do własnego logowania aiwatchera. Bramka przebiegła
+lokalnie; przeciwko `vps` nie została uruchomiona i to jest jedyna pozycja
+z §5, która została otwarta.
+
+---
+
 ## 9. Prompt — IAM-03/M0: pierwsze demo klienckie
 
 > Pracujesz w repozytorium AIWatcher nad **IAM-03/M0: pierwszym demo
@@ -671,7 +767,7 @@ przed M7.
 > ingestu per klient z sufiksem `@org/proj`, i zdanie w panelu dla kogoś bez
 > roli instancyjnej.
 >
-> **Czego nie rób.** Nie otwieraj niczego z M6 ani M7 — projektowy `/start`
+> **Co warto zweryfikować.** Temat z M6 ani M7 — projektowy `/start`
 > **już istnieje** i działa dla niegenerującego scoring runu, więc lab w demo
 > może iść ścieżką autorską (`{SCOPE}/evaluation-results` + `context_id`) albo
 > zarządzaną, i jedno i drugie jest gotowe. Nie opisuj wdrożenia jako

@@ -29,6 +29,7 @@ pub mod error;
 pub mod identity;
 pub mod local;
 pub mod oidc;
+pub mod provisioning;
 pub mod proxy;
 pub mod signing;
 
@@ -42,8 +43,11 @@ use crate::signing::constant_time_eq;
 pub use attempt::{AttemptCredentials, AttemptScope};
 pub use cookie::{CookieSpec, SameSite};
 pub use error::{AuthError, AuthResult};
-pub use identity::{Credential, Identity, NotEntitled, Role, RoleMapping, UnknownRole};
+pub use identity::{
+    Credential, DefaultRole, Identity, NotEntitled, Role, RoleMapping, UnknownRole,
+};
 pub use oidc::{Claims, ProviderMetadata};
+pub use provisioning::{AccountProvisioning, Enrollment, ProvisioningConfig};
 pub use proxy::ProxyHeaders;
 
 /// Where identity comes from.
@@ -989,7 +993,7 @@ impl Authenticator {
 
         tracing::info!(
             subject = identity.log_subject(),
-            role = %identity.role(),
+            role = identity.role_name(),
             "signed in"
         );
 
@@ -1382,7 +1386,11 @@ mod tests {
                 .expect("valid");
         let identity = scoped.identity();
 
-        assert_eq!(identity.role(), Role::Editor, "a project is not a role");
+        assert_eq!(
+            identity.role(),
+            Some(Role::Editor),
+            "a project is not a role"
+        );
         assert!(!identity.can(Role::Admin));
         assert!(!identity.may_claim("houses"), "and it claims nothing");
         assert_eq!(identity.project, scoped.project);
@@ -1450,7 +1458,7 @@ mod tests {
         let worker = worker.identity();
         assert!(worker.may_claim("houses"));
         assert!(!worker.may_claim("plans"), "and only the one it named");
-        assert_eq!(worker.role(), Role::Editor, "a queue is not a role");
+        assert_eq!(worker.role(), Some(Role::Editor), "a queue is not a role");
     }
 
     #[test]

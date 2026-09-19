@@ -1,4 +1,4 @@
-import type { IamPrincipal, IamRoster } from '@/api/generated';
+import type { IamMembership, IamPrincipal, IamRoster } from '@/api/generated';
 import { short } from '@/shared/lib/iam';
 import {
   Badge,
@@ -10,6 +10,46 @@ import {
   EmptyState,
   IdChip,
 } from '@/shared/components/ui/primitives';
+
+/** One list of people, whichever standing they hold. */
+function Roll({
+  people,
+  onGrantTo,
+}: {
+  people: IamMembership[];
+  onGrantTo: (principal: IamPrincipal) => void;
+}) {
+  return (
+    <ul className="flex flex-col gap-2">
+      {people.map((member) => (
+        <li
+          key={`${member.principal.provider}\u0000${member.principal.subject}`}
+          className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2"
+        >
+          <Badge tone={member.role === 'admin' || member.role === 'owner' ? 'primary' : 'neutral'}>
+            {member.role}
+          </Badge>
+          <IdChip
+            label="subject"
+            value={short(member.principal.subject, 16)}
+            full={member.principal.subject}
+          />
+          <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">
+            {member.principal.provider}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => onGrantTo(member.principal)}
+          >
+            Grant to…
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /**
  * Who is in this organization, and which teams a grant can name.
@@ -43,32 +83,26 @@ export function People({
           starts.
         </p>
 
-        <ul className="flex flex-col gap-2">
-          {roster.members.map((member) => (
-            <li
-              key={`${member.principal.provider}\u0000${member.principal.subject}`}
-              className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2"
-            >
-              <Badge tone={member.role === 'member' ? 'neutral' : 'primary'}>{member.role}</Badge>
-              <IdChip
-                label="subject"
-                value={short(member.principal.subject, 16)}
-                full={member.principal.subject}
-              />
-              <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">
-                {member.principal.provider}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                className="ml-auto"
-                onClick={() => onGrantTo(member.principal)}
-              >
-                Grant to…
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <Roll people={roster.members} onGrantTo={onGrantTo} />
+
+        <div className="flex flex-col gap-2 border-t border-border pt-4">
+          <h3 className="text-xs font-medium text-muted-foreground">Guests</h3>
+          <p className="text-xs text-muted-foreground">
+            Invited to a project and not of this organization: a grant to everybody here does not
+            reach them, a team does not take them, and only an explicit change of role makes one a
+            member.
+          </p>
+          {/* Optional in the contract, because a document written before guests
+              existed has no list — which reads the same as having none. */}
+          {(roster.guests ?? []).length === 0 ? (
+            <EmptyState
+              title="No guests here"
+              hint="An invitation makes one unless it says it wants a colleague."
+            />
+          ) : (
+            <Roll people={roster.guests ?? []} onGrantTo={onGrantTo} />
+          )}
+        </div>
 
         <div className="flex flex-col gap-2 border-t border-border pt-4">
           <h3 className="text-xs font-medium text-muted-foreground">Teams</h3>

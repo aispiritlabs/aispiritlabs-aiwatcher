@@ -43,7 +43,7 @@ use aiwatcher_execution::{
     WorkflowMessage, WorkflowStore, allowed_run_actions, derive_uuid,
 };
 
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::execution_scope::RunHandle;
 use crate::state::AppState;
@@ -662,6 +662,7 @@ pub struct ExecutionTimers {
     tag = "execution",
 )]
 async fn execution_timers(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<ExecutionTimers>> {
@@ -864,6 +865,7 @@ async fn take_decider_lease(
     tag = "execution",
 )]
 async fn read_decider_lease(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<DeciderLease>> {

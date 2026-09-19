@@ -287,6 +287,7 @@ pub async fn an_invitation_is_one_use_expiring_and_learns_who_took_it(
             lesson.scope,
             &alice,
             InvitationOffer {
+                standing: OrganizationRole::Guest,
                 role: ProjectRole::Editor,
                 window: GrantWindow {
                     valid_from: 1_000,
@@ -359,6 +360,7 @@ pub async fn an_invitation_is_one_use_expiring_and_learns_who_took_it(
             lesson.scope,
             &alice,
             InvitationOffer {
+                standing: OrganizationRole::Guest,
                 role: ProjectRole::Viewer,
                 window: GrantWindow::permanent(1_000),
                 expires_at: 1_500,
@@ -386,6 +388,7 @@ pub async fn an_invitation_is_one_use_expiring_and_learns_who_took_it(
                 lesson.scope,
                 &stranger,
                 InvitationOffer {
+                    standing: OrganizationRole::Guest,
                     role: ProjectRole::Admin,
                     window: GrantWindow::permanent(1_600),
                     expires_at: 9_000,
@@ -402,6 +405,123 @@ pub async fn an_invitation_is_one_use_expiring_and_learns_who_took_it(
             .unwrap()
             .is_empty()
     );
+}
+
+/// Redeeming an offer makes a guest, and a guest is not one of the membership.
+///
+/// The offer that says `member` still does what every offer used to do. What
+/// changed is which of the two is the default, and it is the narrower one: a
+/// client invited to one demo project must not be swept up by a grant to
+/// everybody in the organization, nor appear on the roster as a colleague, nor
+/// be put in a team (IAM-03 D3).
+pub async fn an_invitation_makes_a_guest_unless_it_says_otherwise(
+    store: &dyn IamStore,
+    _: &TestClock,
+) {
+    let (owner, client, colleague) = (user("owner"), user("a client"), user("a colleague"));
+    let org = store.create_organization(&owner, "Shared").await.unwrap();
+    let demo = project(store, org.id, &owner).await;
+
+    let offer = |standing| InvitationOffer {
+        standing,
+        role: ProjectRole::Editor,
+        window: GrantWindow {
+            valid_from: 0,
+            edit_until: None,
+            read_until: None,
+        },
+        expires_at: 1_000_000,
+        label: None,
+    };
+    let to_client = store
+        .invite(demo.scope, &owner, offer(OrganizationRole::Guest))
+        .await
+        .unwrap();
+    let to_colleague = store
+        .invite(demo.scope, &owner, offer(OrganizationRole::Member))
+        .await
+        .unwrap();
+    store.redeem(&to_client.token, &client).await.unwrap();
+    store.redeem(&to_colleague.token, &colleague).await.unwrap();
+
+    // Both reach the project they were offered…
+    assert_eq!(
+        store.access(demo.scope, &client).await.unwrap().role,
+        ProjectRole::Editor
+    );
+    assert_eq!(
+        store.access(demo.scope, &colleague).await.unwrap().role,
+        ProjectRole::Editor
+    );
+
+    // …and the roster tells them apart by which list they are in, rather than
+    // by a role somebody has to remember to read.
+    let roster = store.roster(org.id, &owner).await.unwrap();
+    assert_eq!(
+        roster
+            .members
+            .iter()
+            .map(|entry| entry.principal.subject.clone())
+            .collect::<Vec<_>>(),
+        vec![owner.subject.clone(), colleague.subject.clone()]
+    );
+    assert_eq!(
+        roster
+            .guests
+            .iter()
+            .map(|entry| entry.principal.subject.clone())
+            .collect::<Vec<_>>(),
+        vec![client.subject.clone()]
+    );
+
+    // A team is the organization's own people. Offering a guest one is the
+    // broad grant this keeps off them, one indirection along.
+    let team = match store
+        .apply(
+            org.id,
+            &owner,
+            Command::CreateTeam {
+                name: "The team".into(),
+            },
+        )
+        .await
+        .unwrap()
+    {
+        Change::TeamCreated(team) => team.id,
+        other => panic!("expected a team: {other:?}"),
+    };
+    assert!(matches!(
+        store
+            .apply(
+                org.id,
+                &owner,
+                Command::SetTeamMember {
+                    team,
+                    principal: client.clone(),
+                    present: true,
+                },
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    store
+        .apply(
+            org.id,
+            &owner,
+            Command::SetTeamMember {
+                team,
+                principal: colleague.clone(),
+                present: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Promotion is an explicit act and never the offer's doing.
+    member(store, org.id, &owner, &client, OrganizationRole::Member).await;
+    let roster = store.roster(org.id, &owner).await.unwrap();
+    assert!(roster.guests.is_empty());
+    assert_eq!(roster.members.len(), 3);
 }
 
 pub async fn membership_is_not_project_access(store: &dyn IamStore, _: &TestClock) {

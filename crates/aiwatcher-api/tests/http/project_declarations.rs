@@ -381,6 +381,14 @@ async fn a_project_start_writes_an_owner_the_instance_cannot_reach() {
     f.fixture.state.executions = Some(Arc::new(aiwatcher_execution::ExecutionHandler::new(
         Arc::clone(&store),
     )));
+    // And the artifact pair, so those two routes reach the question this test
+    // asks. Without them they answer 501 — true, and not the refusal under
+    // test. Both halves, because both are `Some` exactly when there is an
+    // object store.
+    f.fixture.state.catalog = Some(Arc::new(
+        aiwatcher_execution::artifact::memory::MemoryArtifactCatalog::new(),
+    ));
+    f.fixture.state.artifacts = Some(Arc::new(MemoryArtifacts::default()));
     let owner = f.cookie("owner", Role::Admin);
     let outsider = f.cookie("outsider", Role::Admin);
     let org = f.create(&owner).await;

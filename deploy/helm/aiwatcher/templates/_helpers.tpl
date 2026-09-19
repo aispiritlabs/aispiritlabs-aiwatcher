@@ -451,6 +451,29 @@ later as "holds no object".
       # signs everybody out.
       optional: true
 {{- end }}
+{{- with .Values.iam.postgresSecret.name }}
+{{- if ne $.Values.auth.mode "oidc" }}
+{{- fail "iam.postgresSecret.name is set but auth.mode is not \"oidc\". A principal is a verified (provider, subject) pair and the other modes produce none, so the server refuses to start rather than falling back to memory." }}
+{{- end }}
+- name: AIWATCHER_IAM_POSTGRES_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ . }}
+      key: {{ $.Values.iam.postgresSecret.key }}
+{{- if gt (int $.Values.iam.auditRetentionDays) 0 }}
+- { name: AIWATCHER_IAM_AUDIT_RETENTION_DAYS, value: {{ $.Values.iam.auditRetentionDays | quote }} }
+{{- end }}
+{{- end }}
+{{- with .Values.auth.provisioning.secret.name }}
+- { name: AIWATCHER_AUTH_PROVISION_URL, value: {{ required "auth.provisioning.secret.name is set but auth.provisioning.url is empty. Both halves or neither: a token pointing at nothing is a secret with nowhere to go." $.Values.auth.provisioning.url | quote }} }
+- { name: AIWATCHER_AUTH_PROVISION_FLOW, value: {{ $.Values.auth.provisioning.flow | quote }} }
+- { name: AIWATCHER_AUTH_PROVISION_TTL_SECONDS, value: {{ $.Values.auth.provisioning.ttlSeconds | quote }} }
+- name: AIWATCHER_AUTH_PROVISION_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ . }}
+      key: {{ $.Values.auth.provisioning.secret.key }}
+{{- end }}
 {{- if ne .Values.execution.store "none" }}
 - { name: AIWATCHER_WORKFLOW_STORE, value: {{ .Values.execution.store | quote }} }
 {{- if gt (int .Values.execution.retentionDays) 0 }}

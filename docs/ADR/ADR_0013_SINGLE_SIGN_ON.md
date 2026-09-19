@@ -162,3 +162,91 @@ happens, which is the case that must keep working and is tested.
 * `ring` losing its maintenance, or `jsonwebtoken` 9 going unmaintained while
   `rsa` still carries an unfixed advisory. Then the crypto backend is the
   decision to revisit, not the architecture above it.
+
+## Amendment 2026-09-19: an instance read needs an instance role, and an offer can make an account
+
+This ADR's Consequences said the group mapping growing a fourth role would be
+the moment to revisit it. It has not grown one. What has changed is the
+*default* for somebody the mapping does not name, and it is not a role at all.
+
+### `AIWATCHER_AUTH_DEFAULT_ROLE=project`
+
+`RoleMapping::resolve` gave `default_role` — `Viewer` unless a deployment said
+otherwise — to every authenticated caller in none of the mapped groups, and
+`Identity::role()` read an empty list as `Viewer` too. Both were right while an
+instance served one team: a login that succeeded and then showed nothing reads
+as broken software, which is the sentence this ADR already makes about `none`.
+
+Neither is right when the instance hosts somebody else's project. IAM-01 and
+IAM-02 built a boundary around a project's data, and a *client* is exactly the
+caller that must hold nothing outside it — while most read routes check no
+role, so `Viewer` is the whole deployment. So the variable gains a fourth
+value and `Identity::role()` gains an `Option`:
+
+| Value | What an unmapped caller gets |
+|---|---|
+| `viewer` (default), `editor`, `admin` | that role on the instance |
+| `project` | signed in, holding **no** instance role |
+| `none` / `off` | refused the sign-in outright |
+
+`project` is a signed-in person with a verified `(provider, subject)` pair,
+which is everything a grant needs and nothing an instance route answers.
+`none` keeps its meaning exactly, because a deployment that already set it is
+turning people away and a release that quietly started admitting them would be
+the upgrade this ADR's own default exists to avoid.
+
+**The refusal reads the `ScopedRoute` marker, in `Caller::from_request_parts`.**
+The layer this ADR put in front of every route runs *before* routing, so it
+cannot see which family a request matched; the marker is inserted by the nested
+router that serves a project's twin, and `project_scope::resolve_required`
+already reads it. So the check goes where that reading happens — no table of
+paths in a middleware, which is the rule this repository keeps for the reason
+it keeps it: such a table drifts from the routes it guards.
+
+Two families are named exceptions, and they are the smallest set that works.
+`/api/v1/auth/` — refusing `me` would report a valid session as signed out,
+which is the sign-in loop `is_public` avoids one step earlier. `/api/v1/iam/`
+— it authorizes itself, per principal, and without it a client cannot see the
+project that is theirs. It is **403**, not 404: the route exists on every
+aiwatcher and says so in the contract, so there is nothing to keep back, and a
+panel that read a 404 could not tell "this is the deployment's" from "this
+deployment never wired that".
+
+Held by a sweep rather than by a list: `instance_reach.rs` walks every
+operation in `contracts/openapi.json` and asks it as a caller with no instance
+role. Nothing outside the two families answers, and each instance operation
+refuses with `instance_role_required` rather than with something else that
+happens to carry no rows — which reads as a rule about handlers, *the caller is
+extracted before the request is parsed*, and is how the fifteen routes that
+took no caller at all were found.
+
+### An invitation can open an account, and aiwatcher never sees the password
+
+A grant names a verified pair, so an invitation could only be redeemed by
+somebody who already had an account with the provider. For a client invited to
+one demo project that is a sign-up somebody does by hand, in a system the
+client has never heard of.
+
+So aiwatcher asks the provider to open **its own** enrolment to one person:
+`AIWATCHER_AUTH_PROVISION_URL`, a service-account token and a flow slug, and
+the two routes an invited stranger reaches before they have anything —
+`POST /api/v1/iam/invitations/{preview,enrollment}`, both in `is_public`,
+both authenticated by the 244-bit token in the body. Three rules carry it, and
+each is something this does *not* do: it creates no user and no membership,
+only an invitation at the provider; it never sees a password, because the form
+is the provider's page on the provider's origin; and it grants nothing, because
+the grant is still the redemption of aiwatcher's own offer against the pair a
+session verified. Absent configuration is a 501 naming the variable, and an
+invitation goes on working for whoever already has an account.
+
+The token travels in the URL's **fragment** — `https://<host>/invite#<token>` —
+which is not sent to any server, so it is in no access log here and in none at
+the provider the sign-in redirects through. That is a change to a rule the
+panel wrote down, *an invitation token is pasted, never linked*; what the rule
+protected against was a secret in a server log, and what it cost was the one
+case this exists for.
+
+**What would make this wrong.** A deployment setting `project` while some route
+a project member needs still has no scoped twin: they would be shut out of
+their own data with no way round it. That is why the artifact pair got one in
+the same change, and why the sweep is the gate rather than a review.

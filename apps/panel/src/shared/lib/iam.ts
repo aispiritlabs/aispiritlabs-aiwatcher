@@ -11,9 +11,11 @@ import {
   apply as applyCommand,
   audit as readAudit,
   createOrganization as postOrganization,
+  enrollment,
   invitations as readInvitations,
   invite as postInvitation,
   organizations as readOrganizations,
+  preview,
   projectGrants as readProjectGrants,
   projects as readProjects,
   redeem as postRedemption,
@@ -22,12 +24,14 @@ import {
 } from '@/api/generated';
 import type {
   AuditEntry,
+  Enrollment,
   IamChange,
   IamCommand,
   IamGrant,
   IamGrantWindow,
   IamInvitation,
   IamIssuedInvitation,
+  IamOffered,
   IamOrganization,
   IamProjectAccess,
   IamProjectRole,
@@ -329,6 +333,39 @@ export function useRedeem() {
         'the token was not accepted',
       ),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['iam'] }),
+  });
+}
+
+/**
+ * What a token offers, read before anybody has signed in.
+ *
+ * The one read in this file that needs no session: somebody with a link and no
+ * account has nothing else to ask with, and deciding whether to make one is a
+ * decision they are owed the terms of. Not retried and not cached — a spent
+ * offer answers 409 and that answer is as final the second time.
+ */
+export function useOffered(token: string | null): UseQueryResult<IamOffered> {
+  return useQuery({
+    queryKey: ['iam', 'offered', token],
+    enabled: Boolean(token),
+    retry: false,
+    gcTime: 0,
+    queryFn: async () =>
+      answerOf(await preview({ body: { token: token ?? '' } }), 'the token was not accepted'),
+  });
+}
+
+/**
+ * Somewhere to make the account this offer will be redeemed with.
+ *
+ * A mutation rather than a query because it *creates* an invitation at the
+ * identity provider: asking twice opens two, and a second one on a re-render
+ * would be this panel minting credentials in somebody else's system.
+ */
+export function useEnrolment() {
+  return useMutation<Enrollment, unknown, string>({
+    mutationFn: async (token) =>
+      answerOf(await enrollment({ body: { token } }), 'no account could be opened'),
   });
 }
 

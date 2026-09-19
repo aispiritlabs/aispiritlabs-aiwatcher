@@ -219,17 +219,41 @@ pub enum ApiError {
     #[error("this instance has no identity provider configured (AIWATCHER_AUTH_MODE)")]
     AuthDisabled,
 
+    /// No provider to enrol into (IAM-03 D5). 501 and the variable, the prompt
+    /// registry's rule again: the route is in the contract and this deployment
+    /// wired nothing behind it, so the panel offers signing in instead of
+    /// showing a failure.
+    #[error(
+        "this instance cannot open an account for you (AIWATCHER_AUTH_PROVISION_URL);          sign in with an account you already have"
+    )]
+    ProvisioningDisabled,
+
     #[error("authentication is required")]
     Unauthenticated,
 
     /// Authenticated, and not allowed to do this. Names the role required and
     /// the one held, because the fix is a group membership in the identity
     /// provider and "forbidden" alone does not say which one.
-    #[error("this needs the {needed} role; you have {held}")]
+    #[error("this needs the {needed} role; you have {}", held.map_or("none", aiwatcher_auth::Role::as_str))]
     Forbidden {
         needed: aiwatcher_auth::Role,
-        held: aiwatcher_auth::Role,
+        held: Option<aiwatcher_auth::Role>,
     },
+
+    /// Signed in, holding no role on this instance, on a route that answers
+    /// for the instance (IAM-03 D4). Its own refusal rather than
+    /// [`Self::Forbidden`], which would have to name a role that was needed:
+    /// what is missing here is not a higher role but *any*, and the fix is a
+    /// grant on a project rather than a group in the identity provider.
+    ///
+    /// 403 and not 404: this route exists on every aiwatcher and says so in
+    /// the contract, so there is nothing for a 404 to keep back — while a
+    /// panel that read one could not tell "this is the deployment's, not
+    /// yours" from "this deployment never wired that".
+    #[error(
+        "this route answers for the whole deployment and you hold no role on it;          your projects are under /api/v1/orgs/{{organization}}/projects/{{project}}"
+    )]
+    InstanceRoleRequired,
 
     /// A launched pod's credential, presented where it does not open
     /// (ADR_0031). Its own 403 rather than [`Self::Forbidden`], which would
@@ -409,8 +433,10 @@ impl ApiError {
             // Same shape again, and the same reason: the sign-in routes exist
             // in the contract and this deployment configured no provider.
             Self::AuthDisabled => (StatusCode::NOT_IMPLEMENTED, "auth_disabled"),
+            Self::ProvisioningDisabled => (StatusCode::NOT_IMPLEMENTED, "provisioning_disabled"),
             Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "unauthenticated"),
             Self::Forbidden { .. } => (StatusCode::FORBIDDEN, "forbidden"),
+            Self::InstanceRoleRequired => (StatusCode::FORBIDDEN, "instance_role_required"),
             Self::AttemptCredentialRefused { .. } => {
                 (StatusCode::FORBIDDEN, "attempt_credential_refused")
             }
@@ -530,6 +556,11 @@ fn auth_parts(error: &aiwatcher_auth::AuthError) -> (StatusCode, &'static str) {
         // send the panel back to a sign-in that would succeed and land in the
         // same place, which is the loop this distinction exists to avoid.
         AuthError::NotEntitled(_) => (StatusCode::FORBIDDEN, "forbidden"),
+        // The provider understood the request and said no — a wrong token, a
+        // permission the service account does not hold, a flow that is not
+        // there. 502 rather than 500, the same split `IamStorageRefused`
+        // makes: this instance is working and something it depends on refused.
+        AuthError::Provisioning(_) => (StatusCode::BAD_GATEWAY, "enrolment_refused"),
         error if error.is_retryable() => (
             StatusCode::SERVICE_UNAVAILABLE,
             "identity_provider_unavailable",

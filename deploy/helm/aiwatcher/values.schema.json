@@ -97,8 +97,9 @@
               }
             },
             "defaultRole": {
-              "description": "What an authenticated user in none of the mapped groups gets. `none` requires a group to see anything at all.",
+              "description": "What an authenticated user in none of the mapped groups gets. `project` signs them in holding nothing of this instance's, so a client reads their own project and not the deployment. `none` requires a group to sign in at all.",
               "enum": [
+                "project",
                 "viewer",
                 "editor",
                 "admin",

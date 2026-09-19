@@ -236,6 +236,7 @@ impl Fixture {
         let definitions = registry_enabled.then(|| Arc::new(MemoryObjectStore::new()));
         let state = AppState {
             iam: None,
+            provisioning: None,
             iam_audit_exports: None,
             iam_audit_worker: None,
             evaluations: None,
@@ -723,12 +724,26 @@ impl RecordingRunner {
 /// digest is of the bytes it stored, never of anything a caller claimed. A
 /// double that took the caller's word would let a worker fabricate a reference
 /// and would pass the very test written to stop it.
+/// Keyed by `(the scope's key, the digest)`, so one digest in two projects is
+/// two objects, as it is in the store this stands in for.
+type Objects = std::collections::HashMap<(String, String), Vec<u8>>;
+
 #[derive(Debug, Default)]
 struct MemoryArtifacts {
-    objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    /// Keyed by the scope as well as the digest, because the real adapter puts
+    /// a project's bytes under a prefix of their own (ADR_0033) and a double
+    /// that ignored that would let a scoped read answer from the deployment's
+    /// side — which is the thing the scoped route exists to stop.
+    objects: Arc<std::sync::Mutex<Objects>>,
+    scope: Option<aiwatcher_core::ProjectScope>,
 }
 
 impl MemoryArtifacts {
+    /// This handle's half of the key.
+    fn side(&self) -> String {
+        self.scope.map_or_else(String::new, |scope| scope.key())
+    }
+
     /// Store bytes that are not a table — what the pod launcher's `put_log`
     /// writes. Not on the port: nothing reaching this store over HTTP writes
     /// anything but rows, and a `put_bytes` there would be a door the real
@@ -743,7 +758,7 @@ impl MemoryArtifacts {
         self.objects
             .lock()
             .expect("not poisoned")
-            .insert(digest.clone(), body.to_vec());
+            .insert((self.side(), digest.clone()), body.to_vec());
         aiwatcher_core::ArtifactRef {
             name: name.to_owned(),
             uri: format!("object://artifacts/{}/{digest}/data", kind.as_str()),
@@ -758,6 +773,16 @@ impl MemoryArtifacts {
 
 #[async_trait::async_trait]
 impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
+    fn for_project(
+        &self,
+        scope: aiwatcher_core::ProjectScope,
+    ) -> Result<Arc<dyn aiwatcher_core::ports::AttemptArtifacts>, PortError> {
+        Ok(Arc::new(Self {
+            objects: Arc::clone(&self.objects),
+            scope: Some(scope),
+        }))
+    }
+
     async fn read_rows(
         &self,
         artifact: &aiwatcher_core::ArtifactRef,
@@ -776,7 +801,7 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         self.objects
             .lock()
             .expect("not poisoned")
-            .get(&artifact.digest)
+            .get(&(self.side(), artifact.digest.clone()))
             .cloned()
             .ok_or_else(|| PortError::Rejected {
                 target: "the object store",
@@ -794,7 +819,7 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         self.objects
             .lock()
             .expect("not poisoned")
-            .insert(digest.clone(), body.clone());
+            .insert((self.side(), digest.clone()), body.clone());
         Ok(aiwatcher_core::ArtifactRef {
             name: name.to_owned(),
             uri: format!("object://artifacts/rows/{digest}/data"),
@@ -816,8 +841,8 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         let body = spelled.into_bytes();
         let digest = aiwatcher_jobs::digest(&body);
         let mut objects = self.objects.lock().expect("not poisoned");
-        objects.remove(&stored.digest);
-        objects.insert(digest.clone(), body.clone());
+        objects.remove(&(self.side(), stored.digest.clone()));
+        objects.insert((self.side(), digest.clone()), body.clone());
         Ok(aiwatcher_core::ArtifactRef {
             digest,
             size_bytes: Some(body.len() as u64),
@@ -830,7 +855,7 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
             .objects
             .lock()
             .expect("not poisoned")
-            .contains_key(&artifact.digest))
+            .contains_key(&(self.side(), artifact.digest.clone())))
     }
 }
 
@@ -2569,7 +2594,7 @@ async fn every_path_but_its_attempts_worker_routes_and_ingest_refuses_a_pods_cre
     // Walked from the contract, so a route added later is held to it without
     // anybody adding it here. The public paths are left out: they run before
     // authentication, so a pod's credential there gets what no credential gets.
-    const PUBLIC: [&str; 7] = [
+    const PUBLIC: [&str; 9] = [
         "/livez",
         "/healthz",
         "/readyz",
@@ -2577,6 +2602,9 @@ async fn every_path_but_its_attempts_worker_routes_and_ingest_refuses_a_pods_cre
         "/api/v1/auth/login",
         "/api/v1/auth/callback",
         "/api/v1/auth/logout",
+        // The two an invited stranger reaches before they have an account.
+        "/api/v1/iam/invitations/preview",
+        "/api/v1/iam/invitations/enrollment",
     ];
     use axum::http::Method;
     let fixture = Fixture::behind_a_proxy(true).await;
@@ -5855,7 +5883,15 @@ async fn an_instance_with_no_object_store_says_it_keeps_no_artifacts() {
     // An empty list would say the run produced nothing, which is a different
     // problem with a different fix. The prompt registry's rule, in a sixth
     // place.
-    let fixture = Fixture::without_registry();
+    // With a workflow store and no object store, so the premise is the one
+    // the name states: a deployment that runs work and keeps none of its
+    // output. Without the first half the refusal would be about the workflow
+    // store instead, which is a different sentence with a different variable.
+    let mut fixture = Fixture::without_registry();
+    fixture.state.executions = Some(Arc::new(aiwatcher_execution::ExecutionHandler::new(
+        Arc::new(aiwatcher_execution::store::memory::MemoryWorkflowStore::new())
+            as Arc<dyn aiwatcher_execution::WorkflowStore>,
+    )));
     for uri in [
         "/api/v1/executions/run-1/artifacts",
         "/api/v1/executions/run-1/artifacts/abcd",

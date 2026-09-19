@@ -34,7 +34,7 @@ use aiwatcher_execution::{
     SlotKey, SlotRecord, SlotSettlement, WorkflowStore as _,
 };
 
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -254,6 +254,7 @@ fn schedules(state: &AppState) -> ApiResult<&ScheduleStore> {
     tag = "data-curation",
 )]
 async fn get_schedule(
+    _: InstanceRead,
     state: State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ScheduleView>> {
@@ -273,6 +274,7 @@ async fn get_schedule(
     tag = "execution",
 )]
 async fn get_workflow_schedule(
+    _: InstanceRead,
     state: State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ScheduleView>> {

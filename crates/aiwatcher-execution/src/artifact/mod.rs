@@ -96,6 +96,34 @@ impl CacheEntry {
 /// Artifact metadata, lineage and the cache index.
 #[async_trait]
 pub trait ArtifactCatalog: Send + Sync + std::fmt::Debug {
+    /// The same catalog, narrowed to one project (ADR_0033).
+    ///
+    /// The half that pairs with [`AttemptArtifacts::for_project`]: a scoped
+    /// byte store beside a deployment-wide catalog records a project's outputs
+    /// where anybody can read them, so both halves bind or neither does. Both
+    /// compute their prefix from [`layout::prefix`], which is what makes the
+    /// pair agree rather than hope.
+    ///
+    /// Defaulted to a refusal naming the catalog, for the reason ADR_0033
+    /// pt. 7 gives: an adapter with no project form says so, rather than
+    /// answering for the deployment.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::OutOfScope`] when this catalog has no project form, or
+    /// when it is already bound to a different one.
+    ///
+    /// [`AttemptArtifacts::for_project`]: aiwatcher_core::ports::AttemptArtifacts::for_project
+    fn for_project(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> crate::Result<std::sync::Arc<dyn ArtifactCatalog>> {
+        let _ = scope;
+        Err(crate::StoreError::OutOfScope(format!(
+            "{self:?} has no project form; its rows are this deployment's"
+        )))
+    }
+
     /// Record an artifact and what it was made from.
     ///
     /// Idempotent by digest: writing the same bytes twice is one row, because

@@ -174,6 +174,15 @@ pub trait IamStore: Debug + Send + Sync {
         actor: &Principal,
         invitation: InvitationId,
     ) -> Result<()>;
+    /// What this token offers, without spending it.
+    ///
+    /// The one read here whose caller may hold no identity at all: somebody
+    /// with a link and no account has nothing else to ask with, and deciding
+    /// whether to make one is a decision they are owed the terms of. It names
+    /// no organization, because whoever holds a token does not know which one
+    /// it belongs to and a parameter that made them say would confirm a guess —
+    /// the same rule [`Self::redeem`] keeps.
+    async fn offered(&self, token: &str) -> Result<Offered>;
     /// Membership and a grant for whoever presented this token, in one
     /// transaction, once. The redeemer's pair comes from a verified session and
     /// is learned here; the offer never named it.

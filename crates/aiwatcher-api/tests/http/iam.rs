@@ -26,6 +26,18 @@ impl Drop for IamFixture {
 }
 impl IamFixture {
     async fn new() -> Self {
+        Self::build(false).await
+    }
+
+    /// The same instance with an object store behind it, so the authored
+    /// registries answer their handlers rather than 501 before reaching one.
+    /// What the contract sweep needs: a route that refused for want of a store
+    /// says nothing about whether it would have refused for want of a role.
+    async fn with_registries() -> Self {
+        Self::build(true).await
+    }
+
+    async fn build(registries: bool) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let issuer = format!("http://{}", listener.local_addr().unwrap());
         let metadata = json!({ "issuer": issuer,
@@ -54,7 +66,7 @@ impl IamFixture {
         .unwrap();
         let clock = Arc::new(IamClock(std::sync::atomic::AtomicI64::new(1000)));
         let store = Arc::new(MemoryIamStore::with_clock(clock.clone()));
-        let mut fixture = Fixture::build(false, false, None, Some(Arc::new(auth)), None);
+        let mut fixture = Fixture::build(false, registries, None, Some(Arc::new(auth)), None);
         fixture.state.iam = Some(store.clone());
         Self {
             fixture,
@@ -73,6 +85,21 @@ impl IamFixture {
         identity.expires_at = Some(time::OffsetDateTime::now_utc().unix_timestamp() + 3600);
         self.seal(&identity)
     }
+    /// A client of this deployment: signed in, holding no instance role.
+    ///
+    /// What `AIWATCHER_AUTH_DEFAULT_ROLE=project` produces, spelled as the
+    /// identity rather than as the configuration — `RoleMapping::resolve` has
+    /// its own tests for the mapping, and what these ask about is the router.
+    fn client_cookie(&self, subject: &str) -> String {
+        let mut identity = Identity::anonymous();
+        identity.issuer = Some(self.issuer.clone());
+        identity.subject = subject.into();
+        identity.credential = Credential::Session;
+        identity.roles = Vec::new();
+        identity.expires_at = Some(time::OffsetDateTime::now_utc().unix_timestamp() + 3600);
+        self.seal(&identity)
+    }
+
     fn seal(&self, identity: &Identity) -> String {
         let token = Signer::new(SECRET.as_bytes())
             .seal(identity, time::Duration::hours(1))
@@ -142,6 +169,57 @@ impl IamFixture {
             .await;
         assert_eq!(status, StatusCode::CREATED, "{org}");
         org["id"].as_str().unwrap().to_owned()
+    }
+
+    async fn project(&self, cookie: &str, organization: &str) -> String {
+        let (status, created) = self
+            .request(
+                "POST",
+                &format!("{ROOT}/{organization}/commands"),
+                Some(cookie),
+                json!({"type": "create_project", "name": "A client's project"}),
+                true,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+        created["ProjectCreated"]["scope"]["project"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn grant(
+        &self,
+        cookie: &str,
+        organization: &str,
+        project: &str,
+        subject: &str,
+        role: &str,
+    ) {
+        let commands = format!("{ROOT}/{organization}/commands");
+        self.request(
+            "POST",
+            &commands,
+            Some(cookie),
+            json!({"type": "set_member",
+                "principal": {"provider": self.issuer, "subject": subject},
+                "role": "member"}),
+            true,
+        )
+        .await;
+        let (status, granted) = self
+            .request(
+                "POST",
+                &commands,
+                Some(cookie),
+                json!({"type": "grant", "project": project,
+                    "grantee": {"kind": "user",
+                        "value": {"provider": self.issuer, "subject": subject}},
+                    "role": role, "window": {"valid_from": 0}}),
+                true,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{granted}");
     }
 }
 
@@ -498,6 +576,101 @@ async fn iam_expiry_and_audit_pagination_are_evaluated_on_each_request() {
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
 }
 
+/// What a link offers, to somebody who has not signed in and may have no way to.
+///
+/// D5's two public routes. The offer is readable by whoever holds the token and
+/// by nobody else, looking costs it nothing, and the grant is still made by the
+/// redemption — under a session, against the pair it verified.
+#[tokio::test]
+async fn an_offer_reads_to_a_stranger_and_is_spent_only_by_a_redemption() {
+    let f = IamFixture::new().await;
+    let owner = f.cookie("owner", Role::Admin);
+    let organization = f.create(&owner).await;
+    let project = f.project(&owner, &organization).await;
+    let (status, issued) = f
+        .request(
+            "POST",
+            &format!("{ROOT}/{organization}/projects/{project}/invitations"),
+            Some(&owner),
+            json!({"role": "editor", "window": {"valid_from": 0},
+                "expires_at": time::OffsetDateTime::now_utc().unix_timestamp() + 3600,
+                "label": "somebody@example.test"}),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let token = issued["token"].as_str().expect("a token").to_owned();
+    assert_eq!(
+        issued["invitation"]["standing"], "guest",
+        "an offer that does not ask for a colleague makes a guest (D3)"
+    );
+
+    // No cookie at all: this is the whole point of the route.
+    let preview = "/api/v1/iam/invitations/preview";
+    let (status, offered) = f
+        .request("POST", preview, None, json!({"token": token}), false)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{offered}");
+    assert_eq!(offered["organization"]["id"], organization);
+    assert_eq!(offered["project"]["scope"]["project"], project);
+    assert_eq!(offered["role"], "editor");
+    assert_eq!(offered["standing"], "guest");
+
+    // A token nobody issued is absent rather than a hint, as it is on redeem.
+    assert_eq!(
+        f.request(
+            "POST",
+            preview,
+            None,
+            json!({"token": "0".repeat(64)}),
+            false
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Enrolment needs somewhere to enrol into, named.
+    let (status, refused) = f
+        .request(
+            "POST",
+            "/api/v1/iam/invitations/enrollment",
+            None,
+            json!({"token": token}),
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(
+        refused["message"]
+            .as_str()
+            .expect("a message")
+            .contains("AIWATCHER_AUTH_PROVISION_URL"),
+        "{refused}"
+    );
+
+    // Looking cost the offer nothing, and redeeming still takes a session.
+    let stranger = f.client_cookie("a stranger");
+    let (status, redeemed) = f
+        .request(
+            "POST",
+            "/api/v1/iam/invitations/redeem",
+            Some(&stranger),
+            json!({"token": token}),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{redeemed}");
+    assert_eq!(redeemed["role"], "editor");
+    // …and now there is nothing left to preview.
+    assert_eq!(
+        f.request("POST", preview, None, json!({"token": token}), false)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+}
+
 #[path = "project_datasets.rs"]
 mod project_datasets;
 
@@ -770,3 +943,9 @@ mod project_labs;
 
 #[path = "project_runs.rs"]
 mod project_runs;
+
+#[path = "instance_reach.rs"]
+mod instance_reach;
+
+#[path = "project_run_artifacts.rs"]
+mod project_run_artifacts;

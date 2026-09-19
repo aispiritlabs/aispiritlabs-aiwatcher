@@ -123,6 +123,9 @@ impl IamStore for Flaky {
             .revoke_invitation(organization, actor, invitation)
             .await
     }
+    async fn offered(&self, token: &str) -> aiwatcher_iam::Result<aiwatcher_iam::Offered> {
+        self.inner.offered(token).await
+    }
     async fn redeem(
         &self,
         token: &str,

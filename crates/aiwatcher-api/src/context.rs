@@ -36,7 +36,7 @@ use aiwatcher_execution::{
     ContextSnapshot, ExecutionHandler, ExecutionId, WorkflowStore, compile_curation, replay,
 };
 
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -123,6 +123,7 @@ fn definitions(state: &AppState) -> ApiResult<&Arc<DatasetRegistry>> {
     tag = "execution",
 )]
 async fn step_context(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path((execution_id, step_id)): Path<(String, String)>,
 ) -> ApiResult<Json<ContextSnapshot>> {
@@ -168,6 +169,7 @@ async fn step_context(
     tag = "data-curation",
 )]
 async fn block_context(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path((name, revision, block_id)): Path<(String, String, String)>,
 ) -> ApiResult<Json<ContextSnapshot>> {
@@ -214,6 +216,7 @@ async fn block_context(
     tag = "execution",
 )]
 async fn run_blocks(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<RunBlocks>> {

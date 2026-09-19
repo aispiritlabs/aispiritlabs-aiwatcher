@@ -747,8 +747,8 @@ mod tests {
     use super::*;
     use crate::{
         AuditAction, AuditBounds, AuditRetention, Change, Command, Grant, Invitation, InvitationId,
-        InvitationOffer, IssuedInvitation, Organization, ProjectAccess, ProjectScope, PruneReport,
-        Redeemed, Roster,
+        InvitationOffer, IssuedInvitation, Offered, Organization, ProjectAccess, ProjectScope,
+        PruneReport, Redeemed, Roster,
     };
 
     /// Bytes in a map, and a switch that makes every write fail.
@@ -930,6 +930,9 @@ mod tests {
             _: &Principal,
             _: InvitationId,
         ) -> Result<()> {
+            unimplemented!()
+        }
+        async fn offered(&self, _: &str) -> Result<Offered> {
             unimplemented!()
         }
         async fn redeem(&self, _: &str, _: &Principal) -> Result<Redeemed> {

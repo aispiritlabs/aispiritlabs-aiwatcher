@@ -246,6 +246,13 @@ impl ObjectArtifactCatalog {
 
 #[async_trait]
 impl ArtifactCatalog for ObjectArtifactCatalog {
+    fn for_project(
+        &self,
+        scope: ProjectScope,
+    ) -> crate::Result<std::sync::Arc<dyn ArtifactCatalog>> {
+        Ok(Arc::new(Self::for_project(self, scope)?))
+    }
+
     async fn record(&self, artifact: CatalogedArtifact) -> crate::Result<CatalogedArtifact> {
         self.admits(&artifact.artifact)?;
         // Idempotent by digest: two deterministic attempts over the same inputs

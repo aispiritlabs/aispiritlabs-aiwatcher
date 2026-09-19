@@ -340,6 +340,24 @@ fn identity(state: &AppState) -> Vec<Entry> {
                    AIWATCHER_AUTH_MODE=oidc. Without it there are no projects and every route \
                    under /api/v1/iam answers 501.",
         },
+        Entry {
+            id: "account-enrolment",
+            label: "Opening an account from an invitation",
+            group: CapabilityGroup::Identity,
+            state: CapabilityState::of(state.provisioning.is_some()),
+            // The variable, never the address: an identity provider's admin
+            // API is reconnaissance for somebody already inside, and the token
+            // beside it is a credential.
+            variables: &[
+                "AIWATCHER_AUTH_PROVISION_URL",
+                "AIWATCHER_AUTH_PROVISION_TOKEN",
+                "AIWATCHER_AUTH_PROVISION_FLOW",
+            ],
+            settings: Vec::new(),
+            note: "Lets somebody holding an invitation and no account make one at the identity \
+                   provider. Without it an invitation still works for whoever already has an \
+                   account, and the route answers 501.",
+        },
     ]
 }
 

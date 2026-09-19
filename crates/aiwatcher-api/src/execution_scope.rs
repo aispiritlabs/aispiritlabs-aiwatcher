@@ -35,6 +35,17 @@ impl RunHandle {
         &self.handler
     }
 
+    /// The project this handle is bound to, or `None` for the instance's side.
+    ///
+    /// Read by the artifacts routes, which need the **same** scope for their
+    /// two other stores: a run read on one side whose bytes were read on the
+    /// other is the pair ADR_0033 exists to keep together.
+    pub(crate) fn project_scope(&self) -> Option<aiwatcher_iam::ProjectScope> {
+        self.authorization
+            .as_ref()
+            .map(|authorization| authorization.scope)
+    }
+
     /// The role this caller needs for a command, taken on the right side.
     ///
     /// On the instance's own routes it is the instance's `editor`, as it has

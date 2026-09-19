@@ -2743,6 +2743,20 @@ export type EditorSession = {
     rows: number;
 };
 
+/**
+ * Where to send somebody to make an account, and when that stops working.
+ */
+export type Enrollment = {
+    /**
+     * When the provider's invitation lapses, as a Unix timestamp.
+     */
+    expires_at: number;
+    /**
+     * The provider's enrollment page, carrying the one-use token.
+     */
+    url: string;
+};
+
 export type EpochInput = {
     duration_ms?: number;
     epoch: number;
@@ -4980,6 +4994,12 @@ export type IamInvitation = {
     role: IamProjectRole;
     scope: IamProjectScope;
     /**
+     * What redeeming it makes somebody in the organization — the offer's
+     * [`InvitationOffer::standing`], kept on the record so a list says what
+     * each outstanding offer will do.
+     */
+    standing?: IamOrganizationRole;
+    /**
      * The window the resulting grant gets, declared when the offer was made.
      */
     window: IamGrantWindow;
@@ -5002,6 +5022,17 @@ export type IamInvitationOffer = {
      */
     label?: string | null;
     role: IamProjectRole;
+    /**
+     * What redeeming this makes somebody in the organization.
+     *
+     * [`OrganizationRole::Guest`] by default, which is the narrower of the
+     * two: an offer that means to make a colleague says so, and one written
+     * before this field existed reads as a guest rather than as what it used
+     * to do. No deployment had redeemed one when this changed, so the default
+     * is chosen for what an invitation is *for* rather than for compatibility
+     * with a behaviour nobody depended on.
+     */
+    standing?: IamOrganizationRole;
     /**
      * The window the resulting grant gets.
      */
@@ -5027,12 +5058,45 @@ export type IamMembership = {
     role: IamOrganizationRole;
 };
 
+/**
+ * What an offer says it is, to whoever holds its token and no account yet.
+ *
+ * Everything [`Redeemed`] reports except the grant, because there is no grant
+ * yet and the point is to say what taking this up would do. Answered to an
+ * **unauthenticated** caller — a person looking at this has not signed in and
+ * in the case this exists for cannot, having no account — so the token is the
+ * whole credential, as it is for the redemption it precedes. It names the
+ * organization and the project so that "create an account" is a decision
+ * rather than a leap; it names no member, no other project and nothing about
+ * the deployment.
+ */
+export type IamOffered = {
+    /**
+     * When the offer itself lapses, which is not the window's end.
+     */
+    expires_at: number;
+    /**
+     * The delivery hint its author wrote, which the enrollment prefills and
+     * nobody is compared against.
+     */
+    label?: string | null;
+    organization: IamOrganization;
+    project: IamProject;
+    role: IamProjectRole;
+    /**
+     * What redeeming it would make somebody here (IAM-03 D3).
+     */
+    standing: IamOrganizationRole;
+    window: IamGrantWindow;
+};
+
 export type IamOrganization = {
     id: OrganizationId;
     name: string;
 };
 
 export const IamOrganizationRole = {
+    GUEST: 'guest',
     MEMBER: 'member',
     ADMIN: 'admin',
     OWNER: 'owner'
@@ -5105,6 +5169,14 @@ export type IamRedemption = {
  * [`IamStore::access`] answers and only for one person at a time.
  */
 export type IamRoster = {
+    /**
+     * The people who hold grants here without being of here (IAM-03 D3).
+     *
+     * Its own list rather than rows in `members` with a different role: a
+     * guest is not a member, and a reader that had to remember which roles
+     * count would one day forget on the screen where it mattered.
+     */
+    guests?: Array<IamMembership>;
     members: Array<IamMembership>;
     organization: IamOrganization;
     projects: Array<IamProject>;
@@ -15138,6 +15210,51 @@ export type GetExperimentResponses = {
 
 export type GetExperimentResponse = GetExperimentResponses[keyof GetExperimentResponses];
 
+export type EnrollmentData = {
+    body: Redeem;
+    path?: never;
+    query?: never;
+    url: '/api/v1/iam/invitations/enrollment';
+};
+
+export type EnrollmentErrors = {
+    400: unknown;
+    404: unknown;
+    409: unknown;
+    410: unknown;
+    501: unknown;
+    502: unknown;
+    503: unknown;
+};
+
+export type EnrollmentResponses = {
+    200: Enrollment;
+};
+
+export type EnrollmentResponse = EnrollmentResponses[keyof EnrollmentResponses];
+
+export type PreviewData = {
+    body: Redeem;
+    path?: never;
+    query?: never;
+    url: '/api/v1/iam/invitations/preview';
+};
+
+export type PreviewErrors = {
+    400: unknown;
+    404: unknown;
+    409: unknown;
+    410: unknown;
+    501: unknown;
+    503: unknown;
+};
+
+export type PreviewResponses = {
+    200: IamOffered;
+};
+
+export type PreviewResponse = PreviewResponses[keyof PreviewResponses];
+
 export type RedeemData = {
     body: Redeem;
     headers: {
@@ -19183,6 +19300,95 @@ export type ProjectGetExecutionResponses = {
 };
 
 export type ProjectGetExecutionResponse = ProjectGetExecutionResponses[keyof ProjectGetExecutionResponses];
+
+export type ProjectRunArtifactsData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/artifacts';
+};
+
+export type ProjectRunArtifactsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectRunArtifactsError = ProjectRunArtifactsErrors[keyof ProjectRunArtifactsErrors];
+
+export type ProjectRunArtifactsResponses = {
+    200: Array<CatalogedArtifact>;
+};
+
+export type ProjectRunArtifactsResponse = ProjectRunArtifactsResponses[keyof ProjectRunArtifactsResponses];
+
+export type ProjectArtifactContentData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * The artifact's content address, as the list gave it
+         */
+        digest: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/artifacts/{digest}';
+};
+
+export type ProjectArtifactContentErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectArtifactContentError = ProjectArtifactContentErrors[keyof ProjectArtifactContentErrors];
+
+export type ProjectArtifactContentResponses = {
+    200: ArtifactContent;
+};
+
+export type ProjectArtifactContentResponse = ProjectArtifactContentResponses[keyof ProjectArtifactContentResponses];
 
 export type ProjectCancelExecutionData = {
     body: CancelBody;

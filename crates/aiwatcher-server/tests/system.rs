@@ -68,6 +68,12 @@ const NEEDLES: &[(&str, &str)] = &[
     ("AIWATCHER_KAGGLE_KEY", "needle-kaggle-key"),
     ("AIWATCHER_HUGGINGFACE_TOKEN", "needle-huggingface-token"),
     ("AIWATCHER_JUDGE_URL", "https://needle-judge.invalid/v1"),
+    (
+        "AIWATCHER_AUTH_PROVISION_URL",
+        "https://needle-enrolment.invalid",
+    ),
+    ("AIWATCHER_AUTH_PROVISION_TOKEN", "needle-provision-token"),
+    ("AIWATCHER_AUTH_PROVISION_FLOW", "needle-enrolment-flow"),
     ("AIWATCHER_JUDGE_TOKEN", "needle-judge-token"),
     ("AIWATCHER_SCORER_URL", "https://needle-scorers.invalid"),
     ("AIWATCHER_SCORER_TOKEN", "needle-scorer-token"),
@@ -291,6 +297,13 @@ fn configured(scratch: &Scratch) -> Config {
             ),
             ..AuthConfig::default()
         },
+        provisioning: Some(aiwatcher_auth::ProvisioningConfig {
+            url: needle("AIWATCHER_AUTH_PROVISION_URL").to_owned(),
+            token: needle("AIWATCHER_AUTH_PROVISION_TOKEN").to_owned(),
+            flow: needle("AIWATCHER_AUTH_PROVISION_FLOW").to_owned(),
+            ttl: std::time::Duration::from_secs(1800),
+            http_timeout: std::time::Duration::from_secs(5),
+        }),
         ..Config::default()
     }
 }

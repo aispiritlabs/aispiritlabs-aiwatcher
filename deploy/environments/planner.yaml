@@ -284,6 +284,40 @@ webSearch:
 #   mode: proxy
 #   ingestTokenSecret:
 #     name: aiwatcher-ingest
+#
+# ── And the other shape, for clients: IAM-03's M0 ────────────────────────────
+#
+# `proxy` above says who somebody is. This says which project is theirs, and it
+# is a different deployment rather than a bigger one — `oidc`, because a
+# principal is a *verified* `(provider, subject)` pair and a header is an
+# assertion; a database of its own for the grants; and `defaultRole: project`,
+# which is the line that makes a client a client. Without that last one every
+# signed-in person reads the whole deployment, whatever grants exist.
+#
+# It also needs the ingress middleware below to lose
+# `planner-planner-authentik@kubernetescrd`: the outpost in front would make a
+# client pass planner's own policy before reaching aiwatcher's own sign-in, and
+# a client is not one of planner's people. aiwatcher authenticates itself in
+# this mode, which is what ADR_0013 is for.
+#
+# `docs/iam-03-projects.md` §5 is the milestone and
+# `docs/iam-migration-runbook.md` §10 is the order to do it in.
+#
+# auth:
+#   mode: oidc
+#   oidc:
+#     issuer: https://auth.<domain>/application/o/aiwatcher/
+#     secret: { name: aiwatcher-auth }
+#   roles:
+#     defaultRole: project
+#   ingestTokenSecret:
+#     name: aiwatcher-ingest
+#   provisioning:
+#     url: https://auth.<domain>
+#     secret: { name: aiwatcher-provision }
+# iam:
+#   postgresSecret:
+#     name: aiwatcher-iam
 auth:
   mode: none
 

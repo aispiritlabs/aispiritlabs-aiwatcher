@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import http.cookiejar
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -29,9 +30,13 @@ import urllib.request
 
 # The panel's dev server, not :8080 — the redirect URI on the provider is a
 # :5173 one, because that is the origin a browser sees when /api is proxied.
-PANEL = "http://localhost:5173"
-AUTHENTIK = "http://localhost:9000"
-FLOW = "default-authentication-flow"
+#
+# Overridable, because the same questions have to be askable of a deployment:
+# the M0 gate is run against `vps` as well as against a laptop, and a matrix
+# that could only be asked locally would be proving the wrong thing.
+PANEL = os.environ.get("AIWATCHER_URL", "http://localhost:5173").rstrip("/")
+AUTHENTIK = os.environ.get("AIWATCHER_AUTHENTIK_URL", "http://localhost:9000").rstrip("/")
+FLOW = os.environ.get("AIWATCHER_AUTHENTIK_FLOW", "default-authentication-flow")
 
 Session = urllib.request.OpenerDirector
 
@@ -60,13 +65,38 @@ def _post(session: Session, url: str, body: dict[str, object], referer: str) -> 
 
 def sign_in(username: str, password: str, next_path: str = "/account") -> Session:
     """One person's session, from the login route to the callback."""
-    session = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    return authorize(
+        urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        ),
+        username,
+        password,
+        next_path,
     )
+
+
+def authorize(
+    session: Session,
+    username: str | None = None,
+    password: str | None = None,
+    next_path: str = "/account",
+) -> Session:
+    """Take whatever `session` already is through aiwatcher's sign-in.
+
+    Two callers, and the second is why this is not just [`sign_in`]: somebody
+    who has this moment made an account through the provider's own enrolment is
+    **already signed in there**, so the authorization leg answers with a
+    redirect rather than a login form, and a helper that insisted on the form
+    would fail on the one path D5 exists to make work.
+    """
     landed = _open(session, f"{PANEL}/api/v1/auth/login?next={urllib.parse.quote(next_path)}")
     flow_url = landed.geturl()
     if "/if/flow/" not in flow_url:
-        raise SignInFailed(f"expected authentik's flow, landed on {flow_url}")
+        # Already authenticated at the provider: the authorization code came
+        # straight back and the cookie is set.
+        return session
+    if username is None or password is None:
+        raise SignInFailed(f"the provider asked for a login and none was given: {flow_url}")
 
     # The executor wants the flow page's own query string as one `query`
     # parameter. Passing `next=` straight through loses it, and the flow then
@@ -90,6 +120,50 @@ def sign_in(username: str, password: str, next_path: str = "/account") -> Sessio
             case other:
                 raise SignInFailed(f"unexpected stage {other}: {json.dumps(stage)[:300]}")
     raise SignInFailed("the flow did not finish")
+
+
+def enrol(enrolment_url: str, username: str, email: str, password: str) -> Session:
+    """Make an account through the provider's own enrolment, as a person would.
+
+    The other half of [`sign_in`] and the reason the invitation flow is worth
+    driving from here: what makes a client of one project isolated is that the
+    account they end up with holds **no aiwatcher group** (IAM-03 D4, D5), and
+    that is configuration in the identity provider rather than anything this
+    repository can assert. So the gate makes a real account and asks.
+    """
+    session = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    parsed = urllib.parse.urlparse(enrolment_url)
+    slug = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    executor = f"{AUTHENTIK}/api/v3/flows/executor/{slug}/?" + urllib.parse.urlencode(
+        {"query": parsed.query}
+    )
+    stage = json.loads(_open(session, executor, {"Accept": "application/json"}).read())
+    for _ in range(8):
+        match stage.get("component"):
+            case "ak-stage-prompt":
+                stage = _post(
+                    session,
+                    executor,
+                    {
+                        "username": username,
+                        "email": email,
+                        "password": password,
+                        "password_repeat": password,
+                    },
+                    enrolment_url,
+                )
+            case "xak-flow-redirect":
+                target = stage["to"]
+                _open(session, target if target.startswith("http") else AUTHENTIK + target)
+                # The account exists and this session is signed in *there*. What
+                # it does not yet have is an aiwatcher cookie, which is the
+                # ordinary authorization-code leg with no form to fill in.
+                return authorize(session)
+            case other:
+                raise SignInFailed(f"unexpected enrolment stage {other}: {json.dumps(stage)[:300]}")
+    raise SignInFailed("the enrolment flow did not finish")
 
 
 def call(

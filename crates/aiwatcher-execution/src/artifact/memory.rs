@@ -1,24 +1,33 @@
 //! The catalog in process. For tests, and for a run that keeps no lineage.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use time::OffsetDateTime;
 
 use aiwatcher_core::ArtifactKind;
+use aiwatcher_iam::ProjectScope;
 
 use super::{ArtifactCatalog, CacheEntry, CatalogedArtifact};
 use crate::state::ExecutionId;
 
 /// An in-memory catalog. For tests, and for a development run that keeps no
 /// lineage across a restart.
+///
+/// One process, so one map — and the scope is part of its key rather than a
+/// second map, for the reason the object adapter puts it in the prefix: two
+/// projects may record the same digest, and a catalog that kept one row for
+/// both would hand the second project the first one's lineage.
 #[derive(Debug, Default)]
 pub struct MemoryArtifactCatalog {
-    inner: tokio::sync::Mutex<Inner>,
+    inner: Arc<tokio::sync::Mutex<Inner>>,
+    scope: Option<ProjectScope>,
 }
 
 #[derive(Debug, Default)]
 struct Inner {
-    artifacts: Vec<CatalogedArtifact>,
-    cache: std::collections::BTreeMap<String, CacheEntry>,
+    artifacts: Vec<(Option<ProjectScope>, CatalogedArtifact)>,
+    cache: std::collections::BTreeMap<(Option<ProjectScope>, String), CacheEntry>,
 }
 
 impl MemoryArtifactCatalog {
@@ -30,15 +39,30 @@ impl MemoryArtifactCatalog {
 
 #[async_trait]
 impl ArtifactCatalog for MemoryArtifactCatalog {
+    fn for_project(&self, scope: ProjectScope) -> crate::Result<Arc<dyn ArtifactCatalog>> {
+        if let Some(current) = self.scope
+            && current != scope
+        {
+            return Err(crate::StoreError::OutOfScope(
+                "the artifact catalog is already bound to another project".to_owned(),
+            ));
+        }
+        Ok(Arc::new(Self {
+            inner: Arc::clone(&self.inner),
+            scope: Some(scope),
+        }))
+    }
+
     async fn record(&self, artifact: CatalogedArtifact) -> crate::Result<CatalogedArtifact> {
         let mut inner = self.inner.lock().await;
-        if let Some(held) = inner.artifacts.iter().find(|held| {
-            held.artifact.digest == artifact.artifact.digest
+        if let Some((_, held)) = inner.artifacts.iter().find(|(side, held)| {
+            *side == self.scope
+                && held.artifact.digest == artifact.artifact.digest
                 && held.artifact.kind == artifact.artifact.kind
         }) {
             return Ok(held.clone());
         }
-        inner.artifacts.push(artifact.clone());
+        inner.artifacts.push((self.scope, artifact.clone()));
         Ok(artifact)
     }
 
@@ -53,8 +77,10 @@ impl ArtifactCatalog for MemoryArtifactCatalog {
             .await
             .artifacts
             .iter()
-            .find(|held| held.artifact.digest == digest && held.artifact.kind == kind)
-            .cloned())
+            .find(|(side, held)| {
+                *side == self.scope && held.artifact.digest == digest && held.artifact.kind == kind
+            })
+            .map(|(_, held)| held.clone()))
     }
 
     async fn produced_by(&self, execution: &ExecutionId) -> crate::Result<Vec<CatalogedArtifact>> {
@@ -64,12 +90,14 @@ impl ArtifactCatalog for MemoryArtifactCatalog {
             .await
             .artifacts
             .iter()
-            .filter(|held| {
-                held.produced_by
-                    .as_ref()
-                    .is_some_and(|made| &made.execution_id == execution)
+            .filter(|(side, held)| {
+                *side == self.scope
+                    && held
+                        .produced_by
+                        .as_ref()
+                        .is_some_and(|made| &made.execution_id == execution)
             })
-            .cloned()
+            .map(|(_, held)| held.clone())
             .collect())
     }
 
@@ -83,7 +111,7 @@ impl ArtifactCatalog for MemoryArtifactCatalog {
             .lock()
             .await
             .cache
-            .get(cache_key)
+            .get(&(self.scope, cache_key.to_owned()))
             .filter(|entry| entry.is_usable(now))
             .cloned())
     }
@@ -93,12 +121,18 @@ impl ArtifactCatalog for MemoryArtifactCatalog {
             .lock()
             .await
             .cache
-            .insert(entry.cache_key.clone(), entry);
+            .insert((self.scope, entry.cache_key.clone()), entry);
         Ok(())
     }
 
     async fn invalidate(&self, cache_key: &str, at: OffsetDateTime) -> crate::Result<()> {
-        if let Some(entry) = self.inner.lock().await.cache.get_mut(cache_key) {
+        if let Some(entry) = self
+            .inner
+            .lock()
+            .await
+            .cache
+            .get_mut(&(self.scope, cache_key.to_owned()))
+        {
             entry.invalidated_at = Some(at);
         }
         Ok(())
@@ -206,6 +240,54 @@ mod tests {
                 .is_some(),
             "and the artifact it named is still there"
         );
+    }
+
+    #[tokio::test]
+    async fn one_digest_in_two_projects_is_two_rows_with_two_lineages() {
+        // The same bytes in two projects are one content address and two
+        // objects (ADR_0033 pt. 4). A catalog keyed by digest alone would hand
+        // the second project the first one's provenance, which is a lineage
+        // naming an execution its reader may not open.
+        let catalog = MemoryArtifactCatalog::new();
+        let mine = catalog.for_project(scope(1)).expect("bound");
+        let yours = catalog.for_project(scope(2)).expect("bound");
+        mine.record(cataloged("ab")).await.expect("a record");
+
+        assert_eq!(
+            mine.produced_by(&ExecutionId::new("exec-1"))
+                .await
+                .expect("a lineage read")
+                .len(),
+            1
+        );
+        assert!(
+            yours
+                .produced_by(&ExecutionId::new("exec-1"))
+                .await
+                .expect("a lineage read")
+                .is_empty(),
+            "the other project's rows are not this project's"
+        );
+        assert!(
+            catalog
+                .produced_by(&ExecutionId::new("exec-1"))
+                .await
+                .expect("a lineage read")
+                .is_empty(),
+            "and neither are they the deployment's"
+        );
+        assert!(
+            mine.for_project(scope(2)).is_err(),
+            "a catalog that could be re-aimed is one a later call aims somewhere \
+             its first caller never authorized"
+        );
+    }
+
+    fn scope(project: u128) -> ProjectScope {
+        ProjectScope {
+            organization: aiwatcher_iam::OrganizationId(uuid::Uuid::from_u128(1)),
+            project: aiwatcher_iam::ProjectId(uuid::Uuid::from_u128(project)),
+        }
     }
 
     #[tokio::test]

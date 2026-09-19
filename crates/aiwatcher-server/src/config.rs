@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use aiwatcher_auth::{
-    AttemptCredentials, AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping,
+    AttemptCredentials, AuthConfig, AuthMode, DefaultRole, IngestToken, ProxyHeaders, RoleMapping,
 };
 use aiwatcher_datasets::QueryEngine;
 use aiwatcher_execution::message::PayloadPolicy;
@@ -672,6 +672,12 @@ pub struct Config {
     /// Who may reach this instance, and what they may do once they have.
     /// `AuthMode::None` by default — see `aiwatcher_auth`.
     pub auth: AuthConfig,
+    /// Where an invited stranger is sent to make an account (IAM-03 D5).
+    ///
+    /// Beside `auth` rather than inside it, because it is the one outbound
+    /// capability in this area: `AuthConfig` describes what this process
+    /// *accepts*, and this is a credential for somebody else's API.
+    pub provisioning: Option<aiwatcher_auth::ProvisioningConfig>,
     /// Opt-in metadata control plane; requires OIDC and the postgres feature.
     pub iam_postgres_url: Option<String>,
     /// Key prefix for audit exports, inside the same object store the
@@ -817,6 +823,7 @@ impl Default for Config {
             workflow_retention: None,
             answer_limits: aiwatcher_api::state::AnswerLimits::default(),
             auth: AuthConfig::default(),
+            provisioning: None,
             iam_postgres_url: None,
             iam_audit_prefix: "iam-audit".to_owned(),
             // Nothing is removed unless a deployment says so.
@@ -1774,21 +1781,68 @@ fn read_auth(config: &mut Config) -> Result<(), ConfigError> {
 
     config.auth.roles = read_roles(&config.auth.roles)?;
     config.auth.proxy_headers = read_proxy_headers(&config.auth.proxy_headers);
+    config.provisioning = read_provisioning(config.auth.http_timeout)?;
     Ok(())
 }
 
+/// Where an invited stranger makes an account, or nowhere (IAM-03 D5).
+///
+/// All three or none: a URL with no token is a call that will be refused and a
+/// token with no URL is a secret pointing at nothing, and either as a silent
+/// half-configuration is worse than the 501 the absent case gives.
+fn read_provisioning(
+    http_timeout: std::time::Duration,
+) -> Result<Option<aiwatcher_auth::ProvisioningConfig>, ConfigError> {
+    let Some(url) = var("AIWATCHER_AUTH_PROVISION_URL") else {
+        return Ok(None);
+    };
+    let named = |name: &'static str| {
+        var(name).ok_or(ConfigError::Required {
+            name,
+            because: "AIWATCHER_AUTH_PROVISION_URL is set",
+        })
+    };
+    let config = aiwatcher_auth::ProvisioningConfig {
+        url,
+        token: named("AIWATCHER_AUTH_PROVISION_TOKEN")?,
+        flow: named("AIWATCHER_AUTH_PROVISION_FLOW")?,
+        // Minutes, not days: this one is spent in the next few minutes by
+        // somebody who is already looking at the page, while the aiwatcher
+        // offer it came from waits for them to get round to it.
+        ttl: std::time::Duration::from_secs(match var("AIWATCHER_AUTH_PROVISION_TTL_SECONDS") {
+            None => 1800,
+            Some(raw) => raw.parse::<u64>().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_AUTH_PROVISION_TTL_SECONDS",
+                value: raw,
+                expected: "a number of seconds",
+            })?,
+        }),
+        http_timeout,
+    };
+    config.validate().map_err(|error| ConfigError::Invalid {
+        name: "AIWATCHER_AUTH_PROVISION_URL",
+        value: error.to_string(),
+        expected: "the identity provider's base URL, a service-account token and a flow slug",
+    })?;
+    Ok(Some(config))
+}
+
 fn read_roles(defaults: &RoleMapping) -> Result<RoleMapping, ConfigError> {
+    // Four values, and the three that are not a role are three different
+    // decisions. "none" requires a group membership to sign in at all;
+    // "project" signs somebody in holding nothing of the instance's, so a
+    // client on a shared deployment reads their project and not the unassigned
+    // side (IAM-03 D4); a role is what the provider's own decision to let them
+    // through is taken to mean.
     let default_role = match var("AIWATCHER_AUTH_DEFAULT_ROLE") {
         None => defaults.default_role,
-        // "none" is how a deployment says that a group membership is required
-        // to see anything at all, as distinct from "viewer", which is how it
-        // says the provider's decision to let somebody in was the decision.
-        Some(raw) if matches!(raw.to_ascii_lowercase().as_str(), "none" | "off") => None,
-        Some(raw) => Some(raw.parse::<Role>().map_err(|_| ConfigError::Invalid {
-            name: "AIWATCHER_AUTH_DEFAULT_ROLE",
-            value: raw,
-            expected: "one of viewer, editor, admin, none",
-        })?),
+        Some(raw) => raw
+            .parse::<DefaultRole>()
+            .map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_AUTH_DEFAULT_ROLE",
+                value: raw,
+                expected: "one of viewer, editor, admin, project, none",
+            })?,
     };
 
     Ok(RoleMapping {
@@ -1908,6 +1962,7 @@ fn parse_bool(name: &'static str, value: &str) -> Result<bool, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiwatcher_auth::Role;
 
     #[test]
     fn the_defaults_are_runnable_without_any_environment() {
@@ -2161,6 +2216,7 @@ mod tests {
         // And with nothing checking, nothing is minted.
         Config {
             auth: AuthConfig::default(),
+            provisioning: None,
             ..split(ProcessRole::Work, None)
         }
         .validate()
@@ -2501,10 +2557,24 @@ mod tests {
         // Distinct from `viewer`, which says the provider letting somebody in
         // was the decision. Both are legitimate and they are not the same.
         let mapping = RoleMapping {
-            default_role: None,
+            default_role: DefaultRole::Refused,
             ..RoleMapping::default()
         };
         assert!(mapping.resolve("alice", &["everyone".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn the_four_values_of_a_default_role_read_back_as_four_different_decisions() {
+        for (raw, expected) in [
+            ("viewer", DefaultRole::Instance(Role::Viewer)),
+            ("admin", DefaultRole::Instance(Role::Admin)),
+            ("project", DefaultRole::Project),
+            ("none", DefaultRole::Refused),
+            ("off", DefaultRole::Refused),
+        ] {
+            assert_eq!(raw.parse::<DefaultRole>().expect(raw), expected, "{raw}");
+        }
+        assert!("projekt".parse::<DefaultRole>().is_err());
     }
 
     #[test]

@@ -1150,6 +1150,17 @@ pub async fn build(config: Config) -> Result<Runtime> {
         answer_limits: config.answer_limits,
         auth: build_authenticator(&config).await?,
         iam: build_iam_store(&config).await?,
+        // Built here rather than inside the authenticator: it is an outbound
+        // credential for the provider's own API, used by one route, and a
+        // deployment that has single sign-on and has not configured this is
+        // the ordinary case.
+        provisioning: config
+            .provisioning
+            .clone()
+            .map(aiwatcher_auth::AccountProvisioning::new)
+            .transpose()
+            .context("the identity provider's enrolment API")?
+            .map(Arc::new),
         // Two halves: a trail to read and somewhere to put the copy. Absent
         // when either is, which answers 501 rather than queueing a job that
         // could never write a shard.

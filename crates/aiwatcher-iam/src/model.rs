@@ -65,6 +65,20 @@ impl Principal {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "openapi", schema(as = IamOrganizationRole))]
 pub enum OrganizationRole {
+    /// Somebody who holds grants here and is not *of* here.
+    ///
+    /// Below [`Self::Member`] and declared first, because the derived order is
+    /// what every authority check reads. A guest was invited to one project:
+    /// they see the organization (otherwise they could not reach the project
+    /// through it) and the projects their grants name, and nothing else — no
+    /// team takes them, no roster counts them among the members, and a future
+    /// grant to "everybody in this organization" does not reach them. That
+    /// last one is the whole point (IAM-03 D3): a client invited to a demo
+    /// must not become a colleague who is swept up by the next broad grant.
+    ///
+    /// Promotion is an explicit [`Command::SetMember`] and never a side effect
+    /// of redeeming an offer.
+    Guest,
     Member,
     Admin,
     Owner,
@@ -124,6 +138,19 @@ impl ProjectScope {
     #[must_use]
     pub const fn on_the_log(self) -> aiwatcher_core::ProjectScope {
         aiwatcher_core::ProjectScope::new(self.organization.0, self.project.0)
+    }
+
+    /// The same conversion the other way round.
+    ///
+    /// For an adapter whose port is `aiwatcher-core`'s and whose store is this
+    /// crate's — the artifact byte store is the one — so that the pair still
+    /// goes through one place rather than two spellings of `.0`.
+    #[must_use]
+    pub const fn from_the_log(scope: aiwatcher_core::ProjectScope) -> Self {
+        Self {
+            organization: OrganizationId(scope.organization),
+            project: ProjectId(scope.project),
+        }
     }
 
     /// Read [`Self::key`] back.
@@ -309,6 +336,11 @@ pub struct Invitation {
     pub created_at: i64,
     /// A note about who it was sent to. Never compared against anybody.
     pub label: Option<String>,
+    /// What redeeming it makes somebody in the organization — the offer's
+    /// [`InvitationOffer::standing`], kept on the record so a list says what
+    /// each outstanding offer will do.
+    #[serde(default = "guest")]
+    pub standing: OrganizationRole,
     pub redeemed: Option<Redemption>,
 }
 
@@ -330,6 +362,20 @@ pub struct InvitationOffer {
     /// A note about who it was sent to. Never compared against anybody.
     #[serde(default)]
     pub label: Option<String>,
+    /// What redeeming this makes somebody in the organization.
+    ///
+    /// [`OrganizationRole::Guest`] by default, which is the narrower of the
+    /// two: an offer that means to make a colleague says so, and one written
+    /// before this field existed reads as a guest rather than as what it used
+    /// to do. No deployment had redeemed one when this changed, so the default
+    /// is chosen for what an invitation is *for* rather than for compatibility
+    /// with a behaviour nobody depended on.
+    #[serde(default = "guest")]
+    pub standing: OrganizationRole,
+}
+
+const fn guest() -> OrganizationRole {
+    OrganizationRole::Guest
 }
 
 /// Who turned an offer into a grant, and which grant it became.
@@ -364,6 +410,33 @@ pub struct Redeemed {
     pub grant: GrantId,
 }
 
+/// What an offer says it is, to whoever holds its token and no account yet.
+///
+/// Everything [`Redeemed`] reports except the grant, because there is no grant
+/// yet and the point is to say what taking this up would do. Answered to an
+/// **unauthenticated** caller — a person looking at this has not signed in and
+/// in the case this exists for cannot, having no account — so the token is the
+/// whole credential, as it is for the redemption it precedes. It names the
+/// organization and the project so that "create an account" is a decision
+/// rather than a leap; it names no member, no other project and nothing about
+/// the deployment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = IamOffered))]
+pub struct Offered {
+    pub organization: Organization,
+    pub project: Project,
+    pub role: ProjectRole,
+    pub window: GrantWindow,
+    /// What redeeming it would make somebody here (IAM-03 D3).
+    pub standing: OrganizationRole,
+    /// When the offer itself lapses, which is not the window's end.
+    pub expires_at: i64,
+    /// The delivery hint its author wrote, which the enrollment prefills and
+    /// nobody is compared against.
+    pub label: Option<String>,
+}
+
 /// One person's standing in the organization, which is not access to anything.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -396,6 +469,13 @@ pub struct TeamMembers {
 pub struct Roster {
     pub organization: Organization,
     pub members: Vec<Membership>,
+    /// The people who hold grants here without being of here (IAM-03 D3).
+    ///
+    /// Its own list rather than rows in `members` with a different role: a
+    /// guest is not a member, and a reader that had to remember which roles
+    /// count would one day forget on the screen where it mattered.
+    #[serde(default)]
+    pub guests: Vec<Membership>,
     pub teams: Vec<TeamMembers>,
     pub projects: Vec<Project>,
 }

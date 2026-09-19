@@ -30,7 +30,7 @@ use aiwatcher_annotations::{
 use aiwatcher_annotations::integrations::fetch::ImageSource;
 
 use crate::annotation_scope::{AnnotationRead, AnnotationWrite};
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa::OpenApi;
@@ -717,6 +717,9 @@ async fn get_blob(
     tag = "annotations",
 )]
 async fn list_sources(
+    // The one route in this family with no project twin, so the one that needs
+    // saying out loud that it answers for the deployment.
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<SourcesQuery>,
 ) -> Json<SourcePage> {

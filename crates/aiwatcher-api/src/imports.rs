@@ -37,7 +37,7 @@ use aiwatcher_annotations::imports::{
     ImportIndex, ImportJob, ImportJobPage, ImportJobRequest, ImportManifest, RejectPage,
 };
 
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa::OpenApi;
@@ -218,7 +218,10 @@ async fn append_import_rows(
     ),
     tag = "annotations",
 )]
-async fn list_import_batches(State(state): State<AppState>) -> ApiResult<Json<BatchPage>> {
+async fn list_import_batches(
+    _: InstanceRead,
+    State(state): State<AppState>,
+) -> ApiResult<Json<BatchPage>> {
     Ok(Json(registry(&state)?.import_batches().await?))
 }
 
@@ -234,6 +237,7 @@ async fn list_import_batches(State(state): State<AppState>) -> ApiResult<Json<Ba
     tag = "annotations",
 )]
 async fn get_import_batch(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<BatchQuery>,
 ) -> ApiResult<Json<StagedBatch>> {
@@ -290,7 +294,10 @@ async fn queue_import_job(
     ),
     tag = "annotations",
 )]
-async fn list_import_jobs(State(state): State<AppState>) -> ApiResult<Json<ImportJobPage>> {
+async fn list_import_jobs(
+    _: InstanceRead,
+    State(state): State<AppState>,
+) -> ApiResult<Json<ImportJobPage>> {
     Ok(Json(registry(&state)?.import_jobs().await?))
 }
 
@@ -306,6 +313,7 @@ async fn list_import_jobs(State(state): State<AppState>) -> ApiResult<Json<Impor
     tag = "annotations",
 )]
 async fn get_import_job(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<JobQuery>,
 ) -> ApiResult<Json<ImportJob>> {
@@ -357,6 +365,7 @@ async fn cancel_import_job(
     tag = "annotations",
 )]
 async fn list_import_rejects(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<RejectsQuery>,
 ) -> ApiResult<Json<RejectPage>> {
@@ -381,7 +390,10 @@ async fn list_import_rejects(
     ),
     tag = "annotations",
 )]
-async fn list_import_manifests(State(state): State<AppState>) -> ApiResult<Json<ImportIndex>> {
+async fn list_import_manifests(
+    _: InstanceRead,
+    State(state): State<AppState>,
+) -> ApiResult<Json<ImportIndex>> {
     Ok(Json(registry(&state)?.imports().await?))
 }
 
@@ -399,6 +411,7 @@ async fn list_import_manifests(State(state): State<AppState>) -> ApiResult<Json<
     tag = "annotations",
 )]
 async fn get_import_manifest(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<ManifestQuery>,
 ) -> ApiResult<Json<ImportManifest>> {

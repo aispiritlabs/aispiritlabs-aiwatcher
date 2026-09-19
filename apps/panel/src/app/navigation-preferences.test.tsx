@@ -22,6 +22,9 @@ vi.mock('@/shared/components/user-menu', () => ({ UserMenu: () => null }));
 // has no reason to stand up: what it proves is where the shell puts things.
 vi.mock('@/app/scope-selector', () => ({ ScopeSelector: () => null }));
 vi.mock('@/app/reach-notice', () => ({ ReachNotice: () => null }));
+vi.mock('@/app/instance-notice', () => ({
+  InstanceOnly: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock('@/app/command-panel', () => ({ CommandPanel: () => null, useCommandPanel: () => [false, vi.fn()] }));
 
 let storage: Map<string, string>;

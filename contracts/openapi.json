@@ -9802,13 +9802,114 @@
         }
       }
     },
-    "/api/v1/iam/invitations/redeem": {
+    "/api/v1/iam/invitations/enrollment": {
+      "post": {
+        "tags": [
+          "iam"
+        ],
+        "summary": "Somewhere to make the account this offer will be redeemed with.",
+        "description": "Held to the offer: this asks the identity provider to open its enrollment\nonly when the token names a live one, so the route is not a way for anybody\nwho can reach this port to have invitations minted in somebody's identity\nprovider. The provider's answer is data — what goes back to the browser is\nbuilt here from the configured base, never a URL the provider chose.\n\n501 naming the variable when no provider was configured to enroll into,\nwhich is the state every deployment is in until one is: the panel then\noffers signing in with an account somebody already has.",
+        "operationId": "enrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Redeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrollment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "410": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "502": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/invitations/preview": {
       "post": {
         "tags": [
           "iam"
         ],
         "summary": "Turn a token into membership and a grant, once.",
-        "description": "Any signed-in principal may call this — the token is the authority, and the\ncaller's verified pair is what the grant is written to. It names no\norganization because whoever holds one does not know which organization it\nbelongs to, and a route that made them say would leak that they had guessed\nright.",
+        "description": "Any signed-in principal may call this — the token is the authority, and the\ncaller's verified pair is what the grant is written to. It names no\norganization because whoever holds one does not know which organization it\nbelongs to, and a route that made them say would leak that they had guessed\nright.\nWhat a token offers, to somebody who has not signed in and may not be able\nto.\n\nPublic, like the sign-in routes and for the same reason: an invited stranger\nhas no session and no account, so requiring one would make the offer\nunreadable to its only reader. The token is the credential — 244 bits,\nstored as a digest — and nothing comes back that is not about this one\noffer. It spends nothing, so the link survives being looked at.\n\nNo mutation header: that one stops a cross-origin form issuing a *write*\nwith somebody's cookie, and this route reads, writes nothing, and reads\nnothing a cookie could have supplied.",
+        "operationId": "preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Redeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IamOffered"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "410": {
+            "description": ""
+          },
+          "501": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/iam/invitations/redeem": {
+      "post": {
+        "tags": [
+          "iam"
+        ],
         "operationId": "redeem",
         "parameters": [
           {
@@ -18919,6 +19020,211 @@
             }
           },
           "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/artifacts": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Everything one run produced, in the order it was recorded.",
+        "description": "Each row carries its `produced_by` — the execution, the step and the\nattempt — which is what lets a step's view show its own outputs and its own\nlog without a second route per noun.\n\nA run that produced nothing and a run that never existed are the same empty\nlist. The catalog cannot tell them apart and neither could a caller that\nasked it to: whether a run exists is `GET /executions/{id}`, and answering\nit twice would be a second read of a second store to describe the same\nabsence.",
+        "operationId": "project_run_artifacts",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogedArtifact"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/artifacts/{digest}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One of this run's artifacts, read as text.",
+        "description": "The digest is checked against what this execution produced *before*\nanything is read, so the route answers for a run's own outputs and for\nnothing else in the store.",
+        "operationId": "project_artifact_content",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "The artifact's content address, as the list gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactContent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
             "description": "",
             "content": {
               "application/json": {
@@ -32010,6 +32316,25 @@
           }
         }
       },
+      "Enrollment": {
+        "type": "object",
+        "description": "Where to send somebody to make an account, and when that stops working.",
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the provider's invitation lapses, as a Unix timestamp."
+          },
+          "url": {
+            "type": "string",
+            "description": "The provider's enrollment page, carrying the one-use token."
+          }
+        }
+      },
       "EpochInput": {
         "type": "object",
         "required": [
@@ -36607,6 +36932,10 @@
           "scope": {
             "$ref": "#/components/schemas/IamProjectScope"
           },
+          "standing": {
+            "$ref": "#/components/schemas/IamOrganizationRole",
+            "description": "What redeeming it makes somebody in the organization — the offer's\n[`InvitationOffer::standing`], kept on the record so a list says what\neach outstanding offer will do."
+          },
           "window": {
             "$ref": "#/components/schemas/IamGrantWindow",
             "description": "The window the resulting grant gets, declared when the offer was made."
@@ -36636,6 +36965,10 @@
           },
           "role": {
             "$ref": "#/components/schemas/IamProjectRole"
+          },
+          "standing": {
+            "$ref": "#/components/schemas/IamOrganizationRole",
+            "description": "What redeeming this makes somebody in the organization.\n\n[`OrganizationRole::Guest`] by default, which is the narrower of the\ntwo: an offer that means to make a colleague says so, and one written\nbefore this field existed reads as a guest rather than as what it used\nto do. No deployment had redeemed one when this changed, so the default\nis chosen for what an invitation is *for* rather than for compatibility\nwith a behaviour nobody depended on."
           },
           "window": {
             "$ref": "#/components/schemas/IamGrantWindow",
@@ -36677,6 +37010,48 @@
           }
         }
       },
+      "IamOffered": {
+        "type": "object",
+        "description": "What an offer says it is, to whoever holds its token and no account yet.\n\nEverything [`Redeemed`] reports except the grant, because there is no grant\nyet and the point is to say what taking this up would do. Answered to an\n**unauthenticated** caller — a person looking at this has not signed in and\nin the case this exists for cannot, having no account — so the token is the\nwhole credential, as it is for the redemption it precedes. It names the\norganization and the project so that \"create an account\" is a decision\nrather than a leap; it names no member, no other project and nothing about\nthe deployment.",
+        "required": [
+          "organization",
+          "project",
+          "role",
+          "window",
+          "standing",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the offer itself lapses, which is not the window's end."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The delivery hint its author wrote, which the enrollment prefills and\nnobody is compared against."
+          },
+          "organization": {
+            "$ref": "#/components/schemas/IamOrganization"
+          },
+          "project": {
+            "$ref": "#/components/schemas/IamProject"
+          },
+          "role": {
+            "$ref": "#/components/schemas/IamProjectRole"
+          },
+          "standing": {
+            "$ref": "#/components/schemas/IamOrganizationRole",
+            "description": "What redeeming it would make somebody here (IAM-03 D3)."
+          },
+          "window": {
+            "$ref": "#/components/schemas/IamGrantWindow"
+          }
+        }
+      },
       "IamOrganization": {
         "type": "object",
         "required": [
@@ -36695,6 +37070,7 @@
       "IamOrganizationRole": {
         "type": "string",
         "enum": [
+          "guest",
           "member",
           "admin",
           "owner"
@@ -36840,6 +37216,13 @@
           "projects"
         ],
         "properties": {
+          "guests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IamMembership"
+            },
+            "description": "The people who hold grants here without being of here (IAM-03 D3).\n\nIts own list rather than rows in `members` with a different role: a\nguest is not a member, and a reader that had to remember which roles\ncount would one day forget on the screen where it mattered."
+          },
           "members": {
             "type": "array",
             "items": {

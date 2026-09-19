@@ -3,12 +3,13 @@
 //! authorize only organization creation, never another organization's access.
 
 use crate::{ApiError, AppState, Caller, error::ApiResult};
+use aiwatcher_auth::Enrollment;
 use aiwatcher_auth::Role;
 use aiwatcher_iam::{
     AuditBounds, AuditEntry, AuditExportJob, AuditExportRequest, AuditExportRowsPage, AuditExports,
     Change, Command, Grant, IamStore, Invitation, InvitationId, InvitationOffer, IssuedInvitation,
-    Organization, OrganizationId, Principal, ProjectAccess, ProjectId, ProjectScope, Redeemed,
-    Roster,
+    Offered, Organization, OrganizationId, Principal, ProjectAccess, ProjectId, ProjectScope,
+    Redeemed, Roster,
 };
 use axum::{
     Json, Router,
@@ -32,6 +33,8 @@ use utoipa::OpenApi;
     invitations,
     revoke_invitation,
     redeem,
+    preview,
+    enrollment,
     audit,
     audit_bounds,
     create_audit_export,
@@ -87,6 +90,11 @@ pub fn router() -> Router<AppState> {
         // Outside every organization on purpose: whoever redeems one holds a
         // token and knows no id to put in a path.
         .route("/api/v1/iam/invitations/redeem", post(redeem))
+        // The two an invited stranger reaches **before** they have an account,
+        // so both are in `auth::is_public`: a person with a link and no way in
+        // is exactly who these are for. What authenticates them is the token.
+        .route("/api/v1/iam/invitations/preview", post(preview))
+        .route("/api/v1/iam/invitations/enrollment", post(enrollment))
         .route("/api/v1/iam/organizations/{organization}/audit", get(audit))
         // Where the trail begins and how much of it there is — the read a
         // paginated page cannot answer, and the one that says why a history
@@ -367,6 +375,58 @@ async fn revoke_invitation(
 /// organization because whoever holds one does not know which organization it
 /// belongs to, and a route that made them say would leak that they had guessed
 /// right.
+/// What a token offers, to somebody who has not signed in and may not be able
+/// to.
+///
+/// Public, like the sign-in routes and for the same reason: an invited stranger
+/// has no session and no account, so requiring one would make the offer
+/// unreadable to its only reader. The token is the credential — 244 bits,
+/// stored as a digest — and nothing comes back that is not about this one
+/// offer. It spends nothing, so the link survives being looked at.
+///
+/// No mutation header: that one stops a cross-origin form issuing a *write*
+/// with somebody's cookie, and this route reads, writes nothing, and reads
+/// nothing a cookie could have supplied.
+#[utoipa::path(post, path = "/api/v1/iam/invitations/preview", tag = "iam", request_body = Redeem,
+    responses((status = 200, body = Offered), (status = 400), (status = 404), (status = 409), (status = 410), (status = 501), (status = 503)))]
+async fn preview(
+    State(state): State<AppState>,
+    Json(body): Json<Redeem>,
+) -> ApiResult<Json<Offered>> {
+    let store = state.iam.as_deref().ok_or(ApiError::IamDisabled)?;
+    Ok(Json(store.offered(&body.token).await?))
+}
+
+/// Somewhere to make the account this offer will be redeemed with.
+///
+/// Held to the offer: this asks the identity provider to open its enrollment
+/// only when the token names a live one, so the route is not a way for anybody
+/// who can reach this port to have invitations minted in somebody's identity
+/// provider. The provider's answer is data — what goes back to the browser is
+/// built here from the configured base, never a URL the provider chose.
+///
+/// 501 naming the variable when no provider was configured to enroll into,
+/// which is the state every deployment is in until one is: the panel then
+/// offers signing in with an account somebody already has.
+#[utoipa::path(post, path = "/api/v1/iam/invitations/enrollment", tag = "iam", request_body = Redeem,
+    responses((status = 200, body = Enrollment), (status = 400), (status = 404), (status = 409), (status = 410), (status = 501), (status = 502), (status = 503)))]
+async fn enrollment(
+    State(state): State<AppState>,
+    Json(body): Json<Redeem>,
+) -> ApiResult<Json<Enrollment>> {
+    let store = state.iam.as_deref().ok_or(ApiError::IamDisabled)?;
+    let offered = store.offered(&body.token).await?;
+    let provisioning = state
+        .provisioning
+        .as_deref()
+        .ok_or(ApiError::ProvisioningDisabled)?;
+    Ok(Json(
+        provisioning
+            .open_enrollment(offered.label.as_deref())
+            .await?,
+    ))
+}
+
 #[utoipa::path(post, path = "/api/v1/iam/invitations/redeem", tag = "iam", request_body = Redeem,
     params(("X-AIWatcher-IAM" = String, Header, description = "Required value: 1")),
     responses((status = 200, body = Redeemed), (status = 400), (status = 401), (status = 403), (status = 404), (status = 409), (status = 410), (status = 501), (status = 503)))]

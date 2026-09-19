@@ -357,6 +357,25 @@ impl IamStore for PostgresIamStore {
     /// `invitations`, and the same statement locks it — so two people racing
     /// one offer serialize, and the second is told it is spent rather than
     /// granted a second time.
+    async fn offered(&self, token: &str) -> Result<Offered> {
+        // A plain read, so no row lock: this settles nothing, and an offer that
+        // is spent between looking and taking is the refusal `redeem` already
+        // serializes.
+        let digest = digest_of(token);
+        let row = sqlx::query(
+            "SELECT id, document FROM iam_organizations \
+             WHERE document -> 'invitations' @> $1::jsonb",
+        )
+        .bind(serde_json::json!([{ "token_sha256": digest }]))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?
+        .ok_or(Error::NotFound)?;
+        let organization = OrganizationId(row.try_get("id").map_err(backend)?);
+        OrganizationState::decode(organization, row.try_get("document").map_err(backend)?)?
+            .offered(&digest, self.clock.now())
+    }
+
     async fn redeem(&self, token: &str, redeemer: &Principal) -> Result<Redeemed> {
         let digest = digest_of(token);
         let mut transaction = self.pool.begin().await.map_err(backend)?;

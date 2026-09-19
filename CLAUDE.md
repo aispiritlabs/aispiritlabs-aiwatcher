@@ -860,16 +860,43 @@ round leaves a reference to bytes nobody wrote. It applies to:
 
 - **Never let a route decide for itself whether it needs a caller.** The
   authentication layer is applied once in front of the whole router, with an
-  exception list in `auth::is_public` — the health probes and the sign-in
-  routes, which cannot require a session in order to establish one. A route
-  added later is authenticated by default, so the one somebody forgets is not
-  the one that leaks. What the layer does *not* decide is whether the caller may
-  perform the operation: that is a `Role` check in the handler, because a table
-  of paths in a middleware drifts from the routes it guards.
+  exception list in `auth::is_public` — the health probes, the sign-in routes,
+  which cannot require a session in order to establish one, and the two
+  invitation routes an invited stranger reaches before they have an account.
+  A route added later is authenticated by default, so the one somebody forgets
+  is not the one that leaks. What the layer does *not* decide is whether the
+  caller may perform the operation: that is a `Role` check in the handler,
+  because a table of paths in a middleware drifts from the routes it guards.
+- **Never let an instance route answer somebody who holds no instance role.**
+  `AIWATCHER_AUTH_DEFAULT_ROLE=project` signs a client in holding nothing of
+  this deployment's (ADR_0013, amended), `Identity::role()` is an `Option` so
+  an empty list stops meaning `Viewer`, and `Caller::from_request_parts`
+  refuses off a `ScopedRoute` — the marker `project_scope::resolve_required`
+  already reads, because the layer runs before routing and cannot see one. Two
+  named families are exempt: `/api/v1/auth/` and `/api/v1/iam/`, which answer
+  about the caller rather than about anything held here. The consequence for a
+  handler is a rule: **a read takes its caller before it parses the request**
+  (`InstanceRead` where no role is checked), so the refusal is the boundary's
+  rather than a query parameter's. `instance_reach.rs` walks the whole contract
+  and holds every operation to both halves.
 - **Never accept `AIWATCHER_AUTH_MODE=proxy` without a network boundary.** In
   that mode a header is a claim, so any pod that can reach port 8080 can assert
   it is an admin. The chart refuses to render it without `networkPolicy.enabled`
   and says why.
+- **Never let a guest become a member by taking up an offer.**
+  `InvitationOffer.standing` decides, and it is `guest` by default: a client
+  invited to one demo project holds project grants and nothing else, no team
+  takes them, and a future grant to "everybody in this organization" does not
+  reach them. Promotion is an explicit `SetMember`, never the offer's doing.
+- **Never let aiwatcher create an account, or see a password.** What the
+  enrolment adapter asks the identity provider for is an *invitation* to its
+  own flow (`AIWATCHER_AUTH_PROVISION_*`), bounded, credentialed and with the
+  answer treated as data — the URL the browser is given is built here from the
+  configured base, never one the provider chose. The service account needs
+  permission to add an invitation and to read flows, and nothing else; a wider
+  one makes aiwatcher a way into somebody's identity provider. And the flow it
+  opens must assign **no aiwatcher group**, because that is the whole of what
+  keeps a client off the unassigned side.
 - **Never let an ingest token be more than an editor.** It is a shared secret
   sitting in an agent's environment, and it exists because a producer reaches
   the Service directly and cannot complete an interactive sign-in — not so that

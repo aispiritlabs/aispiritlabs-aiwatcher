@@ -3,6 +3,7 @@ import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { Activity, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 
 import { Appearance } from '@/shared/components/appearance';
+import { InstanceOnly } from '@/app/instance-notice';
 import { ReachNotice } from '@/app/reach-notice';
 import { ScopeSelector } from '@/app/scope-selector';
 import { UserMenu } from '@/shared/components/user-menu';
@@ -102,7 +103,9 @@ function ShellLayout() {
             <PinCurrentView />
             <NavigationMessage />
             <ReachNotice />
-            <Outlet />
+            <InstanceOnly>
+              <Outlet />
+            </InstanceOnly>
           </div>
         </main>
       </div>

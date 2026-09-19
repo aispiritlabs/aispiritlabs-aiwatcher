@@ -5,34 +5,35 @@
 //! /executions/{execution}/artifacts/{digest}   one of them, read as text
 //! ```
 //!
-//! The catalog has recorded a step's outputs and a pod's log against the
-//! attempt that made them since ADR_0029; what was missing was any way to read
-//! that back, which made the log a thing this system kept and nobody could
-//! open. These are the reader half: the first answers from
-//! [`ArtifactCatalog::produced_by`] and the second reads the bytes.
+//! The reader half of what ADR_0029 has been recording: the first route
+//! answers from [`ArtifactCatalog::produced_by`] and the second reads bytes.
 //!
 //! **The bytes are proxied, never presigned.** A presigned URL is a bearer
 //! credential for a bucket that also holds prompts, datasets, annotations,
-//! conversations and training; what this route can check instead is the one
-//! thing that matters — that the digest somebody asked for is one *this
-//! execution* produced. That check is also what makes the digest safe as the
-//! whole address: it is not an oracle over the store, because a digest no row
-//! of this run names is a 404 whatever is under it.
+//! conversations and training; what this route checks instead is that the
+//! digest asked for is one *this execution* produced. That is also what makes
+//! a bare digest safe as the whole address: it is no oracle over the store,
+//! because a digest no row of this run names is a 404 whatever is under it.
 //!
 //! **A 501 rather than an empty list** when this deployment has no object
-//! store, naming the variable. Both the catalog and the store are `Some`
-//! exactly when `AIWATCHER_PROMPT_STORE` is set, so their absence is one fact
-//! with one fix — the prompt registry's rule, in a sixth place. An empty list
-//! would be a different problem with a different fix, and a step whose log was
-//! never kept would be indistinguishable from one whose log is simply not
-//! there yet.
+//! store, naming the variable — the prompt registry's rule, in a sixth place.
+//! An empty list is a different problem with a different fix, and a step whose
+//! log was never kept would be indistinguishable from one not written yet.
+//!
+//! **Served twice** (ADR_0033). Before IAM-03's D4 a project member held
+//! `viewer` and could read their bytes on the instance's own list; D4 takes
+//! that away, so without the twin nothing would read a pod's log. Three stores
+//! bind from one answer — the workflow store ([`RunHandle`], where the grant
+//! is asked), the catalog and the bytes — because a manifest under one prefix
+//! with its bytes under another is a row nobody can open.
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRequestParts, Path};
+use axum::http::request::Parts;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
 
 use aiwatcher_core::ArtifactRef;
@@ -40,6 +41,7 @@ use aiwatcher_core::ports::AttemptArtifacts;
 use aiwatcher_execution::{ArtifactCatalog, CatalogedArtifact, ExecutionId};
 
 use crate::error::{ApiError, ApiResult};
+use crate::execution_scope::RunHandle;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -47,22 +49,119 @@ use crate::state::AppState;
 #[openapi(paths(run_artifacts, artifact_content))]
 struct Api;
 
-/// The operations this module serves. Composed by [`crate::openapi`].
+/// The operations this module serves, on both route families. Composed by
+/// [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
+        .route("/executions/{execution_id}/artifacts", get(run_artifacts))
         .route(
-            "/api/v1/executions/{execution_id}/artifacts",
-            get(run_artifacts),
-        )
-        .route(
-            "/api/v1/executions/{execution_id}/artifacts/{digest}",
+            "/executions/{execution_id}/artifacts/{digest}",
             get(artifact_content),
         )
+}
+
+/// Named rather than `Path<String>`, so the scoped family's `organization` and
+/// `project` need no spelling out in a handler that ignores them.
+#[derive(Deserialize)]
+struct RunPath {
+    execution_id: String,
+}
+
+#[derive(Deserialize)]
+struct ArtifactPath {
+    execution_id: String,
+    digest: String,
+}
+
+/// The three stores one run's artifacts are read through, on one side.
+///
+/// [`RunHandle`] resolves the workflow store and, on a project's routes, asks
+/// the grant; the catalog and the bytes follow it. Binding all three from one
+/// answer is what stops a read that took the run from one side and its bytes
+/// from the other.
+struct RunArtifacts {
+    run: RunHandle,
+    catalog: Arc<dyn ArtifactCatalog>,
+    store: Arc<dyn AttemptArtifacts>,
+}
+
+impl RunArtifacts {
+    /// Everything this execution produced, once the side has been settled.
+    async fn produced_by(&self, execution: &ExecutionId) -> ApiResult<Vec<CatalogedArtifact>> {
+        self.on_this_side(execution).await?;
+        self.catalog
+            .produced_by(execution)
+            .await
+            .map_err(|error| aiwatcher_execution::HandleError::Store(error).into())
+    }
+
+    /// Refuse an execution this side is not the one for.
+    ///
+    /// Without it the list would come back **empty** rather than refused, which
+    /// reads as "this run produced nothing" and is exactly the silence
+    /// ADR_0033 pt. 7 exists to prevent. The question is asked of the workflow
+    /// store, which already answers it: a handle refuses the other side's
+    /// execution by name and says `None` for an id nobody has used.
+    async fn on_this_side(&self, execution: &ExecutionId) -> ApiResult<()> {
+        // A refusal renders 404 and a bad moment renders 503; the split is
+        // `execution_parts`' and is not repeated here.
+        self.run
+            .handler()
+            .store()
+            .ownership(execution)
+            .await
+            .map(|_| ())
+            .map_err(|error| aiwatcher_execution::HandleError::Store(error).into())
+    }
+}
+
+impl FromRequestParts<AppState> for RunArtifacts {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
+        let run = RunHandle::from_request_parts(parts, state).await?;
+        let catalog = state
+            .catalog
+            .as_ref()
+            .ok_or(ApiError::StepArtifactsDisabled)?;
+        let store = state
+            .artifacts
+            .as_ref()
+            .ok_or(ApiError::StepArtifactsDisabled)?;
+        let Some(scope) = run.project_scope() else {
+            return Ok(Self {
+                run,
+                catalog: Arc::clone(catalog),
+                store: Arc::clone(store),
+            });
+        };
+        Ok(Self {
+            run,
+            catalog: catalog
+                .for_project(scope)
+                .map_err(aiwatcher_execution::HandleError::Store)?,
+            store: store
+                .for_project(scope.on_the_log())
+                .map_err(ApiError::WorkerArtifacts)?,
+        })
+    }
 }
 
 /// How much of one artifact this route will read as text.
@@ -89,49 +188,6 @@ pub struct ArtifactContent {
     pub text: String,
 }
 
-fn catalog(state: &AppState) -> ApiResult<&Arc<dyn ArtifactCatalog>> {
-    state
-        .catalog
-        .as_ref()
-        .ok_or(ApiError::StepArtifactsDisabled)
-}
-
-/// Refuse an execution this catalog is not the one for.
-///
-/// These two routes read the **unscoped** catalog, and a project's run writes
-/// into a catalog bound to that project — so without this the list would come
-/// back **empty** rather than refused, which reads as "this run produced
-/// nothing" and is exactly the silence ADR_0033 pt. 7 exists to prevent. There
-/// is no scoped twin of these routes yet, so what a project member gets is a
-/// refusal rather than their own rows; that is the honest half, and the other
-/// half is named in `docs/iam-02-data-plane.md`.
-///
-/// The question is asked of the workflow store, which already answers it: the
-/// unscoped handle refuses a project's execution by name and says `None` for a
-/// global one and for an id nobody has used.
-async fn on_this_side(state: &AppState, execution: &ExecutionId) -> ApiResult<()> {
-    let Some(handler) = state.executions.as_deref() else {
-        // No workflow store is no executions at all, so there is no project's
-        // run for this to be confused with.
-        return Ok(());
-    };
-    // A refusal renders 404 and a bad moment renders 503; the split is
-    // `execution_parts`' and is not repeated here.
-    handler
-        .store()
-        .ownership(execution)
-        .await
-        .map(|_| ())
-        .map_err(|error| aiwatcher_execution::HandleError::Store(error).into())
-}
-
-fn store(state: &AppState) -> ApiResult<&Arc<dyn AttemptArtifacts>> {
-    state
-        .artifacts
-        .as_ref()
-        .ok_or(ApiError::StepArtifactsDisabled)
-}
-
 /// Everything one run produced, in the order it was recorded.
 ///
 /// Each row carries its `produced_by` — the execution, the step and the
@@ -155,15 +211,12 @@ fn store(state: &AppState) -> ApiResult<&Arc<dyn AttemptArtifacts>> {
     tag = "execution",
 )]
 async fn run_artifacts(
-    State(state): State<AppState>,
-    Path(execution_id): Path<String>,
+    artifacts: RunArtifacts,
+    Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<Vec<CatalogedArtifact>>> {
-    let execution = ExecutionId::new(execution_id);
-    on_this_side(&state, &execution).await?;
-    let produced = catalog(&state)?
-        .produced_by(&execution)
-        .await
-        .map_err(aiwatcher_execution::HandleError::Store)?;
+    let produced = artifacts
+        .produced_by(&ExecutionId::new(execution_id))
+        .await?;
     Ok(Json(produced))
 }
 
@@ -190,19 +243,19 @@ async fn run_artifacts(
     tag = "execution",
 )]
 async fn artifact_content(
-    State(state): State<AppState>,
-    Path((execution_id, digest)): Path<(String, String)>,
+    artifacts: RunArtifacts,
+    Path(ArtifactPath {
+        execution_id,
+        digest,
+    }): Path<ArtifactPath>,
 ) -> ApiResult<Json<ArtifactContent>> {
     // The run's own list rather than `by_digest`, which would answer for an
     // artifact any execution produced. The cost is a list read per byte read,
     // and it buys the scoping: what makes a bare digest safe as the whole
     // address is that this run has to be the one that produced it.
-    let execution = ExecutionId::new(execution_id.clone());
-    on_this_side(&state, &execution).await?;
-    let produced = catalog(&state)?
-        .produced_by(&execution)
-        .await
-        .map_err(aiwatcher_execution::HandleError::Store)?;
+    let produced = artifacts
+        .produced_by(&ExecutionId::new(execution_id.clone()))
+        .await?;
     let artifact = produced
         .into_iter()
         .map(|row| row.artifact)
@@ -220,7 +273,8 @@ async fn artifact_content(
     // a 502 that will refuse identically — is the split this route needs. Only
     // the *disabled* case earns a variant of its own, because that one is read
     // by a person deciding what to set.
-    let bytes = store(&state)?
+    let bytes = artifacts
+        .store
         .read_bytes(&artifact)
         .await
         .map_err(ApiError::WorkerArtifacts)?;

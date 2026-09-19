@@ -116,6 +116,8 @@ export const SCOPED_ROUTES: ReadonlySet<string> = new Set([
   '/api/v1/evaluations/{evaluation_id}',
   '/api/v1/events/stream',
   '/api/v1/executions/{execution_id}',
+  '/api/v1/executions/{execution_id}/artifacts',
+  '/api/v1/executions/{execution_id}/artifacts/{digest}',
   '/api/v1/executions/{execution_id}/commands/cancel',
   '/api/v1/executions/{execution_id}/commands/pause',
   '/api/v1/executions/{execution_id}/commands/resume',

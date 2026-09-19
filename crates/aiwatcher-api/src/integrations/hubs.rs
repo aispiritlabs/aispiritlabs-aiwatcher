@@ -23,6 +23,7 @@ use aiwatcher_annotations::integrations::hubs::{
 };
 use serde::Serialize;
 
+use crate::auth::InstanceRead;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa::OpenApi;
@@ -78,6 +79,7 @@ pub fn router() -> Router<AppState> {
     tag = "datasets",
 )]
 async fn list_hub_rows(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<HubRowsQuery>,
 ) -> ApiResult<Json<HubRowsPage>> {
@@ -110,6 +112,7 @@ async fn list_hub_rows(
     tag = "datasets",
 )]
 async fn get_hub_image(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<HubCellQuery>,
 ) -> ApiResult<Response> {
@@ -143,7 +146,7 @@ fn hubs(state: &AppState) -> ApiResult<&Arc<Hubs>> {
     ),
     tag = "datasets",
 )]
-async fn list_hubs(State(state): State<AppState>) -> ApiResult<Json<HubsPage>> {
+async fn list_hubs(_: InstanceRead, State(state): State<AppState>) -> ApiResult<Json<HubsPage>> {
     let configured = hubs(&state)?;
     Ok(Json(HubsPage {
         hubs: configured.status(),
@@ -168,6 +171,7 @@ async fn list_hubs(State(state): State<AppState>) -> ApiResult<Json<HubsPage>> {
     tag = "datasets",
 )]
 async fn search_hubs(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<HubQuery>,
 ) -> ApiResult<Json<HubSearchPage>> {

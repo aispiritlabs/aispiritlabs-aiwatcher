@@ -121,3 +121,141 @@ entries:
       # they have is the group mapping. Conflating them means the only way to
       # give somebody read access is to give them a role.
       policy_engine_mode: any
+
+  # ── Enrolment, for somebody an aiwatcher invitation reached ────────────────
+  #
+  # aiwatcher's own invitation offers a project to a secret, and the grant is
+  # written against the `(provider, subject)` pair a session proves — so the
+  # person has to have an account here first. This is where they make one:
+  # aiwatcher asks authentik to open *this* flow to one person
+  # (AIWATCHER_AUTH_PROVISION_URL and the two variables beside it) and sends
+  # them to it with the token in the query.
+  #
+  # Two rules carry it, and both are visible in this file.
+  #
+  #   * **The flow assigns no group.** Every aiwatcher group here is a role on
+  #     the whole deployment, and a client invited to one project must hold
+  #     none of them — that is the whole of IAM-03's D4, and a `groups:` line
+  #     in the user-write stage below would undo it silently.
+  #   * **The invitation stage is required.** Without `continue_flow_without_
+  #     invitation: false` this is open self-service registration for anybody
+  #     who finds the URL.
+  #
+  # The service account aiwatcher uses needs permission to add an invitation
+  # and nothing else. A token that could create users or edit group membership
+  # would make aiwatcher a tool for making accounts in this provider.
+  - model: authentik_stages_invitation.invitationstage
+    id: enrolment-invitation
+    identifiers:
+      name: aiwatcher-enrolment-invitation
+    attrs:
+      continue_flow_without_invitation: false
+
+  - model: authentik_stages_prompt.prompt
+    id: prompt-username
+    identifiers:
+      field_key: username
+    attrs:
+      label: Username
+      type: username
+      required: true
+      placeholder: Username
+      order: 100
+
+  - model: authentik_stages_prompt.prompt
+    id: prompt-email
+    identifiers:
+      field_key: email
+    attrs:
+      label: Email
+      type: email
+      required: true
+      placeholder: Email
+      order: 101
+
+  - model: authentik_stages_prompt.prompt
+    id: prompt-password
+    identifiers:
+      field_key: password
+    attrs:
+      label: Password
+      type: password
+      required: true
+      placeholder: Password
+      order: 200
+
+  - model: authentik_stages_prompt.prompt
+    id: prompt-password-repeat
+    identifiers:
+      field_key: password_repeat
+    attrs:
+      label: Password (again)
+      type: password
+      required: true
+      placeholder: Password (again)
+      order: 201
+
+  - model: authentik_stages_prompt.promptstage
+    id: enrolment-prompt
+    identifiers:
+      name: aiwatcher-enrolment-prompt
+    attrs:
+      fields:
+        - !KeyOf prompt-username
+        - !KeyOf prompt-email
+        - !KeyOf prompt-password
+        - !KeyOf prompt-password-repeat
+
+  # No `groups`: a new account holds no aiwatcher role, which is what lets
+  # AIWATCHER_AUTH_DEFAULT_ROLE=project mean anything.
+  - model: authentik_stages_user_write.userwritestage
+    id: enrolment-write
+    identifiers:
+      name: aiwatcher-enrolment-write
+    attrs:
+      create_users_as_inactive: false
+      user_creation_mode: always_create
+      user_type: internal
+
+  - model: authentik_stages_user_login.userloginstage
+    id: enrolment-login
+    identifiers:
+      name: aiwatcher-enrolment-login
+    attrs:
+      session_duration: seconds=0
+
+  - model: authentik_flows.flow
+    id: enrolment
+    identifiers:
+      slug: aiwatcher-enrolment
+    attrs:
+      name: aiwatcher enrolment
+      title: Create your aiwatcher account
+      designation: enrollment
+      # The flow is reachable only with an invitation token, so it may be
+      # linked to directly — the invitation stage is what decides.
+      authentication: require_unauthenticated
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrolment
+      stage: !KeyOf enrolment-invitation
+      order: 10
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrolment
+      stage: !KeyOf enrolment-prompt
+      order: 20
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrolment
+      stage: !KeyOf enrolment-write
+      order: 30
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf enrolment
+      stage: !KeyOf enrolment-login
+      order: 40

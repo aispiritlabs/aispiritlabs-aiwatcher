@@ -401,6 +401,29 @@ pub struct EditorSession {
 /// workers are inside the cluster.
 #[async_trait]
 pub trait AttemptArtifacts: Send + Sync + std::fmt::Debug {
+    /// The same store, narrowed to one project (ADR_0033).
+    ///
+    /// Storage isolation and never authorization: the scope comes from a grant
+    /// the caller already passed, and binding it grants nothing. Rebinding to
+    /// the project already held is the same store; rebinding to another is
+    /// refused, as it is on every other half of this boundary.
+    ///
+    /// Defaulted to a refusal naming the adapter, because an adapter with no
+    /// project form and one that quietly answered for the deployment are not
+    /// the same thing, and the second is the silence ADR_0033 pt. 7 exists to
+    /// prevent. `Rejected`, not `Unavailable`: a store that has no scoped form
+    /// will have none on the next request either.
+    fn for_project(
+        &self,
+        scope: crate::ProjectScope,
+    ) -> PortResult<std::sync::Arc<dyn AttemptArtifacts>> {
+        let _ = scope;
+        Err(PortError::Rejected {
+            target: "artifact store",
+            message: format!("{self:?} has no project form; its bytes are the deployment's"),
+        })
+    }
+
     /// The rows a reference names, verified against its digest.
     async fn read_rows(&self, artifact: &ArtifactRef) -> PortResult<Vec<serde_json::Value>>;
 

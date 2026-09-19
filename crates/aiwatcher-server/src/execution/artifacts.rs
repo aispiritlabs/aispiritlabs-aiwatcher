@@ -496,6 +496,23 @@ pub fn preview(columns: &[String], rows: &Rows, took_ms: Option<u64>) -> Value {
 /// group by a column.
 #[async_trait::async_trait]
 impl aiwatcher_core::ports::AttemptArtifacts for Artifacts {
+    fn for_project(
+        &self,
+        scope: aiwatcher_core::ProjectScope,
+    ) -> PortResult<Arc<dyn aiwatcher_core::ports::AttemptArtifacts>> {
+        // The log's spelling of a scope on the way in, because the port is
+        // `aiwatcher-core`'s and that crate takes no dependency on the control
+        // plane. `ProjectScope::from_the_log` is the one conversion, as
+        // `on_the_log` is the other way round.
+        let scope = ProjectScope::from_the_log(scope);
+        Self::for_project(self, scope)
+            .map(|bound| Arc::new(bound) as Arc<dyn aiwatcher_core::ports::AttemptArtifacts>)
+            .map_err(|error| PortError::Rejected {
+                target: "artifact store",
+                message: error.to_string(),
+            })
+    }
+
     async fn read_rows(&self, artifact: &ArtifactRef) -> PortResult<Vec<Value>> {
         let rows = Artifacts::read_rows(self, artifact)
             .await

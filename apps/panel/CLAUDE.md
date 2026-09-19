@@ -323,14 +323,19 @@ followed by a full `tsc` project check.
   find, and would be a second copy of the policy besides. What *is* derived from
   a server answer is which cards to draw: the roster is owner-and-admin only, so
   its 403 is the server saying this caller does not administer the organization.
-  **An invitation token is pasted, never linked.** The redeem control is a field
-  on this page rather than a `/invite/{token}` route, because a token in a URL
-  is a secret in browser history, in a referrer header and in whatever chat it
-  was pasted into — and one click instead of one paste does not buy that. It
-  also keeps the secret out of this panel's URL contract, where every other
-  parameter is something somebody may safely share. The token itself is drawn
-  once, in the response that created it; nothing re-reads it, because nothing
-  can.
+  **An invitation token is pasted here, and linked on `/invite` — in the
+  fragment.** The redeem control on this page is a field rather than a
+  `/invite/{token}` route, because a token in a *path* is a secret in this
+  server's access log, in the identity provider's, in a referrer header and in
+  whatever chat it was pasted into. What that rule cost was the one case
+  IAM-03's D5 exists for: somebody with no account cannot paste a token into a
+  page they cannot reach. So there is a second door, and the difference is
+  where the token rides — `/invite#<token>`, a fragment, which no browser sends
+  to any server. `invite/page.tsx` takes it out of `location.hash` into
+  `sessionStorage` and clears the address bar before anything navigates,
+  because the round trip to the provider and back is a full page load. Neither
+  door re-reads the token afterwards, because nothing can: it is drawn once, in
+  the response that created it.
 - **The project being read is one search parameter, and it reaches exactly as
   far as the data plane does.** The rule this replaces was "no organization
   switcher in the header, because a selector that scoped the whole panel would
@@ -372,6 +377,15 @@ followed by a full `tsc` project check.
     Before M1 the instance list *was* every run; it is not any more, and
     somebody whose project's runs stopped appearing deserves the sentence
     rather than a bug report.
+  - **And to a client, an instance area is a sentence rather than a page.**
+    `instance-notice.tsx` replaces the outlet when the caller holds no instance
+    role (IAM-03 D4) and the area's `reach` is not `project`. Not a line beside
+    the page: every read there answers that caller 403, so the page without
+    this is a row of failed queries, which reads as *aiwatcher is broken*
+    rather than as *this part is the deployment's own*. It names their own
+    projects, because somebody just told "not yours" needs the next click more
+    than they need the rule. `undefined` while the session loads renders the
+    page — a blank screen is worse, and the server refuses either way.
   - **None of it appears on an instance whose caller is in no organization.** A
     deployment that never used IAM has one side and gains no control it cannot
     use — the same reason `AIWATCHER_AUTH_MODE` defaults to `none`.

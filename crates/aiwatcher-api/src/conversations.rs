@@ -31,7 +31,7 @@ use aiwatcher_conversations::{
     ReviewRequest, ReviewState, Role, TurnContent, TurnFilter, TurnPage,
 };
 
-use crate::auth::Caller;
+use crate::auth::{Caller, InstanceRead};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -160,7 +160,10 @@ pub struct ArchiveConfig {
     ),
     tag = "conversations",
 )]
-async fn conversation_policy(State(state): State<AppState>) -> ApiResult<Json<ArchiveConfig>> {
+async fn conversation_policy(
+    _: InstanceRead,
+    State(state): State<AppState>,
+) -> ApiResult<Json<ArchiveConfig>> {
     let archive = archive(&state)?;
     Ok(Json(ArchiveConfig {
         policy: archive.policy(),
@@ -218,6 +221,7 @@ async fn record_conversation_turns(
     tag = "conversations",
 )]
 async fn list_conversation_archive(
+    _: InstanceRead,
     State(state): State<AppState>,
 ) -> ApiResult<Json<ConversationPage>> {
     Ok(Json(archive(&state)?.conversations().await?))
@@ -254,6 +258,7 @@ pub struct TurnsQuery {
     tag = "conversations",
 )]
 async fn list_conversation_turns(
+    _: InstanceRead,
     State(state): State<AppState>,
     Query(query): Query<TurnsQuery>,
 ) -> ApiResult<Json<TurnPage>> {
@@ -468,6 +473,7 @@ async fn create_conversation_export(
     tag = "conversations",
 )]
 async fn list_conversation_exports(
+    _: InstanceRead,
     State(state): State<AppState>,
 ) -> ApiResult<Json<ExportJobPage>> {
     Ok(Json(archive(&state)?.export_jobs().await?))
@@ -486,6 +492,7 @@ async fn list_conversation_exports(
     tag = "conversations",
 )]
 async fn get_conversation_export(
+    _: InstanceRead,
     State(state): State<AppState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<ExportJob>> {
@@ -524,7 +531,10 @@ async fn cancel_conversation_export(
     ),
     tag = "conversations",
 )]
-async fn list_conversation_datasets(State(state): State<AppState>) -> ApiResult<Json<ExportPage>> {
+async fn list_conversation_datasets(
+    _: InstanceRead,
+    State(state): State<AppState>,
+) -> ApiResult<Json<ExportPage>> {
     Ok(Json(archive(&state)?.exports().await?))
 }
 

@@ -300,6 +300,12 @@ pub struct AppState {
     pub auth: Option<Arc<Authenticator>>,
     /// Optional IAM metadata control plane; does not scope existing data routes.
     pub iam: Option<Arc<dyn aiwatcher_iam::IamStore>>,
+    /// Where somebody who holds an invitation and no account is sent to make
+    /// one (IAM-03 D5). `None` on every deployment that has not configured
+    /// one, which is a 501 naming the variable on one route and nothing
+    /// anywhere else: an invitation still works for whoever already has an
+    /// account, which is how every one of them worked before this existed.
+    pub provisioning: Option<Arc<aiwatcher_auth::AccountProvisioning>>,
     /// Where a frozen copy of an organization's audit trail goes. Needs both an
     /// IAM store to read and an object store to write, so it is absent whenever
     /// either is.

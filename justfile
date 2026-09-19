@@ -407,10 +407,21 @@ run-sso:
 #
 # The same, with the IAM control plane: organizations, teams, projects, grants.
 #
-# Carries two producer tokens: `agents`, which publishes globally as every
-# producer does, and `lesson`, which publishes into whatever `AIWATCHER_M1_SCOPE`
-# names — the second half of the M1 gate, which needs runs on both sides of the
-# boundary to be able to say that a read answers one of them.
+# Carries producer tokens: `agents`, which publishes globally as every producer
+# does; `lesson`, which publishes into whatever `AIWATCHER_M1_SCOPE` names — the
+# second half of the M1 gate, which needs runs on both sides of the boundary to
+# be able to say that a read answers one of them; and one per client named by
+# `AIWATCHER_M0_SCOPES`, which is how the M0 gate gets a run into each of two
+# projects. `client-a=<org>/<project>,client-b=<org>/<project>`.
+#
+# `AIWATCHER_AUTH_DEFAULT_ROLE` defaults to `project` here rather than to
+# `viewer`: this is the recipe the client demo is developed against, and a
+# signed-in stranger holding `viewer` on the whole deployment is the thing D4
+# takes away. Set it to `viewer` to get the old behaviour back.
+#
+# `AIWATCHER_AUTH_PROVISION_TOKEN` comes from `just authentik-seed`, which
+# prints it. Without it enrolment answers 501 and an invitation still works for
+# whoever already has an account.
 run-sso-iam:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -422,6 +433,19 @@ run-sso-iam:
       M1_TOKEN=",lesson@{{m1_scope}}=fedcba9876543210fedcba9876543210"
       echo "producing into {{m1_scope}} as \`lesson\`"
     fi
+    # One token per client, each naming that client's project. A secret per
+    # line so the pair can be read at a glance, and each one narrows to one
+    # project the way every ingest token narrows to its queues.
+    CLIENT_TOKENS=""
+    IFS=',' read -ra CLIENTS <<< "${AIWATCHER_M0_SCOPES:-}"
+    for entry in "${CLIENTS[@]:-}"; do
+      [ -n "$entry" ] || continue
+      name="${entry%%=*}"
+      scope="${entry#*=}"
+      secret="$(printf '%s' "$name" | shasum -a 256 | cut -c1-32)"
+      CLIENT_TOKENS="${CLIENT_TOKENS},${name}@${scope}=${secret}"
+      echo "producing into ${scope} as \`${name}\` (${secret})"
+    done
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \
     AIWATCHER_AUTH_MODE=oidc \
@@ -429,7 +453,11 @@ run-sso-iam:
     AIWATCHER_AUTH_CLIENT_ID=aiwatcher \
     AIWATCHER_AUTH_REDIRECT_URL=http://localhost:5173/api/v1/auth/callback \
     AIWATCHER_IAM_POSTGRES_URL={{iam_postgres_url}} \
-    AIWATCHER_AUTH_INGEST_TOKENS="agents=0123456789abcdef0123456789abcdef${M1_TOKEN:-}" \
+    AIWATCHER_AUTH_DEFAULT_ROLE="${AIWATCHER_AUTH_DEFAULT_ROLE:-project}" \
+    AIWATCHER_AUTH_PROVISION_URL=http://localhost:9000 \
+    AIWATCHER_AUTH_PROVISION_FLOW=aiwatcher-enrolment \
+    AIWATCHER_AUTH_PROVISION_TOKEN="${AIWATCHER_AUTH_PROVISION_TOKEN:-}" \
+    AIWATCHER_AUTH_INGEST_TOKENS="agents=0123456789abcdef0123456789abcdef${M1_TOKEN:-}${CLIENT_TOKENS:-}" \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher --features aiwatcher-server/postgres
 

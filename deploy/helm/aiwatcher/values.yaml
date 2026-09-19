@@ -178,9 +178,23 @@ auth:
     # When non-empty, somebody in none of these is refused outright. The "who
     # may sign in at all" switch, separate from "what may they do".
     requiredGroups: []
-    # What an authenticated user in none of the mapped groups gets. `viewer`
-    # says the provider letting them in was the decision; `none` says a group
-    # is required to see anything.
+    # What an authenticated user in none of the mapped groups gets, and the one
+    # value here that decides whether this deployment can host somebody else's
+    # project. Four, and three of them are not a role:
+    #
+    #   viewer   the provider letting them in was the decision, and they read
+    #            everything this instance holds. The default, and what every
+    #            release before IAM-03 did.
+    #   editor
+    #   admin
+    #   project  signed in, holding **nothing** of this instance's: the
+    #            instance's own routes refuse them and a project's answer on a
+    #            grant. What a deployment with clients on it sets.
+    #   none     refused outright — a group is required to sign in at all.
+    #
+    # `project` is what makes a client a client rather than a reader of the
+    # whole deployment, and it is the whole of IAM-03's D4. Nothing else here
+    # substitutes for it: most read routes check no role.
     defaultRole: viewer
 
   # How a producer authenticates.
@@ -208,6 +222,34 @@ auth:
   ingestTokenSecret:
     name: ""
     key: AIWATCHER_AUTH_INGEST_TOKENS
+
+  # Where somebody holding an invitation and no account makes one (IAM-03 D5).
+  #
+  # Optional, and absent is the ordinary case: an invitation already works for
+  # whoever has an account, and without this the route answers 501 while the
+  # panel offers signing in instead. What it adds is the client who has never
+  # heard of your identity provider.
+  #
+  # The service account behind the token needs permission to add an invitation
+  # and to read flows, and nothing else. One that could create users or edit
+  # group membership would make aiwatcher a way into the provider — and a flow
+  # that puts a new account in an aiwatcher group would give every client a
+  # role on the whole deployment, which is the thing `roles.defaultRole:
+  # project` exists to prevent.
+  #
+  #   kubectl create secret generic aiwatcher-provision   #     --from-literal=AIWATCHER_AUTH_PROVISION_TOKEN=...
+  provisioning:
+    # The provider's own base URL — not the issuer path under it.
+    url: ""
+    # The enrolment flow's slug, as the provider spells it in its URLs.
+    # `deploy/authentik/aiwatcher-blueprint.yaml` creates this one.
+    flow: aiwatcher-enrolment
+    # How long the provider's invitation stays open. Minutes, because it is
+    # spent by somebody already looking at the page.
+    ttlSeconds: 1800
+    secret:
+      name: ""
+      key: AIWATCHER_AUTH_PROVISION_TOKEN
 
 # ── Panel ────────────────────────────────────────────────────────────────────
 #
@@ -561,6 +603,34 @@ execution:
     # Where launched pods run. Empty is the release's namespace. Another one
     # gets the launcher's Role and RoleBinding written into it.
     namespace: ""
+
+# ── IAM: organizations, teams, projects and grants ───────────────────────────
+#
+# The control plane an instance role does not reach into. Off unless a database
+# is named here, and then every route under `/api/v1/iam` answers instead of
+# 501, the scope selector appears, and a grant is what a client's project is.
+#
+# **Its own database, never the workflow store's.** They have different
+# lifetimes and different blast radii: dropping the workflow store loses run
+# history, and dropping this loses who may see anything. The chart refuses to
+# infer one from the other, so this is a URL rather than a flag.
+#
+# It needs `auth.mode: oidc` — a principal is a verified `(provider, subject)`
+# pair, and the other modes produce none — and an image built with the
+# `aiwatcher-server/postgres` feature, which is `--build-arg FEATURES=…` in
+# `deploy/Dockerfile`. Neither is inferred: a start-up that quietly fell back to
+# memory would be a control plane that forgot every grant on restart.
+iam:
+  # The connection string, from a Secret because it carries a password.
+  #
+  #   kubectl create secret generic aiwatcher-iam   #     --from-literal=AIWATCHER_IAM_POSTGRES_URL=postgres://user:pass@host:5432/aiwatcher_iam
+  postgresSecret:
+    name: ""
+    key: AIWATCHER_IAM_POSTGRES_URL
+
+  # How long an audit entry is kept. 0 keeps everything; the newest entry in
+  # each organization is never swept, whatever this says.
+  auditRetentionDays: 0
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 #

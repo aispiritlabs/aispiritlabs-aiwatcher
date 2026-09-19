@@ -123,3 +123,41 @@ An authenticated person in none of the mapped groups is a `viewer`, because the
 provider letting them in was already a decision. `AIWATCHER_AUTH_DEFAULT_ROLE=none`
 changes that to "a group is required to see anything", and
 `AIWATCHER_AUTH_REQUIRED_GROUPS` refuses the sign-in outright.
+
+The fourth value is `project`, and it is the one a deployment with clients on
+it sets: signed in, holding **no** instance role at all, reading the projects a
+grant names and nothing of the deployment's own. Every route outside
+`/api/v1/auth/` and `/api/v1/iam/` refuses such a caller, which is the point —
+most read routes check no role, so `viewer` is the whole instance.
+
+## Enrolling somebody who has no account
+
+An aiwatcher invitation offers a project to a secret, and the grant is written
+against the `(provider, subject)` pair a session proves — so the person has to
+have an account here first. The blueprint creates the flow they make one in,
+`aiwatcher-enrolment`, and aiwatcher opens it to one person at a time:
+
+```bash
+AIWATCHER_AUTH_PROVISION_URL=https://auth.example      # authentik's base, not the issuer path under it
+AIWATCHER_AUTH_PROVISION_FLOW=aiwatcher-enrolment
+AIWATCHER_AUTH_PROVISION_TOKEN=…                       # the service account's
+```
+
+`just authentik-seed` creates that service account locally and prints its
+token. Two things about it are the whole of its safety, and both are worth
+checking by hand on a cluster:
+
+* **Its permissions are `authentik_stages_invitation.add_invitation` and
+  `authentik_flows.view_flow`, and nothing else.** The first is what it does;
+  the second is what lets the invitation be *bound* to the enrolment flow
+  rather than left open to any invitation stage in the provider. A token that
+  could create users or edit group membership would make aiwatcher a way into
+  this provider.
+* **The flow assigns no group.** Every group above is a role on the whole
+  deployment, so a new account that landed in one would read everything —
+  and nothing in aiwatcher would fail, because the group mapping is doing
+  exactly what it is told. Change `aiwatcher-enrolment-write` and this stops
+  being true.
+
+Without the three variables the enrolment route answers 501 naming the first
+one, and an invitation goes on working for whoever already has an account.
