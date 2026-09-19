@@ -23,24 +23,30 @@ followed by a full `tsc` project check.
 - **One filter, every table and every chart** (`src/shared/lib/object-filter.ts`).
   The axes are the dimensions' own names plus the run's status — `agent`,
   `runtime`, `workflow`, `session`, `variant`, `trace`, `model`, `tool`,
-  `status` — and translating one into a route's parameter happens there and
-  nowhere else. Five rules carry it. A **filter selects runs**: every axis names
-  a property a run has, directly or through its spans, which is how `RunFilter`
-  already matches model and tool. A **number is counted over the selected
-  runs**, and narrowed further only where the axis is about the thing being
-  counted — with a model chosen, LLM calls and tokens are that model's while
-  tool calls are every tool call in those runs, and `queryFor` returns that
-  sentence beside the request so a page cannot keep saying it after the route
-  stops doing it. `/metrics` is the one read that does something else, and its
-  sentence says so: its model parameter skips other models' spans and leaves
-  the run set alone (UX-02). A **view that cannot apply an axis names it** — the
-  Live view's rule, now everybody's, and the three reasons are that the route
-  has no parameter, that the word means something else here (a span's `ok |
-  error` is not a run's status) or that more values were chosen than the route
-  takes; an axis is then *not sent*, because a narrower answer than the chips
-  claim is the one failure a filter must not have. And it lives in the **URL**,
-  so it survives a move between an area's views the way the window does. A bare
-  value reads as a list of one, which is what keeps `?status=failed` working.
+  `prompt`, `status` — and translating one into a route's parameter happens
+  there and nowhere else. Five rules carry it. A **filter selects runs**: every
+  axis names a property a run has, directly or through its spans, which is how
+  `RunFilter` already matches model, tool and prompt. A **number is counted
+  over the selected runs**, and narrowed further only where the axis is about
+  the thing being counted *and the read counts something smaller than a run*.
+  Only `/metrics` does: with a model chosen its LLM calls and tokens are that
+  model's while its tool calls are every tool call in those runs, because a tool
+  call has no model. `/runs` and `/dimensions/{kind}` count nothing below the
+  run — every figure on a row is a total folded when the run was ingested, the
+  same number whatever the filter says — so there a model axis selects and
+  narrows nothing, and the page says *that*. `queryFor` returns whichever
+  sentence is true beside the request it describes, so a page cannot keep saying
+  one after the route stops doing it; the span list says neither, because its
+  rows are the calls the chips already name. A **view that cannot apply an axis
+  names it** — the Live view's rule, now everybody's, and the three reasons are
+  that the route has no parameter (only the span list still has any: five axes
+  that are properties of a run rather than of a span), that the word means
+  something else here (a span's `ok | error` is not a run's status) or that more
+  values were chosen than the route takes; an axis is then *not sent*, because a
+  narrower answer than the chips claim is the one failure a filter must not
+  have. And it lives in the **URL**, so it survives a move between an area's
+  views the way the window does. A bare value reads as a list of one, which is
+  what keeps `?status=failed` working.
 - `agents` is an area rather than a pivot, and the reason is worth keeping: an
   agent is **not an authored object** — no registry, no version, nothing
   outliving retention — so its page never 404s on a name, it says the period

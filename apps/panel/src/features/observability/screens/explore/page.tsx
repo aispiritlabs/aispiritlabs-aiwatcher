@@ -63,6 +63,7 @@ const PIVOT_AXIS: Record<Exclude<Pivot, 'span'>, ObjectAxis> = {
   trace: 'trace',
   model: 'model',
   tool: 'tool',
+  prompt: 'prompt',
 };
 
 const TREE_PAGE = 100;
@@ -505,6 +506,8 @@ const PIVOT_FIELD: Record<Exclude<Pivot, 'span' | 'trace'>, string> = {
   variant: 'variant_id',
   model: 'gen_ai.request.model on an LLM span',
   tool: 'gen_ai.tool.name on a tool span',
+  prompt:
+    'aiwatcher.prompt.name on an LLM span — a call that sent only a version id has no key here',
 };
 
 function EmptyPivot({ pivot, find, ungrouped }: { pivot: Pivot; find: string; ungrouped: number }) {

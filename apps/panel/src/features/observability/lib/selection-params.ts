@@ -17,8 +17,8 @@ import type { AttributeId } from '@/features/observability/lib/query-builder';
  * live in `shared/lib/object-filter.ts` — one filter for every table and every
  * chart, and the agent pages read it too, which is why it is in `shared`.
  * What stays here is what is true of *these* two subjects and of nothing else:
- * the query builder has no column for a variant, and the live stream carries
- * no span-level fact at all.
+ * the query builder has no column for a variant or a prompt, and the live
+ * stream carries no span-level fact at all.
  */
 
 export const attributeSearchSchema = objectFilterSchema;
@@ -26,12 +26,14 @@ export const attributeSearchSchema = objectFilterSchema;
 export type AttributeSearch = ObjectFilterSearch;
 
 /**
- * The attributes the builder and the picker know, out of the filter's nine.
+ * The attributes the builder and the picker know, out of the filter's ten.
  *
- * `variant` is dropped rather than offered: the explorer pivots on it, but the
- * query engines' catalog has no column for it, so a chip whose filter no
+ * `variant` and `prompt` are dropped rather than offered, for one reason: the
+ * query engines' catalog has no column for either, so a chip whose filter no
  * engine can express is one the builder would have to drop the moment it was
- * clicked. See `query-builder.ts`.
+ * clicked. The explorer pivots on both and the read model takes both, which is
+ * where they are chosen; here they are cleared like any axis this pair of
+ * views has no chip for. See `query-builder.ts`.
  */
 const IDS = [
   'agent',

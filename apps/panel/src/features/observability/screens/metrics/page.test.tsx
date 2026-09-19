@@ -152,10 +152,10 @@ it('preserves agent and model filters when the window changes and explains their
   // `agent_id` — and the translation to the route's parameters happens in
   // `shared/lib/object-filter.ts`. What this still proves is UX-02's property:
   // changing the period keeps the filter, and the page says what the model
-  // filter does to the numbers beside it, which on this route is *not* select
-  // the runs.
+  // filter does to the numbers beside it — which is now that it selects the
+  // runs and narrows the call counters within them.
   const { requests, router } = mount(metrics(), 200, '?agent=researcher&model=opus&window=3600');
-  await screen.findByText(/It does not select the runs/);
+  await screen.findByText(/LLM calls, tokens, cost and LLM latency are that model’s/);
   // The filter bar renders through the loading state on purpose — taking a
   // chip off is the way out of "nothing matched" — so wait for the page.
   await screen.findByRole('heading', { name: 'Metrics' });
@@ -172,19 +172,28 @@ it('preserves agent and model filters when the window changes and explains their
   });
 });
 
-it('names the axes this route cannot take rather than dropping them', async () => {
-  // The Live view's rule, generalised. A workflow filter arriving from Explore
-  // is on the screen and not on the request, and the one thing a filter must
-  // not do is look applied.
-  const { requests } = mount(metrics(), 200, '?workflow=import&tool=search');
-  await screen.findByText(/Not applied here/);
-  // Twice each: once on the chip that is still on screen, once in the warning
-  // that says the request did not carry it.
-  expect(screen.getAllByText('workflow')).toHaveLength(2);
-  expect(screen.getAllByText('tool')).toHaveLength(2);
+it('carries the axes it used to name as unapplied', async () => {
+  // The regression this holds: a workflow filter arriving from Explore was on
+  // the screen and not on the request, and the page said so. The route takes
+  // both now, so saying so would be the lie the warning existed to prevent.
+  const { requests } = mount(metrics(), 200, '?workflow=import&tool=search&prompt=extract');
+  await screen.findByRole('heading', { name: 'Metrics' });
+  expect(screen.queryByText(/Not applied here/)).toBeNull();
   const url = new URL((requests.mock.calls[0]![0] as Request).url);
-  expect(url.searchParams.get('workflow')).toBeNull();
-  expect(url.searchParams.get('tool')).toBeNull();
+  expect(url.searchParams.get('workflow')).toBe('import');
+  expect(url.searchParams.get('tool')).toBe('search');
+  expect(url.searchParams.get('prompt')).toBe('extract');
+});
+
+it('still refuses to narrow to the first of two values on one axis', async () => {
+  // The rule survives the route growing parameters: this read takes one agent,
+  // so two chips are reported rather than half-answered. Sending the first
+  // would put a narrower answer on the screen than the chips claim.
+  const { requests } = mount(metrics(), 200, '?agent=researcher&agent=planner');
+  await screen.findByText(/Not applied here/);
+  expect(screen.getByText(/narrows to one agent; 2 are chosen/)).toBeTruthy();
+  const url = new URL((requests.mock.calls[0]![0] as Request).url);
+  expect(url.searchParams.get('agent_id')).toBeNull();
 });
 
 it('shows an API failure instead of empty successful metrics', async () => {

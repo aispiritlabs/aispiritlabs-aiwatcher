@@ -44,37 +44,55 @@ describe('reading the filter out of a URL', () => {
 });
 
 describe('translating the filter for one route', () => {
+  const everything = {
+    agent: ['researcher'],
+    runtime: ['planner'],
+    workflow: ['import'],
+    session: ['s-1'],
+    variant: ['v-1'],
+    trace: ['t-1'],
+    model: ['opus'],
+    tool: ['search'],
+    prompt: ['extract'],
+    status: ['failed'],
+  };
+
+  const asParameters = {
+    agent_id: 'researcher',
+    runtime: 'planner',
+    workflow: 'import',
+    conversation_id: 's-1',
+    variant_id: 'v-1',
+    trace_id: 't-1',
+    model: 'opus',
+    tool: 'search',
+    prompt: 'extract',
+    status: 'failed',
+  };
+
   it('sends every axis to the runs route, under the route’s own parameter names', () => {
-    const { query, unapplied } = queryFor('runs', {
-      agent: ['researcher'],
-      runtime: ['planner'],
-      workflow: ['import'],
-      session: ['s-1'],
-      variant: ['v-1'],
-      trace: ['t-1'],
-      model: ['opus'],
-      tool: ['search'],
-      status: ['failed'],
-    });
+    const { query, unapplied } = queryFor('runs', everything);
     expect(unapplied).toEqual([]);
-    expect(query).toEqual({
-      agent_id: 'researcher',
-      runtime: 'planner',
-      workflow: 'import',
-      conversation_id: 's-1',
-      variant_id: 'v-1',
-      trace_id: 't-1',
-      model: 'opus',
-      tool: 'search',
-      status: 'failed',
-    });
+    expect(query).toEqual(asParameters);
+  });
+
+  it('sends the same ten to the dimension and metrics routes', () => {
+    // The three reads fold one population through one predicate, so a question
+    // one of them can be asked can be asked of all three. Until the projector
+    // grew the rest, "the failed runs of this workflow" was a chart the runs
+    // list could draw and the metrics page could only name as unapplied.
+    for (const target of ['dimensions', 'metrics'] as const) {
+      const { query, unapplied } = queryFor(target, everything);
+      expect(unapplied).toEqual([]);
+      expect(query).toEqual(asParameters);
+    }
   });
 
   it('names an axis a route has no parameter for instead of sending it', () => {
-    const { query, unapplied } = queryFor('dimensions', { agent: ['a'], workflow: ['import'] });
+    const { query, unapplied } = queryFor('spans', { agent: ['a'], workflow: ['import'] });
     expect(query).toEqual({ agent_id: 'a' });
     expect(unapplied.map((entry) => entry.axis)).toEqual(['workflow']);
-    expect(unapplied[0]?.why).toMatch(/narrows by agent alone/);
+    expect(unapplied[0]?.why).toMatch(/span does not name its workflow/);
   });
 
   it('does not take the first of two values on a route that narrows to one', () => {
@@ -104,22 +122,38 @@ describe('translating the filter for one route', () => {
 });
 
 describe('what the sent axes do to the numbers', () => {
-  it('says a model narrows the LLM half and leaves the tool half alone', () => {
-    expect(queryFor('runs', { model: ['opus'] }).notes[0]).toMatch(
-      /Runs are the ones matching the filter/,
+  it('says a model narrows the LLM half of the metrics and leaves the tool half alone', () => {
+    const note = queryFor('metrics', { model: ['opus'], tool: ['search'] }).notes[0] ?? '';
+    expect(note).toMatch(/Runs are the ones matching the filter/);
+    expect(note).toMatch(/LLM calls, tokens, cost and LLM latency are that model’s/);
+    expect(note).toMatch(/tool counters are that tool’s/);
+    expect(note).toMatch(/every other counter covers every call in those runs/);
+  });
+
+  it('names a prompt beside the model, because both are properties of a call', () => {
+    expect(queryFor('metrics', { model: ['opus'], prompt: ['extract'] }).notes[0]).toMatch(
+      /are that model’s and that prompt’s/,
     );
-    expect(queryFor('runs', { model: ['opus'] }).notes[0]).toMatch(/tool and step counters/);
   });
 
-  it('says the opposite on metrics, because that route does something else', () => {
-    // `/metrics` skips other models' spans and leaves the run set alone
-    // (UX-02). The two sentences differ in what they claim about the run count
-    // beside them, which is the difference a reader is entitled to.
-    expect(queryFor('metrics', { model: ['opus'] }).notes[0]).toMatch(/does not select the runs/);
+  it('says the opposite on a list whose rows are runs', () => {
+    // The failure this is here for: `/runs` and `/dimensions` count nothing
+    // below the run — a row's `llm_calls` was folded when the run was ingested
+    // and is the same number whatever the filter says. Lending them the metrics
+    // sentence would put two populations on one screen with nothing to tell
+    // them apart, which is the thing this vocabulary exists to end.
+    for (const target of ['runs', 'dimensions'] as const) {
+      const note = queryFor(target, { model: ['opus'] }).notes[0] ?? '';
+      expect(note).toMatch(/the run's own totals/);
+      expect(note).toMatch(/over every call in it rather than only that model’s/);
+    }
   });
 
-  it('says nothing where nothing below the run was narrowed', () => {
+  it('says nothing where nothing below the run could have been narrowed', () => {
     expect(queryFor('runs', { agent: ['a'], status: ['failed'] }).notes).toEqual([]);
     expect(queryFor('metrics', { agent: ['a'] }).notes).toEqual([]);
+    // The span list's rows *are* the calls the chips name, so a sentence
+    // restating that would be one more line to read and nothing to learn.
+    expect(queryFor('spans', { model: ['opus'] }).notes).toEqual([]);
   });
 });

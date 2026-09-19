@@ -136,10 +136,20 @@ it('carries a filter it arrived with into the runs it can apply it to', async ()
   await screen.findByText('What this agent did');
   expect(urlFor(requests, '/runs')?.searchParams.get('workflow')).toBe('house-import');
   expect(urlFor(requests, '/runs')?.searchParams.get('agent_id')).toBe('researcher');
-  // The metrics route has no workflow parameter, so the page says so rather
-  // than letting a chart look narrowed.
-  expect(urlFor(requests, '/metrics')?.searchParams.get('workflow')).toBeNull();
-  expect(screen.getByText(/Not applied here/)).toBeTruthy();
+  // Both reads take it now, so the strip and the list are about one population
+  // — which is what this page claims by putting them on one screen.
+  expect(urlFor(requests, '/metrics')?.searchParams.get('workflow')).toBe('house-import');
+  expect(urlFor(requests, '/metrics')?.searchParams.get('agent_id')).toBe('researcher');
+  expect(screen.queryByText(/Not applied here/)).toBeNull();
+});
+
+it('still says when an axis the page is about is contradicted', async () => {
+  // The path is the agent, so a link naming a different one is reported rather
+  // than quietly overridden — the one thing on this page a filter cannot do.
+  const { requests } = mount('?agent=planner');
+  await screen.findByText('What this agent did');
+  expect(screen.getByText(/this page is about researcher/)).toBeTruthy();
+  expect(urlFor(requests, '/runs')?.searchParams.get('agent_id')).toBe('researcher');
 });
 
 it('says the period holds nothing rather than pretending the agent is unknown', async () => {
