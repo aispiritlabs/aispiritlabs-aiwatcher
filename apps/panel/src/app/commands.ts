@@ -155,6 +155,18 @@ const FILTERED: Command[] = [
     keywords: ['tools', 'pivot', 'group by', 'function calls'],
   },
   {
+    id: 'traces:by-prompt',
+    label: 'Compare runs by prompt',
+    group: 'Observability',
+    // The registry's names, from the log rather than from the registry: this
+    // groups the runs whose calls *named* a prompt, which is a different
+    // question from what the registry holds.
+    hint: 'The run tree pivoted on the registered prompt each call named.',
+    to: '/observability/explore',
+    search: { by: 'prompt' },
+    keywords: ['prompts', 'pivot', 'group by', 'version', 'template'],
+  },
+  {
     id: 'traces:query',
     label: 'Ask a question of the runs',
     group: 'Observability',
@@ -169,6 +181,15 @@ const FILTERED: Command[] = [
     hint: 'Metrics over the selected period.',
     to: '/observability/metrics',
     keywords: ['tokens', 'spend', 'p95', 'charts', 'graphs'],
+  },
+  {
+    id: 'traces:metrics-compare',
+    label: 'Compare this period with the one before',
+    group: 'Observability',
+    hint: 'The same metrics, with each figure beside what it was a period ago.',
+    to: '/observability/metrics',
+    search: { compare: 'previous' },
+    keywords: ['previous', 'before', 'delta', 'change', 'trend', 'regression'],
   },
 
   // ── Feature ────────────────────────────────────────────────────────────────
