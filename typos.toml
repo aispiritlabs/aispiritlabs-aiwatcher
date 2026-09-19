@@ -32,6 +32,10 @@ extend-exclude = [
   "docs/ux-audit-agent-workflows-2026-09-14-ocena.md",
   "docs/ux-migration-plan-2026-09-14.md",
   "docs/design-skills-selection.md",
+  "docs/iam-01-kickoff.md",
+  "docs/iam-02-data-plane.md",
+  "docs/flow-01-inventory-2026-09-18.md",
+  "docs/parallel-streams-2026-09-18.md",
 ]
 
 [default.extend-words]

@@ -719,14 +719,14 @@ async fn a_project_judge_is_refused_the_archive_a_neighbours_dependency_and_a_co
         .publish_rubric(&reworded, "project-editor", 201)
         .await
         .unwrap();
-    let recard = registry
+    let recalibrated_card = registry
         .publish_scorecard(&judged_card(&second.version), "project-editor", 202)
         .await
         .unwrap();
     let mut uncalibrated = local.run.clone();
     uncalibrated.scorecard = VersionReference {
-        name: recard.scorecard.name.clone(),
-        version: recard.version,
+        name: recalibrated_card.scorecard.name.clone(),
+        version: recalibrated_card.version,
     };
     let refused = registry
         .declare_scoring_run(&uncalibrated, "project-editor", 203)

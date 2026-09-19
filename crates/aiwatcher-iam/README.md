@@ -193,7 +193,7 @@ requested it — the pair, not a decision — and reads each page through
 `IamStore::audit` as them, so an administrator demoted mid-export stops the
 export. That is `ProjectAccess`'s rule applied to the one long-running thing
 this crate has: a snapshot is not a bearer capability, and a job is a sequence
-of operations rather than one. A demotion fails the job rather than requeueing
+of operations rather than one. A demotion fails the job rather than requeuing
 it, because it will be just as true on the third attempt.
 
 | Method and path under `/api/v1/iam/organizations/{organization}` | Meaning |
@@ -1329,7 +1329,7 @@ have their digest verified.
 Receipt writes check the reference's namespace before storing. Reads check both
 the exact idempotency key and the artifact reference; a copied foreign receipt
 or one under another attempt's key is a Policy failure, not usable output.
-Unparseable receipt JSON remains a miss, as in the existing retry contract.
+Unparsable receipt JSON remains a miss, as in the existing retry contract.
 The data-before-receipt write ordering stays with the executor; this does not
 add a byte reread or a transaction to every receipt write.
 
