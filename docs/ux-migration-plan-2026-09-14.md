@@ -24,7 +24,7 @@ Inspiracje W&B: oddzielenie kontekstu globalnego, projektu i obiektu; wspólne f
 | UX-10 | Profil | `/account`: bieżąca tożsamość, role instancji, grupy SSO tylko do odczytu; jawny tryb lokalny. Brak deklaracji fikcyjnych zespołów i projektowych uprawnień. |
 | IAM-01 | Organizacje, zespoły, projekty | W toku: model i magazyny IAM, OIDC issuer/sub, API z bootstrapem i atomowym audytem oraz rejestry zasobów z zakresem organizacja/projekt (datasety, curation, prompty, treningi, modele, anotacje z plikami obrazów oraz formularze, oceny, karty ewaluacji, definicje workflow oraz review przypadków z publikacją do datasetu i kohorty z natywnych datasetów/anotacji oraz nagrania odpowiedzi, pliki pakietów dowodów i wyniki producentów z approvals oraz retencją). Wykonanie ma trwałego właściciela (scope + principal + plan) zapisywanego razem z nim, a zakres wiąże magazyn, więc globalny reactor, worker, launcher, timer, outbox i retencja odmawiają projektowego wykonania (ADR_0033). Projektowy katalog artefaktów, lineage i cache oraz projektowe pomiary sędziowskie i zewnętrzne są izolowane. Jest manifest migracji i wznawialny wykonawca dla czterech rejestrów (`aiwatcher-migrate`), z rozmowami blokowanymi i jedenastoma prefiksami nazwanymi jako nieobsługiwane. Brak dispatchera i projektowego `/start`; query, strumienie, zadania, log zdarzeń i cutover nadal wymagają izolacji. Selektory UI są nieaktywne. |
 | IAM-02 | Zaproszenia i dostęp warsztatowy | Niewdrożone; zależą od IAM-01. |
-| FLOW-01 | Pełne przejścia i lineage | Pozostają dedykowane strony agentów, powiązania wersji prompt/model/dataset, porównania przedziałów i wspólne filtry. |
+| FLOW-01 | Pełne przejścia i lineage | Wdrożono wszystkie cztery: jeden słownik filtra w URL na Runs, Metrics, Explore i stronach agentów, z osią `prompt` dołożoną w read modelu; strony agentów z ich własnymi liczbami, wymiarami i promptami; `ModelVersionReference` i prompt na fali, w liście spanów i w lineage; porównanie przedziału z poprzednim (`?compare=previous`) na Metrics i na stronie agenta. `/dimensions` i `/metrics` przyjmują dziś wszystkie dziesięć osi oraz `as_of`. |
 | LEARN-01 | Learning | Wdrożono `/learning` nad kontrolą dostępu: **warsztat to projekt, uczestnik to grant, zapis to zrealizowane zaproszenie**. Lista warsztatów organizacji, strona warsztatu z uczestnikami i fazą okna każdego grantu czytaną osobno, zapis przez zaproszenie i dziewięć slotów laboratoriów. Bez pojęcia „warsztatu" w backendzie i bez nowej trasy. Treść instrukcji, testy, ewaluacje, wyniki i postęp nie mają kontraktu i są oznaczone jako niedostępne; silnik treści i ocen pozostaje. |
 
 ## Docelowa architektura informacji
@@ -1338,3 +1338,87 @@ do bajtu. Pomiar pamięci: 176 MB bez projektu, 183 MB z pięćdziesięcioma; li
 512 MB zostaje. Szczegóły i to, czego etap **nie** robi, są w sekcji 8 tamtego
 planu. Następny jest IAM-02/B — odczyty i żywy strumień po grantach, czyli
 bramka M1.
+
+---
+
+## FLOW-01 dowieziony — jeden filtr, strony agentów, lineage i dwa przedziały (19.09.2026)
+
+Cztery rzeczy z [mapy strumieni](parallel-streams-2026-09-18.md), w kolejności z
+[inwentaryzacji](flow-01-inventory-2026-09-18.md): panel, serwer, kontrakt,
+panel. Inwentaryzacja jest nadal ważna jako uzasadnienie — tu jest wyłącznie to,
+co powstało, i to, co się w trakcie okazało nieprawdą.
+
+**Krok A i B (18.09) — słownik i read model.** `shared/lib/object-filter.ts`
+stał się jedynym miejscem, w którym oś (`agent`, `runtime`, `workflow`,
+`session`, `variant`, `trace`, `model`, `tool`, `status`) zamienia się w
+parametr trasy; `dimensions::compute`, `metrics::compute` i lista przebiegów
+przeszły na jeden predykat `crate::selection`, dostały `as_of` i oś `prompt`
+(`DimensionKind::Prompt`, `SpanRow::prompt_name`). Strony agentów powstały jako
+osobny obszar, a `ModelVersionReference` dołączył do `lineage-reference.tsx`.
+
+**Krok D (19.09) — to, co zostało, i jedna rzecz do poprawienia po drodze.**
+
+- **Panel nadał wszystkie osie.** Tabela tłumaczeń miała trzy wiersze pełne i
+  dwa prawie puste — trasa wymiarów „zawęża wyłącznie po agencie", trasa metryk
+  „bierze agenta, sesję i model". Po kroku B obie biorą wszystkie dziesięć, więc
+  ostrzeżenie „Not applied here" zniknęło stamtąd i **zostało tylko na liście
+  spanów**, gdzie jest faktem o spanie, a nie o tym, czego jeszcze nie
+  napisano: span nie nosi sesji, workflow, runtime'u ani wariantu swojego
+  przebiegu, a jego `ok | error` nie jest statusem przebiegu.
+- **Zdanie pod filtrem było nieprawdziwe i jest poprawione.** Krok A napisał
+  regułę 3 tak, jakby każdy odczyt zawężał liczniki jak metryki. Zawęża je
+  **wyłącznie `/metrics`**, bo tylko on liczy coś mniejszego niż przebieg.
+  Wiersz `/runs` i wiersz wymiaru niosą własne sumy przebiegu — złożone przy
+  ingeście i takie same niezależnie od filtra — więc przy `model=X` „LLM calls"
+  w wierszu to **wszystkie** wywołania tego przebiegu. Strona mówi teraz to,
+  co jest prawdą u niej, a lista spanów nie mówi nic, bo jej wiersze *są* tymi
+  wywołaniami.
+- **Prompty agenta.** Kartka „Prompts it runs on" mówiła, że pytanie jest bez
+  odpowiedzi. Było to prawdą do kroku B i jest całym powodem, dla którego oś
+  `prompt` powstała. Nazwa, nigdy wersja (rejestr jest kluczowany nazwą), i
+  **link tylko wtedy, gdy rejestr potwierdzi, że taki prompt trzyma** —
+  `PromptNameLink` obok `PromptRefLink`, bo nazwa na spanie to telemetria pod
+  retencją, a tekst jest autorski i ją przeżywa, więc obie połowy mogą się
+  rozjechać w obie strony. 501 z nieskonfigurowanego rejestru to brak linku, nie
+  awaria.
+- **Porównanie przedziałów.** `?compare=previous` na Metrics i na stronie
+  agenta: ten sam filtr, dwa odczyty tej samej trasy. Cała decyzja jest w tym,
+  **gdzie kończy się drugi przedział**: sekundę przed początkiem okna, które
+  zwrócił *pierwszy odczyt*, a nie `teraz − okno` policzone w przeglądarce.
+  Okno względne rozwiązuje zegar serwera, więc przeglądarka spiesząca się o
+  kilka minut poprosiłaby o przedział zachodzący na sąsiedni — i nic w
+  odpowiedzi by tego nie pokazało. Sekunda, bo oba końce okna są domknięte.
+  Para jest **względna**, jak samo okno: link znaczy „przedział przed tym, na
+  którym się otworzy". „All" nie ma przedziału przed sobą, więc przełącznik
+  jest wyłączony i mówi dlaczego.
+- **Zmiana nie jest kolorowana.** Jedyne miejsce w panelu, gdzie delta ma
+  kolor, to przypięty kontekst ewaluacji, który deklaruje kierunek metryki.
+  Nikt nie deklaruje kierunku dla liczby przebiegów ani dla rachunku, więc
+  rysowany jest znak, a odczyt zostaje przy czytającym. Współczynnik rusza się
+  w **punktach**, brak wartości w przedziale wcześniejszym czyta się jako
+  „nothing reported before", a nie jako zero, i zero nie jest mianownikiem.
+
+**Czego świadomie nie zrobiono.** Wykresy i rozbicia (`by_model`, `by_tool`,
+`by_step`) zostają jednookresowe — porównanie stoi przy agregatach, a strona
+mówi to jednym zdaniem zamiast zostawiać domysł. Drzewo Explore nie porównuje
+przedziałów: to listy stronicowane kursorem, więc wiersze dwóch okien nie
+odpowiadają sobie po kluczu bez drugiego zapytania na wiersz. `prompt` nie jest
+atrybutem **budowniczego zapytań** ani osią **żywego strumienia**: katalog
+silników (`services/query/contract/catalog.json`) nie projektuje
+`prompt_name`, a zdarzenie nie niesie faktu spanowego (ADR_0003) — czyli
+dokładnie ta sama przyczyna, dla której nie ma tam `variant`. Dołożenie tych
+dwóch kolumn do katalogu i do trzech silników to osobna praca z własnymi
+testami zgodności.
+
+**Weryfikacja.** `npm run test` (487, w tym 20 nowych), `npm run build`
+(`check:architecture` + Vite + pełne `tsc -b`), `npm run lint` — zielone.
+Kontraktu **nie** regenerowano, bo nie zmieniono żadnej trasy: wszystkie
+parametry, których ten krok używa, weszły w kroku B i są już w
+`contracts/openapi.json` (`/api/v1/dimensions/{kind}` i `/api/v1/metrics` niosą
+`as_of` i wszystkie dziesięć osi).
+
+Czego **nie** uruchomiono: żywego serwera ani przeglądarki (krok jest panelowy,
+a dane, na których porównanie ma sens, wymagają dwóch pełnych okien przebiegów);
+`cargo test` — nie tknięto żadnego crate'a; klastra, workerów, S3/RustFS.
+Równolegle w tym samym repozytorium idzie IAM-02/B, którego praca dotyka
+`aiwatcher-projector` i `aiwatcher-api`; ten krok nie wchodzi do żadnego z nich.
