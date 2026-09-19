@@ -561,6 +561,20 @@ impl WorkflowStore for MemoryWorkflowStore {
         Ok(found)
     }
 
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        refuse_instance_wide(self.binding, "list the projects that have run here")?;
+        let inner = self.inner.lock().await;
+        let mut scopes: Vec<aiwatcher_iam::ProjectScope> = inner
+            .ownership
+            .values()
+            .map(|owner| owner.scope)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        scopes.truncate(limit);
+        Ok(scopes)
+    }
+
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
         refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         Ok(self.inner.lock().await.checkpoints.get(processor).cloned())

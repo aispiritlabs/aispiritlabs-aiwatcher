@@ -1128,6 +1128,27 @@ impl WorkflowStore for FileWorkflowStore {
         Ok(rows)
     }
 
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        refuse_instance_wide(self.binding, "list the projects that have run here")?;
+        let mut entries = fs::read_dir(self.held.root.join(OWNERSHIP_DIR)).await?;
+        let mut scopes = std::collections::BTreeSet::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let Ok(body) = fs::read(entry.path()).await else {
+                continue;
+            };
+            // A record this build cannot read is not a project it may skip
+            // silently: a dispatcher that never binds is work that never runs.
+            let owner: ExecutionOwnership = serde_json::from_slice(&body).map_err(|error| {
+                StoreError::Backend(format!(
+                    "an ownership record in {} does not read back: {error}",
+                    entry.path().display()
+                ))
+            })?;
+            scopes.insert(owner.scope);
+        }
+        Ok(scopes.into_iter().take(limit).collect())
+    }
+
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
         refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let Ok(body) = fs::read(self.checkpoint_path(processor)).await else {

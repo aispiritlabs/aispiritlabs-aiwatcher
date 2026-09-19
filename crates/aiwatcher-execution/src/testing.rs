@@ -434,6 +434,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_retention_sweep_forgets_its_own_side_and_leaves_the_other_alone(name, store).await;
     a_store_binds_to_one_project_and_refuses_a_second(name, store).await;
     what_is_instance_wide_is_refused_by_name_rather_than_answered(name, store).await;
+    the_projects_that_have_run_here_are_listed_as_scopes_and_never_as_rows(name, store).await;
 }
 
 macro_rules! ok {
@@ -3261,6 +3262,10 @@ pub async fn what_is_instance_wide_is_refused_by_name_rather_than_answered(
                 .await
                 .err(),
         ),
+        // The set of projects is the instance's own question, and a bound
+        // store answering it would be answering across the boundary it exists
+        // to keep.
+        ("project_scopes", mine.project_scopes(100).await.err()),
     ] {
         let Some(error) = refused else {
             panic!("{name}: a project-bound store answered {what} from the instance's own tables");
@@ -3270,6 +3275,51 @@ pub async fn what_is_instance_wide_is_refused_by_name_rather_than_answered(
             "{name}: {what}: {error}"
         );
     }
+}
+
+/// The one cross-scope answer, and the whole of what it says.
+///
+/// A work role cannot bind a dispatcher to a project it has not been told
+/// about, so something has to name them. What this proves is that naming them
+/// is all it does: the scopes of every execution this store owns, and nothing
+/// about what any of them ran.
+pub async fn the_projects_that_have_run_here_are_listed_as_scopes_and_never_as_rows(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let before = ok!(name, store.project_scopes(1_000), "listing projects");
+    let (one, other) = (project(), project());
+    for scope in [one, other] {
+        let execution = ExecutionId::new(format!("scopes-{}", scope.project.0));
+        let bound = bound(name, store, scope);
+        ok!(
+            name,
+            bound.append(
+                &execution,
+                owned_start(&execution, "scopes-in", owner(scope, "starter")),
+            ),
+            "starting a project execution"
+        );
+    }
+
+    let after = ok!(name, store.project_scopes(1_000), "listing projects again");
+    for scope in [one, other] {
+        assert!(
+            after.contains(&scope) && !before.contains(&scope),
+            "{name}: a project that has just run here is not listed"
+        );
+    }
+    assert!(
+        after.windows(2).all(|pair| pair[0] < pair[1]),
+        "{name}: the list is read twice and must be ordered"
+    );
+
+    // A limit is a bound on one answer, not a filter that quietly drops a
+    // project: a caller asking for one gets one, and the deployment past its
+    // ceiling is told by counting rather than by a short list that looks whole.
+    let bounded = ok!(name, store.project_scopes(1), "listing one project");
+    assert_eq!(bounded.len(), 1, "{name}: a limit bounds the answer");
+    assert_eq!(bounded[0], after[0], "{name}: and takes them in order");
 }
 
 /// The filter that matches this execution's dispatched row in every way.

@@ -728,6 +728,34 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     ///
     /// Whatever the backend could not do.
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned>;
+
+    /// Every project this store holds an execution for.
+    ///
+    /// The one query here that crosses the boundary, and it is deliberately
+    /// the *narrowest* one that answers a question nothing else can: a work
+    /// role has to know **which** projects to bind a dispatcher for, and a
+    /// dispatcher cannot be bound to a project it has not been told about
+    /// (ADR_0033's own "what would make this wrong" names the dispatcher and
+    /// says to bind per scope rather than per attempt).
+    ///
+    /// It returns **scopes and never rows** — which projects have ever run
+    /// something here, not what they ran, not how much and not whether any of
+    /// it is due. Everything after this goes through a store bound to one of
+    /// them, which sees that project's work and nothing else.
+    ///
+    /// Asked of the **unscoped** store only. A bound one already knows which
+    /// project it is and answering the set would be answering across the
+    /// boundary it exists to keep, so it refuses by name, as the processor
+    /// checkpoints and the schedule slots do.
+    ///
+    /// `limit` bounds one answer. A deployment past it is told by name rather
+    /// than quietly running some projects' work and not others'.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotInThisScope`] on a bound store, or whatever the
+    /// backend could not do.
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>>;
 }
 
 /// Sharing one store between the parts of a process that hold it.
@@ -890,6 +918,27 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
         (**self).prune(before, limit).await
     }
+
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        (**self).project_scopes(limit).await
+    }
+}
+
+/// Read a column of stored scope keys back, refusing one that does not parse.
+///
+/// Shared by the two adapters that keep the key as a column. A key this build
+/// cannot read is not a project to skip quietly: a dispatcher that never binds
+/// is a project's work that never runs, and silence is the fallback this
+/// boundary exists to refuse (ADR_0033 pt. 7).
+#[cfg(any(feature = "postgres", feature = "duckdb"))]
+pub(crate) fn parse_scopes(keys: Vec<String>) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+    keys.into_iter()
+        .map(|key| {
+            aiwatcher_iam::ProjectScope::parse(&key).map_err(|error| {
+                StoreError::Backend(format!("a stored scope key does not read back: {error}"))
+            })
+        })
+        .collect()
 }
 
 /// A row on its way to the log, with the ordering rule already applied.

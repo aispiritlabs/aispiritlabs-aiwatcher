@@ -1049,6 +1049,21 @@ impl WorkflowStore for PostgresWorkflowStore {
         Ok(rows.iter().map(|row| slot_from(row, kind)).collect())
     }
 
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        refuse_instance_wide(self.binding, "list the projects that have run here")?;
+        // `execution_ownership_by_scope` is the index migration 0011 already
+        // created, so this is a walk of distinct keys rather than of rows.
+        let keys: Vec<String> = sqlx::query_scalar(
+            "select distinct scope_key from execution_ownership \
+              where scope_key <> '' order by scope_key limit $1",
+        )
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        super::parse_scopes(keys)
+    }
+
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
         refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let value: Option<String> = sqlx::query_scalar(

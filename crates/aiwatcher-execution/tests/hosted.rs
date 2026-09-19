@@ -550,6 +550,13 @@ impl WorkflowStore for OneProcess {
         self.0.recent_slots(kind, name, limit).await
     }
 
+    async fn project_scopes(
+        &self,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_iam::ProjectScope>> {
+        self.0.project_scopes(limit).await
+    }
+
     async fn checkpoint(
         &self,
         processor: &str,

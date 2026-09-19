@@ -752,6 +752,27 @@ impl WorkflowStore for DuckdbWorkflowStore {
         .await
     }
 
+    async fn project_scopes(&self, limit: usize) -> Result<Vec<aiwatcher_iam::ProjectScope>> {
+        refuse_instance_wide(self.binding, "list the projects that have run here")?;
+        let keys: Vec<String> = self
+            .with(move |db| {
+                let mut statement = db
+                    .prepare(
+                        "select distinct scope_key from ownership \
+                          where scope_key <> '' order by scope_key limit ?",
+                    )
+                    .map_err(|error| StoreError::Backend(format!("preparing a query: {error}")))?;
+                let found = statement
+                    .query_map(duckdb::params![limit as i64], |row| row.get::<_, String>(0))
+                    .map_err(|error| StoreError::Backend(format!("running a query: {error}")))?;
+                found
+                    .collect::<std::result::Result<Vec<String>, _>>()
+                    .map_err(|error| StoreError::Backend(format!("reading a row: {error}")))
+            })
+            .await?;
+        super::parse_scopes(keys)
+    }
+
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
         refuse_instance_wide(self.binding, "read a processor checkpoint")?;
         let processor = processor.to_owned();
