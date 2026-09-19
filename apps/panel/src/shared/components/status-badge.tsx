@@ -1,5 +1,6 @@
 import { Badge, Spinner } from '@/shared/components/ui/primitives';
 import type { EvaluationStatus, RunStatus } from '@/api/generated/types.gen';
+import type { StreamPhase } from '@/shared/lib/live';
 import { formatAge, isStalled } from '@/shared/lib/utils';
 
 const tone = {
@@ -45,9 +46,20 @@ export function StatusBadge({
  * Whether the panel is level with the log.
  *
  * Worth its own indicator: a live view that has silently stopped updating looks
- * exactly like a quiet system, and the difference matters.
+ * exactly like a quiet system, and the difference matters. `revoked` is the
+ * sharpest case of that — the stream stopped because access to what it was
+ * watching was taken away, and there is nothing to retry — so it is the one
+ * phase drawn as a refusal rather than as a state the stream may leave.
  */
-export function StreamBadge({ phase }: { phase: 'catching-up' | 'live' | 'reconnecting' }) {
+export function StreamBadge({ phase }: { phase: StreamPhase }) {
+  if (phase === 'revoked') {
+    return (
+      <Badge tone="danger" className="gap-1.5" title="The grant that opened this stream is gone.">
+        <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+        access revoked
+      </Badge>
+    );
+  }
   if (phase === 'live') {
     return (
       <Badge tone="success" className="gap-1.5">

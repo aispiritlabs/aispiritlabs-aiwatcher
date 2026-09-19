@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { scopedPath } from '@/shared/lib/scope';
+
 /**
  * The live stream, and how a reconnect closes its own gap.
  *
@@ -38,6 +40,16 @@ export const liveFrameSchema = z.discriminatedUnion('frame', [
   liveEventSchema,
   z.object({ frame: z.literal('caught'), checkpoint }),
   z.object({ frame: z.literal('resynced'), from: checkpoint }),
+  /**
+   * The grant that opened this stream is gone, and the server is closing it.
+   *
+   * It carries no checkpoint on purpose: there is nothing to resume from,
+   * because resuming is a new request and the grant is asked again before a
+   * frame is replayed. A stream that simply stopped would be indistinguishable
+   * from one where nothing is happening, which is the failure ADR_0004 exists
+   * to prevent — so the server says why and the browser stops retrying.
+   */
+  z.object({ frame: z.literal('revoked') }),
 ]);
 
 export type LiveEventFrame = z.infer<typeof liveEventSchema>;
@@ -49,7 +61,15 @@ export type StreamPhase =
   /** Level with the log; new events arrive as they happen. */
   | 'live'
   /** The connection dropped and the browser is retrying. */
-  | 'reconnecting';
+  | 'reconnecting'
+  /**
+   * Access to what this stream was watching was taken away while it ran.
+   *
+   * Terminal: no retry, because every retry would be refused for the same
+   * reason and `EventSource` would loop on a 404 for as long as the tab stays
+   * open.
+   */
+  | 'revoked';
 
 export interface LiveHandlers {
   onEvent(frame: LiveEventFrame): void;
@@ -85,7 +105,12 @@ export function openRunStream(
   from: string | undefined,
   handlers: LiveHandlers,
 ): () => void {
-  return open(`/api/v1/runs/${encodeURIComponent(runId)}/stream`, from, handlers);
+  return open(
+    `/api/v1/runs/${encodeURIComponent(runId)}/stream`,
+    '/api/v1/runs/{run_id}/stream',
+    from,
+    handlers,
+  );
 }
 
 /**
@@ -101,8 +126,14 @@ export function openWorkflowStream(
   from: string | undefined,
   handlers: LiveHandlers,
 ): () => void {
+  // The one stream here with no project twin, and it is not an oversight: the
+  // workflow fold has no project in its row (that is the rest of E2), so there
+  // is nothing for a scope to narrow and no scoped route to ask. It answers
+  // instance-wide, which is why `navigation.ts` calls the Workflows area what
+  // it is.
   return open(
     `/api/v1/workflow-executions/${encodeURIComponent(workflowRunId)}/stream`,
+    '/api/v1/workflow-executions/{workflow_run_id}/stream',
     from,
     handlers,
   );
@@ -110,7 +141,7 @@ export function openWorkflowStream(
 
 /** Follow every event in the system over the global SSE stream. */
 export function openSystemStream(handlers: LiveHandlers): () => void {
-  return open('/api/v1/events/stream', undefined, handlers);
+  return open('/api/v1/events/stream', '/api/v1/events/stream', undefined, handlers);
 }
 
 /**
@@ -173,16 +204,41 @@ export function openSelectionStream(
   handlers: LiveHandlers,
 ): () => void {
   const query = selectionQuery(selection);
-  return open(`/api/v1/events/stream${query ? `?${query}` : ''}`, from, handlers);
+  return open(
+    `/api/v1/events/stream${query ? `?${query}` : ''}`,
+    '/api/v1/events/stream',
+    from,
+    handlers,
+  );
 }
 
-/** The mechanics both streams share. Only the path differs. */
-function open(path: string, from: string | undefined, handlers: LiveHandlers): () => void {
-  // `path` may already carry a selection, so the separator is decided rather
-  // than assumed: a second `?` produces a URL whose `from` is part of the last
-  // parameter's value, and the resume silently starts from the beginning.
-  const resume = from ? `${path.includes('?') ? '&' : '?'}from=${encodeURIComponent(from)}` : '';
-  const source = new EventSource(`${import.meta.env.VITE_API_BASE_URL ?? ''}${path}${resume}`);
+/**
+ * The mechanics every stream shares. Only the path differs.
+ *
+ * `template` is the route as the contract spells it, beside the path as this
+ * call spells it, because only the first can be looked up: `/api/v1/runs/abc`
+ * is not in the contract and `/api/v1/runs/{run_id}` is. That lookup is what
+ * decides whether the selected project reaches this stream — and a stream is
+ * the one read where it has to, because `EventSource` cannot set a header and
+ * the session cookie is the whole identity (ADR_0013).
+ */
+function open(
+  path: string,
+  template: string,
+  from: string | undefined,
+  handlers: LiveHandlers,
+): () => void {
+  // `path` may already carry a selection, so the query is separated before the
+  // scope rewrite and the resume's separator is decided rather than assumed: a
+  // second `?` produces a URL whose `from` is part of the last parameter's
+  // value, and the resume silently starts from the beginning.
+  const at = path.indexOf('?');
+  const route = scopedPath(at === -1 ? path : path.slice(0, at), template);
+  const query = at === -1 ? '' : path.slice(at);
+  const resume = from ? `${query ? '&' : '?'}from=${encodeURIComponent(from)}` : '';
+  const source = new EventSource(
+    `${import.meta.env.VITE_API_BASE_URL ?? ''}${route}${query}${resume}`,
+  );
 
   handlers.onPhase('catching-up');
 
@@ -198,6 +254,14 @@ function open(path: string, from: string | undefined, handlers: LiveHandlers): (
   source.addEventListener('resynced', (message) => {
     const frame = parseLiveFrame((message as MessageEvent<string>).data);
     if (frame?.frame === 'resynced') handlers.onResync?.(frame.from);
+  });
+
+  source.addEventListener('revoked', () => {
+    // Close it here rather than let the browser retry: the next attempt is
+    // refused with the same 404 the reads now give, and `EventSource` would
+    // retry it for as long as the tab is open.
+    source.close();
+    handlers.onPhase('revoked');
   });
 
   source.addEventListener('error', () => {
