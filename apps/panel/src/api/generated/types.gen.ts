@@ -19144,6 +19144,344 @@ export type ProjectStreamEventsResponses = {
     200: unknown;
 };
 
+export type ProjectGetExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}';
+};
+
+export type ProjectGetExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectGetExecutionError = ProjectGetExecutionErrors[keyof ProjectGetExecutionErrors];
+
+export type ProjectGetExecutionResponses = {
+    200: RunView;
+};
+
+export type ProjectGetExecutionResponse = ProjectGetExecutionResponses[keyof ProjectGetExecutionResponses];
+
+export type ProjectCancelExecutionData = {
+    body: CancelBody;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/cancel';
+};
+
+export type ProjectCancelExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectCancelExecutionError = ProjectCancelExecutionErrors[keyof ProjectCancelExecutionErrors];
+
+export type ProjectCancelExecutionResponses = {
+    200: RunView;
+};
+
+export type ProjectCancelExecutionResponse = ProjectCancelExecutionResponses[keyof ProjectCancelExecutionResponses];
+
+export type ProjectPauseExecutionData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/pause';
+};
+
+export type ProjectPauseExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectPauseExecutionError = ProjectPauseExecutionErrors[keyof ProjectPauseExecutionErrors];
+
+export type ProjectPauseExecutionResponses = {
+    200: RunView;
+};
+
+export type ProjectPauseExecutionResponse = ProjectPauseExecutionResponses[keyof ProjectPauseExecutionResponses];
+
+export type ProjectResumeExecutionData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/resume';
+};
+
+export type ProjectResumeExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectResumeExecutionError = ProjectResumeExecutionErrors[keyof ProjectResumeExecutionErrors];
+
+export type ProjectResumeExecutionResponses = {
+    200: RunView;
+};
+
+export type ProjectResumeExecutionResponse = ProjectResumeExecutionResponses[keyof ProjectResumeExecutionResponses];
+
+export type ProjectExecutionHistoryData = {
+    body?: never;
+    path: {
+        execution_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        after?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/history';
+};
+
+export type ProjectExecutionHistoryErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectExecutionHistoryError = ProjectExecutionHistoryErrors[keyof ProjectExecutionHistoryErrors];
+
+export type ProjectExecutionHistoryResponses = {
+    200: ExecutionHistory;
+};
+
+export type ProjectExecutionHistoryResponse = ProjectExecutionHistoryResponses[keyof ProjectExecutionHistoryResponses];
+
+export type ProjectRetryStepData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * A step of that run's pinned plan
+         */
+        step_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/steps/{step_id}/commands/retry';
+};
+
+export type ProjectRetryStepErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The step is in no state to be retried
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectRetryStepError = ProjectRetryStepErrors[keyof ProjectRetryStepErrors];
+
+export type ProjectRetryStepResponses = {
+    200: RunView;
+};
+
+export type ProjectRetryStepResponse = ProjectRetryStepResponses[keyof ProjectRetryStepResponses];
+
+export type ProjectProvideInputData = {
+    body: ProvideInputBody;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * The step that asked
+         */
+        step_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/steps/{step_id}/input';
+};
+
+export type ProjectProvideInputErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * That step is not waiting for this answer
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectProvideInputError = ProjectProvideInputErrors[keyof ProjectProvideInputErrors];
+
+export type ProjectProvideInputResponses = {
+    200: RunView;
+};
+
+export type ProjectProvideInputResponse = ProjectProvideInputResponses[keyof ProjectProvideInputResponses];
+
 export type ProjectListExperimentsData = {
     body?: never;
     path: {

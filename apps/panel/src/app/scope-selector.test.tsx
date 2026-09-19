@@ -128,7 +128,10 @@ it('warns on an area a selected project does not reach, and says nothing on one 
       answer: { status: 200, body: [PROJECT] },
     },
   ]);
-  const router = mount('?scope=org-1/proj-1', '/workflows');
+  // Evaluation is `mixed`: its published evidence, cards, rubrics and reviews
+  // are the project's, and the approval lines and the scorer catalogue are the
+  // deployment's.
+  const router = mount('?scope=org-1/proj-1', '/evaluation');
   expect(await screen.findByText(/Partly instance-wide/)).toBeTruthy();
   await router.navigate({ to: '/observability/runs', search: { scope: 'org-1/proj-1' } });
   await waitFor(() => expect(screen.queryByText(/instance-wide/)).toBeNull());

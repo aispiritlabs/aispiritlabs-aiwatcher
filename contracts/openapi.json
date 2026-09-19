@@ -18851,6 +18851,788 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One run's own page: where it is, where each of its steps is, and what may be\ndone to it.",
+        "description": "The store's inline projection rather than a fold of the log, and the two are\nnot interchangeable. This one is transactional with the decision that\nproduced it, which is what makes it safe to accept the next command from;\nthe fold is what draws the run beside every other execution, with `Pending`\nnodes and a live stream, and it is the one a list comes from.\n\nAnswers [`RunView`] — the projection under `execution`, beside the actions\nthe run would accept. It answered the bare projection once; see that type\nfor what a hand-written client has to change.",
+        "operationId": "project_get_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/cancel": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Stop a run, and everything it has not already dispatched.",
+        "operationId": "project_cancel_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/pause": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Schedule nothing further until this run is resumed.",
+        "description": "What is already dispatched keeps running: an attempt is somebody else's\nprocess, and a pause that could reach into it would be a cancel wearing the\nwrong name.",
+        "operationId": "project_pause_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/commands/resume": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Let a paused run schedule again.",
+        "operationId": "project_resume_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/history": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "operationId": "project_execution_history",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/steps/{step_id}/commands/retry": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Take one step again, from the inputs and the code its plan pinned.",
+        "description": "A new attempt rather than a rewrite: the failed one stays in the stream with\nits error, which is what a waterfall draws and what a person reads to find\nout why this needed a second go.",
+        "operationId": "project_retry_step",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "A step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The step is in no state to be retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/executions/{execution_id}/steps/{step_id}/input": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Answer the question a `HumanInput` step is waiting on.",
+        "operationId": "project_provide_input",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step that asked",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvideInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That step is not waiting for this answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/experiments": {
       "get": {
         "tags": [

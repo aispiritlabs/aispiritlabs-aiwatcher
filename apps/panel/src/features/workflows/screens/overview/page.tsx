@@ -38,6 +38,7 @@ import {
   Stat,
 } from '@/shared/components/ui/primitives';
 import { VirtualList } from '@/shared/components/virtual-list';
+import { activeScope } from '@/shared/lib/scope';
 import { needsRole, useCan } from '@/shared/lib/auth';
 import { openWorkflowStream, type LiveEventFrame, type StreamPhase } from '@/shared/lib/live';
 import type { ReachMode } from '@/shared/lib/reach';
@@ -634,6 +635,12 @@ function RerunButton({
   // who cannot dispatch a rerun has no use for the button, and a disabled
   // control that never becomes enabled is a permanent question.
   const mayRerun = useCan('admin');
+  // A rerun is dispatched to one endpoint this deployment configured, and the
+  // route that does it has no project form: the graph it would look for is the
+  // instance's catalogue, which holds none of a project's. Said here rather
+  // than left to answer 404, because "not found" reads as "you may not see
+  // this" when the truth is "this is not a project's to ask for".
+  const scope = activeScope();
   const rerun = useMutation({
     mutationFn: async () => {
       const response = await rerunWorkflow({
@@ -644,6 +651,14 @@ function RerunButton({
       return response.data;
     },
   });
+
+  if (scope) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        a rerun is the deployment’s, not a project’s
+      </span>
+    );
+  }
 
   if (!mayRerun) {
     return (

@@ -242,7 +242,13 @@ export const SECTIONS: NavSection[] = [
       {
         to: '/workflows',
         label: 'Workflows',
-        reach: 'mixed',
+        // Every row here is the selected project's: the graph fold, the
+        // traversals, the definitions and one run's own page all answer for
+        // one project. The rerun does not and cannot — it asks another system
+        // to work from an address this deployment configured, which is an
+        // instance admin's act — so that one control says so itself rather
+        // than the page warning about rows that are not here.
+        reach: 'project',
         icon: Workflow,
         blurb: 'Inspect workflow graphs and follow their executions.',
         views: [],
