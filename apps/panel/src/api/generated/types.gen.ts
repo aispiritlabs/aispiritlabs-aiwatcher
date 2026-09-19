@@ -18663,6 +18663,57 @@ export type ProjectGetScoringRunResponses = {
 
 export type ProjectGetScoringRunResponse = ProjectGetScoringRunResponses[keyof ProjectGetScoringRunResponses];
 
+export type ProjectStartScoringRunData = {
+    body?: never;
+    headers: {
+        /**
+         * Required value: 1
+         */
+        'X-AIWatcher-IAM': string;
+    };
+    path: {
+        /**
+         * The declaration address
+         */
+        id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-runs/{id}/start';
+};
+
+export type ProjectStartScoringRunErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * `pair_not_admitted`: no operator has admitted this pair yet; the message names the approval
+     */
+    409: ErrorBody;
+    /**
+     * The run asks a judge profile this deployment does not have, or more questions at once than it allows
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectStartScoringRunError = ProjectStartScoringRunErrors[keyof ProjectStartScoringRunErrors];
+
+export type ProjectStartScoringRunResponses = {
+    202: ScoringAccepted;
+};
+
+export type ProjectStartScoringRunResponse = ProjectStartScoringRunResponses[keyof ProjectStartScoringRunResponses];
+
 export type ProjectListScorecardsData = {
     body?: never;
     path: {

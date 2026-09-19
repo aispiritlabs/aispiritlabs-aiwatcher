@@ -17870,6 +17870,132 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-runs/{id}/start": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Start the declared measurement.",
+        "description": "Refused while nothing admits the pair, naming the approval that would. A\nrun started without one could only fail when it tried to publish, and that\nfailed run would then be what every later start of the same declaration\nlands on. Once admitted, repeating this reaches the run already going.",
+        "operationId": "project_start_scoring_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The declaration address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-AIWatcher-IAM",
+            "in": "header",
+            "description": "Required value: 1",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`pair_not_admitted`: no operator has admitted this pair yet; the message names the approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The run asks a judge profile this deployment does not have, or more questions at once than it allows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/evaluation-scorecards": {
       "get": {
         "tags": [
