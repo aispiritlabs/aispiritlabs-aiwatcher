@@ -1538,6 +1538,21 @@ się do URL-a tego dnia, w którym dostanie własną trasę".
   ścieżki** — jedno pole na `Lab`, jedno na `LabVersionSummary` i jeden schemat
   `LabNotebook`), `npm run build`, `npm run lint`, `npx prettier`.
 
-Czego **nie** uruchomiono: pełnego `cargo test --workspace`; żywego serwera z SSO
-i przeglądarki; runtime'u notatników z prawdziwym marimo (testy panelu stubują
-jego cztery trasy); klastra, workerów, S3/RustFS.
+**Na żywo, poza testami**, bo to jest jedyny dowód, że obie połowy się spotykają:
+`services/ml_pipeline` na :18082 i serwer na :18081 (scratch, magazyn plikowy w
+katalogu tymczasowym). `PUT /ml-pipeline/notebooks/lab_03_agent` odpowiedział
+digestem `794f3ded…`; `POST /api/v1/labs` z tym przypięciem dało 201, wróciło z
+tym samym digestem i `has_notebook: true`; `GET /api/v1/labs/lab-03` czyta
+przypięcie, `GET /ml-pipeline/notebooks/lab_03_agent/revisions/794f3ded…` czyta
+dokładnie to źródło, a `/ml-pipeline/app/lab_03_agent/` odpowiada 200 — żywa
+aplikacja marimo. Potem edycja pliku przesunęła head na `629ebf33…`, a przypięta
+rewizja **nadal** czyta to, co laboratorium wydało; to jest rozjazd, o którym
+panel mówi. Odmowy: `Lab_03` i `head` to 400 nazywające pole, a poprawnie
+zbudowany digest, którego runtime nie ma, przechodzi — świadomie, bo rejestr
+runtime'u nie woła — i runtime odpowiada na niego 404 ze zdaniem, które panel
+pokazuje przy pliku. Obie instancje zatrzymane po PID-zie; :8080 (cudza sesja)
+nietknięty, a notatnik ze scratcha usunięty z drzewa.
+
+Czego **nie** uruchomiono: pełnego `cargo test --workspace`; żywego serwera z SSO,
+authentika i przeglądarki — czyli formularza i widoku kursanta klikniętych ręką
+(testy panelu stubują cztery trasy runtime'u); klastra, workerów, S3/RustFS.
