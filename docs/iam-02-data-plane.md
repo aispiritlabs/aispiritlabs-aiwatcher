@@ -470,3 +470,137 @@ ewaluacji bez projektu w wierszu, `/experiments`, archiwum rozmów, importy i
 retencja, dzierżawa w VictoriaTraces/Metrics. **To wdrożenie nadal nie jest
 opisywane jako multi-tenant safe** — selektor tego nie zmienia i właśnie dlatego
 mówi, dokąd sięga.
+
+---
+
+## 12. E6 i E7 — co naprawdę stanęło (19.09.2026)
+
+Kontrakt jest w [ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md), aneks
+„a project's work runs", i w [runbooku](iam-migration-runbook.md), §§4 i 9.
+
+### Najpierw reszta E2, bo bez niej E6 tworzyło przeciek
+
+Sekcja 9 nazwała trzy foldy bez projektu w wierszu i zapisała, że ich
+okluczowanie to reszta E2. Dopóki żaden przebieg projektu nie istniał, nic z
+tego nie wyciekało. W chwili, w której dispatcher i projektowy `/start` zaczęły
+takie przebiegi tworzyć, graf i wykonanie projektu pojawiłyby się na liście
+instancyjnej — więc reszta E2 poszła pierwsza.
+
+Fold workflow, fold ewaluacji i `/experiments` mają projekt w wierszu, a
+`/workflows`, `/workflow-executions`, `/evaluations`, `/evaluation-suites` i
+`/experiments` serwują jeden router dwa razy, dokładnie jak `runs`, `metrics` i
+`live`. Strumień wykonania (`/workflow-executions/{id}/stream`) pyta o grant co
+30 s i zamyka się ramką `revoked`, jak każdy zakresowy — więc **przebieg
+projektu ma wreszcie żywy widok grafu**.
+
+Jedna różnica, i jest zamierzona: fold workflow kluczuje po **`(projekt, id)`**,
+a nie po id z projektem obok. `workflow_id` jest deklarowane na każdym
+wykonaniu, a `workflow_run_id` spina etapy jednego przejścia — więc dwa projekty
+importujące domy to przypadek zwyczajny, nie kolizja, i „pierwszy wygrywa"
+oddałoby katalog temu, kto zadeklarował wcześniej, a drugiemu zostawiło pustą
+listę. `run_id` to jeden proces, więc fold przebiegów i fold ewaluacji (którego
+id **jest** `run_id`) zostają przy „pierwszy wygrywa".
+
+Trzy pytania z IAM-02/C odwróciły odpowiedź. Matryca urosła z 47 do **51**: graf
+projektu, jego przejście i jego raport są na trasach projektu, a na
+instancyjnych nie ma ich wcale — pytane po odebraniu grantu, więc druga połowa
+jest zadawana komuś, komu projekt odpowiada 404.
+
+### E6 — dwa zakazy zdjęte, i czego projekt nie uruchomi
+
+**Fakty projektu trafiają na log.** Publikator outboxa stempluje kopertę
+zakresem **magazynu**, nadpisując, nie czytając z wiersza — reguła trasy ingestu
+piętro niżej. Bez tego dispatcher tworzyłby przebiegi, których nikt nie widzi.
+
+**`ProjectDispatcher` jest w produkcyjnym `spawn`.** Jedna pętla nadzorcy:
+`WorkflowStore::project_scopes` raz na minutę (zakresy, nigdy wiersze; na
+związanym magazynie odmawiane po nazwie), wiązanie **raz na projekt** — bo
+ADR_0033 sam nazwał wiązanie per próba jako to, co by go unieważniło — i ten sam
+zestaw czterech wywołań co pętle instancyjne: claim, outbox, timery i co godzinę
+zakresowy sweep retencji. Sufit to 64 projekty na proces, po nazwie, nie po
+cichu. Cztery pętle instancyjne nie wymagały żadnej zmiany.
+
+**Projektowy `/start` istnieje**:
+`POST {zakres}/evaluation-runs/{id}/start`. Właściciel jest budowany z zakresu,
+który dopuścił **grant**, i principala, którego zweryfikowała **sesja** — nigdy z
+`requested_by`, planu, parametru ani autora deklaracji — i zapisywany w tej samej
+transakcji co przebieg. Grant pytany dwa razy: przy wpuszczeniu żądania i
+ponownie po przeczytaniu deklaracji, przed transakcją.
+
+**Czego projekt nie uruchomi, i dlaczego — cztery różne powody, nie jeden.**
+`RuntimeKind::outside_a_project` odpowiada per rodzaj, a `start` odmawia planu
+projektu wymieniając **każdy** taki krok naraz:
+
+| Runtime | Dlaczego poza projektem |
+|---|---|
+| `flow_php`, `datafusion`, `duckdb` | silnik zapytań to jedna usługa na wdrożenie, bez poświadczenia, czytająca trasy **instancyjne** — zapytanie projektu dostałoby stronę nieprzypisaną |
+| `marimo` | runtime notebooków to jedna usługa wdrożenia, a notebook jest przypięty ścieżką w niej |
+| `python_task`, `container_job` | token workera nazywa **kolejki**, nie projekt — nikt nie może zaclaimować przydzielonej próby projektu |
+| `publish_dataset` | publikacja wersji datasetu idzie w roli `serve`, po object storze wdrożenia |
+
+Konsekwencja warta zapisania: **każdy** runtime cachowalny jest na tej liście,
+więc żaden plan, który projekt może dziś wystartować, nie sięga indeksu cache.
+Reguła „grant przed odczytem cache" nadal obowiązuje i nadal jest testowana —
+musi być prawdziwa dla pierwszego cachowalnego runtime'u projektu — ale nic jej
+w produkcji nie wykonuje.
+
+**Reszta sekcji 6, teraz po nazwie zamiast przez nieobecność.** Harmonogramy:
+związany magazyn odmawia slotu po nazwie, żadna zakresowa trasa go nie zapisuje
+— projekt nie ma nieobsługiwanego uruchomienia. Archiwum rozmów: zamknięte po
+obu stronach, bez rejestru projektu i bez trasy, a migracja zablokowana, bo
+szyfrogram jest zapieczętowany własną ścieżką klucza (ADR_0021). Alerty czytają
+stronę globalną świadomie: reguła jest wdrożenia i kanał jest jeden (ADR_0035),
+więc awaria projektu na tym webhooku byłaby pracą jednego projektu w skrzynce
+administratorów wszystkich. VictoriaTraces i VictoriaMetrics: zakres jedzie jako
+atrybut zasobu spanu i etykieta metryki — to jest fakt, po którym wdrożenie
+filtruje; ich własna wielodzierżawność to ścieżka per konto, czyli eksporter i
+datasource Persesa na projekt, a to kształt wdrożenia, nie decyzja kodu.
+
+### E7 — decyzja o dostępie, i cutover
+
+**Decyzja, podjęta z użytkownikiem: raportować, nigdy nie nadawać.** Runbook §9
+mówił „nikt nie ma dostępu po skopiowaniu" — to było o jotę za mocne, bo
+`--principal` musi już trzymać żywy grant **admin** na projekcie docelowym, więc
+po kopii sięga po nią dokładnie ta osoba. Nierozstrzygnięte było, kto jeszcze, i
+to nie jest coś, co narzędzie ma rozstrzygać.
+
+Więc `verify` i `apply` wypisują — na stderr i w paragonie, z czasem odczytu —
+**żywe granty na projekcie docelowym**, każdy z rolą, jaką zostawia jego okno.
+Okna są filtrowane zegarem tutaj, bo pytanie brzmi „kto sięga *teraz*", a lista
+dat kazałaby operatorowi liczyć. Narzędzie nadal nie tworzy organizacji,
+zespołu, członkostwa ani grantu, i nie odmawia projektu jednoosobowego —
+jednoosobowy projekt jest legalny. Precedens to `GET /api/v1/system`: fakt
+konfiguracji jest wart posiadania w jednym miejscu, a grant nie jest sekretem
+przed kimś, kto już trzyma na tym projekcie admina.
+
+**Runbook jest zaktualizowany.** §4 mówi teraz, czego nie wolno ruszyć na żadnym
+kroku — hash treści, ID wersji, referencja historyczna — i że zamrożenie to
+**dwie** połowy (zapisy autorskie i ingest producentów), bo przebieg startujący
+w trakcie kopii pisze do źródła po snapshocie. Krok 5 to odczytanie audytorium
+przed wznowieniem zapisów. Rollback dostał drugą połowę: **rollback interfejsu
+nie przywraca globalnego dostępu** — selektor jest widokiem nad granicą, którą
+trzyma serwer, więc schowanie go, wyczyszczenie `?scope=` albo wdrożenie
+starszego panelu zmienia to, co ktoś **widzi**, i nie zmienia nic w tym, co
+serwer odpowiada. Nieprzypisane zostaje nieprzypisane.
+
+**Powody „unsupported", które wygasły, są przepisane.** Pięć rodzin miało
+uzasadnienie „zakresowa praca X jeszcze się przesuwa"; ta praca stanęła, więc
+teraz mówią, co naprawdę blokuje: brak adaptera (`artifacts`, `workflows`,
+`evaluation-judges`, `evaluation-reviews`, `evaluation-variant-artifacts`), albo
+powód strukturalny, który zostaje (`schedules` — kopia startuje drugiego
+pisarza, i projekt i tak nie ma slotu; `variant-observations` — fold odtwarza
+się foldowaniem; `evaluation-scorers` — katalog jest wdrożenia, nie projektu).
+Liczby bez zmian: **4 z 16 wspierane, 11 bez adaptera, 1 zablokowana**. Ścieżka
+S3/RustFS jest nazwana zamiast przemilczana: snapshot do katalogu, `plan`/`apply`
+po katalogu, i zapis z powrotem — własności, na których to stoi, to
+create-only i read-back po digeście, które adapter S3 ma i których migracja
+end-to-end po nim **nie** przebiegła.
+
+### Czego to nadal nie robi
+
+Logi, silnik zapytań, runtime notebooków, poświadczenia workerów, harmonogramy,
+rozmowy, dzierżawa w VictoriaTraces/Metrics — każde wymienione wyżej z powodem.
+Jedenaście rodzin migracji bez adaptera. I zdanie, które się nie zmienia przez
+nic z powyższego: **to wdrożenie nadal nie jest opisywane jako multi-tenant
+safe.** Co się zmieniło, to że praca projektu się wykonuje i jest dla projektu
+widoczna; co nie — cała reszta powyżej.
