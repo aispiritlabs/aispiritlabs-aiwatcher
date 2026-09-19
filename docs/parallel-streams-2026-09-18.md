@@ -468,3 +468,35 @@ aneks z tą datą. Trzy rzeczy, które dotykają innych strumieni:
 workflow odpowiada stroną globalną. To jest ta odpowiedź, o którą pyta prompt
 IAM-02/C: **selektor jeszcze nie**, dopóki te foldy nie zostaną okluczowane —
 to reszta E2, nie E3.
+
+---
+
+## IAM-02/C — zrobione (19.09.2026)
+
+Selektor organizacja/projekt jest w nagłówku, a reguła, która go tam nie
+wpuszczała, została zdjęta i zastąpiona. [Plan IAM-02](iam-02-data-plane.md),
+sekcja 10, jest pełnym zapisem; `apps/panel/CLAUDE.md` ma regułę, która zajęła
+miejsce starej.
+
+- **Najpierw pomiar, potem aktywacja.** `scripts/iam-permission-check.py` urosło
+  z 44 do **47 pytań** i trzy nowe są tymi, które rozstrzygnęły kształt: zadane
+  po odwołaniu grantu pokazują, że principal bez grantu **nadal czyta** graf
+  workflow tego projektu, jego wykonanie i raport ewaluacji z tras
+  instancyjnych. To reszta E2, nie awaria E3 — i to jest powód, dla którego
+  selektor nazywa swój zasięg zamiast zakresować cały panel.
+- **Panel.** `?scope=` na trasie root z `retainSearchParams`, jedno przepisanie
+  w transporcie (`shared/lib/scope.ts`, zbiór tras sprawdzany testem wobec
+  `contracts/openapi.json`), `reach` na każdym obszarze w `navigation.ts`,
+  `reach-notice.tsx` mówiący, gdzie granica nie sięga, pusty stan dla kogoś bez
+  grantu i brak jakiejkolwiek kontrolki na instancji bez organizacji.
+- **Ramka `revoked` jest narysowana.** To była ta jedna rzecz, którą IAM-02/B
+  zostawił na później: zbudowana na serwerze i nieosiągalna z panelu. Zmierzone
+  w przeglądarce — odwołanie grantu przy otwartym `/observability/live`
+  przestawia odznakę na `access revoked` po 30 s.
+- **Rust nietknięty.** Żadnej nowej trasy, żadnego `just openapi`; kontrakt ma
+  te same 251 ścieżek.
+
+**Dla IAM-02/D:** `SCOPED_ROUTES` w `apps/panel/src/shared/lib/scope.ts` i
+`reach` w `apps/panel/src/app/navigation.ts` są tym, co trzeba zmienić, gdy
+okluczujesz kolejny fold — a test przy `SCOPED_ROUTES` sam powie, że czas to
+zrobić, bo przestanie zgadzać się z kontraktem.

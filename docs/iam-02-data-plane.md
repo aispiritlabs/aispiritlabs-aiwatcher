@@ -385,3 +385,88 @@ multi-tenant safe.**
 Co wiadomo: jedno zapytanie o grant na strumień na pół minuty, w procesie na
 `MemoryIamStore` i jeden zindeksowany wiersz na PostgreSQL. Czego nie wiadomo:
 ile strumieni trzyma naraz instalacja z panelem otwartym na wielu biurkach.
+
+---
+
+## 10. E5 — selektor, i jak daleko sięga (19.09.2026)
+
+E5 było zrobione poza jedną rzeczą: **selektorem organizacja/projekt**. Reguła,
+która go trzymała poza panelem, brzmiała: *„nie ma przełącznika organizacji w
+nagłówku, bo selektor zakresujący cały panel byłby ogłoszeniem multi-tenancy,
+którego płaszczyzna danych nie utrzyma"*. Warunkiem jej zdjęcia było, żeby M1
+naprawdę trzymało — zmierzone, nie założone.
+
+### Matryca, przebiegnięta jeszcze raz i rozszerzona do 47 pytań
+
+`scripts/iam-permission-check.py` na żywym serwerze: **47/47**. Czterdzieści
+cztery to M1 z 19.09 (sekcja 9), bez zmian. Trzy nowe pytają o coś innego i to
+one rozstrzygają kształt selektora — zadane **po** odwołaniu grantu, więc każdą
+odpowiedź dostaje principal, któremu ten projekt odpowiada 404:
+
+```
+ok  a project's workflow graph is still on the instance's list — that fold has no project in its row
+ok  and so is its execution, to somebody the project itself answers 404 to
+ok  and its evaluation report, on the fold ADR_0010 gave its own projection
+```
+
+To nie jest awaria E3. Te foldy **nigdy nie zostały okluczowane** — E2 objęło
+fold przebiegów, wymiary, spany, okresy, `asked`, `measured` i journal, i tyle.
+Nie ma czego zawężać i nie ma trasy zakresowej do zapytania. Kontrakt mówi to
+samo, co do ścieżki: **31 rodzin tras odpowiada za jeden projekt, 6 częściowo,
+33 wyłącznie instancyjnie** (78 ścieżek zakresowych z 251).
+
+### Decyzja: selektor tak, ale nie „cały panel"
+
+Reguła zabraniała **ogłoszenia**, którego dane nie utrzymają. Selektor, który
+nazywa własny zasięg, żadnego takiego ogłoszenia nie robi — i to jest ta zmiana.
+Pięć części:
+
+1. **`?scope=<organizacja>/<projekt>` na trasie *root***, utrzymywany przez
+   `retainSearchParams`. Każdy inny parametr należy do widoku i ginie na jego
+   granicy (`NavArea.carries` to ta sama myśl piętro niżej); zakres nie należy
+   do żadnego, bo decyduje, które wiersze w ogóle są. Czytany w `beforeLoad`
+   trasy root — przed każdym loaderem i przed renderem — więc głęboki link nie
+   zdąży dostać ani jednej odpowiedzi instancyjnej; przy zmianie zakresu cache
+   react-query jest czyszczony, bo klucze nazywają widok, nigdy projekt.
+2. **Jedno przepisanie, w transporcie** (`apps/panel/src/shared/lib/scope.ts`).
+   Wygenerowanego klienta woła 97 plików; zakres nakładany per wywołanie to
+   zakres, o którym ktoś zapomni. `SCOPED_ROUTES` to zbiór tras instancyjnych
+   mających bliźniaka zakresowego — **wzięty z `contracts/openapi.json` i
+   sprawdzany wobec niego testem**. Trasa bez bliźniaka zostaje nietknięta:
+   przepisanie jej dałoby 404, a 404 czyta się jak „nie wolno ci tego widzieć",
+   podczas gdy prawdą jest „to nie jest własność projektu".
+3. **Każdy obszar deklaruje `reach`** w `navigation.ts` (`project | instance |
+   mixed`, per widok tam, gdzie widok się różni), a `reach-notice.tsx` mówi to
+   na stronie. Przy wybranym projekcie obszar, do którego granica nie sięga,
+   mówi, że odpowiada za całe wdrożenie, **łącznie z pracą innych projektów** —
+   i nie da się oznaczyć samych wierszy, bo ten sam brak projektu w wierszu jest
+   powodem, dla którego obszar jest instancyjny.
+4. **Bez wybranego projektu panel jest stroną nieprzypisaną i tak się nazywa.**
+   Przed M1 lista instancyjna *była* wszystkimi przebiegami; już nie jest, a ktoś,
+   komu przebiegi jego projektu zniknęły z listy, zasługuje na zdanie, nie na
+   zgłoszenie błędu.
+5. **Nic z tego nie pojawia się na instancji, której użytkownik nie jest w żadnej
+   organizacji.** Wdrożenie, które nigdy nie użyło IAM, ma jedną stronę i nie
+   dostaje przełącznika, którego nie ma jak użyć.
+
+Zmiana projektu zachowuje obszar albo widok i porzuca obiekt (`landingFor`):
+`/runs/{id}` nazywa przebieg należący do strony, na której został otwarty.
+
+### Co jeszcze zostało domknięte
+
+Ramka `revoked` była zbudowana po stronie serwera w IAM-02/B i **nieosiągalna**
+z panelu, bo panel nie otwierał strumienia zakresowego. Teraz otwiera:
+`live.ts` zna tę ramkę, zamyka `EventSource` zamiast pozwolić mu wznawiać się w
+404, a `StreamBadge` rysuje to jako odmowę. Zmierzone w przeglądarce na żywym
+serwerze: odwołanie grantu przy otwartym `/observability/live` zmienia odznakę z
+`live` na `access revoked` po **30 sekundach**, czyli na pierwszym ponownym
+pytaniu o grant.
+
+### Czego to nadal nie robi
+
+Wszystko z sekcji 6 i z „Czego to nie robi" w sekcji 9 zostaje: foldy workflow i
+ewaluacji bez projektu w wierszu, `/experiments`, archiwum rozmów, importy i
+źródła anotacji, silnik zapytań i runtime notebooków, workerzy, harmonogramy,
+retencja, dzierżawa w VictoriaTraces/Metrics. **To wdrożenie nadal nie jest
+opisywane jako multi-tenant safe** — selektor tego nie zmienia i właśnie dlatego
+mówi, dokąd sięga.

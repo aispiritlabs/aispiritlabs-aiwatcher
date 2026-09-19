@@ -285,10 +285,11 @@ followed by a full `tsc` project check.
   same offer.
 - `/account` is the one area outside `navigation.ts`, and it gained a second
   view: **Organizations & projects**, which is where a permission is tested and
-  a lesson is shared. Three rules hold it. There is **no organization switcher
-  in the header** — a selector that scoped the whole panel would announce a
-  multi-tenancy the data plane cannot keep, so the selection lives in this
-  page's URL and means "the thing I am administering". **An access answer is
+  a lesson is shared. Two rules hold it — the third, that there is no
+  organization switcher in the header, came off with M1 and its replacement is
+  the bullet below. The selection on this page stays its own and still means
+  "the thing I am administering", which is not the same question as "the
+  project I am reading". **An access answer is
   never cached**: `staleTime: 0`, because `ProjectAccess` carries `evaluated_at`
   and is a decision rather than a capability, and a revoked grant must not go on
   being true because react-query still had it. And **the four reads answer two
@@ -308,6 +309,60 @@ followed by a full `tsc` project check.
   parameter is something somebody may safely share. The token itself is drawn
   once, in the response that created it; nothing re-reads it, because nothing
   can.
+- **The project being read is one search parameter, and it reaches exactly as
+  far as the data plane does.** The rule this replaces was "no organization
+  switcher in the header, because a selector that scoped the whole panel would
+  announce a multi-tenancy the data plane cannot keep". M1 removed its premise
+  for the observable half — runs, spans, dimensions, metrics and the live
+  stream answer one project and refuse the rest, in both directions, and a
+  revoked grant closes a stream somebody already had open — and the same
+  measurement showed the premise standing everywhere else: on a live server
+  today, a principal with **no grant** on a project still reads that project's
+  workflow graph, its execution and its evaluation report from the instance
+  routes, because those folds carry no project in the row. So the switcher is
+  in the header and does **not** claim the panel. Five parts hold it:
+  - `?scope=<organization>/<project>` on the **root** route, retained by
+    `retainSearchParams`. Every other parameter belongs to a view and is
+    dropped at its edge (`NavArea.carries` is that idea one level down); a
+    scope belongs to no view, because it decides which rows exist at all rather
+    than narrowing rows somebody may already see. It is read in the root's
+    `beforeLoad` — ahead of every loader and every render — so a deep link
+    cannot get one instance-wide answer in first, and the query cache is
+    cleared when it changes, because react-query keys name a view and never a
+    project.
+  - **One rewrite, in the transport** (`shared/lib/scope.ts`). Ninety-seven
+    files call the generated client; a scope applied per call is a scope
+    somebody forgets, and the read that forgets is the one that answers
+    instance-wide under a header naming a project. `SCOPED_ROUTES` is the set
+    of instance routes that have a twin under `/orgs/{organization}/projects/
+    {project}`, taken from `contracts/openapi.json` and **checked against it by
+    a test** — a route with no twin is left alone, because rewriting it would
+    answer 404, which reads as "you may not see this" when the truth is "this
+    is not a project's to see". `live.ts` asks the same question for
+    `EventSource`, which is not the generated client.
+  - **Every area declares its `reach`** in `navigation.ts` — `project`,
+    `instance` or `mixed`, per view where a view differs — and `reach-notice.tsx`
+    says it on the page. With a project selected, an area the boundary has not
+    reached says it answers for the whole deployment, *other projects' work
+    included*; those folds carry no project in the row, so the same fact that
+    keeps the area instance-wide is what stops a badge on each row.
+  - **With no project selected the panel is the unassigned side, and says so.**
+    Before M1 the instance list *was* every run; it is not any more, and
+    somebody whose project's runs stopped appearing deserves the sentence
+    rather than a bug report.
+  - **None of it appears on an instance whose caller is in no organization.** A
+    deployment that never used IAM has one side and gains no control it cannot
+    use — the same reason `AIWATCHER_AUTH_MODE` defaults to `none`.
+  Switching project keeps the area or the view and drops the object
+  (`landingFor`): `/runs/{id}` names a run that belongs to the side it was
+  opened on, and carrying it across would answer "not found" for a run that
+  exists perfectly well where it was left.
+- **A stream can end because access ended.** `live.ts` knows the `revoked`
+  frame, closes the `EventSource` rather than letting it retry into the 404 the
+  reads now give, and `StreamBadge` draws it as a refusal rather than as a
+  state the stream may leave. A stream that simply stopped is indistinguishable
+  from one where nothing is happening, which is the failure ADR_0004 exists to
+  prevent.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
