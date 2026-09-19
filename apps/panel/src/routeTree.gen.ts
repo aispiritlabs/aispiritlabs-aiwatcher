@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AccountRouteImport } from './routes/account'
+import { Route as AlertsRouteImport } from './routes/alerts'
 import { Route as AnnotationsRouteImport } from './routes/annotations'
 import { Route as ConversationsRouteImport } from './routes/conversations'
 import { Route as DataCurationRouteImport } from './routes/data-curation'
@@ -58,6 +59,11 @@ const IndexRoute = IndexRouteImport.update({
 const AccountRoute = AccountRouteImport.update({
   id: '/account',
   path: '/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AlertsRoute = AlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AnnotationsRoute = AnnotationsRouteImport.update({
@@ -254,6 +260,7 @@ const TrainingRunsRoute = TrainingRunsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/account': typeof AccountRouteWithChildren
+  '/alerts': typeof AlertsRoute
   '/annotations': typeof AnnotationsRouteWithChildren
   '/conversations': typeof ConversationsRouteWithChildren
   '/data-curation': typeof DataCurationRouteWithChildren
@@ -295,6 +302,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/alerts': typeof AlertsRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
@@ -333,6 +341,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/account': typeof AccountRouteWithChildren
+  '/alerts': typeof AlertsRoute
   '/annotations': typeof AnnotationsRouteWithChildren
   '/conversations': typeof ConversationsRouteWithChildren
   '/data-curation': typeof DataCurationRouteWithChildren
@@ -377,6 +386,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/account'
+    | '/alerts'
     | '/annotations'
     | '/conversations'
     | '/data-curation'
@@ -418,6 +428,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/alerts'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
@@ -455,6 +466,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/account'
+    | '/alerts'
     | '/annotations'
     | '/conversations'
     | '/data-curation'
@@ -498,6 +510,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountRoute: typeof AccountRouteWithChildren
+  AlertsRoute: typeof AlertsRoute
   AnnotationsRoute: typeof AnnotationsRouteWithChildren
   ConversationsRoute: typeof ConversationsRouteWithChildren
   DataCurationRoute: typeof DataCurationRouteWithChildren
@@ -530,6 +543,13 @@ declare module '@tanstack/react-router' {
       path: '/account'
       fullPath: '/account'
       preLoaderRoute: typeof AccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/alerts': {
+      id: '/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AlertsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/annotations': {
@@ -907,6 +927,7 @@ const TrainingRouteWithChildren = TrainingRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountRoute: AccountRouteWithChildren,
+  AlertsRoute: AlertsRoute,
   AnnotationsRoute: AnnotationsRouteWithChildren,
   ConversationsRoute: ConversationsRouteWithChildren,
   DataCurationRoute: DataCurationRouteWithChildren,

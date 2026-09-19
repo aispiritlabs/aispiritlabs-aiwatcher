@@ -35,6 +35,10 @@ Python / TypeScript / Go agents
                    └─► serve | work  two roles, one binary; `work` is the only
                                      one that opens a socket to a query engine
 
+   alert rules     ──► RustFS (S3)   what is worth saying out loud, and what was
+                   └─► one webhook   sent: named by what happened, so a repeat
+                                     is not a second notification
+
    organizations   ──► PostgreSQL    teams, projects and grants: the control
                                      plane, not yet the whole data plane
    one machine     ──► `aiwatcher up` one binary, one DuckDB file, one token
@@ -191,6 +195,7 @@ Guardrails says which file holds what.
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
 | `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, a conversation cohort's own archived responses, or answers a worker's task **generates** for each case's input — held to the variant's prompt and model by the traces of their runs — against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric, held against people when the card says so — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-labs` | A workshop's labs (ADR_0034): the authored brief somebody reads, and the measurement their work is held to. Almost everything a lab needs was already here — its tests are an `aiwatcher-evaluation` scorecard version and a derived cohort, the work handed in is a recording or answers a worker generated, and a mark is a published result — so this holds the one thing that was not: a versioned document naming the brief, the card, the cohort and where it sits. `LabTests::measurement` folds those pins into the `EvaluationContext` every submission publishes under, which is the whole join from a lab to its marks. The second authored thing is the *material*: a lab names a notebook in `services/ml_pipeline` and pins its `sha256`, never its source — the shape a saved curation block already uses. |
+| `aiwatcher-alerts` | Saying something out loud, once (ADR_0035): what a rule is, the dedup key a notification is named by, the durable delivery queue and the `AlertChannel` port. It decides nothing about what happened — a watcher hands it an `AlertSignal` already decided — so the two things it knows are which rules match and whether this occurrence has been raised before. Names the `GatePolicy` a regression rule pins, because a regression is the gate's word under a policy somebody chose. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -243,7 +248,7 @@ compiles only to its *shape*, because its decisions stay in the worker.
 
 ## The decisions that explain most of the code
 
-Each has an ADR under `docs/ADR/` — except the last, whose record is
+Each has an ADR under `docs/ADR/` — except the twenty-fifth, whose record is
 `crates/aiwatcher-iam/README.md` until one is written. Read the relevant one
 before changing that area.
 
@@ -631,6 +636,29 @@ before changing that area.
    `POST /evaluation-approvals/address`. Two gaps stay visible rather than
    papered over: `/evaluation-runs/{id}/start` has no scoped twin by ADR_0033's
    own rule, and `/experiments` is legacy-only.
+
+27. **A notification is named by what happened, and the destination is
+   configuration** ([ADR_0035](docs/ADR/ADR_0035_ALERT_DELIVERY.md)). Everything
+   else here waits to be read, which is right for an observability tool and
+   wrong for exactly two facts: a managed execution that reached a terminal
+   failure, and a completed, comparable evaluation the gate calls a
+   `regression`. Both were already decided once — `execution.failed` on the log
+   and `gate::decide`'s verdict — so this is about **delivery**. Three rules
+   carry it. A rule says what is worth saying and never *where*: the endpoint is
+   `AIWATCHER_ALERT_WEBHOOK_URL`, for the reason a rerun's target is a variable,
+   and `/system` reports that it is set and whether it signs, never the address.
+   A delivery is named `sha256(rule version ‖ what happened)` and created with
+   `ObjectStore::create`, so a source read twice raises one alert with no lock
+   and nothing to expire — while *editing* a rule moves the key, because a
+   loosened tolerance is a new question about the same result, and *silencing*
+   one does not, because `enabled` is on the head. And nothing promises
+   exactly-once: the key rides in the body and in `Aiwatcher-Delivery-Key`, so
+   the receiver deduplicates. The retry is `aiwatcher_jobs::after_failure`,
+   called rather than copied; what this owns is how long a retry waits. A
+   channel down past that budget **fails** the delivery, visibly, and an admin
+   sends it again — a queue that waited for ever would report a healthy channel
+   to anybody who did not look. A first pass raises nothing, so turning alerts
+   on does not page somebody about last month.
 
 ## Conventions
 
@@ -1043,6 +1071,39 @@ round leaves a reference to bytes nobody wrote. It applies to:
   timeline's x-axis. The panel's Query tab forwards the same number only to
   datasets whose route accepts it (`Dataset::$windowed`), since the API rejects
   unknown query parameters.
+
+### Saying something out loud
+
+- **Never let an alert's destination come from a rule.** It is
+  `AIWATCHER_ALERT_WEBHOOK_URL`, the same rule as the rerun's endpoint and for
+  the same reason: aiwatcher runs inside a cluster, so a URL in a request body
+  is a request-forgery primitive posted by anything that can publish a rule.
+  `/system` reports that a channel is configured, which variable set it and
+  whether it signs — never the address, which is not a credential and is still
+  reconnaissance.
+- **Never create a delivery with a read followed by a write.** The dedup key is
+  the object's name and `ObjectStore::create` is atomic create-if-absent; that
+  one call is what makes a source read twice one notification rather than two,
+  with no lock and nothing to expire.
+- **Never put `enabled` in a rule version.** Silencing a rule during an incident
+  is an operational act, not an edit. A version per silence would move the dedup
+  key, so switching the rule back on would re-send everything it already sent.
+- **Never let a first pass raise what happened before it.** A watcher with no
+  cursor writes one where its source is now and stops. A deployment turning
+  alerts on has a history behind it, and a channel that opens by paging somebody
+  about last month is worse than no channel.
+- **Never hold a delivery for ever because the channel is down.** The budget is
+  `aiwatcher_jobs::after_failure`'s — called, never copied — and past it the
+  record says `failed` with the last error on it. An admin sends it again by
+  hand; a queue that waited would report a healthy channel to anybody who did
+  not look. What this owns is only how long a retry waits.
+- **Never promise exactly-once.** A receiver that acknowledged into a broken
+  socket is indistinguishable from one that never heard, so the key travels with
+  the payload — in the body and in `Aiwatcher-Delivery-Key` — and the receiver
+  decides. Only `regression` raises one: `incomplete` is a measurement that
+  could not say and `error` is a pair that does not compare, and reporting
+  either would make the one verdict worth waking up for indistinguishable from a
+  scorer that timed out.
 
 ### Prompts on a trace, and what a call cost
 

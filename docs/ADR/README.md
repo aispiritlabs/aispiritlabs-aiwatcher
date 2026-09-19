@@ -45,6 +45,7 @@ the record**, and they are what code comments cite.
 | [0031](ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints |
 | [0033](ADR_0033_PROJECT_SCOPED_STORAGE.md) | A project's data is reached through a bound store, and an execution carries a durable owner |
 | [0034](ADR_0034_WORKSHOP_LABS.md) | A lab is an authored brief bound to a pinned measurement; its tests, its marks and the work handed in already exist |
+| [0035](ADR_0035_ALERT_DELIVERY.md) | A notification is named by what happened, the destination is configuration, and the dedup key travels with the payload |
 
 Use [template.md](template.md) for a new one, and add a line to the reading it
 belongs to in [`docs/decisions/`](../decisions/).

@@ -79,6 +79,11 @@ struct Registries {
     /// pins. The same store, its own prefix, and no second switch — a lab is
     /// authored like a prompt and needs nothing a prompt does not.
     labs: Option<Arc<aiwatcher_labs::Registry>>,
+    /// Alert rules and the history of what was sent. The same store again, its
+    /// own prefix, and no second switch either — what a deployment does need
+    /// to say is where a notification goes, and that is a variable rather than
+    /// anything stored here.
+    alerts: Option<Arc<aiwatcher_alerts::Registry>>,
     evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
     /// The same adapter, seen from the other side: what an operator stages is
     /// what it later admits by, and the prefix those bytes land in is its own.
@@ -196,6 +201,10 @@ async fn build_registries(
         Arc::clone(&store),
         Default::default(),
     ));
+    let alerts = Arc::new(aiwatcher_alerts::Registry::new(
+        Arc::clone(&store),
+        Default::default(),
+    ));
     let conversations = build_conversation_archive(config, &store)?;
     let mut source = crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
         .with_bundles(store.clone())
@@ -231,6 +240,7 @@ async fn build_registries(
         annotations: Some(Arc::clone(&annotations)),
         training: Some(Arc::clone(&training)),
         labs: Some(labs),
+        alerts: Some(alerts),
         evaluations: Some(Arc::new(evaluations)),
         evaluation_bundles: Some(source),
         conversations,
@@ -1045,6 +1055,8 @@ pub async fn build(config: Config) -> Result<Runtime> {
         sink: config.ingest_enabled.then(|| Arc::clone(&sink)),
         prompts: registries.prompts,
         labs: registries.labs,
+        alerts: registries.alerts,
+        alert_channel: crate::alerts::build_channel(&config)?,
         datasets: registries.datasets,
         query_engine: config.query_engine,
         query_step_timeout_seconds: config.query_step_timeout_seconds,

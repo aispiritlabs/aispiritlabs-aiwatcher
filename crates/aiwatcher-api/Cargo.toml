@@ -19,6 +19,11 @@ aiwatcher-conversations.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-execution.workspace = true
 aiwatcher-labs.workspace = true
+aiwatcher-alerts.workspace = true
+# Two readers. The job states a delivery moves through, which an alert history
+# filters by — and the digest rule, called rather than copied, so a test double
+# content-addresses the way the real store does.
+aiwatcher-jobs.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-training.workspace = true
@@ -42,10 +47,6 @@ utoipa-axum.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# The digest rule, called rather than copied: the test double has to
-# content-address the way the real store does, or the test that stops a worker
-# fabricating a reference would pass against a double that cannot tell.
-aiwatcher-jobs.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"

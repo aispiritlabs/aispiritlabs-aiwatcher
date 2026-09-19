@@ -78,6 +78,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-alerts"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-evaluation",
+ "aiwatcher-jobs",
+ "aiwatcher-prompts",
+ "async-trait",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-annotations"
 version = "0.1.0"
 dependencies = [
@@ -102,6 +122,7 @@ dependencies = [
 name = "aiwatcher-api"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-alerts",
  "aiwatcher-annotations",
  "aiwatcher-auth",
  "aiwatcher-bus",
@@ -427,6 +448,7 @@ dependencies = [
 name = "aiwatcher-server"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-alerts",
  "aiwatcher-annotations",
  "aiwatcher-api",
  "aiwatcher-auth",
@@ -453,6 +475,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "reqwest",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

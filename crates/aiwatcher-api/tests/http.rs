@@ -254,6 +254,8 @@ impl Fixture {
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,
             labs: None,
+            alerts: None,
+            alert_channel: None,
             sink: ingest_enabled.then(|| Arc::clone(&bus) as Arc<dyn MessageSink>),
             prompts: registry_enabled.then(|| {
                 Arc::new(Registry::new(

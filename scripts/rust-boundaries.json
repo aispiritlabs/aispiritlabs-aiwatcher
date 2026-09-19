@@ -5,17 +5,18 @@
     "prompts": ["core", "iam"], "datasets": ["core", "iam"], "training": ["core", "iam"], "evaluation": ["core", "iam"],
     "annotations": ["core", "jobs", "iam"], "conversations": ["core", "jobs"],
     "labs": ["core", "iam", "evaluation"],
+    "alerts": ["core", "jobs", "evaluation"],
     "execution": ["bus", "core", "datasets", "jobs", "iam"],
     "projector": ["bus", "core", "trace"],
-    "api": ["annotations", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "labs", "projector", "prompts", "training", "iam"],
-    "server": ["annotations", "api", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "jobs", "labs", "projector", "prompts", "runner", "trace", "training", "iam"],
+    "api": ["alerts", "annotations", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "jobs", "labs", "projector", "prompts", "training", "iam"],
+    "server": ["alerts", "annotations", "api", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "jobs", "labs", "projector", "prompts", "runner", "trace", "training", "iam"],
     "cli": ["api", "auth", "bus", "core", "execution", "server"],
     "migration": ["annotations", "core", "datasets", "iam", "prompts", "training"]
   },
   "test_only": {
     "annotations": ["prompts"], "conversations": ["prompts"],
     "datasets": ["prompts"], "training": ["prompts"],
-    "evaluation": ["prompts"], "labs": ["prompts"],
+    "evaluation": ["prompts"], "labs": ["prompts"], "alerts": ["prompts"],
     "execution": ["execution", "prompts"],
     "projector": ["execution"], "api": ["jobs"]
   }

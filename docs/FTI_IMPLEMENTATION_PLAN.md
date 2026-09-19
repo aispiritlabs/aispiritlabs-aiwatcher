@@ -23,17 +23,25 @@ zasoby serwerowe (D4). Sam filtr `project` nie zapewnia izolacji.
 
 ## Etap D — operacje i współpraca
 
-Status: nie rozpoczęty. Warunki wejścia są spełnione — uruchamialna ewaluacja
-(C0–C3) i trwałe wyniki (B) istnieją.
+Status: w toku. D1 dostarczone; reguły są w
+[ADR 0035](ADR/ADR_0035_ALERT_DELIVERY.md) i w decyzji 27 oraz Guardrails
+[`CLAUDE.md`](../CLAUDE.md), odbiór w opisie commita.
 
 **Rezultat:** platforma informuje o wyniku lub problemie, a zespół może wrócić do uzasadnienia decyzji.
 
-- **D1 — alerty v1:** terminalny błąd wykonania oraz regresja zakończonej, porównywalnej ewaluacji. Jeden kanał, najlepiej konfigurowany webhook. Trwała kolejka dostarczeń/outbox, retry z ograniczeniem, deduplikacja po zdarzeniu i wersji reguły, historia oraz test kanału. Odbiorca może otrzymać powtórzenie po niejednoznacznym błędzie sieci; przekazywać klucz deduplikacji zamiast obiecywać exactly-once.
 - **D2 — alerty okienkowe metryk**, później: okres, minimalna próba, cooldown, odzyskanie poprawnego stanu i jawne zachowanie przy braku danych. Harmonogram uruchamia sprawdzenie, ale sam nie definiuje reguły alertu.
 - **D3 — diagnostyka możliwości instancji** i integracja pierwszego źródła: dostępność registry/workera/oceny oraz link do pierwszego odebranego sygnału. Nie udostępniać sekretów w odpowiedzi diagnostycznej. UI konfiguracji tylko dla rzeczywiście edytowalnych ustawień.
 - **D4 — serwerowe zapisane widoki i prosty raport:** opis decyzji, przypięte warianty/oceny, kilka wykresów i referencje artefaktów. Osobno określić właściciela i uprawnienia zapisu/odczytu. Link do raportu nie nadaje dostępu do obiektów źródłowych. Lokalny zapis widoków z etapu A zostaje.
 
-**Odbiór D:** powtórzone zdarzenie nie tworzy nowego logicznego alertu; awaria kanału jest widoczna i ponawiana; raport zachowuje przypięte wyniki po zmianie etykiety produkcyjnej; osoba bez prawa do źródła nie dostaje jego treści przez raport.
+**Odbiór D:** powtórzone zdarzenie nie tworzy nowego logicznego alertu i awaria
+kanału jest widoczna i ponawiana — te dwa są spełnione przez D1; raport zachowuje
+przypięte wyniki po zmianie etykiety produkcyjnej; osoba bez prawa do źródła nie
+dostaje jego treści przez raport.
+
+Czego D1 nie zrobiło, powiedziane wprost: jeden kanał i brak trasowania per
+reguła; brak agregacji — pięćdziesiąt wykonań jednej definicji, które padły w
+minutę, to pięćdziesiąt powiadomień; baseline regresji jest wyprowadzony
+(poprzedni wynik tego samego wariantu w tym samym kontekście), a nie przypięty.
 
 ## Później — poza etapem D
 

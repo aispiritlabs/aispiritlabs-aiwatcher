@@ -85,6 +85,18 @@ const NEEDLES: &[(&str, &str)] = &[
         "needle-workflow-runner-token",
     ),
     (
+        "AIWATCHER_ALERT_WEBHOOK_URL",
+        "https://needle-alert-receiver.invalid/hook",
+    ),
+    (
+        "AIWATCHER_ALERT_WEBHOOK_TOKEN",
+        "needle-alert-webhook-token",
+    ),
+    (
+        "AIWATCHER_ALERT_WEBHOOK_SECRET",
+        "needle-alert-webhook-secret",
+    ),
+    (
         "AIWATCHER_WORKFLOW_POSTGRES_URL",
         "postgres://needle:needle-pg-password@needle-db.invalid/needle",
     ),
@@ -229,6 +241,10 @@ fn configured(scratch: &Scratch) -> Config {
         workflow_runner: WorkflowRunnerKind::Http,
         workflow_runner_url: Some(needle("AIWATCHER_WORKFLOW_RUNNER_URL").to_owned()),
         workflow_runner_token: Some(needle("AIWATCHER_WORKFLOW_RUNNER_TOKEN").to_owned()),
+
+        alert_webhook_url: Some(needle("AIWATCHER_ALERT_WEBHOOK_URL").to_owned()),
+        alert_webhook_token: Some(needle("AIWATCHER_ALERT_WEBHOOK_TOKEN").to_owned()),
+        alert_webhook_secret: Some(needle("AIWATCHER_ALERT_WEBHOOK_SECRET").to_owned()),
 
         huggingface_enabled: true,
         huggingface_token: Some(needle("AIWATCHER_HUGGINGFACE_TOKEN").to_owned()),

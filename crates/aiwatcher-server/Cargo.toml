@@ -53,6 +53,7 @@ aiwatcher-training.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-execution.workspace = true
 aiwatcher-labs.workspace = true
+aiwatcher-alerts.workspace = true
 aiwatcher-trace.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
@@ -75,6 +76,9 @@ axum.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 sha2.workspace = true
+# The house HMAC, as `aiwatcher-auth` signs a session with: an alert body is
+# signed so a receiver can tell this deployment's notifications from anybody's.
+ring.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

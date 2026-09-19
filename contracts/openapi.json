@@ -10,6 +10,612 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/alert-channel": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "What this deployment sends through, and never where.",
+        "operationId": "get_alert_channel",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertChannelView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-channel/test": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Send one notification through the configured channel, now.",
+        "description": "Synchronous on purpose. A test that queued something would answer\n\"accepted\" for a webhook nobody is listening on, which is the one answer a\ntest must not give. It leaves a record in the history like any other\ndelivery, so what a receiver saw can be found afterwards.",
+        "operationId": "test_alert_channel",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertChannelTest"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No channel is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-deliveries": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "What was sent, newest first.",
+        "operationId": "list_alert_deliveries",
+        "parameters": [
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "Only this rule's deliveries.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only deliveries in this state.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/JobState"
+                }
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Page by key: the last key on the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertDeliveryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-deliveries/{key}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "One delivery, by its dedup key.",
+        "operationId": "get_alert_delivery",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The dedup key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertDelivery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-deliveries/{key}/retry": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Send a failed delivery again.",
+        "description": "The budget starts over, which is the point: a channel that was down for an\nhour outlives three attempts, and somebody deciding this one is still worth\nsending is a different fact from a receiver that refused the body. A\ndelivery that did not fail answers 409 — re-sending a delivered one would\nbe this system creating the duplicate it exists to avoid.",
+        "operationId": "retry_alert_delivery",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The dedup key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertDelivery"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It did not fail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-rules": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Every alert rule, by name.",
+        "operationId": "list_alert_rules",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Page by name: the last name on the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRulePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Publish a version of an alert rule.",
+        "description": "Idempotent on the document: `created` is `false` when this exact rule was\nalready stored, and nothing that already fired under it fires again.",
+        "operationId": "publish_alert_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRulePublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This rule was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRulePublished"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRulePublished"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-rules/{name}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "One rule: its versions, and the one it is at now.",
+        "operationId": "get_alert_rule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The rule to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-rules/{name}/enabled": {
+      "put": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Switch a rule on or off.",
+        "description": "Not an edit: no version is published, the dedup key does not move, and\nswitching a rule back on does not re-send what it already sent while it was\non. Silencing a rule during an incident is what this is for.",
+        "operationId": "set_alert_rule_enabled",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The rule",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleEnabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleHead"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-rules/{name}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "One version of a rule.",
+        "operationId": "get_alert_rule_version",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The rule",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version's digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/annotation-blobs": {
       "post": {
         "tags": [
@@ -24576,6 +25182,580 @@
           }
         }
       },
+      "AlertChannelDescription": {
+        "type": "object",
+        "description": "What a channel is, for an inventory and for a history row.\n\nNever the address. A webhook URL is not a credential and is still\nreconnaissance for somebody already inside, which is the line\n`GET /api/v1/system` draws for every other endpoint this deployment holds.",
+        "required": [
+          "kind",
+          "variable",
+          "signed"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`webhook` — the only kind there is."
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "Whether what this sends carries a signature the receiver can check."
+          },
+          "variable": {
+            "type": "string",
+            "description": "The variable that configured it, which is what a reader needs anyway."
+          }
+        }
+      },
+      "AlertChannelTest": {
+        "type": "object",
+        "description": "What a channel test did.",
+        "required": [
+          "delivered",
+          "delivery"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/AlertDelivery",
+            "description": "The record this test left in the history, so a reader can find it."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The receiver's refusal, in the adapter's words."
+          }
+        }
+      },
+      "AlertChannelView": {
+        "type": "object",
+        "description": "What this deployment can send a notification through.",
+        "properties": {
+          "channel": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlertChannelDescription",
+                "description": "Absent when no channel is configured, which is the default and is why\nthis is a 200 carrying `None` rather than a 501: whether a channel\nexists is exactly the question being asked."
+              }
+            ]
+          }
+        }
+      },
+      "AlertDelivery": {
+        "type": "object",
+        "description": "One notification's record: the queue row and the history row, which are the\nsame object because a delivery's history *is* what became of it.",
+        "required": [
+          "dedup_key",
+          "rule",
+          "rule_version",
+          "state",
+          "attempts",
+          "created_at",
+          "available_at",
+          "payload"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts already spent. Zero until the first one is made.",
+            "minimum": 0
+          },
+          "available_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Not before this. Moved by the backoff after a retryable failure."
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dedup_key": {
+            "type": "string",
+            "description": "`sha256(rule version ‖ occurrence)`, and the key this is stored under."
+          },
+          "delivered_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt did not land. Kept on a delivered row too, so a\nreceiver that took it on the third attempt still shows what the first\ntwo hit."
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AlertPayload"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/AlertRuleName"
+          },
+          "rule_version": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          }
+        }
+      },
+      "AlertDeliveryPage": {
+        "type": "object",
+        "required": [
+          "deliveries",
+          "total"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertDelivery"
+            },
+            "description": "Newest first — a history is read from the top."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlertFact": {
+        "type": "object",
+        "description": "One named thing worth saying, in the order it should be read.\n\nA list rather than a map, because the order is the watcher's argument: the\nreason a run failed comes before the definition it ran, and a map sorted by\nkey would put `definition` first every time.",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertLink": {
+        "type": "object",
+        "description": "Where to look, as a path on this instance.\n\nA path and not a URL, because this process does not reliably know what it\nis reached by — an ingress rewrites, a port-forward is somebody's laptop —\nand a notification carrying a link to `localhost:8080` is worse than one\ncarrying a path the reader can paste after the host they already used.",
+        "required": [
+          "label",
+          "path"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Begins with one `/`. Anything else is refused where a signal is built."
+          }
+        }
+      },
+      "AlertPayload": {
+        "type": "object",
+        "description": "What goes to the receiver.\n\nFlat and `snake_case`, like the event envelope and the rerun body, so a\nproducer already parsing aiwatcher events needs no second vocabulary. It\ncarries `dedup_key` because this does not promise exactly-once: a receiver\nthat stores the key and ignores a repeat gets the guarantee this cannot\ngive it.",
+        "required": [
+          "dedup_key",
+          "rule",
+          "rule_version",
+          "trigger",
+          "subject",
+          "title",
+          "description",
+          "occurred_at"
+        ],
+        "properties": {
+          "dedup_key": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "The rule's own sentence about why somebody wanted to hear this."
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertFact"
+            }
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertLink"
+            },
+            "description": "Paths on this instance, never absolute URLs — a notification carrying a\nlink to a host this process guessed is worse than one carrying a path."
+          },
+          "occurred_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/AlertRuleName"
+          },
+          "rule_version": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "What it happened to: an execution id, an evaluation result id."
+          },
+          "title": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/AlertTriggerKind"
+          }
+        }
+      },
+      "AlertRule": {
+        "type": "object",
+        "description": "The document a version is a version of.",
+        "required": [
+          "name",
+          "description",
+          "trigger"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Why somebody wants to hear about this. Carried into every delivery,\nbecause the person woken by one did not write the rule."
+          },
+          "name": {
+            "$ref": "#/components/schemas/AlertRuleName"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/AlertTrigger"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AlertRuleDetail": {
+        "type": "object",
+        "description": "One rule, with the version it is at.",
+        "required": [
+          "head"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlertRuleVersion",
+                "description": "The version occurrences are matched against, carried with the rule so\nthe page paints without a second round trip."
+              }
+            ]
+          },
+          "head": {
+            "$ref": "#/components/schemas/AlertRuleHead"
+          }
+        }
+      },
+      "AlertRuleEnabledRequest": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AlertRuleHead": {
+        "type": "object",
+        "description": "What a name points at now.",
+        "required": [
+          "name",
+          "enabled",
+          "updated_at"
+        ],
+        "properties": {
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version every new occurrence is matched against."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Off raises nothing. On the head and not in a version, so silencing a\nrule does not move the dedup key and un-silencing it does not re-send\nwhat it already sent."
+          },
+          "labels": {
+            "type": "object",
+            "description": "Labels a deployment may move by hand. Unused by the matcher, kept so a\nname like `reviewed` means the same here as in the other registries.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/AlertRuleName"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRuleVersionSummary"
+            },
+            "description": "Newest first, bounded — a rule edited daily for a year is still one\nobject somebody can read."
+          }
+        }
+      },
+      "AlertRuleName": {
+        "type": "string"
+      },
+      "AlertRulePage": {
+        "type": "object",
+        "required": [
+          "rules",
+          "total"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRuleSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlertRulePublishRequest": {
+        "type": "object",
+        "description": "Publish a version of a rule.",
+        "required": [
+          "rule"
+        ],
+        "properties": {
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this version exists."
+          },
+          "rule": {
+            "$ref": "#/components/schemas/AlertRule"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AlertRulePublished": {
+        "type": "object",
+        "description": "What a publish did.",
+        "required": [
+          "version",
+          "created",
+          "head"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "`false` when this exact rule was already stored. Publishing is\ncontent-addressed, so re-sending an unchanged rule is not a new version\n— and, because the dedup key is built from the version, it is also not\na reason to notify anybody again about what already fired."
+          },
+          "head": {
+            "$ref": "#/components/schemas/AlertRuleHead"
+          },
+          "version": {
+            "$ref": "#/components/schemas/AlertRuleVersion"
+          }
+        }
+      },
+      "AlertRuleSummary": {
+        "type": "object",
+        "description": "One rule as a list shows it.",
+        "required": [
+          "name",
+          "enabled",
+          "versions",
+          "updated_at"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlertRuleVersionSummary"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "$ref": "#/components/schemas/AlertRuleName"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "versions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlertRuleVersion": {
+        "type": "object",
+        "description": "One immutable version of a rule.",
+        "required": [
+          "version_id",
+          "rule",
+          "published_at"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this version exists."
+          },
+          "published_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/AlertRule"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertRuleVersionSummary": {
+        "type": "object",
+        "description": "One version as an index lists it.",
+        "required": [
+          "version_id",
+          "trigger",
+          "description",
+          "published_at"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/AlertTriggerKind"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertTrigger": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A managed execution that reached a terminal failure.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "definition": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Only executions of this definition. Absent is every definition,\nwhich is the useful default for a deployment running three."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "execution_failed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A completed, comparable evaluation result the gate calls a regression\nagainst the baseline an operator admitted beside it.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "context_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Only results measured in this evaluation context — the content\naddress of the cohort, the split, the suite and the scorers\ntogether, so narrowing by it is narrowing to one comparable\nmeasurement rather than to a name somebody typed."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "evaluation_regressed"
+                ]
+              },
+              "policy": {
+                "$ref": "#/components/schemas/GatePolicy",
+                "description": "How far worse each metric may be, and which cases must hold. The\ndefault holds every metric to no worse at all, which is what a\ndeployment that has not thought about tolerances means."
+              }
+            }
+          }
+        ],
+        "description": "What a rule fires on."
+      },
+      "AlertTriggerKind": {
+        "type": "string",
+        "description": "Which watcher raised a signal, and which rules can match it.",
+        "enum": [
+          "execution_failed",
+          "evaluation_regressed"
+        ]
+      },
       "Annotation": {
         "type": "object",
         "description": "One drawn instance.",
@@ -45465,6 +46645,10 @@
     {
       "name": "labs",
       "description": "A workshop's labs: the authored brief, and the scorecard and cohort it pins"
+    },
+    {
+      "name": "alerts",
+      "description": "What is worth telling somebody about, what was sent, and the one channel it goes through"
     },
     {
       "name": "datasets",
