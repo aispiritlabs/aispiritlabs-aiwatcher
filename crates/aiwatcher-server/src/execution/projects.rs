@@ -217,12 +217,15 @@ async fn run(context: Context, poll: Duration, shutdown: CancellationToken) {
     }
 }
 
-/// Read the set of projects again, and bind a dispatcher for each new one.
+/// Read the set of projects again, bind a dispatcher for each new one and drop
+/// the ones that have none left.
 ///
-/// A project that has gone is kept bound rather than dropped: `project_scopes`
-/// answers from the ownership records, and those go with the executions a sweep
-/// forgets — so a project that is merely idle would otherwise be unbound and
-/// rebound every minute.
+/// Dropping is safe and is what keeps this bounded: a scope the store does not
+/// list holds no execution here, so there is nothing of it to claim, publish,
+/// time out or sweep — and an execution an outbox row still speaks for is one
+/// `prunable` refuses to forget, so a project with a fact still to publish is
+/// still listed. Coming back costs one `for_project`, which shares the backing
+/// store.
 async fn discover(context: &Context, bound: &mut BTreeMap<ProjectScope, Arc<ProjectDispatcher>>) {
     let scopes = match context.store.project_scopes(MAX_PROJECTS + 1).await {
         Ok(scopes) => scopes,
@@ -242,7 +245,9 @@ async fn discover(context: &Context, bound: &mut BTreeMap<ProjectScope, Arc<Proj
              {MAX_PROJECTS} in scope order are served and the rest wait for another process",
         );
     }
-    for scope in scopes.into_iter().take(MAX_PROJECTS) {
+    let served: Vec<ProjectScope> = scopes.into_iter().take(MAX_PROJECTS).collect();
+    bound.retain(|scope, _| served.contains(scope));
+    for scope in served {
         if bound.contains_key(&scope) {
             continue;
         }
