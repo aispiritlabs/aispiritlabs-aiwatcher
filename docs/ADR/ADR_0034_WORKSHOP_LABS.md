@@ -188,3 +188,64 @@ fills. And if two labs in one workshop ever need to share a cohort while
 measuring it differently, or the same card over two cohorts, the `context_id`
 join stops being one-to-one with a lab and the class view needs a key of its own
 rather than a derived one.
+
+## Amendment, 2026-09-19: a lab hands out the notebook the work is done in
+
+The decision above holds and gains one field. A brief is what somebody reads;
+it is not what they work in, and a workshop whose exercise is "open a notebook
+and make this pass" had nowhere to put the notebook. So a lab may carry one:
+
+```
+Lab { name, title, position, brief, notebook?, tests? }
+LabNotebook { name, revision }
+```
+
+**It names the file and pins its digest, and stores no copy.** The source lives
+in `services/ml_pipeline`, which is the one process that serves it as a live
+app, imports it for a step and keeps `.revisions/<name>/<sha256>.py` forever —
+and `services/ml_pipeline/CLAUDE.md` already states the rule for a curation
+block: *never hold a notebook's source in the block.* A lab is the second thing
+to pin one and it obeys the same rule for the same reason, which is that a copy
+in a registry is a second source of truth for a file that has to stay runnable
+on its own. The pin is **required** wherever a notebook is named, as it is for a
+public block solution: material several people open cannot resolve through a
+head, because an edit between two of them opening it changes the exercise under
+one.
+
+**The refusals part company here, and deliberately.** A card and a cohort are
+resolved before a lab is stored, because they are in this instance's own
+registry and resolving them is a read. A notebook is not: it belongs to a
+service a deployment need not run at all, and a publish that called it would put
+a third party in the write path of an authored document. What the registry
+refuses is a pin that could never resolve *anywhere* — the runtime's own name
+and digest rules, restated — and a notebook this runtime does not hold is
+reported where the lab is **read**, beside the file that could not be opened.
+The panel pins what the runtime answered on the save, so the digest is never
+composed in a browser that does not keep the file.
+
+**The live app serves the head**, because marimo turns the notebook root into
+apps and the revision history is kept out of it (`editor.rs` says so already).
+So a lab shows the pinned source, opens the head, and says when the two have
+drifted, rather than serving one quietly as the other. Nothing runs because a
+lab was opened: the live app is behind a click of its own, the reason
+`EditorHost::open` stages and stops.
+
+**A participant works in a copy.** One namespace holds every notebook this
+instance can run, including the two that ship with it, so thirty people saving
+`lab_03_agent` would be thirty people overwriting each other and one of them
+would be what the next reader of the lab was handed. Taking a copy mints a name
+nobody else has, which is what the block library already does, and an upload
+that would land on an existing name takes a suffix rather than the file.
+
+**What this does not do.** It does not hand the work in. A submission is a
+staged recording or answers a worker generated, scored by a run somebody starts,
+and `POST /evaluation-runs/{id}/start` still has no project twin — so the copy a
+participant works in is theirs and this instance does not yet know it exists.
+That is the same gap this ADR already left visible, seen from the other side.
+
+It is also, today, **reachable where the panel can reach a notebook runtime**:
+`apps/panel/vite.config.ts` proxies `/ml-pipeline` in development, and the chart
+has no browser-facing proxy for a service that runs code with no sandbox and no
+authentication. A lab's notebook therefore opens under `just dev` and a local
+install, and says plainly that there is no runtime where there is none. Exposing
+one is a decision about that service, not about labs.

@@ -1432,3 +1432,112 @@ a dane, na których porównanie ma sens, wymagają dwóch pełnych okien przebie
 `cargo test` — nie tknięto żadnego crate'a; klastra, workerów, S3/RustFS.
 Równolegle w tym samym repozytorium idzie IAM-02/B, którego praca dotyka
 `aiwatcher-projector` i `aiwatcher-api`; ten krok nie wchodzi do żadnego z nich.
+
+## Kontynuacja — materiał warsztatu: notatnik i notatki (LEARN-02, druga tura)
+
+Data: 19.09.2026. Pierwsza tura LEARN-02 dała **brief, przypięte testy i wyniki
+grupy** — i wszystko to do *czytania*. Zostało to, od czego warsztat się
+zaczyna: prowadzący musi móc laboratorium **napisać**, a kursant **uruchomić**.
+Jedno i drugie zrobione, z jednym nowym polem w kontrakcie i bez ani jednej
+nowej trasy.
+
+### Notatnik jest przypięty, nie przechowany
+
+`Lab` zyskał `notebook: { name, revision }`. Rejestr **nie trzyma źródła** —
+trzyma je `services/ml_pipeline`, jedyny proces, który serwuje ten plik jako
+żywą aplikację, importuje go jako krok i zapisuje każdą wersję w
+`.revisions/<name>/<sha256>.py`. Reguła nie jest nowa: `services/ml_pipeline/CLAUDE.md`
+mówi ją od dawna o bloku kuracji (*nigdy nie trzymaj źródła notatnika w bloku*),
+a laboratorium jest drugą rzeczą, która takie źródło przypina. Przypięcie jest
+**wymagane** wszędzie tam, gdzie notatnik w ogóle jest nazwany — materiał, który
+otwiera trzydzieścioro ludzi, nie może rozwiązywać się przez head, bo edycja
+między jednym a drugim otwarciem zmienia ćwiczenie pod jednym z nich. Ten sam
+powód, dla którego karta jest przypięta na wersji, i ten sam, dla którego
+publiczne rozwiązanie bloku musi przypiąć rewizję.
+
+**Odmowy rozchodzą się tu świadomie.** Karta i kohorta są rozwiązywane przed
+zapisem laboratorium, bo leżą w rejestrze tej instancji i sprawdzenie ich to
+odczyt. Notatnik nie: należy do usługi, której wdrożenie nie musi w ogóle
+uruchamiać, a publikacja wołająca ją wstawiłaby stronę trzecią w ścieżkę zapisu
+dokumentu autorskiego. Rejestr odmawia więc wyłącznie przypięcia, które **nigdzie**
+nie mogłoby się rozwiązać — nazwa i digest wedle reguł samego runtime'u,
+powtórzonych — a notatnik, którego ten runtime nie ma, jest zgłaszany tam, gdzie
+laboratorium jest **czytane**, obok pliku, którego nie dało się otworzyć.
+
+### Tworzenie: notatki i notatnik, oba z pliku
+
+`features/learning/screens/overview/compose.tsx` — formularz „Write a lab" dla
+kogoś, kto ma na warsztacie grant `editor` albo `admin` (viewer widzi zdanie, a
+nie ukryty przycisk; to nie jest kontrola, tylko chowanie kontroli, którą serwer
+i tak by odmówił). Notatki wpisuje się albo **wczytuje z pliku** (`.md`, `.txt`)
+— bez renderera, bo panel go nie ma i wybranie go nadal byłoby decyzją podjętą
+przy okazji rysowania lekcji. Notatnik **uploaduje się jako plik `.py`**, i to
+jest jedyne miejsce z prawdziwą regułą: upload **najpierw zapisuje plik do
+runtime'u** (`PUT /ml-pipeline/notebooks/{name}`) i przypina to, co runtime
+odpowiedział. Digest policzony w przeglądarce byłby drugim adresem treści dla
+pliku, którego przeglądarka nie przechowuje. Nazwa jest wyprowadzana z pliku i
+sanityzowana do reguły runtime'u (`^[a-z][a-z0-9_]{0,63}$`), a kolizja dostaje
+sufiks zamiast nadpisania — jeden warsztat nadpisujący `pii_detection` zepsułby
+cudzy pipeline kuracji z poziomu obszaru Learning.
+
+Publikacja i **ustawienie** są osobne, jak w rejestrze promptów: checkbox „Make
+this the version participants read" przesuwa etykietę `published`, a bez niego
+publikuje się szkic następnego tygodnia.
+
+### Uruchomienie po stronie kursanta
+
+`screens/overview/notebook.tsx` czyta **przypiętą rewizję** (nie head), pokazuje
+źródło, jakie laboratorium wydało, i otwiera żywą aplikację marimo w iframie.
+Trzy rzeczy są tu widoczne, a nie schowane:
+
+- **Runtime'u może nie być.** Nie ma uwierzytelnienia ani sandboxa, słucha na
+  localhoście, a chart nie ma dla niego proxy od strony przeglądarki. To zdanie
+  i nazwa recepty (`just ml-pipeline-serve`), a nie czerwone pudełko — postawa
+  Query tab wobec Flow. Notatnik laboratorium otwiera się więc pod `just dev` i
+  przy lokalnej instalacji; wystawienie tej usługi to decyzja o niej, nie o
+  laboratoriach.
+- **Żywa aplikacja serwuje head**, bo marimo robi aplikacje z katalogu
+  notatników, a historia rewizji jest poza nim (`editor.rs` mówi to od dawna).
+  Kiedy head odjechał od przypięcia, panel mówi, że się rozjechały, zamiast
+  cicho podać jedno za drugie.
+- **Nic się nie uruchamia dlatego, że ktoś otworzył laboratorium.** Żywa
+  aplikacja jest za kliknięciem — ten sam powód, dla którego `EditorHost::open`
+  stage'uje i się zatrzymuje.
+
+Kursant pracuje we **własnej kopii** (`Work in a copy of my own`), którą może
+edytować, zapisywać i uruchamiać. Nie w pliku laboratorium: jedna przestrzeń
+nazw trzyma wszystkie notatniki tej instancji, więc trzydzieści osób
+zapisujących `lab_03_agent` to trzydzieści osób nadpisujących się nawzajem, a
+ostatni zapis byłby tym, co dostaje następny czytelnik laboratorium.
+
+**Czego to nie robi: nie oddaje pracy.** Zgłoszenie to nagranie albo wygenerowane
+odpowiedzi, ocenione przebiegiem, który ktoś startuje, a `POST
+/evaluation-runs/{id}/start` nadal nie ma bliźniaka projektowego (ADR_0033 nie
+otwiera żadnego przed IAM-02/D). Kopia kursanta jest więc jego i ta instancja nie
+wie, że istnieje. Panel mówi to zdaniem, zamiast rysować przycisk.
+
+Które laboratorium jest otwarte — i która kopia notatnika — jest teraz **w
+URL-u**. To był dokładnie ten dzień, który pierwsza tura zapowiedziała: „przeniesie
+się do URL-a tego dnia, w którym dostanie własną trasę".
+
+### Walidacja
+
+- `aiwatcher-labs`: **10 testów** (8 + dwa nowe: notatnik jest częścią wersji, a
+  nowe przypięcie to nowa wersja; przypięcie, którego runtime nigdy by nie
+  rozwiązał, odmawiane po nazwie pola).
+- `aiwatcher-api`: **5 testów HTTP** na rodzinie zakresowej (4 + jeden: lab wydaje
+  przypięty notatnik, wraca jak zapisany, a zły pin to 400 nazywające pole).
+- Panel: **15 testów** na stronie (12 + trzy: laboratorium otwiera się na
+  **przypiętej rewizji** i mówi o rozjeździe z headem; publikacja **najpierw
+  zapisuje notatnik** i przypina to, co runtime odpowiedział — sprawdzone przez
+  psucie: digest policzony w przeglądarce wywala asercję; viewer nie dostaje
+  formularza). Cały panel: 490 testów zielonych.
+- `cargo clippy --workspace --all-targets --all-features -Dwarnings`,
+  `cargo fmt --all --check`, `git diff --check`,
+  `python3 scripts/check-rust-boundaries.py`, `just openapi` (**ani jednej nowej
+  ścieżki** — jedno pole na `Lab`, jedno na `LabVersionSummary` i jeden schemat
+  `LabNotebook`), `npm run build`, `npm run lint`, `npx prettier`.
+
+Czego **nie** uruchomiono: pełnego `cargo test --workspace`; żywego serwera z SSO
+i przeglądarki; runtime'u notatników z prawdziwym marimo (testy panelu stubują
+jego cztery trasy); klastra, workerów, S3/RustFS.

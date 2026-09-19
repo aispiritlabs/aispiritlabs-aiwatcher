@@ -17,30 +17,21 @@ import { short } from '@/shared/lib/iam';
 /**
  * The notebook a lab hands out, and the copy the participant works in.
  *
- * **The lab names a file and pins its digest; it never carries the source.**
- * That file is what marimo serves, what `ml_pipeline.step` imports and what
- * the participant edits — a copy of it in the registry would be a second
- * source of truth for something that has to stay runnable on its own, which is
- * the rule `services/ml_pipeline/CLAUDE.md` already states for a curation
- * block. So everything here is read from the notebook runtime, by the pin the
- * lab published.
+ * **The lab names a file and pins its digest; it never carries the source**
+ * (ADR_0034), so everything here is read from the notebook runtime by that
+ * pin. Three consequences are on the screen rather than hidden.
  *
- * Three consequences are visible on the screen rather than hidden.
- *
- * The runtime **may not be there**. It has no authentication and no sandbox,
- * it binds to localhost, and a deployment is free not to run one; that is a
- * sentence and the name of the recipe that starts it, not an error box — the
- * same posture the Query tab takes towards Flow.
+ * The runtime **may not be there** — no authentication, no sandbox, bound to
+ * localhost, and a deployment is free not to run one. That is a sentence and
+ * the recipe that starts it, the posture the Query tab takes towards Flow.
  *
  * The live app serves the notebook's **head**, because marimo turns the
- * notebook root into apps and the revision history is kept out of it. When the
- * head has moved past what this lab pinned, the two are said to have drifted
- * and the pinned source is shown beside it, rather than quietly running
- * something the lab did not hand out.
+ * notebook root into apps and the revision history is kept out of it. Past the
+ * pin, the two are said to have drifted and the pinned source is shown beside
+ * it rather than one being served quietly as the other.
  *
- * And **nothing runs because somebody opened a lab.** Opening the live app is
- * a click of its own, for the reason `EditorHost::open` stages and stops:
- * executing on open runs somebody's code because a page was looked at.
+ * And **nothing runs because somebody opened a lab**: the live app is a click
+ * of its own, for the reason `EditorHost::open` stages and stops.
  */
 export function Notebook({
   pinned,
