@@ -100,21 +100,37 @@ pub fn judged(
     let Some(evaluations) = state.evaluations.as_ref() else {
         return registry;
     };
-    let judge = match super::judge::OpenAiJudge::from_config(config) {
-        Ok(Some(judge)) => judge,
-        Ok(None) => return registry,
-        Err(error) => {
-            tracing::error!(%error, "the judge client did not build; no judged run is claimed here");
-            return registry;
-        }
+    let Some((judge, concurrency)) = judge_client(config) else {
+        return registry;
     };
-    tracing::info!(provider = judge.provider(), "the work role asks a judge");
-    let mut executor = ScoreExecutor::new(Arc::clone(evaluations))
-        .judged_by(Arc::new(judge), config.judge_concurrency);
+    tracing::info!("the work role asks a judge");
+    let mut executor = ScoreExecutor::new(Arc::clone(evaluations)).judged_by(judge, concurrency);
     if let Some(artifacts) = artifacts {
         executor = executor.reading_from(artifacts.clone());
     }
     registry.with(Arc::new(executor))
+}
+
+/// The judge this deployment asks, and how many questions it puts at once.
+///
+/// One construction read by three callers — the judged executor, the external
+/// one, and the loop that performs a project's measurements — because a judge
+/// built twice is two clients against one rate limit, and a judge built in one
+/// place and forgotten in another is a card that claims nothing where it
+/// should.
+#[must_use]
+pub fn judge_client(config: &crate::config::Config) -> Option<(Arc<dyn JudgeModel>, usize)> {
+    match super::judge::OpenAiJudge::from_config(config) {
+        Ok(Some(judge)) => Some((
+            Arc::new(judge) as Arc<dyn JudgeModel>,
+            config.judge_concurrency,
+        )),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::error!(%error, "the judge client did not build; a card asking one fails here");
+            None
+        }
+    }
 }
 
 /// The executor for runs whose card asks a scorer service, if this deployment
@@ -135,14 +151,8 @@ pub fn external(
     if let Some(artifacts) = artifacts {
         executor = executor.reading_from(artifacts.clone());
     }
-    match super::judge::OpenAiJudge::from_config(config) {
-        Ok(Some(judge)) => {
-            executor = executor.judged_by(Arc::new(judge), config.judge_concurrency);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            tracing::error!(%error, "the judge client did not build; a card asking one fails here");
-        }
+    if let Some((judge, concurrency)) = judge_client(config) {
+        executor = executor.judged_by(judge, concurrency);
     }
     tracing::info!("the work role asks a scorer service");
     registry.with(Arc::new(executor))

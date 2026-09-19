@@ -301,23 +301,6 @@ pub fn spawn(
             shutdown.clone(),
         ));
 
-        // Every project's work, in one loop, each against a store bound to one
-        // project. The four loops above hold the **unscoped** store and so see
-        // none of it — which is ADR_0033's whole point and the reason none of
-        // them needed changing when this arrived.
-        tasks.projects = projects::spawn(
-            state,
-            store,
-            sink,
-            objects,
-            projects::Settings {
-                poll: config.execution_poll,
-                retention: config.workflow_retention,
-                owner: owner_of(config, "work"),
-            },
-            shutdown,
-        );
-
         // One registry per address, merged: each executor's "no address is a
         // working state" stays local to it, and a deployment may run managed
         // query steps and no notebooks or the other way round. The query half
@@ -343,6 +326,29 @@ pub fn spawn(
                 shutdown.clone(),
             ));
         }
+        // Every project's work, in one loop, each against a store bound to one
+        // project. The loops above hold the **unscoped** store and so see none
+        // of it — which is ADR_0033's whole point and the reason none of them
+        // needed changing when this arrived. Here rather than beside them,
+        // because it needs the same judge and scorer clients they do: a card
+        // asking one is claimed by this loop or by nothing.
+        tasks.projects = projects::spawn(
+            state,
+            store,
+            sink,
+            objects,
+            projects::Wiring {
+                poll: config.execution_poll,
+                retention: config.workflow_retention,
+                owner: owner_of(config, "work"),
+                judge: scoring::judge_client(config),
+                scorers: scorer_service
+                    .clone()
+                    .map(|service| (service, config.scorer_concurrency)),
+            },
+            shutdown,
+        );
+
         let executors = query::executors(config, artifacts)
             .merge(marimo::executors(config, artifacts))
             .merge(scoring::judged(state, config, artifacts))

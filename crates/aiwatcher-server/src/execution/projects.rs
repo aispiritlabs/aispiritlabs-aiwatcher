@@ -64,9 +64,14 @@ use super::SWEEP_EVERY;
 /// minute.
 const MAX_PROJECTS: usize = 64;
 
-/// What the work role's own configuration says about this loop.
-#[derive(Debug)]
-pub struct Settings {
+/// What this process brings to a project's work.
+///
+/// The clients as well as the intervals, and they are here rather than read
+/// off `Config` a second time because a project's dispatcher and the work
+/// role's own reactor must claim the same runtimes for the same reasons: a
+/// judge this process does not hold is a card nothing claims, whichever side
+/// of the boundary the card is on.
+pub struct Wiring {
     /// How often each bound project is asked whether it has work.
     pub poll: Duration,
     /// How long a project's finished executions are kept, if at all.
@@ -74,6 +79,21 @@ pub struct Settings {
     /// The name this process holds a project's leases under, before the
     /// project's own key is appended to it.
     pub owner: String,
+    /// The judge this process asks, and how many questions at once.
+    pub judge: Option<(Arc<dyn aiwatcher_evaluation::JudgeModel>, usize)>,
+    /// The scorer service this process asks, and its ceiling.
+    pub scorers: Option<(Arc<dyn aiwatcher_evaluation::ExternalScorers>, usize)>,
+}
+
+impl std::fmt::Debug for Wiring {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wiring")
+            .field("poll", &self.poll)
+            .field("retention", &self.retention)
+            .field("judge", &self.judge.is_some())
+            .field("scorers", &self.scorers.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Start the loop, where this process is the work role and has what a project
@@ -88,14 +108,41 @@ pub fn spawn(
     store: &Arc<dyn WorkflowStore>,
     sink: &Arc<dyn MessageSink>,
     objects: Option<&Arc<dyn ObjectStore>>,
-    settings: Settings,
+    wiring: Wiring,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
-    let Settings {
+    let Wiring {
         poll,
         retention,
         owner,
-    } = settings;
+        judge,
+        scorers,
+    } = wiring;
+    // Each absence is a working state and each says which one it is, because a
+    // process that silently performs no project's work is indistinguishable
+    // from one where no project has any.
+    let missing = [
+        ("AIWATCHER_IAM_POSTGRES_URL", state.iam.is_none()),
+        (
+            "AIWATCHER_PROMPT_STORE (the evaluation registry)",
+            state.evaluations.is_none(),
+        ),
+        (
+            "an object store for a project's artifacts",
+            objects.is_none(),
+        ),
+    ];
+    let absent: Vec<&str> = missing
+        .iter()
+        .filter_map(|(what, missing)| missing.then_some(*what))
+        .collect();
+    if !absent.is_empty() {
+        tracing::info!(
+            missing = absent.join(", "),
+            "this process performs no project's managed work"
+        );
+        return None;
+    }
     let iam = state.iam.clone()?;
     let evaluations = state.evaluations.clone()?;
     let objects = objects?.clone();
@@ -107,6 +154,8 @@ pub fn spawn(
         iam,
         owner,
         retention,
+        judge,
+        scorers,
         telemetry: Telemetry {
             read_model: Arc::clone(&state.read_model),
             bundles: state.evaluation_bundles.clone(),
@@ -135,6 +184,8 @@ struct Context {
     iam: Arc<dyn aiwatcher_iam::IamStore>,
     owner: String,
     retention: Option<Duration>,
+    judge: Option<(Arc<dyn aiwatcher_evaluation::JudgeModel>, usize)>,
+    scorers: Option<(Arc<dyn aiwatcher_evaluation::ExternalScorers>, usize)>,
     telemetry: Telemetry,
 }
 
@@ -205,7 +256,17 @@ async fn discover(context: &Context, bound: &mut BTreeMap<ProjectScope, Arc<Proj
         );
         match dispatcher {
             Ok(dispatcher) => {
-                let dispatcher = dispatcher.reading_telemetry(context.telemetry.clone());
+                let mut dispatcher = dispatcher.reading_telemetry(context.telemetry.clone());
+                // The same clients the work role's own reactor holds. A card
+                // that asks a judge or a framework metric is claimed here or
+                // by nothing, because a project's attempt is invisible to
+                // every other reactor in this process.
+                if let Some((judge, concurrency)) = context.judge.clone() {
+                    dispatcher = dispatcher.judged_by(judge, concurrency);
+                }
+                if let Some((scorers, concurrency)) = context.scorers.clone() {
+                    dispatcher = dispatcher.scored_by(scorers, concurrency);
+                }
                 tracing::info!(
                     project = %scope.key(),
                     runtimes = ?dispatcher.runtimes(),
