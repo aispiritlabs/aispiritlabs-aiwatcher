@@ -501,10 +501,12 @@ oddałoby katalog temu, kto zadeklarował wcześniej, a drugiemu zostawiło pust
 listę. `run_id` to jeden proces, więc fold przebiegów i fold ewaluacji (którego
 id **jest** `run_id`) zostają przy „pierwszy wygrywa".
 
-Trzy pytania z IAM-02/C odwróciły odpowiedź. Matryca urosła z 47 do **51**: graf
-projektu, jego przejście i jego raport są na trasach projektu, a na
-instancyjnych nie ma ich wcale — pytane po odebraniu grantu, więc druga połowa
-jest zadawana komuś, komu projekt odpowiada 404.
+Trzy pytania z IAM-02/C odwróciły odpowiedź. Matryca urosła z 47 do **51** i
+przebiegła **51/51** na żywym serwerze (`just authentik-up`, `authentik-seed`,
+`postgres-up`, `run-sso-iam`, `panel`, dwa przebiegi z `AIWATCHER_M1_SCOPE`):
+graf projektu, jego przejście i jego raport są na trasach projektu, a na
+instancyjnych nie ma ich wcale — druga połowa pytana po odebraniu grantu, więc
+odpowiada komuś, komu projekt mówi 404.
 
 ### E6 — dwa zakazy zdjęte, i czego projekt nie uruchomi
 
@@ -526,6 +528,16 @@ który dopuścił **grant**, i principala, którego zweryfikowała **sesja** —
 `requested_by`, planu, parametru ani autora deklaracji — i zapisywany w tej samej
 transakcji co przebieg. Grant pytany dwa razy: przy wpuszczeniu żądania i
 ponownie po przeczytaniu deklaracji, przed transakcją.
+
+**I przebieg projektu da się otworzyć.** `GET {zakres}/executions/{id}`, jego
+historia i cztery komendy (`cancel`, `pause`, `resume`, `retry`) plus `input`
+mają bliźniaka zakresowego nad **związanym** magazynem; trasy instancyjne
+odpowiadają na nie 404, bo nieskopowany magazyn przebiegu projektu nie widzi.
+Połowa decydenta i workera bliźniaka nie ma i to jest ta sama linia:
+poświadczenie workera nazywa kolejki, nie projekt. Bramka kroku (`awaiting.role`)
+pyta o rolę **tej strony** — instancyjną na trasie instancyjnej, grant projektu
+na projektowej — bo inaczej admin instancji bez grantu odpowiadałby na pytanie
+zadane adminowi projektu.
 
 **Czego projekt nie uruchomi, i dlaczego — cztery różne powody, nie jeden.**
 `RuntimeKind::outside_a_project` odpowiada per rodzaj, a `start` odmawia planu

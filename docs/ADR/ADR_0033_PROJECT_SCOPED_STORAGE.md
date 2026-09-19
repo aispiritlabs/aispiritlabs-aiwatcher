@@ -400,3 +400,23 @@ that is a deployment shape rather than a decision this ADR can take.
 is that a project's work now runs and is visible to the project; what has not
 is logs, the query and notebook runtimes, worker credentials, schedules, the
 conversation archive, and eleven migration families with no adapter.
+
+### Measured, not argued
+
+`scripts/iam-permission-check.py` is **51 questions** and answered all of them
+against a live server. Six of them are this amendment's: a project's graph, its
+traversal and its evaluation report are on the project's own routes, none of
+the three is on an instance list, and the project's own catalog is cut when the
+grant is — the last three asked of a principal the project already answers 404
+to, which is the half a badge on a row could have faked.
+
+One run's own page is scoped too: `GET
+/api/v1/orgs/{organization}/projects/{project}/executions/{id}`, its history
+and the four commands a person sends, all over the bound store, with the
+instance's own routes answering 404 for a project's run. The hosted decider's
+lease, its stream append, its timers and its payloads have no scoped twin, and
+that is the same line again — a worker's credential names queues rather than a
+project. A step's own gate (`awaiting.role`) is asked of **the side the request
+is on**: the instance's role on the instance's routes and the project's grant on
+a project's, because an instance admin holding no grant answering a question
+asked of a project's admin is exactly what decision 6 forbids.
