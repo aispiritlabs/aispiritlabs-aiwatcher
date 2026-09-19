@@ -48,6 +48,21 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // A marimo serving a workshop's own notebooks, for the labs that hand one
+      // out (ADR_0034, amended). Optional in the same way, and the only reason
+      // it is a path on this origin rather than an address the panel is told is
+      // that an address out of stored data, opened by a browser, is the shape
+      // `AIWATCHER_WORKFLOW_RUNNER_URL` is configuration to avoid.
+      //
+      // Whatever serves it runs with `--base-url /lab-marimo`, so marimo emits
+      // its own URLs under the prefix and nothing is rewritten here. `ws` for
+      // the same reason as above: without it the notebook loads, renders
+      // nothing, and never says why.
+      '/lab-marimo': {
+        target: process.env.AIWATCHER_LAB_MARIMO_URL ?? 'http://127.0.0.1:2718',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 });

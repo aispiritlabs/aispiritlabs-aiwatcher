@@ -741,7 +741,7 @@ it('opens a lab at the notebook revision it pinned, not at the file as it is now
           const body = detail('Work through the notebook.', null);
           return {
             ...body,
-            current: { ...body.current, notebook: { name: 'lab_03_agent', revision: PIN } },
+            current: { ...body.current, notebook: { path: 'lab_03_agent', revision: PIN } },
           };
         })(),
       },
@@ -812,6 +812,7 @@ it('publishes a lab by saving its notebook first and pinning what the runtime an
     'Build an agent',
   );
   await userEvent.type(within(labs).getByRole('textbox', { name: /^Notes/ }), 'Read this first.');
+  await userEvent.click(within(labs).getByRole('button', { name: 'A notebook kept here' }));
   await userEvent.upload(
     within(labs).getByLabelText(/Upload a marimo notebook/),
     new File(['import marimo\n'], 'Lab 03 agents.py', { type: 'text/x-python' }),
@@ -827,7 +828,7 @@ it('publishes a lab by saving its notebook first and pinning what the runtime an
     name: 'lab-03',
     title: 'Build an agent',
     brief: 'Read this first.',
-    notebook: { name: 'lab_03_agents', revision: PIN },
+    notebook: { path: 'lab_03_agents', revision: PIN },
     label: 'published',
   });
   // Proved by breaking: swap the pin for a digest worked out in the browser and
@@ -843,4 +844,135 @@ it('offers no way to write a lab to somebody whose grant only reads', async () =
   const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
   expect(within(labs).queryByRole('button', { name: 'Write a lab' })).toBeNull();
   expect(within(labs).getByText(/Writing a lab needs editor or admin/)).toBeTruthy();
+});
+
+const workshopLab = () => {
+  const body = detail('Follow one failed request all the way through.', null);
+  return {
+    ...body,
+    current: {
+      ...body.current,
+      notebook: {
+        path: 'labs/00_foundations/00_llm_workflow_map/notebook.py',
+        command: 'just notebook foundations 00_llm_workflow_map',
+        port: 2718,
+      },
+    },
+  };
+};
+
+/** The four reads a workshop-shaped lab makes, minus whatever the test serves. */
+const workshopRoutes = (extra: Route[]): Route[] => [
+  { method: 'GET', path: '/labs', answer: { status: 200, body: { labs: [summary()], total: 1 } } },
+  { method: 'GET', path: '/labs/lab-03', answer: { status: 200, body: workshopLab() } },
+  {
+    method: 'GET',
+    path: '/labs/lab-03/measurement',
+    answer: {
+      status: 200,
+      body: {
+        name: 'lab-03',
+        version_id: 'a'.repeat(64),
+        unavailable: 'this lab pins no tests yet',
+      },
+    },
+  },
+  ...extra,
+];
+
+it('offers a workshop notebook in two places, and takes no address from the lab', async () => {
+  // The lab says which file and how to open it. Where marimo runs is the
+  // deployment's answer or the participant's, and this is the test that holds
+  // the page to never having been told one: every address it asks about is
+  // either this origin or the participant's own loopback on the lab's port.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = participant(workshopRoutes([]));
+  await open('/learning?organization=org&project=ret&lab=lab-03');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  expect(await within(labs).findByText('Notebook')).toBeTruthy();
+  // Nothing is serving one here, so it says so and points at the other way.
+  expect(await within(labs).findByText(/Nothing answers at/)).toBeTruthy();
+
+  await userEvent.click(within(labs).getByRole('radio', { name: 'On my machine' }));
+  expect(within(labs).getByText('just notebook foundations 00_llm_workflow_map')).toBeTruthy();
+  const address = within(labs).getByLabelText(/Address/) as HTMLInputElement;
+  expect(address.value).toBe('http://127.0.0.1:2718');
+
+  const open_ = (await within(labs).findAllByRole('link', { name: /open in its own tab/ }))[0];
+  expect(open_.getAttribute('href')).toBe(
+    'http://127.0.0.1:2718/?file=labs%2F00_foundations%2F00_llm_workflow_map%2Fnotebook.py',
+  );
+
+  const asked = new Set(stub.calls.map((call) => call.origin));
+  expect([...asked].sort()).toEqual(['http://127.0.0.1:2718', 'http://panel.test']);
+});
+
+it('opens the workshop notebook on this deployment when something serves one', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  participant(
+    workshopRoutes([{ method: 'GET', path: '/lab-marimo/', answer: { status: 200, body: {} } }]),
+  );
+  await open('/learning?organization=org&project=ret&lab=lab-03');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  const open_ = (await within(labs).findAllByRole('link', { name: /open in its own tab/ }))[0];
+  expect(open_.getAttribute('href')).toBe(
+    '/lab-marimo/?file=labs%2F00_foundations%2F00_llm_workflow_map%2Fnotebook.py',
+  );
+  expect(within(labs).queryByText(/Nothing answers at/)).toBeNull();
+});
+
+it('publishes a workshop notebook as a path and a command, uploading nothing', async () => {
+  // The ordinary workshop shape: nine steps in a repository with its own
+  // environment. Nothing can be uploaded, because nothing here could run it —
+  // and no digest is sent, because this instance never sees those bytes.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const stub = instructor([
+    { method: 'GET', path: '/labs', answer: { status: 200, body: { labs: [], total: 0 } } },
+    {
+      method: 'GET',
+      path: '/evaluation-scorecards',
+      answer: { status: 200, body: { scorecards: [] } },
+    },
+    { method: 'POST', path: '/labs', answer: { status: 201, body: {} } },
+  ]);
+  await open('/learning?organization=org&project=ret');
+
+  const labs = (await screen.findByText('Labs')).closest('div[class*="rounded-lg"]') as HTMLElement;
+  await userEvent.click(await within(labs).findByRole('button', { name: 'Write a lab' }));
+  await userEvent.type(within(labs).getByPlaceholderText('lab-03'), 'lab-03');
+  await userEvent.type(
+    within(labs).getByPlaceholderText('Answer the support questions'),
+    'The LLM workflow map',
+  );
+  await userEvent.type(within(labs).getByRole('textbox', { name: /^Notes/ }), 'Read this first.');
+
+  await userEvent.click(within(labs).getByRole('button', { name: 'A file in a workshop' }));
+  await userEvent.type(
+    within(labs).getByPlaceholderText(/labs\/00_foundations/),
+    'labs/00_foundations/00_llm_workflow_map/notebook.py',
+  );
+  await userEvent.type(
+    within(labs).getByPlaceholderText(/just notebook foundations/),
+    'just notebook foundations 00_llm_workflow_map',
+  );
+  await userEvent.type(within(labs).getByPlaceholderText('2718'), '2718');
+  await userEvent.click(within(labs).getByRole('button', { name: /Publish/ }));
+
+  const published = stub.calls.find((call) => call.method === 'POST' && call.url.endsWith('/labs'));
+  expect(published?.body).toMatchObject({
+    name: 'lab-03',
+    notebook: {
+      path: 'labs/00_foundations/00_llm_workflow_map/notebook.py',
+      command: 'just notebook foundations 00_llm_workflow_map',
+      port: 2718,
+    },
+  });
+  expect(
+    (published?.body as { notebook: Record<string, unknown> }).notebook.revision,
+  ).toBeUndefined();
+  // Nothing was uploaded, and the notebook runtime was never even asked what it
+  // holds: this shape has nothing to do with it.
+  expect(stub.calls.filter((call) => call.url.includes('/ml-pipeline'))).toHaveLength(0);
 });

@@ -203,14 +203,125 @@ export function ComposeLab({
 }
 
 /**
- * The notebook the lab hands out: uploaded, or one the runtime already holds.
+ * The notebook the lab hands out, in whichever of its two shapes this lab is.
  *
- * Both paths end in the same place — a name and the digest the runtime
- * answered — because that is the only pin this registry accepts. Without a
- * runtime there is no pin to be had, and saying so is better than a field that
- * takes a digest nobody can check.
+ * **A file in a workshop** is the ordinary case: nine steps in a repository
+ * with its own environment, opened by the workshop's own recipe. Nothing is
+ * uploaded, because nothing here could run it — and no address is asked for,
+ * because where marimo runs is the deployment's question or the participant's,
+ * never the lab's.
+ *
+ * **A notebook this instance keeps** is the other: uploaded here, or one the
+ * notebook runtime already holds. Both paths end in a name and the digest the
+ * runtime answered, because that is the only pin this registry accepts for
+ * bytes it keeps — a digest worked out in the browser would be a second content
+ * address for a file the browser does not hold.
  */
 function PinNotebook({
+  value,
+  onChange,
+}: {
+  value: LabNotebook | undefined;
+  onChange: (notebook: LabNotebook | undefined) => void;
+}) {
+  const [shape, setShape] = React.useState<'none' | 'workshop' | 'kept'>('none');
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Field
+        label="Notebook"
+        hint="Optional. A lab may be a brief and its tests; this is for one that hands out something to work in."
+      >
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['none', 'None'],
+              ['workshop', 'A file in a workshop'],
+              ['kept', 'A notebook kept here'],
+            ] as const
+          ).map(([value_, label]) => (
+            <Button
+              key={value_}
+              type="button"
+              size="sm"
+              variant={shape === value_ ? 'default' : 'outline'}
+              onClick={() => {
+                setShape(value_);
+                onChange(undefined);
+              }}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      </Field>
+      {shape === 'workshop' ? <PinWorkshop value={value} onChange={onChange} /> : null}
+      {shape === 'kept' ? <PinKept value={value} onChange={onChange} /> : null}
+    </div>
+  );
+}
+
+/**
+ * A notebook in a repository the participants check out.
+ *
+ * Three authored facts and no address: which file, the command that opens it
+ * where they have it, and the port that command lands on so the page can offer
+ * an address without asking anybody to read one off their terminal. A URL here
+ * would be authored data deciding where a browser goes.
+ */
+function PinWorkshop({
+  value,
+  onChange,
+}: {
+  value: LabNotebook | undefined;
+  onChange: (notebook: LabNotebook) => void;
+}) {
+  const set = (next: Partial<LabNotebook>) =>
+    onChange({
+      path: next.path ?? value?.path ?? '',
+      command: next.command ?? value?.command,
+      port: next.port ?? value?.port,
+    });
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-3">
+      <Field label="Path" hint="as the workshop names it">
+        <input
+          className={INPUT}
+          value={value?.path ?? ''}
+          onChange={(event) => set({ path: event.target.value.trim() })}
+          placeholder="labs/00_foundations/00_llm_workflow_map/notebook.py"
+        />
+      </Field>
+      <Field label="Command" hint="what a participant types">
+        <input
+          className={INPUT}
+          value={value?.command ?? ''}
+          onChange={(event) => set({ command: event.target.value })}
+          placeholder="just notebook foundations 00_llm_workflow_map"
+        />
+      </Field>
+      <Field label="Port" hint="where that command puts marimo">
+        <input
+          className={INPUT}
+          value={value?.port ?? ''}
+          inputMode="numeric"
+          onChange={(event) => set({ port: Number(event.target.value) || undefined })}
+          placeholder="2718"
+        />
+      </Field>
+    </div>
+  );
+}
+
+/**
+ * A notebook this instance keeps: uploaded, or one the runtime already holds.
+ *
+ * Both paths end in the same place — a name and the digest the runtime
+ * answered. Without a runtime there is no pin to be had, and saying so is
+ * better than a field that takes a digest nobody can check.
+ */
+function PinKept({
   value,
   onChange,
 }: {
@@ -234,7 +345,7 @@ function PinNotebook({
         freeName(file ? file.name : 'lab_notebook', taken),
         source ?? (await readText(file!)),
       );
-      onChange({ name: saved.name, revision: saved.revision });
+      onChange({ path: saved.name, revision: saved.revision });
       await notebooks.refetch();
     } catch (failure) {
       setError(failure);
@@ -246,74 +357,68 @@ function PinNotebook({
   if (notebooks.error instanceof MlPipelineUnavailableError) {
     return (
       <p className="max-w-3xl text-xs text-muted-foreground">
-        <span className="font-medium">Notebook</span> — the notebook runtime is not running here, so
-        this lab cannot hand one out. Start it with{' '}
-        <span className="font-mono">just ml-pipeline-serve</span> and write the lab again; a lab
-        without one is a perfectly ordinary lab.
+        The notebook runtime is not running here, so there is nothing to keep one in. Start it with{' '}
+        <span className="font-mono">just ml-pipeline-serve</span>, or hand out a file from a
+        workshop instead.
       </p>
     );
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <Field
-        label="Notebook"
-        hint="Optional. Pinned at the revision the runtime answers, so an edit later does not change this lab."
-      >
-        {value ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <IdChip label="file" value={value.name} />
-            <IdChip label="pinned" value={short(value.revision)} full={value.revision} />
-            <Button size="sm" variant="ghost" type="button" onClick={() => onChange(undefined)}>
-              Hand out no notebook
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline">
-              <Upload className="h-3.5 w-3.5" /> Upload a marimo notebook
-              <input
-                type="file"
-                accept=".py,text/x-python"
-                className="sr-only"
-                disabled={busy}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = '';
-                  if (file) void upload(file);
-                }}
-              />
-            </label>
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              disabled={busy}
-              onClick={() => void upload(undefined, EMPTY_NOTEBOOK_SOURCE)}
-            >
-              Start from the empty notebook
-            </Button>
-            <select
-              className={INPUT}
-              style={{ width: 'auto' }}
-              value=""
+      {value?.revision ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <IdChip label="file" value={value.path} />
+          <IdChip label="pinned" value={short(value.revision)} full={value.revision} />
+          <Button size="sm" variant="ghost" type="button" onClick={() => onChange(undefined)}>
+            Pick another
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline">
+            <Upload className="h-3.5 w-3.5" /> Upload a marimo notebook
+            <input
+              type="file"
+              accept=".py,text/x-python"
+              className="sr-only"
               disabled={busy}
               onChange={(event) => {
-                const chosen = notebooks.data?.find((n) => n.name === event.target.value);
-                if (chosen) onChange({ name: chosen.name, revision: chosen.revision });
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) void upload(file);
               }}
-            >
-              <option value="">…or one the runtime already holds</option>
-              {notebooks.data?.map((candidate) => (
-                <option key={candidate.name} value={candidate.name}>
-                  {candidate.name}
-                </option>
-              ))}
-            </select>
-            {busy ? <Spinner /> : null}
-          </div>
-        )}
-      </Field>
+            />
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            disabled={busy}
+            onClick={() => void upload(undefined, EMPTY_NOTEBOOK_SOURCE)}
+          >
+            Start from the empty notebook
+          </Button>
+          <select
+            className={INPUT}
+            style={{ width: 'auto' }}
+            value=""
+            disabled={busy}
+            onChange={(event) => {
+              const chosen = notebooks.data?.find((n) => n.name === event.target.value);
+              if (chosen) onChange({ path: chosen.name, revision: chosen.revision });
+            }}
+          >
+            <option value="">…or one the runtime already holds</option>
+            {notebooks.data?.map((candidate) => (
+              <option key={candidate.name} value={candidate.name}>
+                {candidate.name}
+              </option>
+            ))}
+          </select>
+          {busy ? <Spinner /> : null}
+        </div>
+      )}
       {error ? <Refusal error={error} fallback="the notebook was not saved" /> : null}
     </div>
   );
