@@ -295,8 +295,9 @@ async fn a_judged_declaration_resolves_its_rubric_card_and_people_in_one_project
         );
     }
 
-    // There is still no scoped start, and the legacy one finds no project-only
-    // declaration to start either.
+    // The scoped start exists (IAM-02/D) and the gate is what refuses it:
+    // nothing has admitted this pair yet, which is a 409 naming the approval
+    // rather than a boundary saying the declaration is not there.
     assert_eq!(
         f.request(
             "POST",
@@ -307,8 +308,9 @@ async fn a_judged_declaration_resolves_its_rubric_card_and_people_in_one_project
         )
         .await
         .0,
-        StatusCode::NOT_FOUND
+        StatusCode::CONFLICT
     );
+    // And the *instance's* start still finds no project-only declaration.
     assert_eq!(
         f.request(
             "POST",

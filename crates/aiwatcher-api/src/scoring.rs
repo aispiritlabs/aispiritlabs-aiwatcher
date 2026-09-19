@@ -38,6 +38,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use utoipa::OpenApi;
 
+use std::sync::Arc;
+
+use aiwatcher_execution::ExecutionHandler;
+use aiwatcher_execution::scope::ProjectStart;
+use aiwatcher_execution::start::Executions;
+
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::evidence_scope::{EvidenceRead, EvidenceWrite};
@@ -87,7 +93,7 @@ pub struct ScoringAccepted {
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(start_scoring_run, get_scorer_catalog))]
+#[openapi(paths(get_scorer_catalog))]
 struct Api;
 
 #[derive(OpenApi)]
@@ -98,6 +104,11 @@ struct Api;
     get_scoring_run
 ))]
 struct DeclarationApi;
+
+/// The start, which has a scoped twin of its own.
+#[derive(OpenApi)]
+#[openapi(paths(start_scoring_run))]
+struct StartApi;
 
 #[derive(serde::Deserialize)]
 struct DeclarationPath {
@@ -116,14 +127,21 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     api.merge(crate::cohorts::openapi());
     api.merge(crate::recordings::openapi());
     api.merge(crate::project_scope::openapi(DeclarationApi::openapi()));
+    api.merge(crate::project_scope::openapi(StartApi::openapi()));
     api
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/evaluation-runs/{id}/start",
-            post(start_scoring_run),
+        .nest("/api/v1", start_router())
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            start_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
         )
         .nest("/api/v1", declaration_router())
         .nest(
@@ -145,6 +163,29 @@ fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
         .evaluations
         .as_deref()
         .ok_or(ApiError::EvaluationDisabled)
+}
+
+/// The workflow store this deployment wired, narrowed to one project.
+///
+/// The same backing store the instance's own handler holds — `for_project` is
+/// a binding, not a second store — so a project's run is written by the same
+/// transaction, into the same database, with a scope on its rows.
+fn project_executions(
+    state: &AppState,
+    scope: aiwatcher_iam::ProjectScope,
+) -> ApiResult<ExecutionHandler<Arc<dyn aiwatcher_execution::WorkflowStore>>> {
+    let handler = state
+        .executions
+        .as_deref()
+        .ok_or(ApiError::ExecutionsDisabled)?;
+    // A refusal here is the boundary rather than a bad moment — the store is
+    // already bound elsewhere, which it will be on the next request too — so
+    // it reads as the same 404 every other scope refusal does.
+    let store = handler
+        .store()
+        .for_project(scope)
+        .map_err(aiwatcher_execution::HandleError::Store)?;
+    Ok(ExecutionHandler::new(store))
 }
 
 /// Declare a measurement.
@@ -214,11 +255,20 @@ async fn get_scoring_run(
     tag = "evaluation")]
 async fn start_scoring_run(
     State(state): State<AppState>,
+    evidence: EvidenceWrite,
     caller: Caller,
-    Path(id): Path<String>,
+    Path(DeclarationPath { id }): Path<DeclarationPath>,
 ) -> ApiResult<(StatusCode, Json<ScoringAccepted>)> {
-    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
-    let evaluations = registry(&state)?;
+    // On the instance's side the role is the instance's, as it always was. On
+    // a project's, the grant is the admission and `EvidenceWrite` has already
+    // taken a fresh decision — asked again below, after the declaration has
+    // been read and before anything is written.
+    let scope = evidence.scope();
+    if scope.is_none() {
+        caller.require(Role::Editor)?;
+    }
+    let requester = caller.identity().log_subject().to_owned();
+    let evaluations = evidence.registry().as_ref();
     let viewed = view(evaluations, &id).await?;
     // The gate's own refusal: not yet names the approval, and withdrawn is the
     // same 403 a producer's publication of that pair gets — unless a line an
@@ -257,6 +307,25 @@ async fn start_scoring_run(
     // nothing here would claim.
     if viewed.declaration.run.answers.generation().is_some() && state.artifacts.is_none() {
         return Err(ApiError::WorkerArtifactsDisabled);
+    }
+    // What a project's run may be made of, refused now rather than claimed by
+    // nothing. `ProjectDispatcher` performs a project's scoring, judging,
+    // framework, cases and traces steps; a **worker's** Python task it does
+    // not, because a worker's credential names queues and does not yet name a
+    // project — so an attempt dispatched to one would be claimable by every
+    // worker on that queue, or by none. Refused here is a 422 naming the
+    // reason; accepted would be a run that looks alive for ever.
+    if scope.is_some() && viewed.declaration.run.answers.generation().is_some() {
+        return Err(ApiError::PlanRefused {
+            summary: "a project's run cannot have its answers generated by a worker yet".to_owned(),
+            problems: vec![
+                "the generation step is dispatched to a worker queue, and a worker's token \
+                 names queues rather than a project (AIWATCHER_TOKEN); until it names one, \
+                 nothing may claim a project's task. Score a staged recording or a \
+                 conversation cohort instead"
+                    .to_owned(),
+            ],
+        });
     }
     let external = asks_a_scorer_service(&viewed.manifest);
     let asked = viewed.declaration.run.settings.concurrency;
@@ -305,24 +374,51 @@ async fn start_scoring_run(
             });
         }
     }
-    let started = state
-        .executions()
+    // The owner, built here and from nowhere downstream: the scope the grant
+    // admitted, and the principal the session verified. Never `requested_by`,
+    // which is a display string, and never the declaration's writer.
+    let project = match scope {
+        Some(scope) => {
+            // Asked again, after the body of the declaration has been read and
+            // before the transaction that creates the run — which is the
+            // second of ADR_0033's two asks.
+            evidence.recheck().await?;
+            let (_, principal) = crate::iam::context(&state, &caller)?;
+            Some(ProjectStart::new(scope, principal))
+        }
+        None => None,
+    };
+    let bound;
+    let executions = match project.as_ref() {
+        // The same backing store, narrowed to one project — one lock, one
+        // pool, one directory (ADR_0033 pt. 1). The registries beside it are
+        // unused by this start: a scoring run's plan is built from its own
+        // declaration rather than compiled from a name.
+        Some(start) => {
+            bound = project_executions(&state, start.scope)?;
+            Executions {
+                handler: Some(&bound),
+                ..state.executions()
+            }
+        }
+        None => state.executions(),
+    };
+    let started = executions
         .start(
             plan_for(&viewed.declaration, &viewed.variant_id, external),
             StartRun {
                 // The declaration is the content address of the intention, so
                 // starting one twice is one run by construction and no header
                 // decides it. Measuring the same variant again is a second
-                // repetition, which is a different declaration.
+                // repetition, which is a different declaration — and in a
+                // project the scope is folded into the id too, so one
+                // declaration measured in two projects is two runs.
                 identity: RunIdentity::Key(viewed.declaration.id.clone()),
                 parameters: Default::default(),
                 requested_by: requester,
                 decided_by: Default::default(),
                 payloads: None,
-                // The unscoped path. Every start this build performs is
-                // one: no project route creates an execution yet, and a run
-                // with no owner is a global run by construction.
-                project: None,
+                project,
             },
         )
         .await?;
@@ -377,6 +473,16 @@ async fn get_calibration(
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("calibration set {version}")))
+}
+
+/// The one route that creates an execution, served twice.
+///
+/// The scoped side is **the project `/start`** ADR_0033 said did not exist:
+/// the run it creates carries an `ExecutionOwnership` built from the scope the
+/// grant admitted and the principal the session verified, written in the
+/// transaction that creates the execution and never again.
+fn start_router() -> Router<AppState> {
+    Router::new().route("/evaluation-runs/{id}/start", post(start_scoring_run))
 }
 
 fn declaration_router() -> Router<AppState> {

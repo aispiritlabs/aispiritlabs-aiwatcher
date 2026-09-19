@@ -318,10 +318,7 @@ async fn project_roles_and_mutation_headers_cover_all_authored_evaluation_operat
     assert_eq!(member_pin[2]["recorded_by"], "member");
     assert_eq!(member_pin[2]["author"], "member");
     // Other evaluation route families have no scoped aliases in this slice.
-    for (method, route) in [
-        ("POST", "evaluation-runs/run/start"),
-        ("GET", "evaluation-scorers"),
-    ] {
+    for (method, route) in [("GET", "evaluation-scorers")] {
         let response = f
             .fixture
             .router()
@@ -337,6 +334,24 @@ async fn project_roles_and_mutation_headers_cover_all_authored_evaluation_operat
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{route}");
     }
+    // The start *does* have a scoped twin now (IAM-02/D), and it is a write:
+    // without `X-AIWatcher-IAM` it is refused before the declaration is even
+    // looked for, which is what stops a cross-origin form with a session
+    // cookie starting somebody's measurement.
+    let response = f
+        .fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{root}/evaluation-runs/run/start"))
+                .header(header::COOKIE, &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

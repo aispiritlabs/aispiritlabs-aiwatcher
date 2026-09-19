@@ -22,6 +22,39 @@ impl EvidenceWrite {
         }
         Ok(self.registry)
     }
+
+    /// Which project this write is on, or `None` for the instance's own side.
+    ///
+    /// Read off the admission rather than off a path parameter: the two are
+    /// the same string, and taking it from the admission is what makes a
+    /// caller unable to name one project in the path and start a run in
+    /// another.
+    pub(crate) fn scope(&self) -> Option<aiwatcher_iam::ProjectScope> {
+        self.authorization
+            .as_ref()
+            .map(|authorization| authorization.scope)
+    }
+
+    /// The registry, without the grant being asked a second time.
+    ///
+    /// For the caller that goes on to authorize its own write later in the
+    /// request — a start reads the declaration, decides whether it may run at
+    /// all, and only then writes.
+    pub(crate) fn registry(&self) -> &Arc<Registry> {
+        &self.registry
+    }
+
+    /// Ask the grant again, keeping the admission for another question.
+    ///
+    /// # Errors
+    ///
+    /// Whatever IAM answered, as `authorize` does.
+    pub(crate) async fn recheck(&self) -> ApiResult<()> {
+        match &self.authorization {
+            Some(authorization) => authorization.authorize_write().await,
+            None => Ok(()),
+        }
+    }
 }
 async fn resolve(
     parts: &mut Parts,

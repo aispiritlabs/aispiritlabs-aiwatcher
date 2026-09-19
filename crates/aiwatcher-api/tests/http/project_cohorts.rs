@@ -68,6 +68,14 @@ impl SourceAuthority for CohortSource {
         })
     }
 }
+/// The fixture's own resolver, for a test that wraps it.
+pub(super) fn authority(datasets: Arc<DatasetRegistry>) -> Arc<dyn SourceAuthority> {
+    Arc::new(CohortSource {
+        datasets,
+        scope: None,
+    })
+}
+
 pub(super) async fn fixture() -> IamFixture {
     let mut f = IamFixture::new().await;
     let datasets = Arc::new(DatasetRegistry::new(

@@ -1,6 +1,7 @@
 //! HTTP authorization; native source/byte checks use the real server adapter tests.
 use super::project_cohorts::{derive, fixture, source};
 use super::*;
+use aiwatcher_execution::WorkflowStore;
 
 async fn seed(f: &IamFixture, cookie: &str, root: &str) -> Value {
     let request = source(f, cookie, root, "question").await;
@@ -42,7 +43,7 @@ fn id(value: &Value) -> &str {
 }
 
 #[tokio::test]
-async fn declaration_http_is_project_local_idempotent_and_never_starts_a_measurement() {
+async fn declaration_http_is_project_local_idempotent_and_starts_only_an_admitted_pair() {
     let f = fixture().await;
     let owner = f.cookie("owner", Role::Admin);
     let outsider = f.cookie("outsider", Role::Admin);
@@ -134,6 +135,9 @@ async fn declaration_http_is_project_local_idempotent_and_never_starts_a_measure
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
+    // The scoped start exists (IAM-02/D). What refuses it here is the gate —
+    // no operator has admitted this pair — and a 409 rather than a 404 is the
+    // difference between "not yet" and "not yours".
     assert_eq!(
         f.request(
             "POST",
@@ -144,7 +148,7 @@ async fn declaration_http_is_project_local_idempotent_and_never_starts_a_measure
         )
         .await
         .0,
-        StatusCode::NOT_FOUND
+        StatusCode::CONFLICT
     );
     let mut unsupported = body.clone();
     unsupported["answers"] =
@@ -300,5 +304,192 @@ async fn declaration_http_rechecks_current_grants_after_upload_and_never_uses_in
             .await
             .0,
         StatusCode::NOT_IMPLEMENTED
+    );
+}
+
+/// A source that resolves, so a pair can be admitted here.
+///
+/// The shared fixture's resolver refuses on purpose — declaring must not admit
+/// server-measured evidence, and the production resolver is covered in the
+/// server's own tests. What this one is for is the *start*, which cannot be
+/// reached until something has admitted the pair, and which is this crate's to
+/// answer for: whose run it creates, and who may ask.
+#[derive(Debug)]
+struct Resolving(Arc<dyn aiwatcher_evaluation::SourceAuthority>);
+
+#[async_trait::async_trait]
+impl aiwatcher_evaluation::SourceAuthority for Resolving {
+    fn for_project_cohorts(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> aiwatcher_evaluation::Result<Arc<dyn aiwatcher_evaluation::SourceAuthority>> {
+        Ok(Arc::new(Self(self.0.for_project_cohorts(scope)?)))
+    }
+    fn for_project_evidence(
+        &self,
+        scope: aiwatcher_iam::ProjectScope,
+    ) -> aiwatcher_evaluation::Result<Arc<dyn aiwatcher_evaluation::SourceAuthority>> {
+        Ok(Arc::new(Self(self.0.for_project_evidence(scope)?)))
+    }
+    async fn resolve(
+        &self,
+        _: &aiwatcher_evaluation::EvaluationManifest,
+        _: &str,
+    ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::SourceEvidence> {
+        Ok(aiwatcher_evaluation::SourceEvidence {
+            // The one case `seed` publishes, so the resolved evidence agrees
+            // with the manifest it is admitted against.
+            expected: [("one".to_owned(), json!({"answer": "question"}))]
+                .into_iter()
+                .collect(),
+            inputs: [("one".to_owned(), json!({"question": "question"}))]
+                .into_iter()
+                .collect(),
+            expires_at: None,
+            bundle_digest: None,
+            earlier_bundle_digest: None,
+        })
+    }
+    async fn derive_cohort(
+        &self,
+        request: &aiwatcher_evaluation::CohortRequest,
+        subject: &str,
+    ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::CohortFiles> {
+        self.0.derive_cohort(request, subject).await
+    }
+}
+
+/// The project `/start` ADR_0033 said did not exist, end to end.
+///
+/// What it has to prove is not that a 202 comes back — it is that the run the
+/// 202 names is **owned**, by the scope the grant admitted and the principal
+/// the session verified, and that the instance's own routes cannot reach it.
+#[tokio::test]
+async fn a_project_start_writes_an_owner_the_instance_cannot_reach() {
+    let mut f = fixture().await;
+    let datasets = f.fixture.state.datasets.clone().unwrap();
+    f.fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(Resolving(super::project_cohorts::authority(datasets))),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let store: Arc<dyn aiwatcher_execution::WorkflowStore> =
+        Arc::new(aiwatcher_execution::store::memory::MemoryWorkflowStore::new());
+    f.fixture.state.executions = Some(Arc::new(aiwatcher_execution::ExecutionHandler::new(
+        Arc::clone(&store),
+    )));
+    let owner = f.cookie("owner", Role::Admin);
+    let outsider = f.cookie("outsider", Role::Admin);
+    let org = f.create(&owner).await;
+    let p = project(&f, &owner, &org).await;
+    let root = base(&org, &p);
+    let body = seed(&f, &owner, &root).await;
+    let declared = declare(&f, &owner, &root, body).await;
+    let url = format!("{root}/evaluation-runs/{}", id(&declared));
+
+    // The gate first: nothing has admitted this pair.
+    assert_eq!(
+        f.request(
+            "POST",
+            &format!("{url}/start"),
+            Some(&owner),
+            Value::Null,
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let manifest = declared["manifest"].clone();
+    let (status, admitted) = f
+        .request(
+            "POST",
+            &format!("{root}/evaluation-approvals"),
+            Some(&owner),
+            manifest,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+
+    let (status, accepted) = f
+        .request(
+            "POST",
+            &format!("{url}/start"),
+            Some(&owner),
+            Value::Null,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(accepted["created"], true);
+    let execution = aiwatcher_execution::ExecutionId::new(
+        accepted["execution"]["execution_id"].as_str().unwrap(),
+    );
+
+    // The record, read off the bound store: the scope the grant admitted and
+    // the principal the session verified — never `requested_by`, never the
+    // declaration's writer.
+    let scope = aiwatcher_iam::ProjectScope {
+        organization: aiwatcher_iam::OrganizationId(org.parse().unwrap()),
+        project: aiwatcher_iam::ProjectId(p.parse().unwrap()),
+    };
+    let bound = store.for_project(scope).unwrap();
+    let ownership = bound
+        .ownership(&execution)
+        .await
+        .unwrap()
+        .expect("a project run has an owner");
+    assert_eq!(ownership.scope, scope);
+    assert_eq!(ownership.principal.subject, "owner");
+
+    // And the half that makes it a boundary: the unscoped store — which every
+    // instance-wide loop and the instance's own routes hold — reaches none of
+    // it (ADR_0033 pt. 1).
+    assert!(store.ownership(&execution).await.is_err());
+    assert_eq!(
+        f.request(
+            "GET",
+            &format!("/api/v1/executions/{execution}"),
+            Some(&owner),
+            Value::Null,
+            false
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Repeating it is the same run rather than a second one, and somebody with
+    // no grant is told the declaration is not there.
+    let (status, again) = f
+        .request(
+            "POST",
+            &format!("{url}/start"),
+            Some(&owner),
+            Value::Null,
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(again["created"], false);
+    assert_eq!(
+        again["execution"]["execution_id"],
+        accepted["execution"]["execution_id"]
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            &format!("{url}/start"),
+            Some(&outsider),
+            Value::Null,
+            true
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
     );
 }
