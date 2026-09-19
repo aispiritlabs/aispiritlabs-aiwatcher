@@ -191,6 +191,7 @@ use utoipa::OpenApi;
         crate::prompts::LabelRequest,
         aiwatcher_labs::Lab,
         aiwatcher_labs::LabTests,
+        aiwatcher_labs::LabNotebook,
         aiwatcher_labs::LabVersion,
         aiwatcher_labs::LabVersionSummary,
         aiwatcher_labs::LabHead,

@@ -277,3 +277,59 @@ async fn writing_a_lab_needs_the_mutation_header_a_grant_and_no_cached_answer() 
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["created"], false);
 }
+
+#[tokio::test]
+async fn a_lab_hands_out_a_pinned_notebook_and_a_pin_nothing_could_resolve_is_refused() {
+    let f = fixture().await;
+    let owner = f.cookie("owner", Role::Admin);
+    let org = f.create(&owner).await;
+    let a = project(&f, &owner, &org).await;
+    let root = base(&org, &a);
+
+    let mut asked = lab("Work through the notebook, then hand in your answers.");
+    asked["notebook"] = json!({"name": "lab_03_agent", "revision": "a".repeat(64)});
+    let (status, published) = publish_lab(&f, &owner, &root, asked.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    assert_eq!(
+        published["version"]["notebook"]["revision"],
+        json!("a".repeat(64)),
+        "the pin comes back as it was written: the lab names the file, never its source"
+    );
+    assert_eq!(
+        published["head"]["versions"][0]["has_notebook"],
+        json!(true),
+        "and the index says which versions hand one out"
+    );
+
+    let (status, read) = f
+        .request(
+            "GET",
+            &format!("{root}/labs/lab-03"),
+            Some(&owner),
+            Value::Null,
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["current"]["notebook"]["name"], json!("lab_03_agent"));
+
+    // The runtime's own name and digest rules, refused where the lab is
+    // written rather than when a participant opens a notebook that is not
+    // there. The registry never reaches the notebook runtime to find out —
+    // what it refuses is a pin that could not resolve anywhere.
+    for pinned in [
+        json!({"name": "Lab_03", "revision": "a".repeat(64)}),
+        json!({"name": "lab_03_agent", "revision": "head"}),
+    ] {
+        let mut refused = lab("Work through the notebook.");
+        refused["notebook"] = pinned.clone();
+        let (status, body) = publish_lab(&f, &owner, &root, refused).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{pinned} gave {body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("notebook.")),
+            "the refusal names the field: {body}"
+        );
+    }
+}

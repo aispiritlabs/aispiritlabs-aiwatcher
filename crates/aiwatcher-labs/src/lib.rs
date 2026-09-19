@@ -22,7 +22,7 @@ mod registry;
 mod scope;
 
 pub use lab::{
-    Lab, LabHead, LabName, LabTests, LabVersion, LabVersionSummary, MAX_BRIEF_BYTES,
+    Lab, LabHead, LabName, LabNotebook, LabTests, LabVersion, LabVersionSummary, MAX_BRIEF_BYTES,
     MAX_VERSIONS_INDEXED, PUBLISHED_LABEL,
 };
 pub use measurement::LabMeasurement;

@@ -10,7 +10,7 @@ use aiwatcher_evaluation::{
     Cohort, DatasetKind, DatasetReference, Rubrics, Scorecard, VersionReference,
 };
 use aiwatcher_iam::{OrganizationId, ProjectId, ProjectScope};
-use aiwatcher_labs::{Lab, LabFilter, LabName, LabTests, PublishLab, Registry};
+use aiwatcher_labs::{Lab, LabFilter, LabName, LabNotebook, LabTests, PublishLab, Registry};
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 use serde_json::json;
 
@@ -31,7 +31,15 @@ fn lab(name: &str, brief: &str) -> Lab {
         title: "Answer the support questions".into(),
         brief: brief.into(),
         position: Some(3),
+        notebook: None,
         tests: None,
+    }
+}
+
+fn notebook(revision: char) -> LabNotebook {
+    LabNotebook {
+        name: "lab_03_agent".into(),
+        revision: std::iter::repeat_n(revision, 64).collect(),
     }
 }
 
@@ -420,4 +428,101 @@ async fn a_lab_is_refused_before_it_is_stored_when_it_cannot_be_read_back() {
             .is_empty(),
         "nothing refused was written"
     );
+}
+
+#[tokio::test]
+async fn a_labs_notebook_is_part_of_what_it_is_and_a_new_pin_is_a_new_version() {
+    let registry = registry();
+    let name = LabName::parse("lab-03").unwrap();
+
+    let plain = registry
+        .publish(publish(lab("lab-03", "Build an agent."), None), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        plain.head.versions.first().map(|v| v.has_notebook),
+        Some(false),
+        "a lab that hands out no notebook says so in the index"
+    );
+
+    let mut handed_out = lab("lab-03", "Build an agent.");
+    handed_out.notebook = Some(notebook('a'));
+    let first = registry
+        .publish(publish(handed_out.clone(), None), None)
+        .await
+        .unwrap();
+    assert!(first.created, "the same brief with a notebook is a new lab");
+    assert_ne!(first.version.version_id, plain.version.version_id);
+    assert_eq!(
+        first.head.versions.first().map(|v| v.has_notebook),
+        Some(true)
+    );
+
+    let again = registry
+        .publish(publish(handed_out.clone(), None), None)
+        .await
+        .unwrap();
+    assert!(!again.created, "and publishing it unchanged is idempotent");
+
+    // The point of pinning: an edit to the notebook does not reach the
+    // participants already on this lab until somebody publishes the new pin,
+    // and when they do it is a version of its own.
+    let mut edited = handed_out.clone();
+    edited.notebook = Some(notebook('b'));
+    let moved = registry.publish(publish(edited, None), None).await.unwrap();
+    assert!(moved.created);
+    assert_ne!(moved.version.version_id, first.version.version_id);
+
+    let head = registry.head(&name).await.unwrap().unwrap();
+    assert_eq!(head.versions.len(), 3);
+    let stored = registry
+        .version(&name, &first.version.version_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.lab.notebook.as_ref().map(|n| n.revision.as_str()),
+        Some(notebook('a').revision.as_str()),
+        "and an earlier version still names the source it was written against"
+    );
+}
+
+#[tokio::test]
+async fn a_notebook_pin_the_runtime_could_never_resolve_is_refused_by_field() {
+    let registry = registry();
+
+    for (pinned, field) in [
+        (
+            LabNotebook {
+                name: "Lab-03".into(),
+                revision: "a".repeat(64),
+            },
+            "notebook.name",
+        ),
+        (
+            LabNotebook {
+                name: "3_lab".into(),
+                revision: "a".repeat(64),
+            },
+            "notebook.name",
+        ),
+        (
+            LabNotebook {
+                name: "lab_03_agent".into(),
+                revision: "head".into(),
+            },
+            "notebook.revision",
+        ),
+    ] {
+        let mut asked = lab("lab-03", "Build an agent.");
+        asked.notebook = Some(pinned);
+        let refused = registry
+            .publish(publish(asked, None), None)
+            .await
+            .expect_err("a pin nothing could resolve is refused where the lab is written");
+        assert!(
+            refused.to_string().starts_with(field),
+            "{refused} should name {field}"
+        );
+    }
 }

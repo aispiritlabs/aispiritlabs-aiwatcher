@@ -125,6 +125,57 @@ impl LabTests {
     }
 }
 
+/// The notebook a participant works in, named and pinned.
+///
+/// **Never the source.** That file is what marimo serves as a live app, what
+/// `ml_pipeline.step` imports and what the participant edits a copy of; a copy
+/// of it in this registry would be a second source of truth for something that
+/// has to stay runnable on its own. The lab names it and pins the `sha256` it
+/// was written against — the shape a saved curation block already uses, and
+/// the rule `services/ml_pipeline/CLAUDE.md` states for one.
+///
+/// The pin is **required**, because a lab is material several people open. A
+/// notebook resolved by its head would let an edit between two participants
+/// opening the same lab change the exercise underneath one of them, which is
+/// the reason the card is pinned at a version rather than at its head, and the
+/// reason a public block solution must pin its revision too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = LabNotebook)]
+#[serde(deny_unknown_fields)]
+pub struct LabNotebook {
+    /// Its name in the notebook runtime — what `GET /ml-pipeline/notebooks`
+    /// lists and `PUT /ml-pipeline/notebooks/{name}` saves.
+    pub name: String,
+    /// The `sha256` of the source this lab was written against, as the runtime
+    /// answered it on the save.
+    pub revision: String,
+}
+
+impl LabNotebook {
+    pub(crate) fn validate(&self) -> Result<()> {
+        // The runtime's own rule, restated rather than loosened: a name it
+        // would refuse is a pin that can never resolve, and the refusal
+        // belongs where somebody is writing the lab.
+        crate::require(
+            (1..=64).contains(&self.name.len())
+                && self.name.starts_with(|c: char| c.is_ascii_lowercase())
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "notebook.name",
+            "is 1\u{2013}64 characters of a-z, 0-9 and underscore, starting with a letter, as the \
+             notebook runtime names a file",
+        )?;
+        crate::require(
+            self.revision.len() == 64 && self.revision.chars().all(|c| c.is_ascii_hexdigit()),
+            "notebook.revision",
+            "is the sha256 of the notebook's source: 64 hex characters, as `PUT \
+             /ml-pipeline/notebooks/{name}` answered it",
+        )
+    }
+}
+
 /// An authored lab, as somebody wrote it.
 ///
 /// Everything here is part of the version: a lab that measures different work
@@ -154,6 +205,11 @@ pub struct Lab {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(minimum = 1, maximum = 999)]
     pub position: Option<u16>,
+    /// The notebook the work is done in, when the lab hands one out. Absent is
+    /// a lab that is read and answered somewhere else; present, it is named
+    /// and pinned and never copied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook: Option<LabNotebook>,
     /// The measurement, when one is pinned. Absent is the ordinary state of an
     /// instructor halfway through writing a lab, and it is reported as absent
     /// rather than filled in.
@@ -185,6 +241,9 @@ impl Lab {
                 "position",
                 "is between 1 and 999",
             )?;
+        }
+        if let Some(notebook) = &self.notebook {
+            notebook.validate()?;
         }
         if let Some(tests) = &self.tests {
             tests.validate()?;
@@ -231,6 +290,9 @@ pub struct LabVersionSummary {
     /// the version, because a summary carrying them would be a second copy
     /// that a reader could find disagreeing with the first.
     pub has_tests: bool,
+    /// Whether that version hands out a notebook — the same rule, for the same
+    /// reason: which file and which revision are in the version.
+    pub has_notebook: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +307,7 @@ impl From<&LabVersion> for LabVersionSummary {
             title: version.lab.title.clone(),
             position: version.lab.position,
             has_tests: version.lab.tests.is_some(),
+            has_notebook: version.lab.notebook.is_some(),
             notes: version.notes.clone(),
             author: version.author.clone(),
             published_at: version.published_at,
