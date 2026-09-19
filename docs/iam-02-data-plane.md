@@ -473,6 +473,16 @@ mówi, dokąd sięga.
 
 ---
 
+## 11. Co dalej — IAM-03
+
+Mechanizm stoi; produkt na nim jest planem osobnym:
+[IAM-03](iam-03-projects.md) — konto osobiste obok organizacji, gość obok
+członka, zaproszenie zakładające konto w IdP, cykl życia projektu i klonowanie
+konfiguracji. Reszta zakresowania wymieniona wyżej jest tam kamieniem milowym
+M6 i nadal jest warunkiem słowa „multi-tenant".
+
+---
+
 ## 12. E6 i E7 — co naprawdę stanęło (19.09.2026)
 
 Kontrakt jest w [ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md), aneks
