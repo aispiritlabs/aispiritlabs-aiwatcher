@@ -608,12 +608,26 @@ before changing that area.
    store, asks IAM when it takes the work and again before it publishes, treats
    an IAM failure as `Transient`, pairs the byte store with the catalog through
    `ProjectArtifacts::bind`, and builds its executor per attempt so nothing of
-   a project's is in a process-wide registry. What is **not** done is written
-   down as plainly as what is: **no production wiring constructs one**, there is
-   no project `/start`, and logs, streams, query and notebook runtimes, worker
-   credentials, retention and scheduled jobs are still instance-wide. Until
-   those land, no organization or project selector is activated, and this
-   deployment is not described as multi-tenant safe.
+   a project's is in a process-wide registry. **That dispatcher is wired**
+   (ADR_0033, amended 2026-09-19): one supervisor in the work role discovers
+   scopes through `WorkflowStore::project_scopes` — scopes, never rows, refused
+   by name on a bound store — binds one dispatcher per project and keeps it,
+   and per pass claims, publishes that project's outbox onto the log with the
+   **store's** scope stamped on each envelope, delivers its timers and sweeps
+   its retention. `POST
+   /api/v1/orgs/{organization}/projects/{project}/evaluation-runs/{id}/start`
+   is the project `/start`, and the owner it writes comes from the scope the
+   grant admitted and the principal the session verified. What a project may
+   *not* run is refused when the run is started, per step and with the reason:
+   `RuntimeKind::outside_a_project` says a query engine and a notebook runtime
+   read this deployment's own routes with no credential, a worker's token names
+   queues rather than a project, and publishing a dataset version runs in the
+   serve role. What is **not** done is still written down as plainly as what
+   is: logs, the query and notebook runtimes, worker credentials, scheduled
+   jobs and the conversation archive are instance-wide, VictoriaTraces and
+   VictoriaMetrics carry the scope as an attribute and are not tenanted by it,
+   and eleven migration families have no adapter. This deployment is not
+   described as multi-tenant safe.
 
 26. **A lab is an authored brief bound to a pinned measurement, and three of
    the four things it needs already existed**

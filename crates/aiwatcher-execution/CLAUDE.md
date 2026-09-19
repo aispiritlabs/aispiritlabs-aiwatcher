@@ -21,6 +21,21 @@ ordering every durable write here obeys.
   the authority's whole input, so there is no plan, parameter or claimant's
   name to get a scope or a principal out of — and `ProjectDispatcher` is the
   only thing that wires one (ADR_0033).
+- **Never let a project start a step nothing of its own can perform.** A
+  project's attempt whose runtime no project executor claims waits for a
+  reactor that does not exist, and a run that looks alive for ever is worse
+  than a refusal somebody can read. `RuntimeKind::outside_a_project` answers
+  per kind *why* — a query engine and a notebook runtime read this deployment's
+  own routes with no credential, a worker's token names queues rather than a
+  project, publishing a dataset version runs in the serve role — and `start`
+  refuses a project's plan with every such step at once. One consequence worth
+  knowing before it surprises somebody: every cacheable runtime is on that
+  list, so no plan a project may start reaches the artifact cache index.
+- **Never ask the unscoped store for more than which projects exist.**
+  `project_scopes` is the one query here that crosses the boundary, and it
+  answers **scopes, never rows** — what a dispatcher needs to bind and nothing
+  about what any project ran. A bound store refuses it by name, as it refuses
+  the processor checkpoints and the schedule slots.
 - **Never read a refusal that could not be made as consent.** A retryable class
   before the work leaves the attempt claimable and spends nothing; before
   publication every class is reported, because the lease is that pass's and

@@ -285,3 +285,118 @@ and tenancy in VictoriaTraces and VictoriaMetrics. **This deployment is still
 not described as multi-tenant safe**, and the organization/project selector
 stays inactive until IAM-02/C has run the matrix against a live server and found
 nothing answering globally.
+
+## Amendment 2026-09-19: a project's work runs, and what it may not be made of
+
+This ADR's last Consequence said **no production caller constructs a bound
+store**: every `StartRun` passed `project: None`, no executor was registered
+for a project, and there was no project `/start`. It called itself a floor
+rather than an open path. IAM-02's E6 is that path, and it is the one place
+either half may be lifted.
+
+### Three things had to exist before it could be
+
+**A project's facts had to reach the log.** The Consequences named this too — *a
+project's facts never reach the event log, because the global publisher does
+not see its outbox rows* — and drew the right conclusion from it, that a
+project run has no live view, no span and no fold. That is a correct statement
+about isolation and a poor one about a product, so the publisher is now bound
+like everything else: `publish_pending` stamps each envelope with the **store's**
+scope, overwritten rather than read off the row. It is `POST /api/v1/events`'s
+rule one layer in — the scope is the boundary's word and never the writer's
+(ADR_0001, amended) — moved to where the boundary is a bound store rather than
+a credential. A publisher holding the unscoped store drains global rows and
+stamps nothing, exactly as it always has.
+
+**The folds that had no project in the row had to get one.** IAM-02's E2 keyed
+the runs fold, the dimensions, spans, periods, `asked`, `measured` and the
+journal, and not the workflow fold, the evaluation fold or `/experiments` —
+which this ADR's 2026-09-19 amendment named as *what this does not do*. They
+are keyed now, and each serves one `resource_router()` twice, as `runs`,
+`metrics` and `live` already did. The workflow fold keys by `(project, id)`
+rather than by id with the project beside it, and that difference is deliberate:
+a `workflow_id` is re-declared on every execution and a `workflow_run_id` joins
+the stages of one traversal, so two projects both running `house-import` is the
+ordinary case rather than a collision — first-seen-wins would hand the catalog
+entry to whichever declared first and leave the other's list empty. A run id is
+one process, so `RunSummary::project` keeps first-seen-wins and the evaluation
+fold, whose id *is* a run id, keeps it too.
+
+**Something had to say which projects to bind for.** A dispatcher cannot bind
+to a project it has not been told about, and this ADR's own "what would make
+this wrong" says to bind per scope rather than per attempt. So
+`WorkflowStore::project_scopes` is one narrow query that crosses the boundary:
+**scopes, never rows** — which projects have run something here, not what they
+ran, how much of it, or whether any of it is due. It is asked of the unscoped
+store only; a bound one refuses it by name, as the processor checkpoints and
+the schedule slots do. Not asked of IAM, because a background loop that could
+not do a project's work while the control plane was briefly unreachable would
+be a second availability story for the same work — and a grant is asked anyway,
+per claim, by `ProjectGrant`.
+
+### The two prohibitions, lifted
+
+**`ProjectDispatcher` is registered in the work role's `spawn`**, through one
+supervisor that discovers scopes once a minute, binds a dispatcher per project
+and keeps it, and runs the same four calls per pass that the instance's own
+loops make: claim, publish, deliver timers, and — hourly, where a window is
+configured — sweep. The scoped sweep closes another Consequence of this ADR: a
+project's execution was never pruned by the unscoped sweep and no scoped one
+was wired, so a deployment that turned retention on reclaimed no project
+history. The four instance-wide loops needed no change, which is this ADR's
+first decision doing its job.
+
+**There is a project `/start`**: `POST
+/api/v1/orgs/{organization}/projects/{project}/evaluation-runs/{id}/start`, the
+scoped twin of the route that was already the only one to create an execution.
+The owner is built in the route from the scope the **grant** admitted and the
+principal the **session** verified — never `requested_by`, never the
+declaration's writer, never a parameter — and written in the transaction that
+creates the execution. The grant is asked twice: by the extractor that admits
+the request, and again after the declaration has been read and before the
+transaction.
+
+### What a project's run may be made of, refused by name
+
+`RuntimeKind::outside_a_project` answers, per kind, why a project has no
+performer for it, and `aiwatcher_execution::start` refuses a project's plan with
+every such step at once. Four reasons, and they are four different facts rather
+than one shrug:
+
+* a **query engine** is one service per deployment, reached with no credential,
+  reading this deployment's own routes through its catalog — so a project's
+  query would be answered from the unassigned side, which is neither its data
+  nor a refusal;
+* the **notebook runtime** is one service for the deployment and a notebook is
+  pinned by a path in it;
+* a **worker's** token names queues and does not name a project, so a
+  dispatched attempt would be claimable by every worker on that queue or by
+  none;
+* **publishing a dataset version** runs in the serve role against the
+  deployment's own object store.
+
+A consequence worth writing down: every **cacheable** runtime is one of those,
+so no plan a project may start reaches the artifact cache index at all. The
+rule that the grant is asked before the cache lookup still holds and is still
+tested — it has to be true of the first cacheable runtime a project ever gets —
+but nothing exercises it in production yet.
+
+### What is still outside, and now by name rather than by absence
+
+A **schedule** has no scoped form: a bound store refuses a slot by name, and no
+scoped route saves one, so a project has no unattended run. The **conversation
+archive** is closed on both sides — no project registry, no scoped route, and a
+migration blocked because the ciphertext is sealed under its own key path
+(ADR_0021). **Alerts** read the global side deliberately: a rule is the
+deployment's and there is one channel for it (ADR_0035), so a project's failure
+raised on it would put one project's work into a webhook every other project's
+administrator reads. And **VictoriaTraces and VictoriaMetrics are not tenanted**
+— the scope rides as a span resource attribute and a metric label, which is the
+fact a deployment needs to filter by; their own multitenancy is a path per
+account, which would mean an exporter and a Perses datasource per project, and
+that is a deployment shape rather than a decision this ADR can take.
+
+**This deployment is still not described as multi-tenant safe.** What has moved
+is that a project's work now runs and is visible to the project; what has not
+is logs, the query and notebook runtimes, worker credentials, schedules, the
+conversation archive, and eleven migration families with no adapter.
