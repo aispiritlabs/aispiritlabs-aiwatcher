@@ -53,6 +53,22 @@ pub(crate) struct RunRead {
     pub(crate) held: StillHeld,
 }
 
+impl RunRead {
+    /// The control plane's spelling of this side's project, for the routes
+    /// that read a **registry** as well as the fold — `/evaluations` bridges
+    /// to published evidence and `/experiments` is mostly that registry.
+    ///
+    /// Read back off the grant this read was admitted under rather than kept
+    /// as a second field, so the two spellings cannot disagree about which
+    /// project a request is on.
+    pub(crate) fn iam_scope(&self) -> Option<ProjectScope> {
+        match &self.held {
+            StillHeld::Instance => None,
+            StillHeld::Grant { scope, .. } => Some(*scope),
+        }
+    }
+}
+
 /// The access one open stream is running under, in the form it can be re-asked
 /// in.
 #[derive(Clone)]

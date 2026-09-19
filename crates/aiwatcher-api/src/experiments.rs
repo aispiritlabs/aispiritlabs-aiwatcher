@@ -25,6 +25,7 @@ use utoipa::OpenApi;
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
+use crate::run_scope::RunRead;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -32,24 +33,53 @@ use crate::state::AppState;
 #[openapi(paths(list_experiments, get_experiment))]
 struct Api;
 
-/// The operations this module serves. Composed by [`crate::openapi`].
+/// The operations this module serves, on both route families. Composed by
+/// [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
+/// One set of routes, served twice — see [`crate::runs::router`].
+///
+/// An experiment is two clocks at once: the published evidence, which the
+/// registry resolves per project already, and the log's own fold, which now
+/// carries the project in the row. Both sides of one answer come off one
+/// grant, so a row and the run behind it are never from two projects.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/experiments", get(list_experiments))
-        .route("/api/v1/experiments/{context_id}", get(get_experiment))
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
 }
 
-fn registry(state: &AppState) -> ApiResult<aiwatcher_evaluation::Registry> {
-    state
+fn resource_router() -> Router<AppState> {
+    Router::new()
+        .route("/experiments", get(list_experiments))
+        .route("/experiments/{context_id}", get(get_experiment))
+}
+
+/// Named so the scoped family's own path parameters need no spelling out.
+#[derive(serde::Deserialize)]
+struct ExperimentPath {
+    context_id: String,
+}
+
+/// The evidence registry on the side this read is answering on.
+fn registry(state: &AppState, read: &RunRead) -> ApiResult<aiwatcher_evaluation::Registry> {
+    let root = state
         .evaluations
         .as_deref()
-        .cloned()
-        .ok_or(ApiError::EvaluationDisabled)
+        .ok_or(ApiError::EvaluationDisabled)?;
+    match read.iam_scope() {
+        Some(scope) => Ok(root.for_project_evidence(scope)?),
+        None => Ok(root.clone()),
+    }
 }
 
 fn now() -> i64 {
@@ -63,11 +93,12 @@ fn now() -> i64 {
     tag = "evaluation")]
 async fn list_experiments(
     State(state): State<AppState>,
+    read: RunRead,
     caller: Caller,
 ) -> ApiResult<Json<ExperimentIndex>> {
     caller.require(Role::Viewer)?;
     Ok(Json(
-        registry(&state)?
+        registry(&state, &read)?
             .with_content_access(caller.require(Role::Admin).is_ok())
             .experiments(&caller.identity().subject, now())
             .await?,
@@ -109,12 +140,13 @@ pub struct ExperimentView {
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn get_experiment(
     State(state): State<AppState>,
+    read: RunRead,
     caller: Caller,
-    Path(context_id): Path<String>,
+    Path(ExperimentPath { context_id }): Path<ExperimentPath>,
     Query(query): Query<ExperimentQuery>,
 ) -> ApiResult<Json<ExperimentView>> {
     caller.require(Role::Viewer)?;
-    let experiment = registry(&state)?
+    let experiment = registry(&state, &read)?
         .with_content_access(caller.require(Role::Admin).is_ok())
         .experiment(
             &context_id,
@@ -140,7 +172,7 @@ async fn get_experiment(
         .filter_map(|row| row.origin.as_ref()?.execution_id.as_deref())
         .collect();
     for id in named {
-        if let Some(detail) = state.read_model.workflow_execution(id).await {
+        if let Some(detail) = state.read_model.workflow_execution(read.scope, id).await {
             executions.push(detail.summary);
         }
     }
@@ -155,7 +187,7 @@ async fn get_experiment(
     let observed = match (&state.observations, query.window_seconds) {
         (Some(fold), Some(window)) if window > 0 => fold
             .observe(
-                None,
+                read.scope.project(),
                 &variants,
                 now() - window,
                 state.model_prices.as_deref(),
@@ -166,6 +198,7 @@ async fn get_experiment(
             state
                 .read_model
                 .variant_observations(
+                    read.scope,
                     &variants,
                     query.window_seconds,
                     state.model_prices.as_deref(),

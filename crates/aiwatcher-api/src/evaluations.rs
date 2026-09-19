@@ -20,14 +20,12 @@ use utoipa::OpenApi;
 use aiwatcher_projector::{EvaluationDetail, EvaluationFilter, EvaluationPage, SuitePage};
 
 use crate::error::{ApiError, ApiResult};
+use crate::run_scope::RunRead;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
 #[openapi(paths(
-    list_evaluations,
-    get_evaluation,
-    list_evaluation_suites,
     address_approval,
     gate_result,
     admit_line,
@@ -52,6 +50,12 @@ struct Api;
 ))]
 struct EvidenceApi;
 
+/// The legacy telemetry fold's operations, which have a scoped twin because
+/// the fold behind them carries the project in the row.
+#[derive(OpenApi)]
+#[openapi(paths(list_evaluations, get_evaluation, list_evaluation_suites))]
+struct FoldApi;
+
 #[derive(serde::Deserialize)]
 struct ResultPath {
     evaluation_id: String,
@@ -66,6 +70,7 @@ struct ApprovalPath {
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut api = Api::openapi();
     api.merge(crate::project_scope::openapi(EvidenceApi::openapi()));
+    api.merge(crate::project_scope::openapi(FoldApi::openapi()));
     api.merge(crate::evaluation_bundles::openapi());
     api
 }
@@ -82,6 +87,16 @@ pub fn router() -> Router<AppState> {
                 )),
         )
         .nest("/api/v1", evidence_router())
+        .nest("/api/v1", fold_router())
+        .nest(
+            "/api/v1/orgs/{organization}/projects/{project}",
+            fold_router()
+                .layer(axum::Extension(crate::project_scope::ScopedRoute))
+                .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                )),
+        )
         .route(
             "/api/v1/evaluation-results/{evaluation_id}/gate",
             post(gate_result),
@@ -103,10 +118,26 @@ pub fn router() -> Router<AppState> {
             "/api/v1/evaluation-approvals/address",
             post(address_approval),
         )
-        .route("/api/v1/evaluations", get(list_evaluations))
-        .route("/api/v1/evaluations/{evaluation_id}", get(get_evaluation))
-        .route("/api/v1/evaluation-suites", get(list_evaluation_suites))
         .merge(crate::evaluation_bundles::router())
+}
+
+/// The legacy telemetry fold, served twice.
+///
+/// The fold carries the project in the row (IAM-02 E2's remainder) and the
+/// durable registry these bridge to resolves per project already, so both
+/// halves of each answer come from one side — [`RunRead`] resolves the fold's
+/// and `RunRead::iam_scope` the registry's, off the same grant.
+fn fold_router() -> Router<AppState> {
+    Router::new()
+        .route("/evaluations", get(list_evaluations))
+        .route("/evaluations/{evaluation_id}", get(get_evaluation))
+        .route("/evaluation-suites", get(list_evaluation_suites))
+}
+
+/// Named so the scoped family's own path parameters need no spelling out.
+#[derive(serde::Deserialize)]
+struct EvaluationPath {
+    evaluation_id: String,
 }
 
 fn evidence_router() -> Router<AppState> {
@@ -165,13 +196,14 @@ struct DetailQuery {
 )]
 async fn list_evaluations(
     State(state): State<AppState>,
+    read: RunRead,
     Query(filter): Query<EvaluationFilter>,
 ) -> ApiResult<Json<EvaluationPage>> {
-    let excluded = known_ids(&state).await?;
+    let excluded = known_ids(&state, &read).await?;
     Ok(Json(
         state
             .read_model
-            .legacy_evaluations(&filter, &excluded)
+            .legacy_evaluations(read.scope, &filter, &excluded)
             .await,
     ))
 }
@@ -191,16 +223,13 @@ async fn list_evaluations(
 )]
 async fn get_evaluation(
     State(state): State<AppState>,
-    Path(evaluation_id): Path<String>,
+    read: RunRead,
+    Path(EvaluationPath { evaluation_id }): Path<EvaluationPath>,
     Query(query): Query<DetailQuery>,
     caller: Caller,
 ) -> ApiResult<Json<EvaluationDetail>> {
     caller.require(Role::Viewer)?;
-    if let Some(registry) = &state.evaluations {
-        let registry = registry
-            .as_ref()
-            .clone()
-            .with_content_access(caller.require(Role::Admin).is_ok());
+    if let Some(registry) = evidence_for(&state, &read, caller.require(Role::Admin).is_ok())? {
         if let Some(detail) = registry
             .get(&evaluation_id, &caller.identity().subject, now())
             .await?
@@ -221,7 +250,7 @@ async fn get_evaluation(
                     now(),
                 )
                 .await?;
-            return Ok(Json(legacy_detail(detail, page)?));
+            return Ok(Json(legacy_detail(detail, page, read.iam_scope())?));
         }
         if let Some(baseline) = &query.baseline_id
             && registry
@@ -237,9 +266,10 @@ async fn get_evaluation(
     state
         .read_model
         .legacy_evaluation(
+            read.scope,
             &evaluation_id,
             query.baseline_id.as_deref(),
-            &known_ids(&state).await?,
+            &known_ids(&state, &read).await?,
         )
         .await
         .map(Json)
@@ -258,17 +288,54 @@ async fn get_evaluation(
     responses((status = 200, body = SuitePage)),
     tag = "evaluation",
 )]
-async fn list_evaluation_suites(State(state): State<AppState>) -> ApiResult<Json<SuitePage>> {
+async fn list_evaluation_suites(
+    State(state): State<AppState>,
+    read: RunRead,
+) -> ApiResult<Json<SuitePage>> {
+    let excluded = known_ids(&state, &read).await?;
     Ok(Json(
         state
             .read_model
-            .legacy_evaluation_suites(&known_ids(&state).await?)
+            .legacy_evaluation_suites(read.scope, &excluded)
             .await,
     ))
 }
 
-async fn known_ids(state: &AppState) -> ApiResult<std::collections::BTreeSet<String>> {
-    match &state.evaluations {
+/// The published-evidence registry on the side this read is answering on.
+///
+/// `None` where this deployment has no registry at all, which is a working
+/// state for these three routes: the fold answers on its own, and the bridge
+/// below has nothing to bridge to.
+fn evidence_for(
+    state: &AppState,
+    read: &RunRead,
+    content_access: bool,
+) -> ApiResult<Option<aiwatcher_evaluation::Registry>> {
+    let Some(root) = &state.evaluations else {
+        return Ok(None);
+    };
+    match read.iam_scope() {
+        // A project's evidence is read through the grant, which is
+        // `for_project_evidence`'s own rule rather than a second one here: an
+        // instance role does not become a project role (ADR_0033).
+        Some(scope) => Ok(Some(root.for_project_evidence(scope)?)),
+        None => Ok(Some(
+            root.as_ref().clone().with_content_access(content_access),
+        )),
+    }
+}
+
+/// Which ids the durable registry on this side already owns, so the fold does
+/// not answer for them twice.
+///
+/// Asked without content access: which ids exist is not the content, and a
+/// list that shrank for a viewer would show them a report the registry owns as
+/// though the fold still did.
+async fn known_ids(
+    state: &AppState,
+    read: &RunRead,
+) -> ApiResult<std::collections::BTreeSet<String>> {
+    match evidence_for(state, read, false)? {
         Some(registry) => Ok(registry.known_ids().await?),
         None => Ok(Default::default()),
     }
@@ -684,7 +751,11 @@ async fn forget_result(
 
 /// The old detail shape stays readable. It exposes only a bounded first page
 /// and no quality recommendation; durable clients page the separate resource.
-fn legacy_detail(detail: DurableEvaluation, page: Option<CasePage>) -> ApiResult<EvaluationDetail> {
+fn legacy_detail(
+    detail: DurableEvaluation,
+    page: Option<CasePage>,
+    project: Option<aiwatcher_iam::ProjectScope>,
+) -> ApiResult<EvaluationDetail> {
     use aiwatcher_projector::evaluations::EvaluationContext;
     use aiwatcher_projector::{EvaluationCase, EvaluationStatus, EvaluationSummary};
     if !matches!(
@@ -703,6 +774,10 @@ fn legacy_detail(detail: DurableEvaluation, page: Option<CasePage>) -> ApiResult
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let summary = EvaluationSummary {
         evaluation_id: detail.receipt.evaluation_id,
+        // The registry a caller reached this through is already the one their
+        // grant admitted, so the row says which side it came from rather than
+        // deciding anything: `project_scope` is what answers whose it is.
+        project: project.map(crate::project_scope::on_the_log),
         suite: manifest.context.suite.name.clone(),
         dataset: Some(manifest.context.dataset.name.clone()),
         variant: Some(detail.receipt.variant_id),

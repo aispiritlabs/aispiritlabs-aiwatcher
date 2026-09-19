@@ -250,7 +250,7 @@ async fn stream_run(
 /// On the global side there is nothing per-stream to ask, so the tick is a
 /// no-op with no await in it. One code path either way — a second one would be
 /// the path that gets it wrong.
-fn while_held(
+pub(crate) fn while_held(
     held: StillHeld,
     frames: impl Stream<Item = LiveFrame> + Send + 'static,
 ) -> impl Stream<Item = LiveFrame> + Send + 'static {
