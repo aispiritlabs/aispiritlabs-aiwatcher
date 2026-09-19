@@ -24,6 +24,7 @@ use crate::evaluations::{
     SuitePage,
 };
 use crate::measured::{MeasuredRuns, MeasuredState};
+use crate::scope::ReadScope;
 use crate::workflows::{
     ExecutionDetail, ExecutionFilter, ExecutionPage, WorkflowConfig, WorkflowDefinition,
     WorkflowFilter, WorkflowPage, WorkflowState,
@@ -642,9 +643,37 @@ impl ReadModel {
         Self::shed_spans(&mut state, self.config.max_spans_total);
     }
 
-    pub async fn run(&self, run_id: &str) -> Option<RunDetail> {
+    /// The runs on one side of the project boundary, cloned for a fold.
+    ///
+    /// Every fold below reads through this rather than through `state.runs`,
+    /// because a scope is not one more axis to narrow by: it decides which rows
+    /// are there at all, including for the counts a fold takes *before* it
+    /// narrows anything — a dimension page's ungrouped total, the metrics
+    /// summary's `runs_retained`. Filtering after the fold would report one
+    /// side's rows against the whole instance's totals.
+    fn runs_in(state: &State, scope: ReadScope) -> Vec<RunSummary> {
+        state
+            .runs
+            .values()
+            .filter(|run| scope.admits(run.project))
+            .cloned()
+            .collect()
+    }
+
+    /// One run with the spans finished so far, if it is on this side.
+    ///
+    /// `None` for a run another project holds, and `None` for a project's run
+    /// asked for globally — the same answer a run id nobody ever wrote gets,
+    /// which is how a caller is told about a run they do not reach without
+    /// being told it exists (ADR_0033; `StoreError::OutOfScope` renders the
+    /// same way for the same reason).
+    pub async fn run(&self, scope: ReadScope, run_id: &str) -> Option<RunDetail> {
         let state = self.state.read().await;
-        let summary = state.runs.get(run_id)?.clone();
+        let summary = state
+            .runs
+            .get(run_id)
+            .filter(|run| scope.admits(run.project))?
+            .clone();
         let mut spans = state.spans.get(run_id).cloned().unwrap_or_default();
         // Waterfall order: by start time, then by span id for stability.
         spans.sort_by(|a, b| {
@@ -660,12 +689,13 @@ impl ReadModel {
     /// the run they served. One pass over what is held.
     pub async fn serving(
         &self,
+        scope: ReadScope,
         callers: &std::collections::BTreeSet<&str>,
     ) -> std::collections::BTreeMap<String, Vec<RunDetail>> {
         let state = self.state.read().await;
         let mut found: std::collections::BTreeMap<String, Vec<RunDetail>> =
             std::collections::BTreeMap::new();
-        for summary in state.runs.values() {
+        for summary in state.runs.values().filter(|run| scope.admits(run.project)) {
             let Some(caller) = summary
                 .caller_run_id
                 .as_deref()
@@ -689,11 +719,12 @@ impl ReadModel {
     /// digests of what the request asked — that started at or after `from`,
     /// whichever run each names as its caller, if any. One pass over what is
     /// held.
-    pub async fn asked_since(&self, from: OffsetDateTime) -> Vec<RunDetail> {
+    pub async fn asked_since(&self, scope: ReadScope, from: OffsetDateTime) -> Vec<RunDetail> {
         let state = self.state.read().await;
         state
             .runs
             .values()
+            .filter(|summary| scope.admits(summary.project))
             .filter(|summary| summary.started_at >= from)
             .filter_map(|summary| {
                 let spans = state.spans.get(&summary.run_id)?;
@@ -726,12 +757,17 @@ impl ReadModel {
         self.state.read().await.measured.of(project, evaluation_id)
     }
 
-    pub async fn list(&self, filter: &RunFilter) -> RunPage {
-        self.list_at(filter, OffsetDateTime::now_utc()).await
+    pub async fn list(&self, scope: ReadScope, filter: &RunFilter) -> RunPage {
+        self.list_at(scope, filter, OffsetDateTime::now_utc()).await
     }
 
     /// The runs list with the clock passed in, so the window is testable.
-    pub async fn list_at(&self, filter: &RunFilter, now: OffsetDateTime) -> RunPage {
+    pub async fn list_at(
+        &self,
+        scope: ReadScope,
+        filter: &RunFilter,
+        now: OffsetDateTime,
+    ) -> RunPage {
         let state = self.state.read().await;
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let window =
@@ -744,6 +780,10 @@ impl ReadModel {
             .iter()
             .rev()
             .filter_map(|run_id| state.runs.get(run_id))
+            // Before the window and before the axes: a scope decides which
+            // runs are there at all, so `total_known` and the cursor are one
+            // side's too.
+            .filter(|run| scope.admits(run.project))
             // Last activity, not start: a run that began before the window and
             // is still emitting is the one most worth seeing in it.
             .filter(|run| window.holds(run.last_event_at))
@@ -772,21 +812,23 @@ impl ReadModel {
     /// Conversations: the level above a run.
     pub async fn conversations(
         &self,
+        scope: ReadScope,
         filter: &crate::conversations::ConversationFilter,
     ) -> crate::conversations::ConversationPage {
         let state = self.state.read().await;
-        let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
+        let runs = Self::runs_in(&state, scope);
         crate::conversations::compute(&runs, &state.spans, filter, OffsetDateTime::now_utc())
     }
 
     /// One dimension's rows: the explorer's top level, whatever it is rooted on.
     pub async fn dimensions(
         &self,
+        scope: ReadScope,
         kind: crate::dimensions::DimensionKind,
         filter: &crate::dimensions::DimensionFilter,
     ) -> crate::dimensions::DimensionPage {
         let state = self.state.read().await;
-        let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
+        let runs = Self::runs_in(&state, scope);
         crate::dimensions::compute(&runs, &state.spans, kind, filter, OffsetDateTime::now_utc())
     }
 
@@ -810,9 +852,13 @@ impl ReadModel {
     }
 
     /// Every retained span, flat and filterable. See [`crate::spans`].
-    pub async fn spans(&self, filter: &crate::spans::SpanFilter) -> crate::spans::SpanPage {
+    pub async fn spans(
+        &self,
+        scope: ReadScope,
+        filter: &crate::spans::SpanFilter,
+    ) -> crate::spans::SpanPage {
         let state = self.state.read().await;
-        crate::spans::compute(&state.spans, filter, OffsetDateTime::now_utc())
+        crate::spans::compute(&state.spans, scope, filter, OffsetDateTime::now_utc())
     }
 
     /// Evaluation reports, newest first. See [`crate::evaluations`].
@@ -912,10 +958,11 @@ impl ReadModel {
     /// pass over in-memory data with no I/O in it.
     pub async fn metrics(
         &self,
+        scope: ReadScope,
         filter: &crate::metrics::MetricsFilter,
     ) -> crate::metrics::MetricsSummary {
         let state = self.state.read().await;
-        let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
+        let runs = Self::runs_in(&state, scope);
         crate::metrics::compute(
             &runs,
             &state.spans,
@@ -1092,6 +1139,7 @@ mod tests {
 
         let page = model
             .list_at(
+                ReadScope::Global,
                 &RunFilter {
                     window_seconds: Some(900),
                     ..RunFilter::default()
@@ -1111,6 +1159,7 @@ mod tests {
 
         let page = model
             .list_at(
+                ReadScope::Global,
                 &RunFilter {
                     window_seconds: Some(0),
                     ..RunFilter::default()
@@ -1144,17 +1193,20 @@ mod tests {
         assert!(held <= 20, "span_count {held} should be within the budget");
         assert!(
             model
-                .run("run-3")
+                .run(ReadScope::Global, "run-3")
                 .await
                 .is_some_and(|d| !d.spans.is_empty()),
             "the newest run keeps its spans"
         );
         assert!(
-            model.run("run-0").await.is_some_and(|d| d.spans.is_empty()),
+            model
+                .run(ReadScope::Global, "run-0")
+                .await
+                .is_some_and(|d| d.spans.is_empty()),
             "the oldest run gives up its spans first"
         );
         assert!(
-            model.run("run-0").await.is_some(),
+            model.run(ReadScope::Global, "run-0").await.is_some(),
             "but the run itself survives, so the list and the metrics stay complete"
         );
     }
@@ -1174,7 +1226,10 @@ mod tests {
         }
 
         assert!(
-            model.run("live").await.is_some_and(|d| d.spans.len() == 10),
+            model
+                .run(ReadScope::Global, "live")
+                .await
+                .is_some_and(|d| d.spans.len() == 10),
             "the run someone is most likely watching is not the one to strip"
         );
     }
@@ -1189,7 +1244,10 @@ mod tests {
         });
         seed(&model, "chatty", RunStatus::Succeeded, 40).await;
 
-        let detail = model.run("chatty").await.expect("the run");
+        let detail = model
+            .run(ReadScope::Global, "chatty")
+            .await
+            .expect("the run");
         assert_eq!(detail.spans.len(), 5, "trimmed to the per-run cap");
         assert_eq!(
             model.state.read().await.span_count,
@@ -1226,7 +1284,7 @@ mod tests {
             "a report is not a node, and the run it names is no execution of its own"
         );
         assert!(
-            model.run("eval-1").await.is_none(),
+            model.run(ReadScope::Global, "eval-1").await.is_none(),
             "nor is it an agent run"
         );
     }
@@ -1259,9 +1317,101 @@ mod tests {
         // A run id is a producer's text, so two credentials can publish into
         // one. First-seen-wins is what stops the second taking the run — the
         // fold's form of the rule ADR_0033 states for an execution's owner.
-        let run = model.run("run-1").await.expect("the run").summary;
+        let run = model
+            .run(ReadScope::Project(scope(0xaa)), "run-1")
+            .await
+            .expect("the run")
+            .summary;
         assert_eq!(run.project, Some(scope(0xaa)));
         assert_eq!(run.event_count, 3, "and every event still counts in it");
+        // …and the side it is not on cannot open it, including the side the
+        // second and third events were published under.
+        assert!(model.run(ReadScope::Global, "run-1").await.is_none());
+        assert!(
+            model
+                .run(ReadScope::Project(scope(0xbb)), "run-1")
+                .await
+                .is_none()
+        );
+    }
+
+    /// A read answers one side, and a list is that side's rows and its totals.
+    ///
+    /// The half that is easy to forget is the second assertion. A project's
+    /// list holding only its own runs is what somebody asked for; the global
+    /// list holding *none* of them is what makes this a boundary rather than a
+    /// label, because an instance viewer who kept seeing them would be reading
+    /// a project they hold no grant on.
+    #[tokio::test]
+    async fn a_list_answers_one_side_and_the_other_sides_runs_are_not_in_its_totals() {
+        let model = ReadModel::default();
+        for (run_id, project) in [
+            ("run-global", None),
+            ("run-mine", Some(scope(0xaa))),
+            ("run-yours", Some(scope(0xbb))),
+        ] {
+            seed(&model, run_id, RunStatus::Succeeded, 1).await;
+            model
+                .state
+                .write()
+                .await
+                .runs
+                .get_mut(run_id)
+                .expect("seeded")
+                .project = project;
+        }
+
+        for (scope_read, expected) in [
+            (ReadScope::Global, vec!["run-global"]),
+            (ReadScope::Project(scope(0xaa)), vec!["run-mine"]),
+            (ReadScope::Project(scope(0xbb)), vec!["run-yours"]),
+        ] {
+            let page = model.list(scope_read, &RunFilter::default()).await;
+            let ids: Vec<&str> = page.runs.iter().map(|run| run.run_id.as_str()).collect();
+            assert_eq!(ids, expected, "{scope_read:?}");
+            assert_eq!(
+                page.total_known, 1,
+                "a cursor over one side counts one side: {scope_read:?}"
+            );
+        }
+    }
+
+    /// The counts a fold takes before it narrows anything are one side's too.
+    #[tokio::test]
+    async fn a_projects_metrics_count_its_own_runs_and_report_its_own_retention() {
+        let model = ReadModel::default();
+        for (run_id, project) in [
+            ("run-global", None),
+            ("run-a", Some(scope(0xaa))),
+            ("run-b", Some(scope(0xaa))),
+        ] {
+            seed(&model, run_id, RunStatus::Succeeded, 0).await;
+            model
+                .state
+                .write()
+                .await
+                .runs
+                .get_mut(run_id)
+                .expect("seeded")
+                .project = project;
+        }
+
+        let mine = model
+            .metrics(
+                ReadScope::Project(scope(0xaa)),
+                &crate::metrics::MetricsFilter::default(),
+            )
+            .await;
+        assert_eq!(mine.totals.runs, 2);
+        assert_eq!(
+            mine.window.runs_retained, 2,
+            "retention is reported over the side that was read, never the instance's"
+        );
+        let global = model
+            .metrics(ReadScope::Global, &crate::metrics::MetricsFilter::default())
+            .await;
+        assert_eq!(global.totals.runs, 1);
+        assert_eq!(global.window.runs_retained, 1);
     }
 
     /// A run published under no project reads exactly as every run this build
@@ -1280,7 +1430,11 @@ mod tests {
         );
         model.apply(&event.record(1, 1, at, None)).await;
 
-        let run = model.run("run-global").await.expect("the run").summary;
+        let run = model
+            .run(ReadScope::Global, "run-global")
+            .await
+            .expect("the run")
+            .summary;
         assert_eq!(run.project, None);
         assert!(
             serde_json::to_value(&run)
@@ -1313,7 +1467,12 @@ mod tests {
         counted.variant_id = Some("v1".to_owned());
         model.apply(&counted.record(2, 2, at, None)).await;
 
-        assert!(model.run("client-worker-1").await.is_none());
+        assert!(
+            model
+                .run(ReadScope::Global, "client-worker-1")
+                .await
+                .is_none()
+        );
         assert_eq!(model.len().await, 1);
         assert_eq!(
             model.measured_runs(None, "e1").await,
@@ -1357,6 +1516,7 @@ mod tests {
 
         let page = model
             .list_at(
+                ReadScope::Global,
                 &RunFilter {
                     variant_id: Some("v1".to_owned()),
                     ..RunFilter::default()
@@ -1365,7 +1525,11 @@ mod tests {
             )
             .await;
         assert_eq!(page.total_known, 2);
-        let benchmark = model.run("benchmark").await.expect("folded").summary;
+        let benchmark = model
+            .run(ReadScope::Global, "benchmark")
+            .await
+            .expect("folded")
+            .summary;
         assert_eq!(benchmark.variant_id.as_deref(), Some("v1"));
         assert_eq!(benchmark.evaluation_id.as_deref(), Some("answers-v1"));
 
@@ -1401,7 +1565,11 @@ mod tests {
                 .await;
         }
 
-        let summary = model.run("run-cost").await.expect("folded").summary;
+        let summary = model
+            .run(ReadScope::Global, "run-cost")
+            .await
+            .expect("folded")
+            .summary;
         assert_eq!(summary.costed_calls, 2);
         let cost = summary.cost_usd.expect("two calls reported one");
         assert!((cost - 0.000_5).abs() < 1e-9, "got {cost}");
@@ -1424,7 +1592,11 @@ mod tests {
         .with_data(serde_json::json!({ "call_id": "c1", "prompt_tokens": 10 }));
         model.apply(&envelope.record(1, 1, at, None)).await;
 
-        let summary = model.run("run-quiet").await.expect("folded").summary;
+        let summary = model
+            .run(ReadScope::Global, "run-quiet")
+            .await
+            .expect("folded")
+            .summary;
         assert_eq!(summary.cost_usd, None);
         assert_eq!(summary.costed_calls, 0);
     }
@@ -1495,7 +1667,11 @@ mod tests {
                 .await;
         }
 
-        let answer = model.run("answer").await.expect("folded").summary;
+        let answer = model
+            .run(ReadScope::Global, "answer")
+            .await
+            .expect("folded")
+            .summary;
         assert_eq!(answer.published_by.as_deref(), Some("worker"));
         assert_eq!(
             answer.workflow_topology,
@@ -1516,7 +1692,10 @@ mod tests {
         );
 
         let serving = model
-            .serving(&std::collections::BTreeSet::from(["answer"]))
+            .serving(
+                ReadScope::Global,
+                &std::collections::BTreeSet::from(["answer"]),
+            )
             .await;
         let found: Vec<(&str, Option<&str>)> = serving["answer"]
             .iter()

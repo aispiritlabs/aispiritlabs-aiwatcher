@@ -23,6 +23,7 @@ use aiwatcher_execution::{
     ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, FailureClass, Now,
     StepError, WorkflowCommand, WorkflowEvent, WorkflowMessage,
 };
+use aiwatcher_projector::ReadScope;
 use aiwatcher_projector::readmodel::{ReadModel, RunStatus};
 use aiwatcher_projector::workflows::{ExecutionFilter, NodeStatus, WorkflowConfig, WorkflowState};
 use time::OffsetDateTime;
@@ -359,7 +360,11 @@ async fn a_managed_execution_that_finished_is_not_still_running_in_the_runs_list
     let detail = fold(&events).execution(EXECUTION).expect("the execution");
     assert_eq!(detail.summary.nodes_pending, 0);
 
-    let listed = runs(&events).await.run(EXECUTION).await.expect("the run");
+    let listed = runs(&events)
+        .await
+        .run(ReadScope::Global, EXECUTION)
+        .await
+        .expect("the run");
     assert_eq!(listed.summary.status, RunStatus::Succeeded);
     assert!(
         listed.summary.ended_at.is_some(),
@@ -390,7 +395,7 @@ async fn a_managed_execution_that_failed_carries_the_engine_s_own_reason() {
 
     let listed = runs(&published(&store).await)
         .await
-        .run(EXECUTION)
+        .run(ReadScope::Global, EXECUTION)
         .await
         .expect("the run");
     assert_eq!(listed.summary.status, RunStatus::Failed);

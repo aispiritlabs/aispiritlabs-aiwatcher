@@ -22,6 +22,7 @@ use aiwatcher_core::ports::{CompletedSpan, SpanKind, SpanStatus};
 use aiwatcher_core::{SpanId, TraceId};
 
 use crate::metrics::string_attr;
+use crate::scope::ReadScope;
 
 /// One span, flattened for a list rather than for a tree.
 #[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
@@ -263,9 +264,16 @@ fn matches(row: &SpanRow, filter: &SpanFilter) -> bool {
     true
 }
 
-/// Flatten and filter every retained span.
+/// Flatten and filter every retained span on one side of the project boundary.
+///
+/// A span's own attributes say whose it is, so the scope is read off the row
+/// rather than off the run it belongs to (`SpanRow::project`). That is the
+/// conservative direction: a span whose assembler never wrote the pair — one
+/// written before ADR_0033, or half a pair — reads as global, so it appears on
+/// the side it was always on and never inside a project.
 pub fn compute(
     spans: &HashMap<String, Vec<CompletedSpan>>,
+    scope: ReadScope,
     filter: &SpanFilter,
     now: OffsetDateTime,
 ) -> SpanPage {
@@ -281,6 +289,7 @@ pub fn compute(
                 .is_none_or(|wanted| *run_id == wanted)
         })
         .flat_map(|(run_id, spans)| spans.iter().map(move |span| SpanRow::build(run_id, span)))
+        .filter(|row| scope.admits(row.project))
         // On the end, not the start: a span is only ever written when it
         // finishes, so "in the last fifteen minutes" is a question about when
         // it landed.
@@ -368,6 +377,60 @@ mod tests {
         ])
     }
 
+    /// A list answers one side, and the rows of the other side are not in its
+    /// total either.
+    #[test]
+    fn a_span_list_answers_one_side_of_the_project_boundary() {
+        let scope = aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::from_bytes([0xaa; 16]),
+            uuid::Uuid::from_bytes([0xbb; 16]),
+        );
+        let mut owned = span("run-2", "search", 120, Some("tool"));
+        owned.attributes.push(attr(
+            own::project::ORGANIZATION,
+            scope.organization.to_string().as_str(),
+        ));
+        owned
+            .attributes
+            .push(attr(own::project::ID, scope.project.to_string().as_str()));
+        let spans = HashMap::from([
+            (
+                "run-1".to_owned(),
+                vec![span("run-1", "search", 3_000, Some("tool"))],
+            ),
+            ("run-2".to_owned(), vec![owned]),
+        ]);
+
+        let global = compute(&spans, ReadScope::Global, &SpanFilter::default(), now());
+        assert_eq!(global.total_known, 1);
+        assert_eq!(global.spans[0].run_id, "run-1");
+
+        let mine = compute(
+            &spans,
+            ReadScope::Project(scope),
+            &SpanFilter::default(),
+            now(),
+        );
+        assert_eq!(mine.total_known, 1);
+        assert_eq!(mine.spans[0].run_id, "run-2");
+    }
+
+    /// Half a pair is not a project, so it stays where it always was.
+    #[test]
+    fn a_span_naming_only_half_a_project_reads_as_global_rather_than_as_a_project_s() {
+        let mut half = span("run-1", "search", 100, None);
+        half.attributes.push(attr(
+            own::project::ORGANIZATION,
+            "0198c0de-0000-7000-8000-00000000000a",
+        ));
+        let spans = HashMap::from([("run-1".to_owned(), vec![half])]);
+
+        assert_eq!(
+            compute(&spans, ReadScope::Global, &SpanFilter::default(), now()).total_known,
+            1
+        );
+    }
+
     #[test]
     fn a_row_carries_the_prompt_its_call_named_and_is_filterable_by_it() {
         // A row that names a model, a duration and an outcome, and leaves the
@@ -385,7 +448,7 @@ mod tests {
             vec![called, span("run-1", "embed", 40, None)],
         )]);
 
-        let all = compute(&spans, &SpanFilter::default(), now());
+        let all = compute(&spans, ReadScope::Global, &SpanFilter::default(), now());
         let named = all
             .spans
             .iter()
@@ -399,6 +462,7 @@ mod tests {
 
         let filtered = compute(
             &spans,
+            ReadScope::Global,
             &SpanFilter {
                 prompt: Some("planner.assistant".to_owned()),
                 ..SpanFilter::default()
@@ -410,7 +474,7 @@ mod tests {
 
     #[test]
     fn every_span_carries_the_run_it_belongs_to() {
-        let page = compute(&model(), &SpanFilter::default(), now());
+        let page = compute(&model(), ReadScope::Global, &SpanFilter::default(), now());
         assert_eq!(page.total_known, 3);
         assert!(page.spans.iter().all(|row| !row.run_id.is_empty()));
     }
@@ -420,6 +484,7 @@ mod tests {
     fn the_window_keeps_the_spans_that_ended_inside_it() {
         let page = compute(
             &model(),
+            ReadScope::Global,
             &SpanFilter {
                 window_seconds: Some(60),
                 ..SpanFilter::default()
@@ -434,6 +499,7 @@ mod tests {
 
         let page = compute(
             &model(),
+            ReadScope::Global,
             &SpanFilter {
                 window_seconds: Some(3600),
                 ..SpanFilter::default()
@@ -447,6 +513,7 @@ mod tests {
     fn a_span_filter_by_step_type_ignores_spans_from_other_runs() {
         let page = compute(
             &model(),
+            ReadScope::Global,
             &SpanFilter {
                 run_id: Some("run-1".to_owned()),
                 step_type: Some("tool".to_owned()),
@@ -464,6 +531,7 @@ mod tests {
     fn a_duration_floor_keeps_only_the_slow_spans() {
         let page = compute(
             &model(),
+            ReadScope::Global,
             &SpanFilter {
                 min_duration_ms: Some(1_000),
                 ..SpanFilter::default()
@@ -480,6 +548,7 @@ mod tests {
         let spans = model();
         let first = compute(
             &spans,
+            ReadScope::Global,
             &SpanFilter {
                 limit: Some(2),
                 ..SpanFilter::default()
@@ -491,6 +560,7 @@ mod tests {
 
         let second = compute(
             &spans,
+            ReadScope::Global,
             &SpanFilter {
                 after: Some(cursor),
                 limit: Some(2),
@@ -509,6 +579,7 @@ mod tests {
     fn the_search_is_case_insensitive_over_the_lifted_attributes() {
         let page = compute(
             &model(),
+            ReadScope::Global,
             &SpanFilter {
                 search: Some("EMBED".to_owned()),
                 ..SpanFilter::default()

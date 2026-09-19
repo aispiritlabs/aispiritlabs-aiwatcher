@@ -147,6 +147,19 @@ pub fn external(
     registry.with(Arc::new(executor))
 }
 
+/// Which side of the project boundary this step reads the log's fold on
+/// (ADR_0033, IAM-02 E3).
+///
+/// `Global`, and it is a statement rather than a placeholder: no production
+/// wiring constructs a project-bound workflow store or a project execution, so
+/// every scoring run this binary can start is the instance's and reads the side
+/// every run has always been on. When E6 opens the project `/start` and
+/// registers the dispatcher, this becomes the scope read off the execution's
+/// durable `ExecutionOwnership` — never off the plan, a parameter,
+/// `requested_by`, a worker's name or a declaration's author, which is the rule
+/// `ProjectDispatcher` already holds itself to.
+const READS: aiwatcher_projector::ReadScope = aiwatcher_projector::ReadScope::Global;
+
 #[derive(Debug)]
 pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
@@ -913,10 +926,10 @@ impl TracesExecutor {
         &self,
         named: &std::collections::BTreeSet<&str>,
     ) -> std::collections::BTreeMap<String, TracedRun> {
-        let mut serving = self.read_model.serving(named).await;
+        let mut serving = self.read_model.serving(READS, named).await;
         let mut runs = std::collections::BTreeMap::new();
         for run_id in named {
-            let Some(detail) = self.read_model.run(run_id).await else {
+            let Some(detail) = self.read_model.run(READS, run_id).await else {
                 continue;
             };
             let calls = traced_calls(&detail);
@@ -1315,7 +1328,7 @@ impl ActivityExecutor for TracesExecutor {
                 None => match started {
                     Some(started) => witnesses.asked_elsewhere(
                         self.read_model
-                            .asked_since(started - time::Duration::seconds(before))
+                            .asked_since(READS, started - time::Duration::seconds(before))
                             .await
                             .iter()
                             .flat_map(|detail| {
@@ -1378,7 +1391,7 @@ impl ActivityExecutor for TracesExecutor {
         let mut started = std::collections::BTreeSet::new();
         for row in rows.iter().filter(|row| !row.seen) {
             if let Some(run_id) = row.run_id.as_deref()
-                && self.read_model.run(run_id).await.is_some()
+                && self.read_model.run(READS, run_id).await.is_some()
             {
                 started.insert(run_id.to_owned());
             }

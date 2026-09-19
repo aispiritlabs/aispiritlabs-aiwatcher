@@ -23,7 +23,7 @@ use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, Sdk, Source};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{
     EvaluationStatus, InMemoryDeadLetters, LiveHub, NodeStatus, Projector, ProjectorConfig,
-    ReadModel, RunStatus,
+    ReadModel, ReadScope, RunStatus,
 };
 use aiwatcher_trace::AssemblerConfig;
 
@@ -304,13 +304,17 @@ async fn a_run_flows_from_the_log_to_spans_metrics_and_the_read_model() {
         .until("the run is marked succeeded", || async {
             harness
                 .read_model
-                .run("run-1")
+                .run(ReadScope::Global, "run-1")
                 .await
                 .is_some_and(|detail| detail.summary.status == RunStatus::Succeeded)
         })
         .await;
 
-    let detail = harness.read_model.run("run-1").await.expect("the run");
+    let detail = harness
+        .read_model
+        .run(ReadScope::Global, "run-1")
+        .await
+        .expect("the run");
     assert_eq!(detail.summary.llm_calls, 1);
     assert_eq!(detail.summary.input_tokens, 812);
     assert_eq!(detail.summary.output_tokens, 193);
@@ -359,7 +363,7 @@ async fn a_redelivered_event_does_not_double_count_tokens() {
         .until("the first pass is folded in", || async {
             harness
                 .read_model
-                .run("run-1")
+                .run(ReadScope::Global, "run-1")
                 .await
                 .is_some_and(|detail| detail.summary.input_tokens == 812)
         })
@@ -373,7 +377,11 @@ async fn a_redelivered_event_does_not_double_count_tokens() {
         .expect("redelivers");
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    let detail = harness.read_model.run("run-1").await.expect("the run");
+    let detail = harness
+        .read_model
+        .run(ReadScope::Global, "run-1")
+        .await
+        .expect("the run");
     assert_eq!(
         detail.summary.input_tokens, 812,
         "a redelivery must not inflate the token count"
@@ -505,7 +513,7 @@ struct ReadingLive {
 #[async_trait::async_trait]
 impl aiwatcher_core::ports::LivePublisher for ReadingLive {
     async fn publish(&self, event: aiwatcher_core::ports::LiveEvent) -> PortResult<()> {
-        let detail = self.read_model.run(&event.run_id).await;
+        let detail = self.read_model.run(ReadScope::Global, &event.run_id).await;
         self.seen.lock().await.push((
             event.event_type,
             detail.as_ref().map(|detail| detail.summary.status),
@@ -628,7 +636,7 @@ async fn an_abandoned_run_is_swept_and_shows_as_failed_spans() {
     assert_eq!(
         harness
             .read_model
-            .run("run-abandoned")
+            .run(ReadScope::Global, "run-abandoned")
             .await
             .map(|detail| detail.spans.len()),
         Some(2),
@@ -667,29 +675,38 @@ async fn the_runs_list_filters_and_pages() {
 
     let running = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            status: Some(RunStatus::Running),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                status: Some(RunStatus::Running),
+                ..Default::default()
+            },
+        )
         .await;
     assert_eq!(running.runs.len(), 1);
     assert_eq!(running.runs[0].run_id, "run-live");
 
     let by_agent = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            agent_id: Some("researcher".to_owned()),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                agent_id: Some("researcher".to_owned()),
+                ..Default::default()
+            },
+        )
         .await;
     assert_eq!(by_agent.runs.len(), 5);
 
     let by_model = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            model: Some("claude-opus-5".to_owned()),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                model: Some("claude-opus-5".to_owned()),
+                ..Default::default()
+            },
+        )
         .await;
     assert_eq!(
         by_model.runs.len(),
@@ -699,10 +716,13 @@ async fn the_runs_list_filters_and_pages() {
 
     let unknown_model = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            model: Some("gpt-5".to_owned()),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                model: Some("gpt-5".to_owned()),
+                ..Default::default()
+            },
+        )
         .await;
     assert!(
         unknown_model.runs.is_empty(),
@@ -711,21 +731,27 @@ async fn the_runs_list_filters_and_pages() {
 
     let first_page = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            limit: Some(2),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
         .await;
     assert_eq!(first_page.runs.len(), 2);
     let cursor = first_page.next_cursor.clone().expect("more pages");
 
     let second_page = harness
         .read_model
-        .list(&aiwatcher_projector::RunFilter {
-            limit: Some(2),
-            before: Some(cursor),
-            ..Default::default()
-        })
+        .list(
+            ReadScope::Global,
+            &aiwatcher_projector::RunFilter {
+                limit: Some(2),
+                before: Some(cursor),
+                ..Default::default()
+            },
+        )
         .await;
     assert_eq!(second_page.runs.len(), 2);
     assert!(
@@ -793,7 +819,10 @@ async fn a_restart_rebuilds_the_read_model_from_the_log() {
         "both runs are back despite the checkpoint being past them"
     );
     let metrics = read_model
-        .metrics(&aiwatcher_projector::MetricsFilter::default())
+        .metrics(
+            ReadScope::Global,
+            &aiwatcher_projector::MetricsFilter::default(),
+        )
         .await;
     assert_eq!(metrics.totals.runs, 2);
     assert_eq!(metrics.totals.input_tokens, 1624, "812 per run");
@@ -1212,14 +1241,40 @@ async fn a_fold_over_a_mixture_answers_for_globals_exactly_as_it_did_before_proj
         .until("both runs are folded in", || async {
             harness
                 .read_model
-                .run("run-scoped")
+                .run(ReadScope::Project(scope), "run-scoped")
                 .await
                 .is_some_and(|detail| detail.summary.input_tokens == 812)
         })
         .await;
 
-    let global = harness.read_model.run("run-global").await.expect("the run");
-    let project = harness.read_model.run("run-scoped").await.expect("the run");
+    let global = harness
+        .read_model
+        .run(ReadScope::Global, "run-global")
+        .await
+        .expect("the run");
+    let project = harness
+        .read_model
+        .run(ReadScope::Project(scope), "run-scoped")
+        .await
+        .expect("the run");
+    // E3, on the same pipeline: each side opens its own run and neither opens
+    // the other's, which is the same answer a run id nobody wrote gets.
+    assert!(
+        harness
+            .read_model
+            .run(ReadScope::Global, "run-scoped")
+            .await
+            .is_none(),
+        "an instance read must not reach into a project"
+    );
+    assert!(
+        harness
+            .read_model
+            .run(ReadScope::Project(scope), "run-global")
+            .await
+            .is_none(),
+        "and a project read must not reach out of one"
+    );
     assert_eq!(global.summary.project, None, "the global side is untouched");
     assert_eq!(project.summary.project, Some(scope));
     assert_eq!(
@@ -1238,7 +1293,11 @@ async fn a_fold_over_a_mixture_answers_for_globals_exactly_as_it_did_before_proj
         .await
         .expect("redelivers");
     tokio::time::sleep(Duration::from_millis(150)).await;
-    let after = harness.read_model.run("run-scoped").await.expect("the run");
+    let after = harness
+        .read_model
+        .run(ReadScope::Project(scope), "run-scoped")
+        .await
+        .expect("the run");
     assert_eq!(
         after
             .spans
@@ -1253,21 +1312,27 @@ async fn a_fold_over_a_mixture_answers_for_globals_exactly_as_it_did_before_proj
         "and inflates no count, project or not"
     );
 
-    // One dimension fold, a row per side, and each row holding only its own.
-    let page = harness
-        .read_model
-        .dimensions(
-            aiwatcher_projector::DimensionKind::Agent,
-            &aiwatcher_projector::DimensionFilter::default(),
-        )
-        .await;
-    let rows: Vec<(Option<aiwatcher_core::ProjectScope>, u64)> = page
-        .rows
-        .iter()
-        .map(|row| (row.project, row.runs))
-        .collect();
-    assert!(rows.contains(&(None, 1)), "{rows:?}");
-    assert!(rows.contains(&(Some(scope), 1)), "{rows:?}");
+    // One dimension fold, a row per side — and now each read gets its own row
+    // and only that one. Before E3 this was one page holding both.
+    for (read, expected) in [
+        (ReadScope::Global, vec![(None, 1)]),
+        (ReadScope::Project(scope), vec![(Some(scope), 1)]),
+    ] {
+        let page = harness
+            .read_model
+            .dimensions(
+                read,
+                aiwatcher_projector::DimensionKind::Agent,
+                &aiwatcher_projector::DimensionFilter::default(),
+            )
+            .await;
+        let rows: Vec<(Option<aiwatcher_core::ProjectScope>, u64)> = page
+            .rows
+            .iter()
+            .map(|row| (row.project, row.runs))
+            .collect();
+        assert_eq!(rows, expected, "{read:?}");
+    }
 
     harness.stop().await;
 }
