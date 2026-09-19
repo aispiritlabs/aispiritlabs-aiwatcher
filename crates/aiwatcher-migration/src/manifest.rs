@@ -305,19 +305,15 @@ pub enum IamCheck {
 
 /// Who will reach what this run copied.
 ///
-/// **A copy is not a share**, and this is where that sentence stops being
-/// prose. The tool creates no organization, team, membership or grant — §1 of
-/// the runbook says so and this does not change it. What it does is *report*:
-/// mapping an application's authored data into a project makes it reachable by
-/// whoever holds a live grant on that project and by nobody else, so a cutover
-/// declared without knowing who that is was declared without reading the
-/// consequence.
+/// **A copy is not a share.** This tool creates no organization, team,
+/// membership or grant, and that does not change; what it does is *report*.
+/// Mapping authored data into a project makes it reachable by whoever holds a
+/// live grant on that project and by nobody else, so a cutover declared
+/// without knowing who that is was declared without reading its consequence.
 ///
 /// The precedent is `GET /api/v1/system`: a deployment's own facts are worth
-/// having in one place, and *configured* is not a secret. A grant is not a
-/// secret from the operator who already holds admin on the project — it is the
-/// answer to "who can now read this", and the only one they cannot get from
-/// the bytes.
+/// having in one place, and a grant is not a secret from the operator who
+/// already holds admin on the project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Audience {
@@ -333,7 +329,7 @@ pub enum Audience {
         evaluated_at: i64,
     },
     /// Nobody was asked. A dry run with no IAM says this, and so does a run
-    /// whose authority is a fixture — which is not an authority (§2).
+    /// whose authority is a fixture, which is not an authority.
     NotRead { reason: String },
 }
 

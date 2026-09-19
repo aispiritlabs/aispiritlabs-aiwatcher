@@ -21,19 +21,7 @@
 //! failed leaves every row in it unpublished, and the next pass re-sends the
 //! whole batch — which is the same redelivery, at a different size.
 //!
-//! ## Whose project a fact is
-//!
-//! Every envelope leaves here carrying the **store's** scope, overwritten
-//! rather than read off the row. It is the same rule `POST /api/v1/events`
-//! keeps one layer out — the scope is the boundary's word and never the
-//! writer's (ADR_0001 amended, ADR_0033) — moved to where the boundary is a
-//! bound store rather than a credential. A row is written by a decision, and a
-//! decision is a document; the store it was drained from is not.
-//!
-//! So a publisher holding the unscoped store drains global rows and stamps
-//! nothing, exactly as it always has, and one holding a project's store drains
-//! that project's and stamps it. Neither can reach the other's rows, which is
-//! `WorkflowStore::pending_outbox`'s own binding and not a rule repeated here.
+//! Every envelope leaves carrying the **store's** project, never the row's.
 
 use aiwatcher_bus::ports::MessageSink;
 use aiwatcher_core::{EventEnvelope, MessageId};
@@ -77,6 +65,10 @@ pub async fn publish_pending(
         return Ok(Published::default());
     }
 
+    // Whose facts these are is the boundary's word and never the writer's
+    // (ADR_0001 amended, ADR_0033), which is `POST /api/v1/events`'s rule one
+    // layer in: a row is a document a decision wrote, and the store it was
+    // drained from is not.
     let project = store.scope().project().map(ProjectScope::on_the_log);
     let mut envelopes = Vec::with_capacity(pending.len());
     let mut ids: Vec<MessageId> = Vec::with_capacity(pending.len());

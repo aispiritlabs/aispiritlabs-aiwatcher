@@ -731,25 +731,18 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
 
     /// Every project this store holds an execution for.
     ///
-    /// The one query here that crosses the boundary, and it is deliberately
-    /// the *narrowest* one that answers a question nothing else can: a work
-    /// role has to know **which** projects to bind a dispatcher for, and a
-    /// dispatcher cannot be bound to a project it has not been told about
-    /// (ADR_0033's own "what would make this wrong" names the dispatcher and
-    /// says to bind per scope rather than per attempt).
+    /// The one query here that crosses the boundary, and the narrowest that
+    /// answers what nothing else can: a work role cannot bind a dispatcher to
+    /// a project it has not been told about (ADR_0033).
     ///
-    /// It returns **scopes and never rows** — which projects have ever run
-    /// something here, not what they ran, not how much and not whether any of
-    /// it is due. Everything after this goes through a store bound to one of
-    /// them, which sees that project's work and nothing else.
+    /// **Scopes, never rows** — which projects have run something here, not
+    /// what they ran, how much, or whether any of it is due. Everything after
+    /// it goes through a store bound to one of them.
     ///
-    /// Asked of the **unscoped** store only. A bound one already knows which
-    /// project it is and answering the set would be answering across the
-    /// boundary it exists to keep, so it refuses by name, as the processor
-    /// checkpoints and the schedule slots do.
-    ///
-    /// `limit` bounds one answer. A deployment past it is told by name rather
-    /// than quietly running some projects' work and not others'.
+    /// Asked of the **unscoped** store only; a bound one refuses by name, as
+    /// the processor checkpoints and the schedule slots do. `limit` bounds one
+    /// answer, and a deployment past it is told rather than quietly served in
+    /// part.
     ///
     /// # Errors
     ///
