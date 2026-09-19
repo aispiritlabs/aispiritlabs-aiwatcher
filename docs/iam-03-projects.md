@@ -619,3 +619,75 @@ rejestracji bez zaproszenia. Federacji wielu dostawców tożsamości naraz —
 
 I żadne z powyższych nie jest powodem, żeby nazwać to wdrożenie multi-tenant
 przed M7.
+
+---
+
+## 9. Prompt — IAM-03/M0: pierwsze demo klienckie
+
+> Pracujesz w repozytorium AIWatcher nad **IAM-03/M0: pierwszym demo
+> klienckim** — dwóch klientów, dwa projekty, jedna dzielona organizacja, i
+> żadne pytanie nie zwraca cudzego wiersza. Przeczytaj `CLAUDE.md`,
+> `docs/iam-03-projects.md` (całość; D3, D4, D5 i M0 to twoja praca),
+> `docs/iam-02-data-plane.md` sekcje 9–12, `ADR_0033` z oboma aneksami,
+> `crates/aiwatcher-iam/README.md` i `apps/panel/CLAUDE.md`.
+>
+> **Zacznij od D4, bo to jest zawias.** `Identity::role()` to
+> `roles.iter().max().unwrap_or(Role::Viewer)`, `AIWATCHER_AUTH_DEFAULT_ROLE=none`
+> **odmawia logowania** zamiast wpuszczać bez roli, a trasy instancyjne przy
+> odczycie nie sprawdzają żadnej roli. Skutek: każdy zalogowany czyta stronę
+> nieprzypisaną wdrożenia. Cudzych wierszy **projektu** już nie czyta — to
+> zamknęło IAM-02/D i jest zmierzone — więc nie szukaj tam przecieku, tylko
+> zrób to, czego D4 żąda: czwarta wartość `project`, `role() -> Option<Role>`,
+> odmowa w `Caller::from_request_parts` poza `ScopedRoute`, wyjątki `is_public`
+> i `/api/v1/iam`. Bez tablicy ścieżek w middleware — znacznik `ScopedRoute`
+> już istnieje i czyta go `project_scope::resolve_required`.
+>
+> **Jedna zależność, którą musisz sprawdzić, zanim napiszesz krok 3.** Odmowa
+> poza `ScopedRoute` działa tylko wtedy, gdy każda trasa potrzebna członkowi
+> projektu **ma** bliźniaka. Dziś mają go `/runs`, `/spans`, `/dimensions`,
+> `/metrics`, `/live`, `/events/stream`, `/workflows`,
+> `/workflow-executions`, `/evaluations`, `/experiments` i strona jednego
+> przebiegu. **Nie mają** go trasy artefaktów przebiegu — instancyjna odmawia
+> przebiegu projektu, więc po D4 członek projektu nie przeczyta swoich
+> artefaktów żadną drogą. Albo dorób bliźniaka (`for_project` na porcie
+> `ArtifactCatalog`), albo nazwij to na ekranie; nie zostawiaj tego do
+> odkrycia.
+>
+> **Test, który to trzyma, bierze się z kontraktu, nie z listy pisanej
+> ręcznie**: każda ścieżka z `contracts/openapi.json`, zapytana przez
+> principala bez roli instancyjnej i bez grantu, nie zwraca danych. Ten sam
+> wzorzec, co `SCOPED_ROUTES` w panelu.
+>
+> **Potem D3 i D5**, w tej kolejności: `OrganizationRole::Guest` (klient nie
+> staje się członkiem rosteru), a następnie zaproszenie zakładające konto w
+> authentiku przez jego API — token we **fragmencie** URL, nie w ścieżce i nie
+> w query, żeby nie trafił do logu serwera. Grant nadal wiąże się ze
+> zweryfikowaną parą `(provider, subject)` po SSO; żadna reguła tożsamości się
+> nie zmienia.
+>
+> **Reszta M0 to wdrożenie**: chart uczy się `AIWATCHER_IAM_POSTGRES_URL` na
+> **własnej** bazie (nie tej od workflow store), obraz z
+> `aiwatcher-server/postgres`, wdrożenie na `vps` w namespace `planner`, token
+> ingestu per klient z sufiksem `@org/proj`, i zdanie w panelu dla kogoś bez
+> roli instancyjnej.
+>
+> **Czego nie rób.** Nie otwieraj niczego z M6 ani M7 — projektowy `/start`
+> **już istnieje** i działa dla niegenerującego scoring runu, więc lab w demo
+> może iść ścieżką autorską (`{SCOPE}/evaluation-results` + `context_id`) albo
+> zarządzaną, i jedno i drugie jest gotowe. Nie opisuj wdrożenia jako
+> multi-tenant — to jest dopiero po M7. Nie zmieniaj istniejących migracji SQL.
+> Nie wypełniaj ekranu danymi zastępczymi.
+>
+> **Bramka M0**: `scripts/iam-permission-check.py` rozszerzone o **drugiego
+> klienta** — każde pytanie zadane jako klient A o zasób klienta B odpowiada
+> 404, i każde zadane jako klient A o trasę instancyjną też. Uruchom je
+> przeciwko wdrożeniu na `vps`, nie tylko lokalnie; pytania, których nie dało
+> się zadać, raportuj jako **niezadane**, nie zaliczone — tak jak dziś działa
+> `AIWATCHER_M1_SCOPE`. Lokalnie: `just authentik-up`, `authentik-seed`,
+> `postgres-up`, `run-sso-iam`, `panel`, dwa przebiegi skryptu; serwer
+> odpowiada na `/readyz`, nie `/health`.
+>
+> **Testy na koniec**: `./scripts/check.sh`. Uwaga — `comments` jest tam
+> **czerwone od dawna** (15 za długich bloków, żaden z tej pracy); trzymaj swoje
+> bloki poniżej 25 linii prozy i nie próbuj naprawiać cudzych. Jawnie wypisz,
+> czego nie uruchomiłeś.
