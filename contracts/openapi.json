@@ -35189,19 +35189,38 @@
       },
       "LabNotebook": {
         "type": "object",
-        "description": "The notebook a participant works in, named and pinned.\n\n**Never the source.** That file is what marimo serves as a live app, what\n`ml_pipeline.step` imports and what the participant edits a copy of; a copy\nof it in this registry would be a second source of truth for something that\nhas to stay runnable on its own. The lab names it and pins the `sha256` it\nwas written against — the shape a saved curation block already uses, and\nthe rule `services/ml_pipeline/CLAUDE.md` states for one.\n\nThe pin is **required**, because a lab is material several people open. A\nnotebook resolved by its head would let an edit between two participants\nopening the same lab change the exercise underneath one of them, which is\nthe reason the card is pinned at a version rather than at its head, and the\nreason a public block solution must pin its revision too.",
+        "description": "The notebook a participant works in.\n\n**A lab names the notebook; it does not say where marimo is.** Those are\ndifferent questions with different owners. Which notebook is authored and\nversioned with the lab. Where it runs is the deployment's (a marimo the\npanel's own origin serves) or the participant's own machine — and a URL\ncarried here would be authored data deciding where a browser goes, which is\nthe request-forgery shape `AIWATCHER_WORKFLOW_RUNNER_URL` exists to refuse.\n\n**It never carries the source either.** Where the notebook is one this\ninstance keeps, the source is in the notebook runtime, which is the rule\n`services/ml_pipeline/CLAUDE.md` states for a curation block. Where it is a\nfile in a workshop the participant checked out, this instance has never\nseen the bytes at all.",
         "required": [
-          "name",
-          "revision"
+          "path"
         ],
         "properties": {
-          "name": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The command that opens it where the participant has it — the workshop's\nown recipe, `just notebook foundations 00_llm_workflow_map`. Authored\nbecause only the person who wrote the lab knows it; shown to be typed\nby a person, never run by anything here."
+          },
+          "path": {
             "type": "string",
-            "description": "Its name in the notebook runtime — what `GET /ml-pipeline/notebooks`\nlists and `PUT /ml-pipeline/notebooks/{name}` saves."
+            "description": "Which notebook, as whatever serves it names one: a file in the notebook\nruntime (`lab_03_agent`), or a path in the workshop a participant\nchecked out (`labs/00_foundations/00_llm_workflow_map/notebook.py`)."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Where that command puts marimo, so the page can offer the address\nwithout asking somebody to read it off their own terminal. A port and\nnot an address: the host is always the participant's own machine, and\nanything else is an address they type themselves.",
+            "maximum": 65535,
+            "minimum": 1024
           },
           "revision": {
-            "type": "string",
-            "description": "The `sha256` of the source this lab was written against, as the runtime\nanswered it on the save."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `sha256` of the source — **only** where the bytes are ones this\ninstance keeps, and then `path` is that runtime's name for them.\n\nAbsent is not a weaker pin, it is an honest one: a lab whose notebook\nlives in somebody's checkout is a lab whose bytes this instance has\nnever seen, and a digest it cannot check is a promise it cannot keep.\nWhat holds that file still is the workshop's own version control."
           }
         },
         "additionalProperties": false

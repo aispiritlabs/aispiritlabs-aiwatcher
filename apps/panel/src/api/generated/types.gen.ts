@@ -5573,32 +5573,52 @@ export type LabMeasurementView = {
 export type LabName = string;
 
 /**
- * The notebook a participant works in, named and pinned.
+ * The notebook a participant works in.
  *
- * **Never the source.** That file is what marimo serves as a live app, what
- * `ml_pipeline.step` imports and what the participant edits a copy of; a copy
- * of it in this registry would be a second source of truth for something that
- * has to stay runnable on its own. The lab names it and pins the `sha256` it
- * was written against — the shape a saved curation block already uses, and
- * the rule `services/ml_pipeline/CLAUDE.md` states for one.
+ * **A lab names the notebook; it does not say where marimo is.** Those are
+ * different questions with different owners. Which notebook is authored and
+ * versioned with the lab. Where it runs is the deployment's (a marimo the
+ * panel's own origin serves) or the participant's own machine — and a URL
+ * carried here would be authored data deciding where a browser goes, which is
+ * the request-forgery shape `AIWATCHER_WORKFLOW_RUNNER_URL` exists to refuse.
  *
- * The pin is **required**, because a lab is material several people open. A
- * notebook resolved by its head would let an edit between two participants
- * opening the same lab change the exercise underneath one of them, which is
- * the reason the card is pinned at a version rather than at its head, and the
- * reason a public block solution must pin its revision too.
+ * **It never carries the source either.** Where the notebook is one this
+ * instance keeps, the source is in the notebook runtime, which is the rule
+ * `services/ml_pipeline/CLAUDE.md` states for a curation block. Where it is a
+ * file in a workshop the participant checked out, this instance has never
+ * seen the bytes at all.
  */
 export type LabNotebook = {
     /**
-     * Its name in the notebook runtime — what `GET /ml-pipeline/notebooks`
-     * lists and `PUT /ml-pipeline/notebooks/{name}` saves.
+     * The command that opens it where the participant has it — the workshop's
+     * own recipe, `just notebook foundations 00_llm_workflow_map`. Authored
+     * because only the person who wrote the lab knows it; shown to be typed
+     * by a person, never run by anything here.
      */
-    name: string;
+    command?: string | null;
     /**
-     * The `sha256` of the source this lab was written against, as the runtime
-     * answered it on the save.
+     * Which notebook, as whatever serves it names one: a file in the notebook
+     * runtime (`lab_03_agent`), or a path in the workshop a participant
+     * checked out (`labs/00_foundations/00_llm_workflow_map/notebook.py`).
      */
-    revision: string;
+    path: string;
+    /**
+     * Where that command puts marimo, so the page can offer the address
+     * without asking somebody to read it off their own terminal. A port and
+     * not an address: the host is always the participant's own machine, and
+     * anything else is an address they type themselves.
+     */
+    port?: number | null;
+    /**
+     * The `sha256` of the source — **only** where the bytes are ones this
+     * instance keeps, and then `path` is that runtime's name for them.
+     *
+     * Absent is not a weaker pin, it is an honest one: a lab whose notebook
+     * lives in somebody's checkout is a lab whose bytes this instance has
+     * never seen, and a digest it cannot check is a promise it cannot keep.
+     * What holds that file still is the workshop's own version control.
+     */
+    revision?: string | null;
 };
 
 export type LabPage = {
