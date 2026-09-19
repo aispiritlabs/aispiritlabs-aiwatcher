@@ -34,25 +34,31 @@ indexes it — and the project boundary is the root file's and ADR_0033's.
   not have been graded by the same one and their results share no context.
   `LabError::Unmeasurable` names the metric that asks rather than answering an
   id that quietly means less than it looks like it means.
-- **Never hold the notebook a lab hands out.** A lab names a file in the
-  notebook runtime and pins the `sha256` of the source it was written against;
-  it stores no copy. That file is what marimo serves as a live app, what
-  `ml_pipeline.step` imports and what a participant takes a copy of, and a
-  second copy here would be a second source of truth for something that has to
-  stay runnable on its own — which is the rule `services/ml_pipeline/CLAUDE.md`
-  already states for a curation block, restated because a lab is the second
-  thing to pin one. The pin is **required** where a notebook is named at all:
-  material several people open cannot resolve through a head that an edit
-  moves between two of them opening it.
-- **Never reach the notebook runtime from this crate or its routes.** The card
-  and the cohort are resolved before a lab is stored because they are in this
-  instance's own registry and the answer is a read; a notebook is another
-  service's, one that a deployment need not run at all, and a publish that
-  called it would put a third party in the write path of an authored document.
-  What is refused here is a pin that could never resolve *anywhere* — the
-  runtime's own name and digest rules, restated — and a notebook this runtime
-  does not hold is reported where the lab is **read**, in the panel, beside the
-  file it could not open.
+- **Never hold the notebook a lab hands out, and never say where marimo is.**
+  A lab names a notebook — a file in the notebook runtime, or a path in a
+  workshop the participants checked out — and stores no source. Where a marimo
+  for it runs is the *deployment's* answer or the *participant's*, and a URL
+  carried in the document would be authored data deciding where a browser goes:
+  the shape `AIWATCHER_WORKFLOW_RUNNER_URL` is configuration to avoid, read from
+  the browser's side. What may be authored is the command that opens it and the
+  port that command lands on, because those are facts about the exercise rather
+  than about anybody's machine.
+- **Never pin a digest for bytes this instance does not hold.** `revision` is
+  present exactly when the notebook is one the notebook runtime keeps, and then
+  `path` is that runtime's name for it — `services/ml_pipeline/CLAUDE.md`'s rule
+  for a curation block, restated for the second thing to pin one. A file in
+  somebody's checkout has none, and absence is the honest answer rather than a
+  weaker one: a digest that cannot be checked is a promise that cannot be kept,
+  and what holds that file still is the workshop's own version control.
+- **Never reach a notebook from this crate or its routes.** The card and the
+  cohort are resolved before a lab is stored because they are in this instance's
+  own registry and the answer is a read; a notebook is another service's or
+  another repository's, and a publish that called one would put a third party in
+  the write path of an authored document. What is refused here is a description
+  that could resolve *nowhere* — an absolute path or one that escapes upwards, a
+  command longer than a line, a privileged port, a digest that is not one — and
+  everything else is reported where the lab is **read**, beside the thing that
+  could not be opened.
 - **Never let a lab carry a mark, a score or a position in a ranking.** It holds
   what was authored. Progress, points and due dates have no contract in this
   instance; a workshop's timetable is already the grant's `GrantWindow`, which

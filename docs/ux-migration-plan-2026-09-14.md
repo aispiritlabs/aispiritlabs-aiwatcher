@@ -1556,3 +1556,87 @@ nietknięty, a notatnik ze scratcha usunięty z drzewa.
 Czego **nie** uruchomiono: pełnego `cargo test --workspace`; żywego serwera z SSO,
 authentika i przeglądarki — czyli formularza i widoku kursanta klikniętych ręką
 (testy panelu stubują cztery trasy runtime'u); klastra, workerów, S3/RustFS.
+
+## Kontynuacja — dwa miejsca, w których stoi marimo (LEARN-02, trzecia tura)
+
+Data: 19.09.2026. Poprzednia tura założyła, że notatnik laboratorium to plik
+wgrany do `services/ml_pipeline` i przypięty digestem, bo to był jedyny
+notatnik, jaki to repozytorium kiedykolwiek trzymało. Przyłożone do prawdziwego
+warsztatu — `labs/<track>/<lab>/steps/<NN>_<slug>/notebook.py` razy dziewięć,
+do tego `notebook_solve.py`, `shared/`, `core/`, fikstury, `course_manifest.toml`,
+własne środowisko `uv` i **pytest w komórkach notatnika** — założenie okazało
+się po prostu nietrafione. Te notatniki nie uruchomią się w runtimie kuracji, a
+ich bajtów ta instancja nigdy nie zobaczy.
+
+### Jedno zdanie, które to porządkuje
+
+**Laboratorium nazywa notatnik; nie mówi, gdzie stoi marimo.** To są dwa pytania
+z dwoma różnymi właścicielami:
+
+- **który notatnik** jest autorski, wersjonowany razem z labem i adresowany
+  treścią — więc przeniesienie ćwiczenia to nowa wersja, a nie cicha edycja pod
+  ludźmi, którzy już nad nim siedzą;
+- **gdzie działa** to odpowiedź wdrożenia albo maszyny uczestnika, i **nigdy URL
+  w dokumencie**. URL wzięty z zapisanych danych i otwarty przez przeglądarkę to
+  dokładnie ten kształt, przed którym `AIWATCHER_WORKFLOW_RUNNER_URL` jest
+  konfiguracją — ta sama reguła, czytana od strony przeglądarki.
+
+`LabNotebook` to teraz `{ path, revision?, command?, port? }`. `revision` jest
+obecne **dokładnie wtedy**, gdy bajty trzyma ta instancja (runtime notatników) —
+i wtedy `path` jest jego nazwą pliku. Dla pliku w cudzym checkoucie nie ma
+żadnego digestu, i brak jest tu odpowiedzią uczciwą, a nie słabszą: digest,
+którego nie da się sprawdzić, jest obietnicą, której nie da się dotrzymać, a
+tym, co trzyma ten plik nieruchomo, jest kontrola wersji warsztatu.
+
+### Dwie opcje, i żadna z nich to ta strona wykonująca czyjś kod
+
+- **Serwowane tutaj** — `/lab-marimo` na originie panelu. Składa się, bo marimo
+  ma własne `--base-url` i emituje URL-e pod prefiksem; vite proxuje to w
+  developmencie (`AIWATCHER_LAB_MARIMO_URL`), a wdrożenie kieruje tam
+  `marimo edit --headless --no-token --host 0.0.0.0 --base-url /lab-marimo <warsztat>`.
+  Gdy nic nie odpowiada, strona mówi to zdaniem i wskazuje drugą drogę.
+- **Na mojej maszynie** — komenda laboratorium do skopiowania i adres, domyślnie
+  `http://127.0.0.1:<port z laba>`. To samo pole przyjmuje adres prowadzącego,
+  który prezentuje read-only `marimo run --no-token` — bo to ta sama odpowiedź z
+  innym hostem, wpisana przez człowieka, który na nią patrzy. Wybór i wpisany
+  adres siedzą w `localStorage` tego urządzenia, nie w URL-u: to fakty o
+  maszynie, a link, który by je niósł, mówiłby koledze, na który port ma patrzeć.
+
+Osiągalność jest pytana inaczej po każdej ze stron i to nie jest kosmetyka: na
+tym samym originie proxy odpowiada i status da się przeczytać, więc 404 i 5xx
+znaczą „nic tam nie stoi"; cross-origin marimo nie wysyła nagłówków CORS, więc
+żadnego statusu nie da się odczytać — ale odpowiedź opaque mówi, że połączenie
+doszło, a odrzucenie, że nie. To dokładnie ten jeden bit.
+
+### Sprawdzone w prawdziwej przeglądarce
+
+Bo całość stoi na jednym założeniu — że marimo z innego originu daje się osadzić.
+Chromium (Playwright, 1440×900) na stronie z portu 12740, iframe na
+`http://127.0.0.1:12730/lab-marimo/?file=sub/notebook.py`:
+
+- marimo nie wysyła `X-Frame-Options` ani `frame-ancestors` — ramka się ładuje;
+- `?file=` trafiło we właściwy plik: nagłówek `sub/notebook.py`, w komórce
+  `import marimo as mo`;
+- **kernel się połączył**: `ws://127.0.0.1:12730/lab-marimo/ws?file=…&session_id=…`;
+- jedyny błąd w konsoli to 404 favikony samej stronki testowej.
+
+### Walidacja
+
+- `aiwatcher-labs`: **11 testów** (notatnik w cudzym checkoucie bez digestu, w
+  tym że zmiana komendy to nowa wersja; odmowy po nazwie pola dla ścieżki
+  absolutnej, wychodzącej w górę, komendy wielolinijkowej i portu
+  uprzywilejowanego).
+- `aiwatcher-api`: **6 testów HTTP** (doszedł: lab wydaje notatnik, którego
+  bajtów ta instancja nigdy nie trzyma — `revision` nie jest zapisywane).
+- Panel: **18 testów** na stronie, **514** w całym panelu. Trzy nowe: dwie opcje
+  i **żaden adres z laba** (asercja na origin każdego wywołania: tylko ten panel
+  i własny loopback na porcie z laba); otwarcie na wdrożeniu, gdy coś serwuje
+  `/lab-marimo`; publikacja kształtu warsztatowego bez uploadu i bez digestu, z
+  asercją, że runtime notatników nie został nawet zapytany.
+- `just openapi` (ani jednej nowej ścieżki), `just openapi-check`, `npx eslint`,
+  `npx prettier --check`, `cargo fmt`, `cargo clippy` na dotkniętych crate'ach.
+
+Czego **nie** uruchomiono: pełnego `cargo test --workspace`; `npm run build`
+(pełny `tsc` był w tym momencie czerwony od niedokończonych plików innej sesji —
+moje pliki przechodzą `tsc` czysto); panelu z SSO i klikniętego ręką przepływu
+warsztatu; klastra.

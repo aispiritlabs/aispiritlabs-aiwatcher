@@ -267,17 +267,25 @@ followed by a full `tsc` project check.
   **is** in the URL, and so is the participant's own copy of its notebook: that
   was the day a lab earned a route, because opening one runs code and working in
   one makes a file, and both are things somebody comes back to and sends to a
-  classmate. The **notebook a lab hands out is the runtime's file, not the
-  registry's**: the lab names it and pins a `sha256`, `screens/overview/notebook.tsx`
-  reads *that revision* through `shared/lib/ml-pipeline.ts`, and when the head has
-  moved past the pin the two are said to have drifted rather than one being
-  quietly served as the other. Nothing executes because a lab was opened — the
-  live app is behind a summary somebody clicks, for the reason `EditorHost::open`
-  stages and stops. A participant never edits the lab's own file: one namespace
-  holds every notebook this instance can run, so `Work in a copy of my own`
-  mints one, and saving into the lab's would be thirty people overwriting each
-  other. Writing a lab (`screens/overview/compose.tsx`) **uploads the notebook to
-  the runtime first and pins what the runtime answered**, because a digest worked
+  classmate. The **notebook a lab hands out has two shapes and the field decides
+  which**: a pinned `revision` means the bytes are this instance's, kept in the
+  notebook runtime, so `notebook.tsx` reads *that revision*, says when the head
+  has drifted past it, and offers a copy of your own — one namespace holds every
+  notebook, so saving into the lab's file would be thirty people overwriting each
+  other. No revision means a file in a workshop somebody checked out, and then
+  the page's whole job is the **two places a marimo can be**: one this deployment
+  serves at `/lab-marimo` on this origin, and one the participant starts with the
+  lab's own command, reached on their own loopback. **No address ever comes from
+  the lab** — a URL out of stored data, opened by a browser, is what
+  `AIWATCHER_WORKFLOW_RUNNER_URL` is configuration to avoid — so the served side
+  is a path on this origin and the other is typed by the person looking at it,
+  which is also how an instructor's read-only `marimo run` is reached. Which of
+  the two, and what was typed, live in that device's `localStorage` rather than
+  the URL: they are facts about a machine, and a link carrying them would tell a
+  classmate which port to look at. Nothing runs because a lab was opened — the
+  live view is behind a click, for the reason `EditorHost::open` stages and
+  stops. Writing a lab (`screens/overview/compose.tsx`) authors either shape, and
+  where it uploads it **pins what the runtime answered**, because a digest worked
   out in the browser is a second content address for a file the browser does not
   keep. The invitation and redeem cards are `shared/`,
   parameterised on their framing alone, because an administrator inviting
