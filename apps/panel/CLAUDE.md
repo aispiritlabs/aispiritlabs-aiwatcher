@@ -100,6 +100,20 @@ followed by a full `tsc` project check.
   `RegistryDisabled` says which variable is unset — an empty list would be a
   different problem with a different fix. `datasets` and `annotations` share
   that store and that component, because one setting decides all three.
+- `alerts` is the one area that speaks first. Everything else here waits to be
+  opened; this is what a deployment says out loud. Three things on it are the
+  server's and are not worked out in the browser: whether a notification arrived
+  is the delivery's own state and its attempt count rather than an age or a
+  spinner, what a receiver saw is the payload stored beside it rather than a
+  payload rebuilt from the rule, and what happens next to a failed one is the
+  row the retry route answers with. Two absences are sentences and not failures:
+  a 403 is a role, because a rule decides who is woken, and a 501 is a
+  deployment with no object store — the same one Prompts needs, named. A channel
+  nobody configured is a working state and says so, because rules are still kept
+  and regressions are still found; what does not happen is anybody being told.
+  It publishes no rule: a rule's trigger is a `GatePolicy` and a context id, and
+  a form that composed one in the browser would be a second opinion about what a
+  gate holds a result to.
 - `datasets` is the one area that reads a service aiwatcher does not run. Its
   Discover view searches Kaggle and Hugging Face, and renders the mirror's
   licence claim and aiwatcher's verdict as two separate things — never one

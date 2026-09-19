@@ -743,6 +743,36 @@ fn integrations(state: &AppState) -> Vec<Entry> {
                    acknowledges a rerun nobody ran.",
         },
         Entry {
+            id: "alert-channel",
+            label: "Where an alert goes",
+            group: CapabilityGroup::Integration,
+            state: CapabilityState::of(state.alert_channel.is_some()),
+            // Never the endpoint, and never the token or the signing secret.
+            // The endpoint is configuration for the same reason the rerun's is
+            // — so that nothing able to publish a rule can aim this process's
+            // outbound POSTs — and printing it here would hand back what that
+            // rule keeps out of a request body.
+            variables: &[
+                "AIWATCHER_ALERT_WEBHOOK_URL",
+                "AIWATCHER_ALERT_WEBHOOK_SECRET",
+                "AIWATCHER_ALERT_HISTORY_DAYS",
+            ],
+            settings: state
+                .alert_channel
+                .as_deref()
+                .map(|channel| {
+                    let channel = aiwatcher_alerts::AlertChannel::describe(channel);
+                    vec![
+                        Setting::derived("kind", channel.kind),
+                        Setting::derived("signed", if channel.signed { "yes" } else { "no" }),
+                    ]
+                })
+                .unwrap_or_default(),
+            note: "Without it a rule is still kept and a regression is still found — what does \
+                   not happen is anybody being told, which the route that tries says by name \
+                   rather than answering as though it had sent something.",
+        },
+        Entry {
             id: "notebook-editor",
             label: "Notebook runtime",
             group: CapabilityGroup::Integration,

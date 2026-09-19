@@ -63,6 +63,312 @@ export type AgreementInterval = {
 };
 
 /**
+ * What a channel is, for an inventory and for a history row.
+ *
+ * Never the address. A webhook URL is not a credential and is still
+ * reconnaissance for somebody already inside, which is the line
+ * `GET /api/v1/system` draws for every other endpoint this deployment holds.
+ */
+export type AlertChannelDescription = {
+    /**
+     * `webhook` — the only kind there is.
+     */
+    kind: string;
+    /**
+     * Whether what this sends carries a signature the receiver can check.
+     */
+    signed: boolean;
+    /**
+     * The variable that configured it, which is what a reader needs anyway.
+     */
+    variable: string;
+};
+
+/**
+ * What a channel test did.
+ */
+export type AlertChannelTest = {
+    delivered: boolean;
+    /**
+     * The record this test left in the history, so a reader can find it.
+     */
+    delivery: AlertDelivery;
+    /**
+     * The receiver's refusal, in the adapter's words.
+     */
+    error?: string | null;
+};
+
+/**
+ * What this deployment can send a notification through.
+ */
+export type AlertChannelView = {
+    channel?: null | AlertChannelDescription;
+};
+
+/**
+ * One notification's record: the queue row and the history row, which are the
+ * same object because a delivery's history *is* what became of it.
+ */
+export type AlertDelivery = {
+    /**
+     * Attempts already spent. Zero until the first one is made.
+     */
+    attempts: number;
+    /**
+     * Not before this. Moved by the backoff after a retryable failure.
+     */
+    available_at: number;
+    created_at: number;
+    /**
+     * `sha256(rule version ‖ occurrence)`, and the key this is stored under.
+     */
+    dedup_key: string;
+    delivered_at?: number | null;
+    /**
+     * Why the last attempt did not land. Kept on a delivered row too, so a
+     * receiver that took it on the third attempt still shows what the first
+     * two hit.
+     */
+    last_error?: string | null;
+    payload: AlertPayload;
+    rule: AlertRuleName;
+    rule_version: string;
+    state: JobState;
+};
+
+export type AlertDeliveryPage = {
+    /**
+     * Newest first — a history is read from the top.
+     */
+    deliveries: Array<AlertDelivery>;
+    next_cursor?: string | null;
+    total: number;
+};
+
+/**
+ * One named thing worth saying, in the order it should be read.
+ *
+ * A list rather than a map, because the order is the watcher's argument: the
+ * reason a run failed comes before the definition it ran, and a map sorted by
+ * key would put `definition` first every time.
+ */
+export type AlertFact = {
+    label: string;
+    value: string;
+};
+
+/**
+ * Where to look, as a path on this instance.
+ *
+ * A path and not a URL, because this process does not reliably know what it
+ * is reached by — an ingress rewrites, a port-forward is somebody's laptop —
+ * and a notification carrying a link to `localhost:8080` is worse than one
+ * carrying a path the reader can paste after the host they already used.
+ */
+export type AlertLink = {
+    label: string;
+    /**
+     * Begins with one `/`. Anything else is refused where a signal is built.
+     */
+    path: string;
+};
+
+/**
+ * What goes to the receiver.
+ *
+ * Flat and `snake_case`, like the event envelope and the rerun body, so a
+ * producer already parsing aiwatcher events needs no second vocabulary. It
+ * carries `dedup_key` because this does not promise exactly-once: a receiver
+ * that stores the key and ignores a repeat gets the guarantee this cannot
+ * give it.
+ */
+export type AlertPayload = {
+    dedup_key: string;
+    /**
+     * The rule's own sentence about why somebody wanted to hear this.
+     */
+    description: string;
+    facts?: Array<AlertFact>;
+    /**
+     * Paths on this instance, never absolute URLs — a notification carrying a
+     * link to a host this process guessed is worse than one carrying a path.
+     */
+    links?: Array<AlertLink>;
+    occurred_at: number;
+    rule: AlertRuleName;
+    rule_version: string;
+    /**
+     * What it happened to: an execution id, an evaluation result id.
+     */
+    subject: string;
+    title: string;
+    trigger: AlertTriggerKind;
+};
+
+/**
+ * The document a version is a version of.
+ */
+export type AlertRule = {
+    /**
+     * Why somebody wants to hear about this. Carried into every delivery,
+     * because the person woken by one did not write the rule.
+     */
+    description: string;
+    name: AlertRuleName;
+    trigger: AlertTrigger;
+};
+
+/**
+ * One rule, with the version it is at.
+ */
+export type AlertRuleDetail = {
+    current?: null | AlertRuleVersion;
+    head: AlertRuleHead;
+};
+
+export type AlertRuleEnabledRequest = {
+    enabled: boolean;
+};
+
+/**
+ * What a name points at now.
+ */
+export type AlertRuleHead = {
+    /**
+     * The version every new occurrence is matched against.
+     */
+    current?: string | null;
+    /**
+     * Off raises nothing. On the head and not in a version, so silencing a
+     * rule does not move the dedup key and un-silencing it does not re-send
+     * what it already sent.
+     */
+    enabled: boolean;
+    /**
+     * Labels a deployment may move by hand. Unused by the matcher, kept so a
+     * name like `reviewed` means the same here as in the other registries.
+     */
+    labels?: {
+        [key: string]: string;
+    };
+    name: AlertRuleName;
+    updated_at: number;
+    /**
+     * Newest first, bounded — a rule edited daily for a year is still one
+     * object somebody can read.
+     */
+    versions?: Array<AlertRuleVersionSummary>;
+};
+
+export type AlertRuleName = string;
+
+export type AlertRulePage = {
+    next_cursor?: string | null;
+    rules: Array<AlertRuleSummary>;
+    total: number;
+};
+
+/**
+ * Publish a version of a rule.
+ */
+export type AlertRulePublishRequest = {
+    /**
+     * Why this version exists.
+     */
+    notes?: string | null;
+    rule: AlertRule;
+};
+
+/**
+ * What a publish did.
+ */
+export type AlertRulePublished = {
+    /**
+     * `false` when this exact rule was already stored. Publishing is
+     * content-addressed, so re-sending an unchanged rule is not a new version
+     * — and, because the dedup key is built from the version, it is also not
+     * a reason to notify anybody again about what already fired.
+     */
+    created: boolean;
+    head: AlertRuleHead;
+    version: AlertRuleVersion;
+};
+
+/**
+ * One rule as a list shows it.
+ */
+export type AlertRuleSummary = {
+    current?: null | AlertRuleVersionSummary;
+    enabled: boolean;
+    name: AlertRuleName;
+    updated_at: number;
+    versions: number;
+};
+
+/**
+ * One immutable version of a rule.
+ */
+export type AlertRuleVersion = {
+    author?: string | null;
+    /**
+     * Why this version exists.
+     */
+    notes?: string | null;
+    published_at: number;
+    rule: AlertRule;
+    version_id: string;
+};
+
+/**
+ * One version as an index lists it.
+ */
+export type AlertRuleVersionSummary = {
+    author?: string | null;
+    description: string;
+    published_at: number;
+    trigger: AlertTriggerKind;
+    version_id: string;
+};
+
+/**
+ * What a rule fires on.
+ */
+export type AlertTrigger = {
+    /**
+     * Only executions of this definition. Absent is every definition,
+     * which is the useful default for a deployment running three.
+     */
+    definition?: string | null;
+    kind: 'execution_failed';
+} | {
+    /**
+     * Only results measured in this evaluation context — the content
+     * address of the cohort, the split, the suite and the scorers
+     * together, so narrowing by it is narrowing to one comparable
+     * measurement rather than to a name somebody typed.
+     */
+    context_id?: string | null;
+    kind: 'evaluation_regressed';
+    /**
+     * How far worse each metric may be, and which cases must hold. The
+     * default holds every metric to no worse at all, which is what a
+     * deployment that has not thought about tolerances means.
+     */
+    policy?: GatePolicy;
+};
+
+/**
+ * Which watcher raised a signal, and which rules can match it.
+ */
+export const AlertTriggerKind = { EXECUTION_FAILED: 'execution_failed', EVALUATION_REGRESSED: 'evaluation_regressed' } as const;
+
+/**
+ * Which watcher raised a signal, and which rules can match it.
+ */
+export type AlertTriggerKind = typeof AlertTriggerKind[keyof typeof AlertTriggerKind];
+
+/**
  * One drawn instance.
  */
 export type Annotation = {
@@ -10980,6 +11286,270 @@ export type WorkflowTask = {
      */
     timeout_seconds?: number;
 };
+
+export type GetAlertChannelData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/alert-channel';
+};
+
+export type GetAlertChannelErrors = {
+    403: ErrorBody;
+};
+
+export type GetAlertChannelError = GetAlertChannelErrors[keyof GetAlertChannelErrors];
+
+export type GetAlertChannelResponses = {
+    200: AlertChannelView;
+};
+
+export type GetAlertChannelResponse = GetAlertChannelResponses[keyof GetAlertChannelResponses];
+
+export type TestAlertChannelData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/alert-channel/test';
+};
+
+export type TestAlertChannelErrors = {
+    403: ErrorBody;
+    /**
+     * No channel is configured
+     */
+    501: ErrorBody;
+};
+
+export type TestAlertChannelError = TestAlertChannelErrors[keyof TestAlertChannelErrors];
+
+export type TestAlertChannelResponses = {
+    200: AlertChannelTest;
+};
+
+export type TestAlertChannelResponse = TestAlertChannelResponses[keyof TestAlertChannelResponses];
+
+export type ListAlertDeliveriesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Only this rule's deliveries.
+         */
+        rule?: string | null;
+        /**
+         * Only deliveries in this state.
+         */
+        state?: null | JobState;
+        /**
+         * Page by key: the last key on the previous page.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/alert-deliveries';
+};
+
+export type ListAlertDeliveriesErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListAlertDeliveriesError = ListAlertDeliveriesErrors[keyof ListAlertDeliveriesErrors];
+
+export type ListAlertDeliveriesResponses = {
+    200: AlertDeliveryPage;
+};
+
+export type ListAlertDeliveriesResponse = ListAlertDeliveriesResponses[keyof ListAlertDeliveriesResponses];
+
+export type GetAlertDeliveryData = {
+    body?: never;
+    path: {
+        /**
+         * The dedup key
+         */
+        key: string;
+    };
+    query?: never;
+    url: '/api/v1/alert-deliveries/{key}';
+};
+
+export type GetAlertDeliveryErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetAlertDeliveryError = GetAlertDeliveryErrors[keyof GetAlertDeliveryErrors];
+
+export type GetAlertDeliveryResponses = {
+    200: AlertDelivery;
+};
+
+export type GetAlertDeliveryResponse = GetAlertDeliveryResponses[keyof GetAlertDeliveryResponses];
+
+export type RetryAlertDeliveryData = {
+    body?: never;
+    path: {
+        /**
+         * The dedup key
+         */
+        key: string;
+    };
+    query?: never;
+    url: '/api/v1/alert-deliveries/{key}/retry';
+};
+
+export type RetryAlertDeliveryErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * It did not fail
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RetryAlertDeliveryError = RetryAlertDeliveryErrors[keyof RetryAlertDeliveryErrors];
+
+export type RetryAlertDeliveryResponses = {
+    200: AlertDelivery;
+};
+
+export type RetryAlertDeliveryResponse = RetryAlertDeliveryResponses[keyof RetryAlertDeliveryResponses];
+
+export type ListAlertRulesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Page by name: the last name on the previous page.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/alert-rules';
+};
+
+export type ListAlertRulesErrors = {
+    501: ErrorBody;
+};
+
+export type ListAlertRulesError = ListAlertRulesErrors[keyof ListAlertRulesErrors];
+
+export type ListAlertRulesResponses = {
+    200: AlertRulePage;
+};
+
+export type ListAlertRulesResponse = ListAlertRulesResponses[keyof ListAlertRulesResponses];
+
+export type PublishAlertRuleData = {
+    body: AlertRulePublishRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/alert-rules';
+};
+
+export type PublishAlertRuleErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishAlertRuleError = PublishAlertRuleErrors[keyof PublishAlertRuleErrors];
+
+export type PublishAlertRuleResponses = {
+    /**
+     * This rule was already stored
+     */
+    200: AlertRulePublished;
+    /**
+     * A new version was stored
+     */
+    201: AlertRulePublished;
+};
+
+export type PublishAlertRuleResponse = PublishAlertRuleResponses[keyof PublishAlertRuleResponses];
+
+export type GetAlertRuleData = {
+    body?: never;
+    path: {
+        /**
+         * The rule to fetch
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/alert-rules/{name}';
+};
+
+export type GetAlertRuleErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetAlertRuleError = GetAlertRuleErrors[keyof GetAlertRuleErrors];
+
+export type GetAlertRuleResponses = {
+    200: AlertRuleDetail;
+};
+
+export type GetAlertRuleResponse = GetAlertRuleResponses[keyof GetAlertRuleResponses];
+
+export type SetAlertRuleEnabledData = {
+    body: AlertRuleEnabledRequest;
+    path: {
+        /**
+         * The rule
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/alert-rules/{name}/enabled';
+};
+
+export type SetAlertRuleEnabledErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetAlertRuleEnabledError = SetAlertRuleEnabledErrors[keyof SetAlertRuleEnabledErrors];
+
+export type SetAlertRuleEnabledResponses = {
+    200: AlertRuleHead;
+};
+
+export type SetAlertRuleEnabledResponse = SetAlertRuleEnabledResponses[keyof SetAlertRuleEnabledResponses];
+
+export type GetAlertRuleVersionData = {
+    body?: never;
+    path: {
+        /**
+         * The rule
+         */
+        name: string;
+        /**
+         * The version's digest
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/v1/alert-rules/{name}/versions/{version_id}';
+};
+
+export type GetAlertRuleVersionErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetAlertRuleVersionError = GetAlertRuleVersionErrors[keyof GetAlertRuleVersionErrors];
+
+export type GetAlertRuleVersionResponses = {
+    200: AlertRuleVersion;
+};
+
+export type GetAlertRuleVersionResponse = GetAlertRuleVersionResponses[keyof GetAlertRuleVersionResponses];
 
 export type UploadBlobData = {
     body: Array<number>;

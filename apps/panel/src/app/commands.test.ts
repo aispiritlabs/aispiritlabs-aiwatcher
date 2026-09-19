@@ -22,6 +22,7 @@ import { searchSchema as observabilityMetrics } from '@/features/observability/s
 import { searchSchema as observabilityQuery } from '@/features/observability/screens/query/search';
 import { searchSchema as observabilityRuns } from '@/features/observability/screens/runs/search';
 import { searchSchema as prompts } from '@/features/prompts/screens/list/search';
+import { searchSchema as alerts } from '@/features/alerts/screens/overview/search';
 import { searchSchema as system } from '@/features/system/screens/overview/search';
 import { searchSchema as trainingModels } from '@/features/training/screens/models/search';
 import { searchSchema as trainingRuns } from '@/features/training/screens/runs/search';
@@ -65,6 +66,7 @@ const SCHEMAS: Record<string, { parse: (value: unknown) => unknown }> = {
   '/learning': learning,
   '/workflows': workflows,
   '/system': system,
+  '/alerts': alerts,
 };
 
 /**

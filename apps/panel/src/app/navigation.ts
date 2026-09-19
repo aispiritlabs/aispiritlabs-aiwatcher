@@ -1,4 +1,5 @@
 import {
+  BellRing,
   Bot,
   Boxes,
   BookOpen,
@@ -265,6 +266,17 @@ export const SECTIONS: NavSection[] = [
     home: '/system',
     areas: [
       {
+        to: '/alerts',
+        label: 'Alerts',
+        icon: BellRing,
+        // The one area that speaks first. It sits beside System rather than
+        // inside it because a rule is a thing somebody writes, while System
+        // is read-only by design — and an operator asking "did anybody get
+        // told" is asking about this rather than about what is wired.
+        blurb: 'What this deployment says out loud, and what was actually sent.',
+        views: [],
+      },
+      {
         to: '/system',
         label: 'System',
         reach: 'instance',
@@ -296,6 +308,7 @@ const SECTION_OF: Array<[prefix: string, id: SectionId]> = [
   ['/workflows', 'workflows'],
   ['/learning', 'learning'],
   ['/system', 'system'],
+  ['/alerts', 'system'],
   ['/runs', 'inference'],
   ['/training', 'training'],
   ['/experiments', 'training'],

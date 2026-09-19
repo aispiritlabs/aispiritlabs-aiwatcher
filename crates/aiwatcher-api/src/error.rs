@@ -277,6 +277,9 @@ pub enum ApiError {
     LabRegistry(#[from] aiwatcher_labs::LabError),
 
     #[error(transparent)]
+    AlertRegistry(#[from] aiwatcher_alerts::AlertError),
+
+    #[error(transparent)]
     ConversationArchive(#[from] aiwatcher_conversations::Error),
 
     /// A rerun the orchestrator would not take. Distinct from every other
@@ -450,6 +453,7 @@ impl ApiError {
             },
             Self::TrainingRegistry(error) => training_registry_parts(error),
             Self::LabRegistry(error) => lab_registry_parts(error),
+            Self::AlertRegistry(error) => alert_registry_parts(error),
             Self::ConversationArchive(error) => conversation_archive_parts(error),
             // The same retryable/not split the registry makes, for the same
             // reason: an orchestrator that is down is a 503 worth repeating,
@@ -639,6 +643,32 @@ fn lab_registry_parts(error: &aiwatcher_labs::LabError) -> (StatusCode, &'static
         }
         LabError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
         LabError::Corrupt { .. } | LabError::Encoding(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt")
+        }
+    }
+}
+
+/// An alert registry failure, as a status the caller can act on.
+///
+/// One outcome no other registry here has. Asking for a delivery that did not
+/// fail is a **409**: the record is there, the caller may read it, and what is
+/// wrong is the state it is in. A 400 would read as a malformed key, and a 404
+/// would deny a record this same caller can see in the history.
+fn alert_registry_parts(error: &aiwatcher_alerts::AlertError) -> (StatusCode, &'static str) {
+    use aiwatcher_alerts::AlertError;
+    match error {
+        AlertError::UnknownRule(_)
+        | AlertError::UnknownVersion { .. }
+        | AlertError::UnknownDelivery(_) => (StatusCode::NOT_FOUND, "not_found"),
+        AlertError::Invalid { .. } => (StatusCode::BAD_REQUEST, "bad_request"),
+        AlertError::NotRetryable { .. } => (StatusCode::CONFLICT, "alert_not_retryable"),
+        AlertError::Disabled => (StatusCode::NOT_IMPLEMENTED, "registry_disabled"),
+        AlertError::NoChannel => (StatusCode::NOT_IMPLEMENTED, "alert_channel_disabled"),
+        AlertError::Store(store) if store.is_retryable() => {
+            (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
+        }
+        AlertError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
+        AlertError::Corrupt { .. } | AlertError::Encoding(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt")
         }
     }

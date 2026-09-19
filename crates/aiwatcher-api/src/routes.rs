@@ -58,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         // holds a brief and pins a scorecard and a cohort, and its marks are
         // evaluation results sharing one context. See ADR_0034.
         .merge(crate::labs::router())
+        .merge(crate::alerts::router())
         // ── Asking another system to do something ────────────────────────────
         .merge(crate::workflows::router())
         // ── Doing the work here instead ──────────────────────────────────────

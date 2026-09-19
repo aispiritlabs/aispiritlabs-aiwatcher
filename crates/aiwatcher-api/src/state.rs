@@ -109,6 +109,16 @@ pub struct AppState {
     /// naming the variable rather than an empty list, which would be a
     /// different problem with a different fix.
     pub labs: Option<Arc<aiwatcher_labs::Registry>>,
+    /// Alert rules and the history of what was sent. The same object store
+    /// under its own prefix, and `None` on the same condition as `prompts`.
+    pub alerts: Option<Arc<aiwatcher_alerts::Registry>>,
+    /// Where a notification goes: one channel, from configuration.
+    ///
+    /// Separate from the registry because they fail apart. A deployment with
+    /// an object store and no webhook can write rules and read the history —
+    /// what it cannot do is send, and the route that tries says so by name
+    /// rather than answering "no rules".
+    pub alert_channel: Option<Arc<dyn aiwatcher_alerts::AlertChannel>>,
 
     /// When a definition runs unattended. `None` when this deployment has no
     /// object store, which is the same condition that leaves it no definitions
@@ -367,6 +377,8 @@ impl std::fmt::Debug for AppState {
             .field("prompt_registry", &self.prompts.is_some())
             .field("dataset_registry", &self.datasets.is_some())
             .field("lab_registry", &self.labs.is_some())
+            .field("alert_registry", &self.alerts.is_some())
+            .field("alert_channel", &self.alert_channel.is_some())
             .field("annotation_registry", &self.annotations.is_some())
             .field("conversation_archive", &self.conversations.is_some())
             .field("execution_store", &self.executions.is_some())

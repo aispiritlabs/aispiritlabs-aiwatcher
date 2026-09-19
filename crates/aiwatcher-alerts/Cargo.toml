@@ -1,0 +1,34 @@
+[package]
+name = "aiwatcher-alerts"
+description = "Alert rules, the dedup key an occurrence is named by, and the durable delivery queue behind one channel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+# The retry decision and the job states. Called rather than copied: a delivery
+# that runs out of attempts is the same decision an export's shard makes.
+aiwatcher-jobs.workspace = true
+# A regression is the gate's word, under the policy the rule pins. A rule that
+# could not name that policy would be a rule whose meaning lived elsewhere.
+aiwatcher-evaluation.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+aiwatcher-prompts.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

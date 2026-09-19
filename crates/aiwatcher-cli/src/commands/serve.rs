@@ -114,6 +114,11 @@ pub async fn run(config: Config) -> Result<()> {
     // unless it has either somewhere to export into or a retention to apply.
     let iam_audit_task = aiwatcher_server::iam::spawn(&state, &config, shutdown.clone());
 
+    // The alert half: two watchers looking for what is worth telling somebody
+    // about, the queue that sends it, and the sweep that bounds the history.
+    // Empty when this deployment has no object store to keep rules in.
+    let alert_tasks = aiwatcher_server::alerts::spawn(&state, &config, shutdown.clone());
+
     // The annotation registry's own background job: the import queue. `None`
     // when no object store is configured, which is when there is no registry
     // to import into either.
@@ -167,6 +172,15 @@ pub async fn run(config: Config) -> Result<()> {
             // An export in flight has committed every shard it finished, so
             // whichever process picks the job up next resumes from there.
             Err(_) => tracing::warn!("the IAM audit worker did not stop within 10s"),
+        }
+    }
+    for task in alert_tasks {
+        match tokio::time::timeout(GRACE, task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "an alert worker panicked"),
+            // A notification in flight is recorded after the attempt, so one
+            // cut off here is re-sent and the receiver knows it by its key.
+            Err(_) => tracing::warn!("an alert worker did not stop within 10s"),
         }
     }
     if let Some(task) = import_task {

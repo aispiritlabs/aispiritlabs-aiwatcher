@@ -1,5 +1,4 @@
-//! The HTTP surface. Every module here is a facade: `router()` and
-//! `openapi()`, nothing else.
+//! The HTTP surface. Every module here is a facade: `router()`, `openapi()`.
 //!
 //! | Group | Reads | Notes |
 //! |---|---|---|
@@ -20,10 +19,12 @@
 //! | `/auth` | — | about the caller. Its layer runs in front of everything |
 //! | `/events` (POST) | — | the way in for a client that cannot reach the log directly |
 //! | `/labs` | object store | a workshop's exercise: the brief, and the card and cohort it pins — see [`labs`] |
+//! | `/alert-*` | object store | what is worth telling somebody about, and what was sent — see [`alerts`] |
 //! | `/system` | configuration | what this instance has wired, and the variable that decides each — see [`system`] |
 //!
 //! ADR_0021, ADR_0022, ADR_0025, ADR_0026.
 
+pub mod alerts;
 mod annotation_scope;
 pub mod annotations;
 pub mod artifacts;

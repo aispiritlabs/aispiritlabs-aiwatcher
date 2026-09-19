@@ -469,6 +469,23 @@ pub struct Config {
     pub workflow_runner_url: Option<String>,
     pub workflow_runner_token: Option<String>,
     pub workflow_runner_timeout: Duration,
+    /// Where a notification goes. The one destination this deployment has, and
+    /// the only place one may come from: an endpoint that arrived in a request
+    /// body would let anything able to publish an alert rule aim this
+    /// process's outbound POSTs from inside the cluster. Absent keeps rules
+    /// and sends nothing.
+    pub alert_webhook_url: Option<String>,
+    /// Sent as `Authorization: Bearer …` when present.
+    pub alert_webhook_token: Option<String>,
+    /// Signs each body with HMAC-SHA256 when present, so a receiver on a
+    /// network anybody can reach can tell this deployment's notifications from
+    /// somebody else's.
+    pub alert_webhook_secret: Option<String>,
+    pub alert_webhook_timeout_seconds: u64,
+    /// How long a delivery stays readable after it finished. The queue is not
+    /// swept: a notification nothing has taken yet is never forgotten, whatever
+    /// its age.
+    pub alert_history_days: u32,
     /// A JSON catalogue of corpora somebody read the licence of.
     ///
     /// Domain content, so this build ships none. Absent means an empty table,
@@ -749,6 +766,11 @@ impl Default for Config {
             workflow_runner_token: None,
             // The same ten seconds the OTLP exporter and the object store use.
             workflow_runner_timeout: Duration::from_secs(10),
+            alert_webhook_url: None,
+            alert_webhook_token: None,
+            alert_webhook_secret: None,
+            alert_webhook_timeout_seconds: 10,
+            alert_history_days: 30,
             dataset_sources: None,
             model_prices: None,
             witnesses: Vec::new(),
@@ -1031,6 +1053,24 @@ impl Config {
                 expected: "whole number of seconds",
             })?;
             config.workflow_runner_timeout = Duration::from_secs(seconds);
+        }
+        config.alert_webhook_url = var("AIWATCHER_ALERT_WEBHOOK_URL");
+        config.alert_webhook_token = var("AIWATCHER_ALERT_WEBHOOK_TOKEN");
+        config.alert_webhook_secret = var("AIWATCHER_ALERT_WEBHOOK_SECRET");
+        if let Some(raw) = var("AIWATCHER_ALERT_WEBHOOK_TIMEOUT_SECONDS") {
+            config.alert_webhook_timeout_seconds =
+                raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds",
+                })?;
+        }
+        if let Some(raw) = var("AIWATCHER_ALERT_HISTORY_DAYS") {
+            config.alert_history_days = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_ALERT_HISTORY_DAYS",
+                value: raw,
+                expected: "whole number of days",
+            })?;
         }
         config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
         config.model_prices = var("AIWATCHER_MODEL_PRICES");

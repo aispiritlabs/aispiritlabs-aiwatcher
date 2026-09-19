@@ -4,6 +4,7 @@
 //! get their implementations, which makes it the only place that knows Laser,
 //! VictoriaTraces and axum all exist.
 
+pub mod alerts;
 pub mod config;
 pub mod conversations;
 pub mod execution;

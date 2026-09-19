@@ -79,7 +79,19 @@ pub struct GatePolicy {
 }
 
 impl GatePolicy {
-    pub(crate) fn validate(&self) -> Result<()> {
+    /// Whether this policy is one a gate can apply.
+    ///
+    /// Public because a policy is pinned in places a gate is not asked from:
+    /// an alert rule holds one, and refusing a nonsense tolerance where the
+    /// rule is written beats discovering it when a regression fires.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`](crate::EvaluationError::Invalid) for a
+    /// tolerance that is not a finite amount of nought or more, an
+    /// `asked_since_seconds` with nothing to hold it to, and a critical list
+    /// longer than a thousand cases.
+    pub fn validate(&self) -> Result<()> {
         for (metric, tolerance) in &self.tolerance {
             require(
                 tolerance.is_finite() && *tolerance >= 0.0,
