@@ -60,6 +60,7 @@ pub mod prompts;
 mod recordings;
 pub mod reviews;
 pub mod routes;
+mod run_scope;
 pub mod runs;
 pub mod schedules;
 pub mod scorecards;

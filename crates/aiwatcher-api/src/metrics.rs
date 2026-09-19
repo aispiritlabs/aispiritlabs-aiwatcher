@@ -10,6 +10,7 @@ use utoipa::OpenApi;
 
 use aiwatcher_projector::{MetricsFilter, MetricsSummary};
 
+use crate::run_scope::RunRead;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -17,14 +18,28 @@ use crate::state::AppState;
 #[openapi(paths(get_metrics,))]
 struct Api;
 
-/// The operations this module serves. Composed by [`crate::openapi`].
+/// The operations this module serves, on both route families. Composed by
+/// [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
+/// One route, served twice — see [`crate::runs::router`] for why.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/metrics", get(get_metrics))
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
+    Router::new().route("/metrics", get(get_metrics))
 }
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
@@ -45,7 +60,8 @@ pub fn router() -> Router<AppState> {
 )]
 async fn get_metrics(
     State(state): State<AppState>,
+    read: RunRead,
     Query(filter): Query<MetricsFilter>,
 ) -> Json<MetricsSummary> {
-    Json(state.read_model.metrics(&filter).await)
+    Json(state.read_model.metrics(read.scope, &filter).await)
 }

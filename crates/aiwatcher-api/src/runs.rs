@@ -17,6 +17,7 @@ use aiwatcher_projector::{
 };
 
 use crate::error::{ApiError, ApiResult};
+use crate::run_scope::RunRead;
 use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
@@ -31,20 +32,49 @@ use crate::state::AppState;
 ))]
 struct Api;
 
-/// The operations this module serves. Composed by [`crate::openapi`].
+/// The operations this module serves, on both route families. Composed by
+/// [`crate::openapi`].
 #[must_use]
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    Api::openapi()
+    crate::project_scope::openapi(Api::openapi())
 }
 
+/// One set of routes, served twice: once under instance authorization for the
+/// global side, once under a project's grant for that project's (ADR_0033,
+/// IAM-02 E3). The handlers are the same handlers — what differs is the side
+/// [`RunRead`] resolves, and a body cannot name it.
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/api/v1", resource_router()).nest(
+        "/api/v1/orgs/{organization}/projects/{project}",
+        resource_router()
+            .layer(axum::Extension(crate::project_scope::ScopedRoute))
+            .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            )),
+    )
+}
+
+fn resource_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/conversations", get(list_conversations))
-        .route("/api/v1/dimensions/{kind}", get(list_dimension))
-        .route("/api/v1/spans", get(list_spans))
-        .route("/api/v1/runs", get(list_runs))
-        .route("/api/v1/runs/{run_id}", get(get_run))
-        .route("/api/v1/runs/{run_id}/events", get(get_run_events))
+        .route("/conversations", get(list_conversations))
+        .route("/dimensions/{kind}", get(list_dimension))
+        .route("/spans", get(list_spans))
+        .route("/runs", get(list_runs))
+        .route("/runs/{run_id}", get(get_run))
+        .route("/runs/{run_id}/events", get(get_run_events))
+}
+
+/// Named rather than `Path<String>` so the scoped family's `organization` and
+/// `project` do not have to be spelled out in every handler that ignores them.
+#[derive(Deserialize)]
+struct RunPath {
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+struct DimensionPath {
+    kind: DimensionKind,
 }
 
 // ── Conversations ────────────────────────────────────────────────────────────
@@ -62,9 +92,10 @@ pub fn router() -> Router<AppState> {
 )]
 async fn list_conversations(
     State(state): State<AppState>,
+    read: RunRead,
     Query(filter): Query<ConversationFilter>,
 ) -> Json<ConversationPage> {
-    Json(state.read_model.conversations(&filter).await)
+    Json(state.read_model.conversations(read.scope, &filter).await)
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -79,9 +110,10 @@ async fn list_conversations(
 )]
 async fn list_runs(
     State(state): State<AppState>,
+    read: RunRead,
     Query(filter): Query<RunFilter>,
 ) -> Json<RunPage> {
-    Json(state.read_model.list(&filter).await)
+    Json(state.read_model.list(read.scope, &filter).await)
 }
 
 /// One run with the spans finished so far.
@@ -97,11 +129,12 @@ async fn list_runs(
 )]
 async fn get_run(
     State(state): State<AppState>,
-    Path(run_id): Path<String>,
+    read: RunRead,
+    Path(RunPath { run_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunDetail>> {
     state
         .read_model
-        .run(&run_id)
+        .run(read.scope, &run_id)
         .await
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id}")))
@@ -153,22 +186,36 @@ pub struct EventPage {
 
 /// Read from the durable log rather than the read model: this is the audit
 /// view, and it must show what was actually recorded.
+///
+/// Which side it is on is read from the log too — from the run's **first**
+/// event, which is the same rule the runs fold keeps (`RunSummary::project`,
+/// first-seen-wins). Asking the read model instead would have left a hole with
+/// a name: a project's run whose row had been evicted would become readable on
+/// the global side, on the one route that answers past the read model.
 #[utoipa::path(
     get,
     path = "/api/v1/runs/{run_id}/events",
     params(("run_id" = String, Path, description = "The run to fetch"), EventQuery),
     responses(
         (status = 200, body = EventPage),
+        (status = 404, body = crate::error::ErrorBody),
         (status = 503, body = crate::error::ErrorBody),
     ),
     tag = "runs",
 )]
 async fn get_run_events(
     State(state): State<AppState>,
-    Path(run_id): Path<String>,
+    read: RunRead,
+    Path(RunPath { run_id }): Path<RunPath>,
     Query(query): Query<EventQuery>,
 ) -> ApiResult<Json<EventPage>> {
     let stream_name = aiwatcher_core::StreamName::for_run(&run_id);
+    let opening = state.source.read_stream_page(&stream_name, None, 1).await?;
+    if let Some(first) = opening.events.first()
+        && !read.scope.admits(first.metadata.project)
+    {
+        return Err(ApiError::NotFound(format!("run {run_id}")));
+    }
     let limit = query
         .limit
         .unwrap_or(EVENTS_PAGE_DEFAULT)
@@ -248,10 +295,13 @@ fn event_matches(event: &RecordedEvent, query: &EventQuery) -> bool {
 )]
 async fn list_dimension(
     State(state): State<AppState>,
-    Path(kind): Path<DimensionKind>,
+    read: RunRead,
+    Path(DimensionPath { kind }): Path<DimensionPath>,
     Query(filter): Query<DimensionFilter>,
 ) -> ApiResult<Json<DimensionPage>> {
-    Ok(Json(state.read_model.dimensions(kind, &filter).await))
+    Ok(Json(
+        state.read_model.dimensions(read.scope, kind, &filter).await,
+    ))
 }
 
 /// Every retained span, flat and filterable.
@@ -268,7 +318,8 @@ async fn list_dimension(
 )]
 async fn list_spans(
     State(state): State<AppState>,
+    read: RunRead,
     Query(filter): Query<SpanFilter>,
 ) -> ApiResult<Json<SpanPage>> {
-    Ok(Json(state.read_model.spans(&filter).await))
+    Ok(Json(state.read_model.spans(read.scope, &filter).await))
 }
