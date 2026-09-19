@@ -74,7 +74,33 @@ function metrics(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function mount(search = '', body: unknown = metrics()) {
+/** One dimension row, with the fields this page reads. */
+function row(key: string, runs: number) {
+  return {
+    key,
+    runs,
+    running: 0,
+    failures: 0,
+    llm_calls: 0,
+    tool_calls: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    first_activity_at: '2026-09-18T10:00:00Z',
+    last_activity_at: '2026-09-18T11:00:00Z',
+  };
+}
+
+const REGISTERED = {
+  status: 200,
+  body: { prompts: [{ name: 'extract-rooms' }], total: 1, next_cursor: null },
+};
+
+function mount(
+  search = '',
+  body: unknown = metrics(),
+  prompts: { status: number; body?: unknown } = REGISTERED,
+) {
   vi.stubGlobal('scrollTo', () => {});
   serve([
     { method: 'GET', path: '/metrics', answer: { status: 200, body } },
@@ -93,6 +119,20 @@ function mount(search = '', body: unknown = metrics()) {
       path: '/dimensions/runtime',
       answer: { status: 200, body: { kind: 'runtime', rows: [], total: 0, ungrouped_runs: 0 } },
     },
+    {
+      method: 'GET',
+      path: '/dimensions/prompt',
+      answer: {
+        status: 200,
+        body: {
+          kind: 'prompt',
+          rows: [row('extract-rooms', 4), row('retired-draft', 1)],
+          total: 2,
+          ungrouped_runs: 3,
+        },
+      },
+    },
+    { method: 'GET', path: '/prompts', answer: prompts },
   ]);
   const requests = vi.fn(fetch);
   vi.stubGlobal('fetch', requests);
@@ -159,8 +199,25 @@ it('says the period holds nothing rather than pretending the agent is unknown', 
   await screen.findByText('Nothing under this agent in the period');
 });
 
-it('names the prompts it cannot list instead of leaving the question out', async () => {
-  mount();
+it('lists the prompts its runs named, and links only the ones the registry holds', async () => {
+  // The name is retained telemetry and the registry is authored, so the two
+  // can disagree in either direction: `retired-draft` ran and is no longer
+  // registered. A link that 404s is worse than a fact somebody looks up.
+  const { requests } = mount();
   await screen.findByText('Prompts it runs on');
-  expect(screen.getByText(/counted in the browser/)).toBeTruthy();
+  expect(await screen.findByRole('link', { name: 'extract-rooms' })).toBeTruthy();
+  expect(screen.getByText('retired-draft').tagName).toBe('SPAN');
+  expect(screen.getByText('3 of its runs named no prompt.')).toBeTruthy();
+  // The dimension carries the page's whole filter, so this card is about the
+  // same runs as the strip above it.
+  expect(urlFor(requests, '/dimensions/prompt')?.searchParams.get('agent_id')).toBe('researcher');
+});
+
+it('renders a prompt as a fact when no registry answers at all', async () => {
+  // 501 is the store saying it is not configured. An unreadable registry
+  // resolves nothing, which is the same answer as a name it does not list.
+  mount('', metrics(), { status: 501, body: { code: 'not_configured', message: 'no store' } });
+  await screen.findByText('Prompts it runs on');
+  expect(await screen.findByText('extract-rooms')).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'extract-rooms' })).toBeNull();
 });

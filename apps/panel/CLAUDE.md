@@ -55,9 +55,15 @@ followed by a full `tsc` project check.
   *span*, so it is this agent's own calls, tokens, cost and latency, while
   `by_model` and `by_tool` are folded over every span of the runs it took part
   in — a run where it hands work to another agent counts that agent's models
-  there, and the cards say so. Which prompts an agent uses is **not answerable**
-  from any read that exists, and the page says that too rather than counting
-  versions out of every run's spans in the browser.
+  there, and the cards say so. Which prompts an agent runs on is a third read,
+  and the card that used to say it was **not answerable** is why the `prompt`
+  dimension exists: the answer was in the spans and no fold grouped by it, so
+  the only way to the list was paging every run and counting versions in the
+  browser. It is the name and never the version — the registry is keyed by name
+  and a version is what a prompt's own page lists — and the name is linked only
+  where the registry confirms it holds one, because a span's prompt name is
+  retained telemetry while the text is authored and outlives it, so the two can
+  disagree in either direction.
 - Routes are grouped into peer work areas — Data, Models & quality,
   Applications, Workflows and Learning — described once in
   `src/app/navigation.ts`. The desktop sidebar exposes all areas; mobile

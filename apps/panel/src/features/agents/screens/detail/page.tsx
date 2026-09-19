@@ -19,7 +19,13 @@ import {
   Stat,
 } from '@/shared/components/ui/primitives';
 import { VirtualList } from '@/shared/components/virtual-list';
-import { filterFromSearch, queryFor, type Unapplied } from '@/shared/lib/object-filter';
+import { PromptNameLink } from '@/shared/components/prompt-bits';
+import {
+  filterFromSearch,
+  queryFor,
+  type TargetQuery,
+  type Unapplied,
+} from '@/shared/lib/object-filter';
 import {
   formatAge,
   formatCount,
@@ -72,6 +78,7 @@ export function AgentPage() {
 
   const metricsFilter = React.useMemo(() => queryFor('metrics', filter), [filter]);
   const runsFilter = React.useMemo(() => queryFor('runs', filter), [filter]);
+  const dimensionFilter = React.useMemo(() => queryFor('dimensions', filter), [filter]);
 
   const metrics = useQuery({
     queryKey: ['metrics', 'agent', agentId, windowSeconds, metricsFilter.query],
@@ -270,29 +277,21 @@ export function AgentPage() {
           </p>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <Where kind="workflow" title="Workflows it appears in" agentId={agentId} window={windowSeconds} />
-            <Where kind="runtime" title="Runtimes that produced it" agentId={agentId} window={windowSeconds} />
+            <Where
+              kind="workflow"
+              title="Workflows it appears in"
+              query={dimensionFilter.query}
+              window={windowSeconds}
+            />
+            <Where
+              kind="runtime"
+              title="Runtimes that produced it"
+              query={dimensionFilter.query}
+              window={windowSeconds}
+            />
           </div>
 
-          {/*
-           * The one thing this page cannot answer, said rather than left out.
-           * A span carries the registered prompt it ran on
-           * (`aiwatcher.prompt.*`, ADR_0011) and `SpanRow` does not lift it,
-           * and no dimension groups by it — so "which prompts does this agent
-           * use" would mean paging its runs and counting versions in the
-           * browser, which is the one thing the panel may not do.
-           */}
-          <Card className="border-dashed">
-            <CardHeader>
-              <CardTitle>Prompts it runs on</CardTitle>
-            </CardHeader>
-            <CardContent className="text-xs leading-relaxed text-muted-foreground">
-              Not answerable from a read that exists. A call carries the prompt version it ran on
-              and the span detail links it, but nothing groups runs by prompt, so this list would
-              have to be counted in the browser from every run’s spans. Open a run and its call
-              shows the version.
-            </CardContent>
-          </Card>
+          <Prompts query={dimensionFilter.query} window={windowSeconds} />
 
           <Card className="overflow-hidden">
             <CardHeader>
@@ -331,24 +330,30 @@ export function AgentPage() {
   );
 }
 
-/** One dimension's rows, narrowed to this agent's runs. */
+/**
+ * One dimension's rows, over the runs this page is about.
+ *
+ * The whole filter rather than the agent alone: the dimension route takes
+ * every axis the runs list does, so a reader who arrived under a workflow sees
+ * the same population in this card as in the strip above and the list below.
+ */
 function Where({
   kind,
   title,
-  agentId,
+  query,
   window,
 }: {
   kind: Extract<DimensionKind, 'workflow' | 'runtime'>;
   title: string;
-  agentId: string;
+  query: TargetQuery['dimensions'];
   window: number;
 }) {
   const rows = useQuery({
-    queryKey: ['dimensions', kind, { agent: agentId, window }],
+    queryKey: ['dimensions', kind, { query, window }],
     queryFn: async () => {
       const response = await listDimension({
         path: { kind },
-        query: { agent_id: agentId, window_seconds: windowParam(window), limit: 20 },
+        query: { ...query, window_seconds: windowParam(window), limit: 20 },
       });
       if (response.error) throw new Error(`failed to load ${kind}s`);
       return response.data;
@@ -391,6 +396,83 @@ function Where({
         {rows.data?.next_cursor ? (
           <p className="text-[11px] text-muted-foreground">
             {formatCount(rows.data.total)} in the period; the first twenty are shown.
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The prompts this agent's runs ran on.
+ *
+ * The card that used to say this was not answerable. It was true when it was
+ * written: a call carried `aiwatcher.prompt.name` and nothing grouped by it,
+ * so the only way to the list was paging every run and counting versions in
+ * the browser — which is the one thing the panel may not do. The span row
+ * lifts the reference now and `prompt` is a dimension, so the answer is one
+ * read of the same shape as the two cards above it.
+ *
+ * The name, never the version: the registry is keyed by name and a version is
+ * what a prompt's own page lists, so grouping by version would put a row under
+ * every edit of one prompt. A call that sent only a version id contributes no
+ * key and its run is counted in the dimension's `ungrouped_runs`.
+ */
+function Prompts({ query, window }: { query: TargetQuery['dimensions']; window: number }) {
+  const rows = useQuery({
+    queryKey: ['dimensions', 'prompt', { query, window }],
+    queryFn: async () => {
+      const response = await listDimension({
+        path: { kind: 'prompt' },
+        query: { ...query, window_seconds: windowParam(window), limit: 20 },
+      });
+      if (response.error) throw new Error('failed to load prompts');
+      return response.data;
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Prompts it runs on</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1 text-sm">
+        {rows.isPending ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner /> Reading…
+          </p>
+        ) : rows.isError ? (
+          <p className="text-xs text-danger">Could not read the prompt list.</p>
+        ) : (rows.data?.rows.length ?? 0) === 0 ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            No call in these runs named a registered prompt. A call carries the prompt as a
+            reference and many producers send none — the text itself is never on the log (ADR_0011).
+          </p>
+        ) : (
+          rows.data?.rows.map((row: DimensionSummary) => (
+            <div
+              key={row.key}
+              className="flex items-baseline justify-between gap-3 rounded px-1 py-0.5"
+            >
+              {/* Two links, because they answer two questions: the name goes to
+                  the text the registry holds, the count to the runs that ran
+                  on it. Nested anchors would be neither. */}
+              <span className="truncate" title={row.key}>
+                <PromptNameLink name={row.key} />
+              </span>
+              <Link
+                to="/observability/explore"
+                search={{ by: 'prompt', key: row.key, window }}
+                className="shrink-0 text-xs tabular-nums text-muted-foreground hover:underline"
+              >
+                {formatCount(row.runs)} runs
+              </Link>
+            </div>
+          ))
+        )}
+        {rows.data && rows.data.ungrouped_runs > 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            {formatCount(rows.data.ungrouped_runs)} of its runs named no prompt.
           </p>
         ) : null}
       </CardContent>
