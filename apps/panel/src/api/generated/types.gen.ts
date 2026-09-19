@@ -5888,6 +5888,7 @@ export type LiveEvent = {
     };
     event_type: EventType;
     occurred_at: string;
+    project?: null | ProjectScope;
     run_id: string;
     sequence?: number | null;
     service: string;
@@ -5919,6 +5920,8 @@ export type LiveFrame = (LiveEvent & {
 } | {
     frame: 'resynced';
     from: Checkpoint;
+} | {
+    frame: 'revoked';
 };
 
 export type LoggedOut = {
@@ -15968,6 +15971,58 @@ export type ProjectSaveRevisionResponses = {
 
 export type ProjectSaveRevisionResponse = ProjectSaveRevisionResponses[keyof ProjectSaveRevisionResponses];
 
+export type ProjectListConversationsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only sessions with activity in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
+        agent_id?: string | null;
+        /**
+         * Substring match on the conversation id. The one control that turns a
+         * long list into the session someone is actually looking for.
+         */
+        search?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/conversations';
+};
+
+export type ProjectListConversationsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListConversationsResponses = {
+    200: ConversationPage;
+};
+
+export type ProjectListConversationsResponse = ProjectListConversationsResponses[keyof ProjectListConversationsResponses];
+
 export type ProjectSearchBlockLibraryData = {
     body?: never;
     path: {
@@ -16466,6 +16521,92 @@ export type ProjectPublishDatasetResponses = {
 };
 
 export type ProjectPublishDatasetResponse = ProjectPublishDatasetResponses[keyof ProjectPublishDatasetResponses];
+
+export type ProjectListDimensionData = {
+    body?: never;
+    path: {
+        /**
+         * What to group runs by
+         */
+        kind: DimensionKind;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only runs with activity in the last this-many seconds, before they are
+         * grouped. See [`crate::window`] — a row whose every run falls outside the
+         * window disappears with them rather than staying behind as an empty key.
+         */
+        window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now, which is every ordinary read. A caller comparing two
+         * periods pins each end, so the older half is the period it names rather
+         * than one that slides as the page is read — [`crate::window::bounds`].
+         */
+        as_of?: number | null;
+        /**
+         * Narrow the runs before they are grouped, whatever the dimension is.
+         *
+         * These are the runs list's own axes, under the runs list's own names, so
+         * one filter means one thing across every read (`crate::selection`). A
+         * tree rooted on tools, narrowed to one workflow, is the question that
+         * made this more than `agent_id`.
+         */
+        conversation_id?: string | null;
+        agent_id?: string | null;
+        runtime?: string | null;
+        workflow?: string | null;
+        variant_id?: string | null;
+        trace_id?: string | null;
+        model?: string | null;
+        tool?: string | null;
+        prompt?: string | null;
+        status?: null | RunStatus;
+        /**
+         * Substring match on the key. The one control that turns a long list into
+         * the row someone is looking for.
+         */
+        search?: string | null;
+        /**
+         * Cursor: return rows after this key in the current sort order. Keyed
+         * rather than offset, because the list reorders as runs arrive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/dimensions/{kind}';
+};
+
+export type ProjectListDimensionErrors = {
+    400: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListDimensionError = ProjectListDimensionErrors[keyof ProjectListDimensionErrors];
+
+export type ProjectListDimensionResponses = {
+    200: DimensionPage;
+};
+
+export type ProjectListDimensionResponse = ProjectListDimensionResponses[keyof ProjectListDimensionResponses];
 
 export type ProjectListApprovalsData = {
     body?: never;
@@ -18113,6 +18254,72 @@ export type ProjectListScorecardVersionsResponses = {
 
 export type ProjectListScorecardVersionsResponse = ProjectListScorecardVersionsResponses[keyof ProjectListScorecardVersionsResponses];
 
+export type ProjectStreamEventsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query: {
+        /**
+         * Resume point. Usually unnecessary for SSE — the browser sends
+         * `Last-Event-ID` on its own — but explicit here for non-browser clients.
+         */
+        from?: string | null;
+        /**
+         * Events produced by any of these agents.
+         */
+        agent: Array<string>;
+        /**
+         * Events produced by any of these services — the explorer's `runtime`.
+         */
+        runtime: Array<string>;
+        /**
+         * Events belonging to any of these workflows.
+         */
+        workflow: Array<string>;
+        /**
+         * Events belonging to any of these sessions.
+         */
+        session: Array<string>;
+        /**
+         * Only these event types — `llm.completed`, `tool.failed`, and so on.
+         */
+        event_type: Array<string>;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/events/stream';
+};
+
+export type ProjectStreamEventsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectStreamEventsResponses = {
+    /**
+     * text/event-stream of LiveFrame
+     */
+    200: unknown;
+};
+
 export type ProjectListLabsData = {
     body?: never;
     path: {
@@ -18419,6 +18626,135 @@ export type ProjectGetLabVersionResponses = {
 };
 
 export type ProjectGetLabVersionResponse = ProjectGetLabVersionResponses[keyof ProjectGetLabVersionResponses];
+
+export type ProjectLiveWebsocketData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Follow one run only. Omit to follow everything.
+         */
+        run_id?: string | null;
+        from?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/live';
+};
+
+export type ProjectLiveWebsocketErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetMetricsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only runs that started within this many seconds of the window's end.
+         */
+        window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now. A caller comparing two periods pins each end, which is
+         * also what moves the timeline's x-axis: the axis runs to the window's
+         * end, so an older half drawn against `now` would be a chart of mostly
+         * empty buckets. See [`crate::window::bounds`].
+         */
+        as_of?: number | null;
+        /**
+         * The runs these numbers are about — the runs list's own axes, under its
+         * own names, so one filter means one thing across every read
+         * (`crate::selection`).
+         */
+        conversation_id?: string | null;
+        agent_id?: string | null;
+        runtime?: string | null;
+        workflow?: string | null;
+        variant_id?: string | null;
+        trace_id?: string | null;
+        status?: null | RunStatus;
+        /**
+         * Selects the runs that called this model, **and** narrows the counters
+         * that are about a call: LLM calls, tokens, cost and LLM latency. Run,
+         * tool and step counters still cover every call in those runs, because a
+         * tool call has no model.
+         *
+         * Selecting the runs is new (FLOW-01) and is the one behaviour change in
+         * this filter. Before it, "Runs: 412" beside a model-filtered token chart
+         * counted every run in the window, so two numbers on one screen were
+         * about two populations with a paragraph of small print between them.
+         */
+        model?: string | null;
+        /**
+         * The same, for the tool half: selects the runs that invoked it and
+         * narrows the tool counters to it.
+         */
+        tool?: string | null;
+        /**
+         * The same, for the registered prompt a call named (ADR_0011).
+         */
+        prompt?: string | null;
+        /**
+         * Buckets in the timeline. Clamped to 6..=200.
+         */
+        buckets?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/metrics';
+};
+
+export type ProjectGetMetricsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetMetricsResponses = {
+    200: MetricsSummary;
+};
+
+export type ProjectGetMetricsResponse = ProjectGetMetricsResponses[keyof ProjectGetMetricsResponses];
 
 export type ProjectListModelsData = {
     body?: never;
@@ -18997,6 +19333,335 @@ export type ProjectGetPromptVersionResponses = {
 };
 
 export type ProjectGetPromptVersionResponse = ProjectGetPromptVersionResponses[keyof ProjectGetPromptVersionResponses];
+
+export type ProjectListRunsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only runs with activity in the last this-many seconds. See
+         * [`crate::window`] — zero and absent both mean everything.
+         */
+        window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now, which is every ordinary read and every link somebody
+         * pastes. A managed step pins one so that a retry reads the same rows —
+         * see [`crate::window::bounds`].
+         */
+        as_of?: number | null;
+        conversation_id?: string | null;
+        agent_id?: string | null;
+        /**
+         * Runs produced by this service. See `RunSummary::runtimes`.
+         */
+        runtime?: string | null;
+        workflow?: string | null;
+        /**
+         * Runs in which this declared variant answered.
+         */
+        variant_id?: string | null;
+        /**
+         * Runs sharing one trace. Normally one run, but a producer that supplies
+         * its own `trace_id` can span several — the only view that shows it.
+         */
+        trace_id?: string | null;
+        /**
+         * Runs that made at least one call to this model.
+         *
+         * Matched against the run's spans rather than its summary, because a run
+         * does not carry the models it used — the LLM spans do. Same for `tool`.
+         */
+        model?: string | null;
+        /**
+         * Runs that invoked this tool.
+         */
+        tool?: string | null;
+        /**
+         * Runs in which a call named this registered prompt.
+         *
+         * The prompt's *name*, never its text and never its version id: the text
+         * is off the log on purpose (ADR_0011) and a version is what the prompt's
+         * own page lists. Matched against the run's spans, as `model` and `tool`
+         * are.
+         */
+        prompt?: string | null;
+        status?: null | RunStatus;
+        /**
+         * Cursor: return runs older than this one. Keyset pagination, because an
+         * offset shifts under a list that is actively growing.
+         */
+        before?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/runs';
+};
+
+export type ProjectListRunsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListRunsResponses = {
+    200: RunPage;
+};
+
+export type ProjectListRunsResponse = ProjectListRunsResponses[keyof ProjectListRunsResponses];
+
+export type ProjectGetRunData = {
+    body?: never;
+    path: {
+        /**
+         * The run to fetch
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}';
+};
+
+export type ProjectGetRunErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetRunError = ProjectGetRunErrors[keyof ProjectGetRunErrors];
+
+export type ProjectGetRunResponses = {
+    200: RunDetail;
+};
+
+export type ProjectGetRunResponse = ProjectGetRunResponses[keyof ProjectGetRunResponses];
+
+export type ProjectGetRunEventsData = {
+    body?: never;
+    path: {
+        /**
+         * The run to fetch
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Cursor: the `stream_position` of the last event already seen. Exclusive.
+         */
+        after?: number | null;
+        limit?: number | null;
+        /**
+         * Case-insensitive substring over the event type, agent, span key and the
+         * serialised payload.
+         *
+         * Applied to the page that was read, not to the whole run: the cost of a
+         * search stays the cost of a page. A search that finds nothing on this
+         * page but has `has_more` set means "keep paging", which is what the
+         * panel does.
+         */
+        q?: string | null;
+        /**
+         * Only events on one span.
+         */
+        span_id?: string | null;
+        /**
+         * Only events of one type, e.g. `llm.completed`.
+         */
+        event_type?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}/events';
+};
+
+export type ProjectGetRunEventsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ProjectGetRunEventsError = ProjectGetRunEventsErrors[keyof ProjectGetRunEventsErrors];
+
+export type ProjectGetRunEventsResponses = {
+    200: EventPage;
+};
+
+export type ProjectGetRunEventsResponse = ProjectGetRunEventsResponses[keyof ProjectGetRunEventsResponses];
+
+export type ProjectStreamRunData = {
+    body?: never;
+    path: {
+        /**
+         * The run to follow
+         */
+        run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Resume point. Usually unnecessary for SSE — the browser sends
+         * `Last-Event-ID` on its own — but explicit here for non-browser clients.
+         */
+        from?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}/stream';
+};
+
+export type ProjectStreamRunErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectStreamRunResponses = {
+    /**
+     * text/event-stream of LiveFrame
+     */
+    200: unknown;
+};
+
+export type ProjectListSpansData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only spans that ended in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch. `None` is
+         * now — see [`crate::window::bounds`].
+         */
+        as_of?: number | null;
+        run_id?: string | null;
+        trace_id?: string | null;
+        agent_id?: string | null;
+        model?: string | null;
+        tool?: string | null;
+        step_type?: string | null;
+        operation?: string | null;
+        /**
+         * Spans that named this registered prompt. Its name, never its version:
+         * the registry is keyed by name, and a version is what the prompt's own
+         * page lists.
+         */
+        prompt?: string | null;
+        status?: null | SpanOutcome;
+        /**
+         * The filter that turns this list into a hunt for a problem: everything
+         * slower than a threshold, whatever it is.
+         */
+        min_duration_ms?: number | null;
+        /**
+         * Substring over the span name and the lifted attributes.
+         */
+        search?: string | null;
+        /**
+         * Cursor: `run_id:span_id`, from a previous page's `next_cursor`.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/spans';
+};
+
+export type ProjectListSpansErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListSpansResponses = {
+    200: SpanPage;
+};
+
+export type ProjectListSpansResponse = ProjectListSpansResponses[keyof ProjectListSpansResponses];
 
 export type ProjectListTrainingRunsData = {
     body?: never;
@@ -19712,6 +20377,7 @@ export type GetRunEventsData = {
 };
 
 export type GetRunEventsErrors = {
+    404: ErrorBody;
     503: ErrorBody;
 };
 

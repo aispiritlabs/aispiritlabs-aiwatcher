@@ -12629,6 +12629,111 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/conversations": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Sessions, each grouping the runs it produced.",
+        "description": "The level above a run, so the panel can start from \"which session\" and walk\ndown to a single LLM call without going back to a flat list and re-filtering.",
+        "operationId": "project_list_conversations",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only sessions with activity in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match on the conversation id. The one control that turns a\nlong list into the session someone is actually looking for.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/curation-library": {
       "get": {
         "tags": [
@@ -13725,6 +13830,256 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/dimensions/{kind}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "One dimension's rows: the explorer's top level, whatever it is rooted on.",
+        "description": "`session`, `agent`, `runtime`, `workflow`, `trace`, `model` and `tool` all\nreturn the same row shape, so the panel's tree has one renderer rather than\none per pivot. See `aiwatcher_projector::dimensions`.",
+        "operationId": "project_list_dimension",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "What to group runs by",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DimensionKind"
+            }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs with activity in the last this-many seconds, before they are\ngrouped. See [`crate::window`] — a row whose every run falls outside the\nwindow disappears with them rather than staying behind as an empty key.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now, which is every ordinary read. A caller comparing two\nperiods pins each end, so the older half is the period it names rather\nthan one that slides as the page is read — [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "description": "Narrow the runs before they are grouped, whatever the dimension is.\n\nThese are the runs list's own axes, under the runs list's own names, so\none filter means one thing across every read (`crate::selection`). A\ntree rooted on tools, narrowed to one workflow, is the question that\nmade this more than `agent_id`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match on the key. The one control that turns a long list into\nthe row someone is looking for.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: return rows after this key in the current sort order. Keyed\nrather than offset, because the list reorders as runs arrive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
           },
           "503": {
             "description": "Current project authorization failed or is unavailable"
@@ -17347,6 +17702,128 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/events/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for the whole system: a catch-up marker, then live.",
+        "description": "This is the panel's Observability transport. It is deliberately separate\nfrom the WebSocket below: the panel only receives here, so EventSource can\nown reconnects and `Last-Event-ID` resume without client-side machinery.",
+        "operationId": "project_stream_events",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Events produced by any of these agents.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "description": "Events produced by any of these services — the explorer's `runtime`.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "description": "Events belonging to any of these workflows.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "description": "Events belonging to any of these sessions.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "description": "Only these event types — `llm.completed`, `tool.failed`, and so on.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/labs": {
       "get": {
         "tags": [
@@ -17963,6 +18440,293 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/live": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "A WebSocket for the whole system, or one run.",
+        "description": "Prefer SSE where the traffic is one-way — it reconnects on its own and\nsurvives proxies better. Use this when the panel needs to send *up* as well:\ncancelling a run, approving a tool call, submitting human feedback.",
+        "operationId": "project_live_websocket",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "description": "Follow one run only. Omit to follow everything.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade"
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Aggregates over the runs the projector still holds.",
+        "description": "Served from the read model rather than from a metrics backend: the numbers\nare a fold over data already in memory, so the page renders with no PromQL\nand no dependency on VictoriaMetrics being reachable. The window is bounded\nby retention — `window.runs_retained` against `window.retention_limit` tells\na caller whether it is looking at everything or at a truncated tail.",
+        "operationId": "project_get_metrics",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs that started within this many seconds of the window's end.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now. A caller comparing two periods pins each end, which is\nalso what moves the timeline's x-axis: the axis runs to the window's\nend, so an older half drawn against `now` would be a chart of mostly\nempty buckets. See [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "description": "The runs these numbers are about — the runs list's own axes, under its\nown names, so one filter means one thing across every read\n(`crate::selection`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Selects the runs that called this model, **and** narrows the counters\nthat are about a call: LLM calls, tokens, cost and LLM latency. Run,\ntool and step counters still cover every call in those runs, because a\ntool call has no model.\n\nSelecting the runs is new (FLOW-01) and is the one behaviour change in\nthis filter. Before it, \"Runs: 412\" beside a model-filtered token chart\ncounted every run in the window, so two numbers on one screen were\nabout two populations with a paragraph of small print between them.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "The same, for the tool half: selects the runs that invoked it and\nnarrows the tool counters to it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "description": "The same, for the registered prompt a call named (ADR_0011).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "buckets",
+            "in": "query",
+            "description": "Buckets in the timeline. Clamped to 6..=200.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
           },
           "503": {
             "description": "Current project authorization failed or is unavailable"
@@ -19181,6 +19945,752 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "List runs, newest first.",
+        "operationId": "project_list_runs",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs with activity in the last this-many seconds. See\n[`crate::window`] — zero and absent both mean everything.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now, which is every ordinary read and every link somebody\npastes. A managed step pins one so that a retry reads the same rows —\nsee [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "description": "Runs produced by this service. See `RunSummary::runtimes`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant_id",
+            "in": "query",
+            "description": "Runs in which this declared variant answered.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "description": "Runs sharing one trace. Normally one run, but a producer that supplies\nits own `trace_id` can span several — the only view that shows it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Runs that made at least one call to this model.\n\nMatched against the run's spans rather than its summary, because a run\ndoes not carry the models it used — the LLM spans do. Same for `tool`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "Runs that invoked this tool.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "description": "Runs in which a call named this registered prompt.\n\nThe prompt's *name*, never its text and never its version id: the text\nis off the log on purpose (ADR_0011) and a version is what the prompt's\nown page lists. Matched against the run's spans, as `model` and `tool`\nare.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Cursor: return runs older than this one. Keyset pagination, because an\noffset shifts under a list that is actively growing.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "One run with the spans finished so far.",
+        "operationId": "project_get_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}/events": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read from the durable log rather than the read model: this is the audit\nview, and it must show what was actually recorded.",
+        "description": "Which side it is on is read from the log too — from the run's **first**\nevent, which is the same rule the runs fold keeps (`RunSummary::project`,\nfirst-seen-wins). Asking the read model instead would have left a hole with\na name: a project's run whose row had been evicted would become readable on\nthe global side, on the one route that answers past the read model.",
+        "operationId": "project_get_run_events",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the `stream_position` of the last event already seen. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring over the event type, agent, span key and the\nserialised payload.\n\nApplied to the page that was read, not to the whole run: the cost of a\nsearch stays the cost of a page. A search that finds nothing on this\npage but has `has_more` set means \"keep paging\", which is what the\npanel does.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "description": "Only events on one span.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "description": "Only events of one type, e.g. `llm.completed`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/runs/{run_id}/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for one run: history, a catch-up marker, then live.",
+        "operationId": "project_stream_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to follow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/spans": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Every retained span, flat and filterable.",
+        "description": "The waterfall answers \"show me this run\". This answers \"show me every tool\ncall slower than two seconds\", which is the question asked when the run to\nlook at is not yet known.",
+        "operationId": "project_list_spans",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only spans that ended in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch. `None` is\nnow — see [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "step_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "operation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "description": "Spans that named this registered prompt. Its name, never its version:\nthe registry is keyed by name, and a version is what the prompt's own\npage lists.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/SpanOutcome"
+                }
+              ]
+            }
+          },
+          {
+            "name": "min_duration_ms",
+            "in": "query",
+            "description": "The filter that turns this list into a hunt for a problem: everything\nslower than a threshold, whatever it is.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the span name and the lifted attributes.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: `run_id:span_id`, from a previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
           },
           "503": {
             "description": "Current project authorization failed or is unavailable"
@@ -20864,6 +22374,7 @@
           "runs"
         ],
         "summary": "Read from the durable log rather than the read model: this is the audit\nview, and it must show what was actually recorded.",
+        "description": "Which side it is on is read from the log too — from the run's **first**\nevent, which is the same rule the runs fold keeps (`RunSummary::project`,\nfirst-seen-wins). Asking the read model instead would have left a hole with\na name: a project's run whose row had been evicted would become readable on\nthe global side, on the one route that answers past the read model.",
         "operationId": "get_run_events",
         "parameters": [
           {
@@ -20945,6 +22456,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -34209,6 +35730,17 @@
             "type": "string",
             "format": "date-time"
           },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this event belongs to, as the ingest route stamped it on\nthe envelope (ADR_0033, ADR_0001 amended).\n\nCarried for the reason above once more, and this time it is not a\nconvenience: the live channel is filtered **server-side**, and a\nsubscriber that may see one project's events cannot be served by\nresolving that project to a set of run ids when it connects — the run\nworth watching is the one that has not started. Narrowing in the\nbrowser instead would mean sending every project's events to every\nbrowser and asking it to throw the rest away, which is the mistake\n`llm.chunk` makes expensive and the one a boundary must not make at all.\n\nAbsent is the global side, which is every event this build has written."
+              }
+            ]
+          },
           "run_id": {
             "type": "string"
           },
@@ -34304,6 +35836,21 @@
               },
               "from": {
                 "$ref": "#/components/schemas/Checkpoint"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The access this stream opened under is gone — a grant revoked or\nexpired, or the session that opened it run out — and the connection is\nclosing (IAM-02 E4).\n\nA frame rather than a silent close, for the reason this whole module\nexists: a stream that simply stops looks exactly like a stream where\nnothing is happening, and \"nothing looks wrong\" is the failure mode\nADR_0004 was written to prevent. A consumer that does not know this\nframe drops it and reconnects, and the reconnect answers 404 — so the\naccess is cut either way and the frame only decides whether anybody can\nsay why.",
+            "required": [
+              "frame"
+            ],
+            "properties": {
+              "frame": {
+                "type": "string",
+                "enum": [
+                  "revoked"
+                ]
               }
             }
           }
