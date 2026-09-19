@@ -186,3 +186,102 @@ decision.
 
 The third is **retention**. A store that grows without a sweep is a store that
 eventually fails for a reason that has nothing to do with scope.
+
+## Amendment 2026-09-19: a read answers one side, and a stream is asked again
+
+IAM-02's E1 put the project on the envelope and E2 put it in the row. Neither
+was a decision about access: every read still answered with every row, under
+instance authorization, and this ADR's Consequences said so — *a project run has
+no live view, no span and no fold*. This is the decision, and it is the gate the
+plan calls **M1**.
+
+### A read names its side before it starts
+
+`aiwatcher_projector::ReadScope` is `Global | Project(scope)`, and every read of
+the runs fold takes one: `list`, `run`, `spans`, `dimensions`, `conversations`,
+`metrics`, `serving` and `asked_since`. It is **not** one more axis in
+`RunSelection`. The axes there are a caller's own and may be widened by asking
+for less; a scope decides which rows are there at all, including for the counts
+a fold takes before it narrows anything — a dimension page's ungrouped total,
+the metrics summary's `runs_retained`. So it arrives as its own argument, a
+query string cannot name it, and `ReadScope::default()` is `Global`, which is
+the side that fails closed.
+
+Routing follows the pattern this ADR already set, with one difference worth
+naming. The authored registries resolve a **store** per project; there is no
+second store here, so `crate::run_scope::RunRead` resolves the **side** —
+through the same `project_scope::resolve`, so a scoped read is one fresh
+`IamStore::access` on that request and nothing cached. `runs`, `metrics` and
+`live` each serve one `resource_router()` twice: once under `/api/v1` for the
+global side, once under `/api/v1/orgs/{organization}/projects/{project}` for a
+project's, `Cache-Control: no-store` on the second.
+
+**Global data stays where it is, and project data is additive.** That is the
+decision E3 left open, and it is the only one under which nothing existing
+breaks: every run this build has written has no project, and the instance routes
+go on answering for exactly those under instance authorization. Its other half
+is what makes it a boundary rather than a label — **the instance routes answer
+none of a project's rows.** An instance viewer who kept seeing them would be
+reading a project they hold no grant on, and the additive family would have
+added nothing.
+
+A refusal is **404**. Not 403, which confirms the thing exists; not 503, which
+promises a retry for a boundary that never moves. `IamStore::access` already
+answers `NotFound` for a principal with no live grant, and
+`StoreError::OutOfScope` already renders 404 on the execution half — one answer,
+two halves, for one reason: a run somebody may not reach is a run they do not
+have.
+
+`/runs/{id}/events` reads the durable log rather than the read model, so it
+takes its side from the log too — from the run's **first** event, which is the
+rule `RunSummary::project` already keeps. Asking the read model would have left
+a hole with a name: a project's run whose row had been evicted would become
+readable on the global side, on the one route that answers past the read model.
+
+### A stream carries its side, and is asked again while it runs
+
+`LiveEvent` gains `project`, and `stream::Subscription` pairs it with the
+selection a subscriber chose. The filter stays on the server for the reason
+ADR_0004's 2026-09-11 amendment gives — `llm.chunk` is most of the log, and
+narrowing in the browser means sending every project's events to every browser
+to throw them away — with a boundary riding on it rather than a preference. The
+identity is the **session cookie**, because a browser sets headers on neither
+transport; that is ADR_0013's whole reason for existing, load-bearing here for
+the first time.
+
+Until this, the cookie's TTL *was* the revocation window (ADR_0013's own
+Consequences), which is defensible for a list and not for a connection that
+lives for hours. So a scoped stream re-asks its grant every **30 seconds** and
+closes on a refusal, with a `LiveFrame::Revoked` frame on the way out: a stream
+that simply stops looks exactly like a stream where nothing is happening, which
+is the failure mode ADR_0004 exists to prevent. The same tick reads the
+identity's own expiry, because a stream that outlives its session is the same
+complaint. An IAM store that could not be *reached* is not an answer — it is
+`Transient`, as `ProjectDispatcher` reads the same failure — so the connection
+stays and the next tick asks again; what bounds that is the other half, since no
+new stream opens while IAM is unreachable.
+
+`Last-Event-ID` widens nothing. The resume is a new request, so the grant is
+asked before a frame is replayed, and the frames replayed from that position are
+held to the same subscription — two answers to one question on purpose: the
+first stops the stream being reopened, the second stops the bytes moving if it
+ever is.
+
+### What this does not do, by name
+
+The **workflow fold** has no project in its rows: E2 keyed the runs fold, the
+dimensions, spans, periods, `asked`, `measured` and the journal, and not that
+one. So `/api/v1/workflows` and `/api/v1/workflow-executions` still answer
+instance-wide, there is no scoped family for them, and their stream answers the
+**global side** — which fails closed and means a project's execution has no live
+view. The **evaluation fold** (`/api/v1/evaluations`) and `/api/v1/experiments`
+are in the same position. Keying those folds is the rest of E2, and until it is
+done a project's runs are isolated on the runs half and its *workflow shape* is
+not.
+
+Everything section 6 of the plan names is still outside: logs, query and
+notebook runtimes, workers and their credentials, scheduled jobs, retention,
+and tenancy in VictoriaTraces and VictoriaMetrics. **This deployment is still
+not described as multi-tenant safe**, and the organization/project selector
+stays inactive until IAM-02/C has run the matrix against a live server and found
+nothing answering globally.

@@ -1558,7 +1558,63 @@ per tenant" means in megabytes — and the 512 MB limit in `deploy/` stands on i
 unchanged, with the figures recorded beside `ReadModelConfig`.
 
 **What this is not.** None of it is authorization. Every row says whose a run is
-and nothing about who may read it; the read routes still answer under instance
-authorization, and filtering them by grant is E3. SSE and the WebSocket are
-untouched, which is E4. No organization or project selector is activated, and
-this deployment is still not described as multi-tenant safe.
+and nothing about who may read it; that is the next section's.
+
+## The observable half answers: a read names its side, and a stream is asked again
+
+IAM-02's E3 and E4 — the gate the plan calls **M1**. ADR_0033's amendment of
+2026-09-19 is the record, and what follows is what an IAM reader needs from it.
+
+**A read names a side, and `IamStore::access` decides it.** `ReadScope` is
+`Global | Project`, an argument to every read of the runs fold rather than an
+axis a query string can fill in. The authored registries resolve a *store* per
+project; there is no second store over the log, so what a route resolves is the
+side — through the same `project_scope::resolve`, which means a scoped read is
+one fresh `access` on that request and nothing cached. `runs`, `metrics` and
+`live` each serve one router twice, the scoped half under
+`/api/v1/orgs/{organization}/projects/{project}` with `Cache-Control: no-store`.
+
+**Both directions, or it is not a boundary.** A project read answers that
+project's rows; an instance read answers **none** of them. The first is what
+somebody asked for. The second is what stops an instance viewer reading a
+project they hold no grant on — and without it the additive family would have
+added nothing. Global data stays under instance authorization, unchanged, which
+is why nothing existing breaks: every run this build has written has no project.
+
+**A refusal is 404**, as `StoreError::OutOfScope` already renders on the
+execution half. `access` answers `Error::NotFound` for a principal with no live
+grant, which is already the shape — 403 would confirm the project exists, and
+503 would promise a retry for a boundary that never moves.
+
+**A stream re-asks.** `ProjectAccess` is a snapshot with `evaluated_at`, so the
+next *list* asks again by construction; a stream is one request that lives for
+hours, and until this the session cookie's TTL was its whole revocation window
+(ADR_0013). A scoped stream now asks `access` again every **30 seconds** and
+closes on `NotFound` or `Forbidden` with a `revoked` frame, reading the
+identity's own expiry on the same tick. An IAM store that could not be reached
+is **not** an answer — `Transient`, the reading `ProjectDispatcher` already
+takes — so the connection stays and the next tick asks again; what bounds it is
+that no new stream opens while the store is unreachable, because the extractor
+fails closed on the same error.
+
+**The gate, asked of a running server.** `scripts/iam-permission-check.py` grew
+from 28 questions to 44 and holds all 44 against `just run-sso-iam` with a real
+authentik: sign in → exactly my projects → my project's runs, spans and metrics
+and none of the instance's, in both directions → my project's live stream →
+revoking a grant closes a stream somebody already had open → a resume after
+revocation replays nothing. Two of those need a run on the project side, and
+only a *credential* puts one there, so the script prints the
+`AIWATCHER_M1_SCOPE` line to configure and reports the questions as **not
+asked** until it is — a green that counts an unasked question is a green that
+means nothing.
+
+**What is still instance-wide, by name.** The workflow fold and the evaluation
+fold have no project in their rows — E2 keyed the runs fold, the dimensions,
+spans, periods, `asked`, `measured` and the journal, and not those — so
+`/api/v1/workflows`, `/api/v1/workflow-executions`, `/api/v1/evaluations` and
+`/api/v1/experiments` still answer instance-wide, and the workflow stream
+answers the global side, which fails closed and means a project's execution has
+no live view. Logs, query and notebook runtimes, workers and their credentials,
+scheduled jobs, retention and tenancy in the metric and trace stores are all
+outside as before. No organization or project selector is activated, and this
+deployment is still not described as multi-tenant safe.

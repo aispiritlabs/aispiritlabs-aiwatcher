@@ -88,5 +88,15 @@ with everything else about what the log carries; what is here is the period fold
   on the first record.
 - **Never read a project's row as permission to see it.** Every one of these is
   a fact about whose a run is, and none is a decision about who may read it.
-  That is a grant, asked of IAM fresh per request, and it is E3's — the read
-  routes here still answer under instance authorization.
+  That is a grant, asked of IAM fresh per request, in `aiwatcher-api`.
+- **Never let a read of the fold not name a side.** `ReadScope` is `Global |
+  Project` and it is an argument to every read that returns runs or spans, not
+  an axis in `RunSelection`: the axes there are a caller's own and may be
+  widened by asking for less, while a scope decides which rows are there at all
+  — including for the counts a fold takes *before* it narrows anything, like a
+  dimension page's ungrouped total or the metrics summary's `runs_retained`.
+  Filtering after the fold reports one side's rows against the whole instance's
+  totals. The default is `Global`, which fails closed: a reader that forgot to
+  name a side sees what was always instance-wide and never a project's.
+  `ReadModel::runs_in` is where the rows come from; a fold that reads
+  `state.runs` directly is a fold that forgot.

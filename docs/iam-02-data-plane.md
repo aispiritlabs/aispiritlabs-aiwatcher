@@ -105,7 +105,7 @@ operację, powtórzona po odebraniu ciała), trwałe `ExecutionOwnership`, zwią
   kontenera. Metryki rosną o jedną serię na projekt, który cokolwiek zapisał.
 - Retencja logu pozostaje instancyjna i tak ma zostać na tym etapie.
 
-### E3 — odczyty odpowiadają pytającemu
+### E3 — odczyty odpowiadają pytającemu — **zrobione**
 
 - Każda lista i każdy szczegół filtruje po **efektywnych grantach pytającego**,
   liczonych świeżo na żądanie. `ProjectAccess` to migawka z `evaluated_at`, nie
@@ -118,7 +118,7 @@ operację, powtórzona po odebraniu ciała), trwałe `ExecutionOwnership`, zwią
   są addytywne. To jest dokładnie to „nie wchodzić jeszcze całkowicie", i to
   jest też jedyny wariant, w którym nic istniejącego się nie psuje.
 
-### E4 — żywy odczyt — **to jest M1**
+### E4 — żywy odczyt — **to jest M1** — **zrobione**
 
 - SSE i WebSocket niosą zakres w subskrypcji; hub filtruje. Tożsamością jest
   **podpisane ciasteczko sesji**, bo przeglądarka nie ustawi nagłówka na żadnej
@@ -295,3 +295,93 @@ wdrożenie nadal nie jest opisywane jako multi-tenant safe.
 własne słowo o swoim projekcie — dokładnie tak, jak żaden rekord tam nie nazywa
 publikującego (ADR_0001). Trasa jest granicą; broker stanie się nią, gdy zacznie
 uwierzytelniać producentów, a adapter poniesie to, czego się dowiedział.
+
+---
+
+## 9. E3 i E4 — co naprawdę stanęło, i bramka M1 (19.09.2026)
+
+Oba etapy są zrobione; kontrakt jest w
+[ADR_0033](ADR/ADR_0033_PROJECT_SCOPED_STORAGE.md), aneks z 19.09.2026.
+
+**Decyzja z E3, podjęta: bez zmian, tak jak rekomendował plan.** Dane globalne
+zostają tam, gdzie są, pod autoryzacją instancji; dane projektowe są addytywne,
+na rodzinie `/api/v1/orgs/{organization}/projects/{project}`. To jedyny wariant,
+w którym nic istniejącego się nie psuje — każdy przebieg, jaki ten build
+napisał, nie ma projektu, więc trasy instancyjne odpowiadają dokładnie tym, czym
+odpowiadały.
+
+Druga połowa tej decyzji jest tą, którą łatwo pominąć i którą trzeba powiedzieć
+głośno: **trasy instancyjne nie odpowiadają wierszami projektu.** Członek
+projektu widzi przebieg globalny — tak, bez zmian. Widz instancji **nie** widzi
+przebiegu projektu, bo inaczej dodatkowa rodzina tras nie dodałaby niczego, a
+czytałby projekt, do którego nie ma grantu.
+
+**E3.** `aiwatcher_projector::ReadScope` (`Global | Project`) jest argumentem
+każdego odczytu foldu przebiegów — `list`, `run`, `spans`, `dimensions`,
+`conversations`, `metrics`, `serving`, `asked_since` — a nie kolejną osią w
+`RunSelection`: zakres decyduje, które wiersze w ogóle są, łącznie z licznikami,
+które fold bierze *zanim* cokolwiek zawęzi (`runs_retained`, suma niezgrupowanych
+w wymiarze). `run_scope::RunRead` rozstrzyga stronę przez to samo
+`project_scope::resolve`, czyli **świeże** `IamStore::access` na każde żądanie.
+Odmowa zakresu to **404**. `/runs/{id}/events` czyta log, więc stronę bierze z
+**pierwszego zdarzenia przebiegu** — tą samą regułą, którą trzyma
+`RunSummary::project`; pytanie read modelu zostawiłoby dziurę: przebieg projektu,
+którego wiersz został wyparty, stałby się czytelny globalnie.
+
+**E4.** `LiveEvent` niesie `project`, a `stream::Subscription` łączy go z
+selekcją. Filtr zostaje na serwerze (ADR_0004, aneks z 11.09). Tożsamością jest
+**podpisane ciasteczko sesji** — po raz pierwszy jest to nośne, a nie tylko
+opisane (ADR_0013). Strumień zakresowy **pyta o grant ponownie co 30 s** i
+zamyka się przy odmowie ramką `LiveFrame::Revoked`; ten sam tik czyta wygaśnięcie
+tożsamości. Niedostępny IAM **nie** jest odpowiedzią i nie zamyka połączenia
+(`Transient`, jak w `ProjectDispatcher`) — ogranicza to druga połowa: dopóki IAM
+nie odpowiada, żaden **nowy** strumień się nie otwiera. `Last-Event-ID` niczego
+nie rozszerza: wznowienie to nowe żądanie, więc grant jest sprawdzany przed
+odtworzeniem, a odtwarzane ramki idą przez tę samą subskrypcję.
+
+### Bramka M1 — 44/44, rzeczywistym HTTP
+
+`scripts/iam-permission-check.py` urosło z 28 pytań do **44**, na żywym serwerze
+(`just authentik-up`, `authentik-seed`, `postgres-up`, `run-sso-iam`, `panel`).
+Dwa pytania potrzebują przebiegu po stronie projektu, a tam kładzie go wyłącznie
+**poświadczenie** — sesja człowieka nie niesie projektu z założenia. Więc
+pierwsze uruchomienie wypisuje linię do ustawienia, a drugie pyta o wszystko:
+
+```
+python3 scripts/iam-permission-check.py
+AIWATCHER_M1_SCOPE=<organizacja>/<projekt> just run-sso-iam
+AIWATCHER_M1_SCOPE=<organizacja>/<projekt> python3 scripts/iam-permission-check.py
+```
+
+Bez tego te pytania są **wypisane jako niezadane**, nie zaliczone — zielone,
+które liczy niezadane pytanie, nic nie znaczy. Zmierzone: 44/44 z zakresem,
+37/37 + 7 niezadanych bez niego.
+
+Bramka, punkt po punkcie: zalogowanie → lista wyłącznie moich projektów →
+przebiegi, spany i metryki wyłącznie mojego projektu (i **żadnego** z
+instancji, w obie strony) → żywy strumień wyłącznie mojego projektu →
+odwołanie grantu zamyka strumień, który ktoś już miał otwarty, i odcina
+odczyty → wznowienie po odwołaniu nie odtwarza nic.
+
+### Czego to nie robi, po nazwie
+
+**Fold workflow nie ma projektu w wierszu.** E2 okluczowało fold przebiegów,
+wymiary, spany, okresy, `asked`, `measured` i journal — nie ten. Więc
+`/api/v1/workflows` i `/api/v1/workflow-executions` nadal odpowiadają
+instancyjnie, nie mają rodziny zakresowej, a ich strumień odpowiada **stroną
+globalną** — co zawodzi zamknięciem i znaczy, że przebieg projektu nadal nie ma
+żywego widoku grafu. To samo dotyczy foldu ewaluacji (`/api/v1/evaluations`) i
+`/api/v1/experiments`. Okluczowanie tych foldów to reszta E2 i jest warunkiem
+IAM-02/C: **dopóki nie stoi, selektor organizacja/projekt zostaje nieaktywny.**
+
+Poza tym wszystko z sekcji 6 zostaje poza: logi, silniki zapytań i notebooków,
+workerzy i ich poświadczenia, harmonogramy, retencja, dzierżawa w
+VictoriaTraces/Metrics. **To wdrożenie nadal nie jest opisywane jako
+multi-tenant safe.**
+
+### Ryzyko, zmierzone tylko w połowie
+
+30 s to nadal propozycja, nie pomiar wobec realnej liczby strumieni (sekcja 5).
+Co wiadomo: jedno zapytanie o grant na strumień na pół minuty, w procesie na
+`MemoryIamStore` i jeden zindeksowany wiersz na PostgreSQL. Czego nie wiadomo:
+ile strumieni trzyma naraz instalacja z panelem otwartym na wielu biurkach.

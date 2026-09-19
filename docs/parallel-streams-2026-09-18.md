@@ -435,3 +435,29 @@ przeglądarek daje `python3 scripts/sso-session.py <kto>`, całą matrycę
 > nazywa własny zegar, nie cudzy. Przeczytaj `crates/aiwatcher-iam/README.md` i
 > ADR_0022 zanim cokolwiek napiszesz. Migracja SQL **addytywna**, z rolling
 > upgrade i rollbackiem starego binarium; istniejących nie ruszaj.
+
+---
+
+## IAM-02/B — zrobione (19.09.2026)
+
+E3 i E4 stoją, bramka **M1** trzyma 44/44 na żywym serwerze.
+[Plan IAM-02](iam-02-data-plane.md), sekcja 9, jest pełnym zapisem; ADR_0033 ma
+aneks z tą datą. Trzy rzeczy, które dotykają innych strumieni:
+
+- **`aiwatcher-projector` i `aiwatcher-api` (runs, metrics, live, stream)** —
+  `ReadScope` jest argumentem każdego odczytu foldu przebiegów, a `runs`,
+  `metrics` i `live` serwują jeden router dwa razy: pod `/api/v1` i pod
+  `/api/v1/orgs/{organization}/projects/{project}`. Kontrakt urósł o **10
+  ścieżek**; nic nie zniknęło.
+- **Panel nietknięty ręcznie.** Zmienił się wyłącznie wygenerowany klient, bo
+  nic w panelu nie musi jeszcze nazywać projektu — selektor to IAM-02/C.
+- **Zastane na `main`, naprawione osobnym commitem:** merge IAM-02/A zostawił
+  `cargo test --workspace --all-targets` niekompilujące się (fikstura
+  `RunSummary` bez pola `project`) i trzy pliki poza `cargo fmt --check`.
+
+**Dla IAM-02/C:** fold workflow i fold ewaluacji **nie mają projektu w wierszu**
+— `/api/v1/workflows`, `/api/v1/workflow-executions`, `/api/v1/evaluations` i
+`/api/v1/experiments` nadal odpowiadają instancyjnie, a strumień wykonania
+workflow odpowiada stroną globalną. To jest ta odpowiedź, o którą pyta prompt
+IAM-02/C: **selektor jeszcze nie**, dopóki te foldy nie zostaną okluczowane —
+to reszta E2, nie E3.

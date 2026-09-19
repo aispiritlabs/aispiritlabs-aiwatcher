@@ -981,6 +981,30 @@ round leaves a reference to bytes nobody wrote. It applies to:
   is the global side, which is every event this build has written, and a
   producer publishing straight to the broker is its own word for its project —
   named here rather than left to be discovered.
+- **Never let a read of the log's folds not name a side, and never let the
+  instance routes answer with a project's rows.** `ReadScope` is `Global |
+  Project` and every read of the runs fold takes one; it is not an axis in
+  `RunSelection`, because a scope decides which rows exist rather than narrowing
+  the ones that do — including for the counts a fold takes before it narrows
+  anything. `runs`, `metrics` and `live` each serve one router twice: under
+  `/api/v1` for the global side and under
+  `/api/v1/orgs/{organization}/projects/{project}` for a project's, the second
+  on a fresh grant. Global data stays under instance authorization and project
+  data is additive (ADR_0033, amended) — and the half that makes it a boundary
+  rather than a label is the other direction: an instance read answers **none**
+  of a project's rows, or the additive family added nothing. A scope refusal is
+  **404**, as `StoreError::OutOfScope` already is.
+- **Never let a live stream outlive the access that opened it.** SSE and the
+  WebSocket carry the scope in the subscription and the hub filters, because
+  `llm.chunk` is most of the log and narrowing in the browser means sending
+  every project's events to every browser to throw them away. The identity is
+  the session cookie, which is what ADR_0013 exists for. A scoped stream
+  re-asks its grant every 30 s and closes with a `revoked` frame — a stream
+  that simply stops is indistinguishable from one where nothing is happening,
+  which is the failure ADR_0004 prevents. An unreachable IAM is not an answer
+  and closes nothing; what bounds that is that no new stream opens either.
+  `Last-Event-ID` widens nothing: the resume is a new request, so the grant is
+  asked before a frame is replayed.
 - **Never list a client's count as a run.** `client.counted` says how many runs
   a client opened and its `run_id` names the client: it folds into the
   measured-runs counts and into lost runs, never into the runs list, a span or a
