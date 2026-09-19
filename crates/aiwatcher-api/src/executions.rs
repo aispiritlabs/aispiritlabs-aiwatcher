@@ -1027,7 +1027,7 @@ async fn apply<F>(
     build: F,
 ) -> ApiResult<Json<RunView>>
 where
-    F: FnOnce(&Caller, &str, &RunProjection) -> ApiResult<WorkflowCommand>,
+    F: FnOnce(&Caller, &str, &RunProjection) -> ApiResult<Applied>,
 {
     // The floor, which every command shares: the instance's `editor` on the
     // instance's own routes, and the project's `editor` grant — asked again,
@@ -1050,7 +1050,13 @@ where
         .map_err(aiwatcher_execution::HandleError::Store)?
         .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))?;
 
-    let command = build(caller, &who, &current)?;
+    let Applied { command, gate } = build(caller, &who, &current)?;
+    // A gate only ever raises the floor, and it is asked on the side this
+    // request is on: an instance role on the instance's routes, this project's
+    // grant on a project's.
+    if let Some(needed) = gate {
+        run.authorize_gate(caller, needed).await?;
+    }
     debug_assert!(
         !command.is_effect(),
         "a caller may only send an intention; ExecuteStep and RequestInput are the decider's"
@@ -1094,6 +1100,25 @@ where
     }))
 }
 
+/// One command, and the role the step's own question raised the floor to.
+///
+/// Returned rather than checked inside the closure, because which role answers
+/// is one question and *whose* roles they are is another — and only the caller
+/// that resolved the side can answer the second.
+struct Applied {
+    command: WorkflowCommand,
+    gate: Option<aiwatcher_auth::Role>,
+}
+
+impl From<WorkflowCommand> for Applied {
+    fn from(command: WorkflowCommand) -> Self {
+        Self {
+            command,
+            gate: None,
+        }
+    }
+}
+
 /// Stop a run, and everything it has not already dispatched.
 #[utoipa::path(
     post,
@@ -1119,7 +1144,7 @@ async fn cancel_execution(
     let reason = body.map(|Json(body)| body.reason).unwrap_or_default();
 
     apply(&state, &run, &execution_id, &caller, |_, _, _| {
-        Ok(WorkflowCommand::CancelExecution { reason })
+        Ok(WorkflowCommand::CancelExecution { reason }.into())
     })
     .await
 }
@@ -1149,7 +1174,7 @@ async fn pause_execution(
     Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunView>> {
     apply(&state, &run, &execution_id, &caller, |_, _, _| {
-        Ok(WorkflowCommand::PauseExecution)
+        Ok(WorkflowCommand::PauseExecution.into())
     })
     .await
 }
@@ -1175,7 +1200,7 @@ async fn resume_execution(
     Path(RunPath { execution_id }): Path<RunPath>,
 ) -> ApiResult<Json<RunView>> {
     apply(&state, &run, &execution_id, &caller, |_, _, _| {
-        Ok(WorkflowCommand::ResumeExecution)
+        Ok(WorkflowCommand::ResumeExecution.into())
     })
     .await
 }
@@ -1211,7 +1236,7 @@ async fn retry_step(
     }): Path<StepPath>,
 ) -> ApiResult<Json<RunView>> {
     apply(&state, &run, &execution_id, &caller, |_, _, _| {
-        Ok(WorkflowCommand::RetryStep { step_id })
+        Ok(WorkflowCommand::RetryStep { step_id }.into())
     })
     .await
 }
@@ -1249,23 +1274,22 @@ async fn provide_input(
         &run_handle,
         &execution_id,
         &caller,
-        |caller, who, run| {
-            // The role the *question* named, checked here because this is the one
+        |_caller, who, run| {
+            // The role the *question* named, read here because this is the one
             // place that knows it: it comes from the pinned plan, through the
-            // step's own `awaiting`, and a route cannot know it in advance. The
-            // editor floor is already held above; a gate only ever raises it, so a
-            // step nobody is waiting on and a step asking for an editor both fall
-            // through unchanged. A gate that asked for nothing readable is a gate
-            // an editor answers.
-            if let Some(asked) = run
+            // step's own `awaiting`, and a route cannot know it in advance.
+            // Returned rather than checked, because *whose* roles those are is
+            // the side's question and `apply` is what holds the side. The
+            // editor floor is already held above; a gate only ever raises it,
+            // so a step nobody is waiting on and a step asking for an editor
+            // both fall through unchanged. A gate that asked for nothing
+            // readable is a gate an editor answers.
+            let gate = run
                 .steps
                 .iter()
                 .find(|step| step.step_id == step_id)
                 .and_then(|step| step.awaiting.as_ref())
-                && let Ok(needed) = asked.role.parse::<aiwatcher_auth::Role>()
-            {
-                caller.require(needed)?;
-            }
+                .and_then(|asked| asked.role.parse::<aiwatcher_auth::Role>().ok());
             // What this deployment allows an answer to be. Checked here because
             // this is the one door every answer comes through and the only place
             // that holds both the configuration and the step's own history —
@@ -1290,11 +1314,14 @@ async fn provide_input(
             // Who answered comes from the session, never from the body. A field a
             // caller could set would make the one record of a human decision say
             // whatever the caller preferred it to say.
-            Ok(WorkflowCommand::ProvideInput {
-                step_id,
-                attempt: body.attempt,
-                answered_by: who.to_owned(),
-                response: body.response,
+            Ok(Applied {
+                command: WorkflowCommand::ProvideInput {
+                    step_id,
+                    attempt: body.attempt,
+                    answered_by: who.to_owned(),
+                    response: body.response,
+                },
+                gate,
             })
         },
     )

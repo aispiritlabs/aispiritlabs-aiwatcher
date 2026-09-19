@@ -63,6 +63,40 @@ impl RunHandle {
     }
 }
 
+/// The role a step's own gate asked for, on the side this request is on.
+///
+/// A gate names `viewer`, `editor` or `admin`, which on the instance's routes
+/// is the instance's role and on a project's is **the project's grant**. The
+/// two spell the same three words and mean different things, and taking the
+/// instance's here is precisely what ADR_0033 forbids: an instance admin who
+/// holds no grant would answer a question asked of a project's admin.
+///
+/// # Errors
+///
+/// Whatever the role check or IAM refused.
+impl RunHandle {
+    pub(crate) async fn authorize_gate(
+        &self,
+        caller: &Caller,
+        needed: aiwatcher_auth::Role,
+    ) -> ApiResult<()> {
+        let Some(authorization) = &self.authorization else {
+            caller.require(needed)?;
+            return Ok(());
+        };
+        let needed = match needed {
+            aiwatcher_auth::Role::Viewer => aiwatcher_iam::ProjectRole::Viewer,
+            aiwatcher_auth::Role::Editor => aiwatcher_iam::ProjectRole::Editor,
+            aiwatcher_auth::Role::Admin => aiwatcher_iam::ProjectRole::Admin,
+        };
+        authorization
+            .clone()
+            .needing(needed)
+            .authorize_write()
+            .await
+    }
+}
+
 impl FromRequestParts<AppState> for RunHandle {
     type Rejection = ApiError;
 
