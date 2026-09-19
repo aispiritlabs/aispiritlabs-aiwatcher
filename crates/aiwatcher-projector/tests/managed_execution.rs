@@ -176,7 +176,7 @@ async fn a_managed_execution_draws_itself_with_every_step_pending_before_one_run
     let state = fold(&published(&store).await);
 
     let detail = state
-        .execution(EXECUTION)
+        .execution(ReadScope::Global, EXECUTION)
         .expect("the execution is in the workflow tab");
     assert_eq!(
         detail
@@ -221,7 +221,9 @@ async fn an_attempt_fills_in_the_node_it_ran_and_leaves_the_rest_pending() {
     ])
     .await;
     let state = fold(&published(&store).await);
-    let detail = state.execution(EXECUTION).expect("the execution");
+    let detail = state
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
 
     assert_eq!(detail.nodes[0].status, NodeStatus::Succeeded);
     assert_eq!(detail.nodes[0].attempts, 1);
@@ -277,7 +279,9 @@ async fn a_node_two_parties_published_is_flagged_rather_than_reconciled() {
         None::<&ObservabilityContext>,
     ));
 
-    let detail = fold(&events).execution(EXECUTION).expect("the execution");
+    let detail = fold(&events)
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
     let acquire = detail
         .nodes
         .iter()
@@ -304,7 +308,9 @@ async fn a_whole_run_completes_and_the_execution_lists_as_finished() {
     let events = published(&store).await;
     let state = fold(&events);
 
-    let detail = state.execution(EXECUTION).expect("the execution");
+    let detail = state
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
     assert_eq!(detail.summary.nodes_pending, 0);
     for node in &detail.nodes {
         assert_eq!(node.status, NodeStatus::Succeeded, "{}", node.node_id);
@@ -332,7 +338,7 @@ async fn a_whole_run_completes_and_the_execution_lists_as_finished() {
 
     assert_eq!(
         state
-            .executions(&ExecutionFilter::default(), at(100))
+            .executions(ReadScope::Global, &ExecutionFilter::default(), at(100))
             .executions
             .len(),
         1
@@ -357,7 +363,9 @@ async fn a_managed_execution_that_finished_is_not_still_running_in_the_runs_list
     .await;
     let events = published(&store).await;
 
-    let detail = fold(&events).execution(EXECUTION).expect("the execution");
+    let detail = fold(&events)
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
     assert_eq!(detail.summary.nodes_pending, 0);
 
     let listed = runs(&events)
@@ -427,7 +435,9 @@ async fn a_failed_run_names_the_step_and_leaves_the_rest_pending() {
     ])
     .await;
     let events = published(&store).await;
-    let detail = fold(&events).execution(EXECUTION).expect("the execution");
+    let detail = fold(&events)
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
 
     let normalize = &detail.nodes[1];
     assert_eq!(normalize.status, NodeStatus::Failed);
@@ -478,7 +488,7 @@ async fn a_retry_is_two_attempts_of_one_node_rather_than_two_nodes() {
     ])
     .await;
     let detail = fold(&published(&store).await)
-        .execution(EXECUTION)
+        .execution(ReadScope::Global, EXECUTION)
         .expect("the execution");
 
     let acquire = &detail.nodes[0];
@@ -521,7 +531,7 @@ async fn a_redelivered_command_publishes_nothing_a_second_time() {
 
     // And the graph is still one execution with four nodes.
     let detail = fold(&published(&store).await)
-        .execution(EXECUTION)
+        .execution(ReadScope::Global, EXECUTION)
         .expect("the execution");
     assert_eq!(detail.nodes.len(), 4);
 }
@@ -545,7 +555,9 @@ async fn a_facts_ordering_holds_the_declaration_before_the_first_step() {
     .await;
     let events = published(&store).await;
     assert_eq!(events[0].event_type.as_str(), "workflow.declared");
-    let detail = fold(&events).execution(EXECUTION).expect("the execution");
+    let detail = fold(&events)
+        .execution(ReadScope::Global, EXECUTION)
+        .expect("the execution");
     assert!(
         detail.nodes.iter().all(|node| node.declared),
         "a node arrived before the declaration did"

@@ -63,6 +63,20 @@ pub struct WorkflowEdge {
 #[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct WorkflowDefinition {
     pub workflow_id: String,
+    /// Which project declared it (ADR_0033, IAM-02 E2's remainder). Absent is
+    /// the global side, which is every graph this build folded before a
+    /// project could run one.
+    ///
+    /// **Part of the key, not a label on the row.** A `workflow_id` is a name
+    /// a producer re-declares on every execution, so two projects both running
+    /// `house-import` is the ordinary case rather than a collision — and a
+    /// catalog keyed by the name alone would hold one shape, belonging to
+    /// whichever project declared first, with the other project's `/workflows`
+    /// empty while it declares its graph every run. That is where this parts
+    /// company with [`crate::RunSummary::project`], which keys by a run id: a
+    /// run is one process, and first-seen-wins leaves it where it started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     pub name: String,
     /// Content hash of the declared topology, chosen by the producer.
     ///
@@ -260,6 +274,14 @@ impl NodeState {
 pub struct ExecutionSummary {
     pub workflow_run_id: String,
     pub workflow_id: String,
+    /// Which project this traversal belongs to. Absent is the global side.
+    ///
+    /// Part of the key for the reason [`WorkflowDefinition::project`] gives: a
+    /// `workflow_run_id` is a producer's text joining the stages of one
+    /// traversal, so two projects' executions are two rows and neither folds
+    /// the other's events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub status: ExecutionStatus,
@@ -448,6 +470,7 @@ impl Held {
             summary: ExecutionSummary {
                 workflow_run_id,
                 workflow_id,
+                project: event.metadata.project,
                 version: None,
                 status: ExecutionStatus::Running,
                 started_at: event.metadata.occurred_at,
@@ -632,16 +655,28 @@ impl Held {
     }
 }
 
+/// What a row of this fold is keyed by: its project, then its own id.
+///
+/// The spelling [`crate::dimensions`] uses — `ProjectScope::key_of` first,
+/// which is the empty string on the global side — so one fold holds every
+/// project's graphs with none of them able to reach another's.
+type Key = (String, String);
+
+/// The key one event's row takes.
+fn key_of(project: Option<aiwatcher_core::ProjectScope>, id: &str) -> Key {
+    (aiwatcher_core::ProjectScope::key_of(project), id.to_owned())
+}
+
 /// The projection. Folded from the log like everything else here, and rebuilt
 /// by a replay on restart.
 #[derive(Debug, Default)]
 pub struct WorkflowState {
-    definitions: HashMap<String, WorkflowDefinition>,
-    /// Workflow ids in first-seen order; the eviction candidate list.
-    definition_order: Vec<String>,
-    held: HashMap<String, Held>,
-    /// Execution ids in first-seen order; the eviction candidate list.
-    order: Vec<String>,
+    definitions: HashMap<Key, WorkflowDefinition>,
+    /// Workflow keys in first-seen order; the eviction candidate list.
+    definition_order: Vec<Key>,
+    held: HashMap<Key, Held>,
+    /// Execution keys in first-seen order; the eviction candidate list.
+    order: Vec<Key>,
     /// Running totals, so the global caps are checked without walking every
     /// execution on every write.
     artifact_count: usize,
@@ -663,27 +698,34 @@ impl WorkflowState {
             return;
         };
 
+        // One project's graph and another's are two rows, so every lookup
+        // below goes through the key rather than the id (see
+        // `WorkflowDefinition::project`).
+        let project = event.metadata.project;
+        let definition_key = key_of(project, &workflow_id);
+        let execution_key = key_of(project, &execution_id);
+
         if event.event_type == EventType::WorkflowDeclared {
             self.declare(event, &workflow_id, config);
         }
 
-        if !self.held.contains_key(&execution_id) {
-            self.order.push(execution_id.clone());
+        if !self.held.contains_key(&execution_key) {
+            self.order.push(execution_key.clone());
             let mut held = Held::new(event, execution_id.clone(), workflow_id.clone());
             // Seed the shape the catalog already knows, so a graph is drawable
             // from the first event of an execution rather than from whenever
             // its declaration happens to arrive.
-            if let Some(definition) = self.definitions.get(&workflow_id) {
+            if let Some(definition) = self.definitions.get(&definition_key) {
                 held.adopt(definition, config.max_nodes_per_execution);
             }
-            self.held.insert(execution_id.clone(), held);
-            self.bump_definition(&workflow_id, event.metadata.occurred_at);
+            self.held.insert(execution_key.clone(), held);
+            self.bump_definition(project, &workflow_id, event.metadata.occurred_at);
         }
 
         let mut artifacts_added = 0usize;
         let mut messages_added = 0usize;
         {
-            let Some(held) = self.held.get_mut(&execution_id) else {
+            let Some(held) = self.held.get_mut(&execution_key) else {
                 return;
             };
             held.summary.last_checkpoint = event.metadata.checkpoint.clone();
@@ -726,15 +768,17 @@ impl WorkflowState {
         // its last, claiming them for good.
         self.evict(config);
         self.shed_detail(config);
-        self.refresh_definition(&workflow_id, event.metadata.occurred_at);
+        self.refresh_definition(&definition_key, event.metadata.occurred_at);
         // Also here, not only in `declare`: a workflow that nobody ever
         // declares still gets a catalog row from `bump_definition`, and a cap
         // enforced on only one of the two paths is not a cap.
         self.evict_definitions(config.max_definitions);
     }
 
-    /// Upsert the catalog entry from a declaration.
+    /// Upsert the catalog entry from a declaration, in the declaring project.
     fn declare(&mut self, event: &RecordedEvent, workflow_id: &str, config: &WorkflowConfig) {
+        let project = event.metadata.project;
+        let key = key_of(project, workflow_id);
         let nodes = declared_nodes(&event.data);
         let edges = declared_edges(&event.data);
         let version = event
@@ -747,7 +791,7 @@ impl WorkflowState {
             .unwrap_or(workflow_id)
             .to_owned();
 
-        if let Some(existing) = self.definitions.get_mut(workflow_id) {
+        if let Some(existing) = self.definitions.get_mut(&key) {
             existing.name = name;
             existing.last_activity_at = existing.last_activity_at.max(event.metadata.occurred_at);
             // A declaration that carries no nodes is a producer saying the
@@ -759,11 +803,12 @@ impl WorkflowState {
                 existing.edges = edges;
             }
         } else {
-            self.definition_order.push(workflow_id.to_owned());
+            self.definition_order.push(key.clone());
             self.definitions.insert(
-                workflow_id.to_owned(),
+                key.clone(),
                 WorkflowDefinition {
                     workflow_id: workflow_id.to_owned(),
+                    project,
                     name,
                     version,
                     nodes,
@@ -778,13 +823,15 @@ impl WorkflowState {
             );
         }
 
-        // Every execution of this workflow that is still held picks the shape
-        // up, including ones that started before the declaration arrived.
-        let Some(definition) = self.definitions.get(workflow_id).cloned() else {
+        // Every execution of this workflow **in this project** that is still
+        // held picks the shape up, including ones that started before the
+        // declaration arrived. Another project's execution of a graph with the
+        // same name is a different graph and keeps its own.
+        let Some(definition) = self.definitions.get(&key).cloned() else {
             return;
         };
         for held in self.held.values_mut() {
-            if held.summary.workflow_id == workflow_id {
+            if held.summary.workflow_id == workflow_id && held.summary.project == project {
                 held.adopt(&definition, config.max_nodes_per_execution);
                 held.recount();
             }
@@ -794,13 +841,20 @@ impl WorkflowState {
 
     /// A workflow with no declaration still gets a catalog row, so the picker
     /// lists it. Its graph is whatever ran.
-    fn bump_definition(&mut self, workflow_id: &str, at: OffsetDateTime) {
-        if !self.definitions.contains_key(workflow_id) {
-            self.definition_order.push(workflow_id.to_owned());
+    fn bump_definition(
+        &mut self,
+        project: Option<aiwatcher_core::ProjectScope>,
+        workflow_id: &str,
+        at: OffsetDateTime,
+    ) {
+        let key = key_of(project, workflow_id);
+        if !self.definitions.contains_key(&key) {
+            self.definition_order.push(key.clone());
             self.definitions.insert(
-                workflow_id.to_owned(),
+                key,
                 WorkflowDefinition {
                     workflow_id: workflow_id.to_owned(),
+                    project,
                     name: workflow_id.to_owned(),
                     version: None,
                     nodes: Vec::new(),
@@ -819,13 +873,16 @@ impl WorkflowState {
     /// Recount a workflow's executions. Cheap enough to do on every event: the
     /// alternative is four counters kept in step across creation, transition
     /// and eviction, and eviction is where that always goes wrong.
-    fn refresh_definition(&mut self, workflow_id: &str, at: OffsetDateTime) {
+    fn refresh_definition(&mut self, key: &Key, at: OffsetDateTime) {
+        let (scope_key, workflow_id) = key;
         let mut executions = 0;
         let mut running = 0;
         let mut succeeded = 0;
         let mut failed = 0;
         for held in self.held.values() {
-            if held.summary.workflow_id != workflow_id {
+            if &held.summary.workflow_id != workflow_id
+                || &aiwatcher_core::ProjectScope::key_of(held.summary.project) != scope_key
+            {
                 continue;
             }
             executions += 1;
@@ -835,7 +892,7 @@ impl WorkflowState {
                 ExecutionStatus::Failed => failed += 1,
             }
         }
-        if let Some(definition) = self.definitions.get_mut(workflow_id) {
+        if let Some(definition) = self.definitions.get_mut(key) {
             definition.executions = executions;
             definition.running = running;
             definition.succeeded = succeeded;
@@ -846,9 +903,20 @@ impl WorkflowState {
 
     // ── Reads ────────────────────────────────────────────────────────────────
 
-    /// The catalog, most recently active first.
+    /// The catalog on one side of the project boundary, most recently active
+    /// first.
+    ///
+    /// The scope decides which rows are there at all — `total_known` included
+    /// — rather than narrowing the ones that are, which is why it is an
+    /// argument and not a field of the filter a query string fills in
+    /// (`crate::scope`).
     #[must_use]
-    pub fn workflows(&self, filter: &WorkflowFilter, now: OffsetDateTime) -> WorkflowPage {
+    pub fn workflows(
+        &self,
+        scope: crate::ReadScope,
+        filter: &WorkflowFilter,
+        now: OffsetDateTime,
+    ) -> WorkflowPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
         let since = crate::window::cutoff(filter.window_seconds, now);
@@ -856,6 +924,7 @@ impl WorkflowState {
         let mut matching: Vec<&WorkflowDefinition> = self
             .definitions
             .values()
+            .filter(|row| scope.admits(row.project))
             .filter(|row| since.is_none_or(|start| row.last_activity_at >= start))
             .filter(|row| {
                 needle.as_ref().is_none_or(|needle| {
@@ -894,14 +963,31 @@ impl WorkflowState {
         }
     }
 
+    /// One graph, if it is this side's.
+    ///
+    /// `None` for another project's and `None` for a project's asked for
+    /// globally — the answer an id nobody ever declared gets, which is how a
+    /// caller learns they do not reach it without learning it exists
+    /// (ADR_0033).
     #[must_use]
-    pub fn workflow(&self, workflow_id: &str) -> Option<WorkflowDefinition> {
-        self.definitions.get(workflow_id).cloned()
+    pub fn workflow(
+        &self,
+        scope: crate::ReadScope,
+        workflow_id: &str,
+    ) -> Option<WorkflowDefinition> {
+        self.definitions
+            .get(&(scope.key(), workflow_id.to_owned()))
+            .cloned()
     }
 
-    /// Newest first, filtered, one page.
+    /// Newest first, on one side, filtered, one page.
     #[must_use]
-    pub fn executions(&self, filter: &ExecutionFilter, now: OffsetDateTime) -> ExecutionPage {
+    pub fn executions(
+        &self,
+        scope: crate::ReadScope,
+        filter: &ExecutionFilter,
+        now: OffsetDateTime,
+    ) -> ExecutionPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
         let since = crate::window::cutoff(filter.window_seconds, now);
@@ -910,8 +996,9 @@ impl WorkflowState {
             .order
             .iter()
             .rev()
-            .filter_map(|id| self.held.get(id))
+            .filter_map(|key| self.held.get(key))
             .map(|held| &held.summary)
+            .filter(|row| scope.admits(row.project))
             .filter(|row| since.is_none_or(|start| row.last_activity_at >= start))
             .filter(|row| {
                 filter
@@ -953,9 +1040,17 @@ impl WorkflowState {
         }
     }
 
+    /// One traversal, if it is this side's. `None` otherwise, as
+    /// [`Self::workflow`] is.
     #[must_use]
-    pub fn execution(&self, workflow_run_id: &str) -> Option<ExecutionDetail> {
-        self.held.get(workflow_run_id).map(Held::detail)
+    pub fn execution(
+        &self,
+        scope: crate::ReadScope,
+        workflow_run_id: &str,
+    ) -> Option<ExecutionDetail> {
+        self.held
+            .get(&(scope.key(), workflow_run_id.to_owned()))
+            .map(Held::detail)
     }
 
     #[must_use]
@@ -983,13 +1078,13 @@ impl WorkflowState {
         {
             return;
         }
-        for id in self.order.clone() {
+        for key in self.order.clone() {
             if self.message_count <= config.max_messages_total
                 && self.artifact_count <= config.max_artifacts_total
             {
                 break;
             }
-            let Some(held) = self.held.get_mut(&id) else {
+            let Some(held) = self.held.get_mut(&key) else {
                 continue;
             };
             if held.summary.status == ExecutionStatus::Running {
@@ -1018,13 +1113,13 @@ impl WorkflowState {
         }
         let mut excess = self.held.len() - config.max_executions;
         let mut keep = Vec::with_capacity(self.order.len());
-        for id in std::mem::take(&mut self.order) {
+        for key in std::mem::take(&mut self.order) {
             let finished = self
                 .held
-                .get(&id)
+                .get(&key)
                 .is_some_and(|held| held.summary.status != ExecutionStatus::Running);
             if excess > 0 && finished {
-                if let Some(dropped) = self.held.remove(&id) {
+                if let Some(dropped) = self.held.remove(&key) {
                     self.message_count = self.message_count.saturating_sub(dropped.messages.len());
                     let artifacts: usize = dropped
                         .nodes
@@ -1035,7 +1130,7 @@ impl WorkflowState {
                 }
                 excess -= 1;
             } else {
-                keep.push(id);
+                keep.push(key);
             }
         }
         self.order = keep;
@@ -1052,16 +1147,18 @@ impl WorkflowState {
         }
         let mut excess = self.definitions.len() - max_definitions;
         let mut keep = Vec::with_capacity(self.definition_order.len());
-        for id in std::mem::take(&mut self.definition_order) {
-            let held_by_an_execution = self
-                .held
-                .values()
-                .any(|held| held.summary.workflow_id == id);
+        for key in std::mem::take(&mut self.definition_order) {
+            // In this project: another project's execution of a graph with the
+            // same name holds its own catalog row, not this one.
+            let held_by_an_execution = self.held.values().any(|held| {
+                held.summary.workflow_id == key.1
+                    && aiwatcher_core::ProjectScope::key_of(held.summary.project) == key.0
+            });
             if excess > 0 && !held_by_an_execution {
-                self.definitions.remove(&id);
+                self.definitions.remove(&key);
                 excess -= 1;
             } else {
-                keep.push(id);
+                keep.push(key);
             }
         }
         self.definition_order = keep;
@@ -1440,6 +1537,7 @@ mod tests {
         execution_id: String,
         position: u64,
         at: OffsetDateTime,
+        project: Option<aiwatcher_core::ProjectScope>,
     }
 
     impl Traversal {
@@ -1449,7 +1547,14 @@ mod tests {
                 execution_id: execution_id.to_owned(),
                 position: 0,
                 at: datetime!(2026-08-28 09:00:00 UTC),
+                project: None,
             }
+        }
+
+        /// The project the ingest route stamped onto this producer's events.
+        fn in_project(mut self, project: aiwatcher_core::ProjectScope) -> Self {
+            self.project = Some(project);
+            self
         }
 
         fn after(&mut self, millis: i64) -> &mut Self {
@@ -1479,6 +1584,7 @@ mod tests {
             envelope.workflow_id = Some(self.workflow_id.clone());
             envelope.workflow_run_id = Some(self.execution_id.clone());
             envelope.agent_id = agent_id.map(ToOwned::to_owned);
+            envelope.project = self.project;
             envelope.record(self.position, self.position, self.at, None)
         }
     }
@@ -1525,7 +1631,10 @@ mod tests {
             ),
         ];
         let state = fold(&events);
-        let summary = state.execution("managed").expect("execution").summary;
+        let summary = state
+            .execution(crate::ReadScope::Global, "managed")
+            .expect("execution")
+            .summary;
         assert_eq!(summary.status, ExecutionStatus::Running);
         assert_eq!(summary.ended_at, None);
         events.push(run.after(10).emit(
@@ -1536,7 +1645,7 @@ mod tests {
         ));
         assert_eq!(
             fold(&events)
-                .execution("managed")
+                .execution(crate::ReadScope::Global, "managed")
                 .expect("execution")
                 .summary
                 .status,
@@ -1550,7 +1659,7 @@ mod tests {
         ));
         assert_eq!(
             fold(&events)
-                .execution("managed")
+                .execution(crate::ReadScope::Global, "managed")
                 .expect("execution")
                 .summary
                 .error
@@ -1562,7 +1671,7 @@ mod tests {
                 .emit(EventType::ExecutionResumed, "managed", None, json!({})),
         );
         let summary = fold(&events)
-            .execution("managed")
+            .execution(crate::ReadScope::Global, "managed")
             .expect("execution")
             .summary;
         assert_eq!(summary.status, ExecutionStatus::Running);
@@ -1578,7 +1687,7 @@ mod tests {
                 .emit(EventType::AgentCompleted, "managed", None, json!({})),
         );
         let summary = fold(&events)
-            .execution("managed")
+            .execution(crate::ReadScope::Global, "managed")
             .expect("execution")
             .summary;
         assert_eq!(summary.status, ExecutionStatus::Succeeded);
@@ -1612,7 +1721,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-1").expect("the execution is held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-1")
+            .expect("the execution is held");
 
         assert_eq!(
             detail
@@ -1668,7 +1779,9 @@ mod tests {
         }
 
         let state = fold(&events);
-        let detail = state.execution("exec-2").expect("the execution is held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-2")
+            .expect("the execution is held");
 
         assert_eq!(detail.summary.status, ExecutionStatus::Succeeded);
         assert_eq!(detail.summary.nodes_succeeded, 4);
@@ -1698,7 +1811,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-3").expect("the execution is held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-3")
+            .expect("the execution is held");
 
         assert_eq!(detail.summary.status, ExecutionStatus::Failed);
         let analyze = detail
@@ -1740,7 +1855,10 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let summary = state.execution("exec-4").expect("held").summary;
+        let summary = state
+            .execution(crate::ReadScope::Global, "exec-4")
+            .expect("held")
+            .summary;
 
         assert_eq!(summary.status, ExecutionStatus::Succeeded);
         assert_eq!(summary.nodes_pending, 3, "and says three never ran");
@@ -1761,7 +1879,9 @@ mod tests {
         let events = vec![started.clone(), started];
 
         let state = fold(&events);
-        let detail = state.execution("exec-5").expect("held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-5")
+            .expect("held");
 
         assert_eq!(detail.nodes[0].attempts, 1);
     }
@@ -1791,7 +1911,10 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let node = &state.execution("exec-6").expect("held").nodes[0];
+        let node = &state
+            .execution(crate::ReadScope::Global, "exec-6")
+            .expect("held")
+            .nodes[0];
 
         assert_eq!(node.attempts, 2);
         assert_eq!(node.status, NodeStatus::Running, "the retry reopened it");
@@ -1827,7 +1950,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-7").expect("held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-7")
+            .expect("held");
         let acquire = &detail.nodes[0];
 
         assert_eq!(acquire.artifacts.len(), 1);
@@ -1851,7 +1976,11 @@ mod tests {
         let state = fold(&[artifact.clone(), artifact]);
 
         assert_eq!(
-            state.execution("exec-8").expect("held").summary.artifacts,
+            state
+                .execution(crate::ReadScope::Global, "exec-8")
+                .expect("held")
+                .summary
+                .artifacts,
             1
         );
     }
@@ -1870,7 +1999,11 @@ mod tests {
 
         let state = fold(&events);
         assert_eq!(
-            state.execution("exec-9").expect("held").summary.artifacts,
+            state
+                .execution(crate::ReadScope::Global, "exec-9")
+                .expect("held")
+                .summary
+                .artifacts,
             0
         );
     }
@@ -1897,7 +2030,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-10").expect("held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-10")
+            .expect("held");
 
         assert_eq!(detail.messages.len(), 2);
         assert_eq!(detail.messages[0].from, "planner");
@@ -1923,7 +2058,7 @@ mod tests {
 
         assert_eq!(
             fold(&events)
-                .execution("exec-11")
+                .execution(crate::ReadScope::Global, "exec-11")
                 .expect("held")
                 .messages
                 .len(),
@@ -1947,7 +2082,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-12").expect("held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-12")
+            .expect("held");
         let extra = detail
             .nodes
             .iter()
@@ -1985,7 +2122,9 @@ mod tests {
         ];
 
         let state = fold(&events);
-        let detail = state.execution("exec-13").expect("held");
+        let detail = state
+            .execution(crate::ReadScope::Global, "exec-13")
+            .expect("held");
 
         assert_eq!(detail.nodes.len(), 4);
         assert!(detail.nodes.iter().all(|node| node.declared));
@@ -2002,7 +2141,7 @@ mod tests {
         let events = vec![run.emit(EventType::RunStarted, "run-a", None, json!({}))];
 
         let state = fold(&events);
-        let page = state.workflows(&WorkflowFilter::default(), now());
+        let page = state.workflows(crate::ReadScope::Global, &WorkflowFilter::default(), now());
 
         assert_eq!(page.workflows.len(), 1);
         assert_eq!(page.workflows[0].workflow_id, "nightly-summary");
@@ -2026,7 +2165,7 @@ mod tests {
         assert!(state.is_empty());
         assert_eq!(
             state
-                .workflows(&WorkflowFilter::default(), now())
+                .workflows(crate::ReadScope::Global, &WorkflowFilter::default(), now())
                 .total_known,
             0
         );
@@ -2065,6 +2204,7 @@ mod tests {
         );
 
         let page = state.executions(
+            crate::ReadScope::Global,
             &ExecutionFilter {
                 window_seconds: Some(900),
                 ..ExecutionFilter::default()
@@ -2092,6 +2232,7 @@ mod tests {
         }
 
         let first = state.executions(
+            crate::ReadScope::Global,
             &ExecutionFilter {
                 limit: Some(2),
                 ..ExecutionFilter::default()
@@ -2109,6 +2250,7 @@ mod tests {
         assert_eq!(first.next_cursor.as_deref(), Some("exec-3"));
 
         let second = state.executions(
+            crate::ReadScope::Global,
             &ExecutionFilter {
                 limit: Some(2),
                 after: first.next_cursor,
@@ -2155,7 +2297,9 @@ mod tests {
         }
 
         assert!(
-            state.execution("exec-open").is_some(),
+            state
+                .execution(crate::ReadScope::Global, "exec-open")
+                .is_some(),
             "the running execution survives; it is the one being watched"
         );
         assert!(state.len() <= 3);
@@ -2188,7 +2332,7 @@ mod tests {
             }
         }
 
-        let catalog = state.workflows(&WorkflowFilter::default(), now());
+        let catalog = state.workflows(crate::ReadScope::Global, &WorkflowFilter::default(), now());
         assert!(
             catalog.total_known <= 3 + config.max_executions,
             "the catalog grew to {} rows",
@@ -2226,7 +2370,9 @@ mod tests {
             }
         }
 
-        let definition = state.workflow("house-import").expect("declared");
+        let definition = state
+            .workflow(crate::ReadScope::Global, "house-import")
+            .expect("declared");
         assert_eq!(
             definition.executions as usize,
             state.len(),
@@ -2259,7 +2405,10 @@ mod tests {
             ),
         ];
 
-        let summary = fold(&events).execution("exec-15").expect("held").summary;
+        let summary = fold(&events)
+            .execution(crate::ReadScope::Global, "exec-15")
+            .expect("held")
+            .summary;
 
         assert_eq!(summary.nodes_total, 1);
         assert_eq!(summary.nodes_succeeded, 1);
@@ -2278,7 +2427,9 @@ mod tests {
         )];
 
         let state = fold(&events);
-        let definition = state.workflow("tiny").expect("declared");
+        let definition = state
+            .workflow(crate::ReadScope::Global, "tiny")
+            .expect("declared");
 
         assert_eq!(definition.nodes.len(), 2);
         assert_eq!(definition.nodes[0].id, "a");
@@ -2309,11 +2460,130 @@ mod tests {
         let state = fold(&events);
         assert_eq!(
             state
-                .workflow("house-import")
+                .workflow(crate::ReadScope::Global, "house-import")
                 .expect("declared")
                 .nodes
                 .len(),
             4
+        );
+    }
+
+    // ── The project boundary ─────────────────────────────────────────────────
+
+    fn scope(byte: u8) -> aiwatcher_core::ProjectScope {
+        aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::from_bytes([byte; 16]),
+            uuid::Uuid::from_bytes([byte.wrapping_add(1); 16]),
+        )
+    }
+
+    /// Two projects importing houses have two graphs, not one they overwrite.
+    ///
+    /// This is where the workflow fold parts company with the runs fold: a
+    /// `workflow_id` is re-declared on every execution, so first-seen-wins
+    /// would hand `house-import` to whichever project declared first and leave
+    /// the other's catalog empty while it declared its shape every run.
+    #[test]
+    fn two_projects_declaring_one_workflow_id_are_two_graphs() {
+        let mut mine = Traversal::new("house-import", "exec-mine").in_project(scope(0xaa));
+        let mut yours = Traversal::new("house-import", "exec-yours").in_project(scope(0xbb));
+        let events = vec![
+            mine.emit(EventType::WorkflowDeclared, "run-a", None, declaration()),
+            mine.emit(EventType::RunStarted, "run-a", None, json!({})),
+            yours.emit(
+                EventType::WorkflowDeclared,
+                "run-b",
+                None,
+                json!({
+                    "workflow_id": "house-import",
+                    "name": "Somebody else's import",
+                    "nodes": [{ "id": "only", "name": "Only" }],
+                    "edges": [],
+                }),
+            ),
+            yours.emit(EventType::RunStarted, "run-b", None, json!({})),
+        ];
+        let state = fold(&events);
+
+        let ours = state
+            .workflow(crate::ReadScope::Project(scope(0xaa)), "house-import")
+            .expect("my project's graph");
+        assert_eq!(ours.nodes.len(), 4, "my four stages, not their one node");
+        assert_eq!(ours.executions, 1, "and only my execution under it");
+
+        let theirs = state
+            .workflow(crate::ReadScope::Project(scope(0xbb)), "house-import")
+            .expect("their graph");
+        assert_eq!(theirs.name, "Somebody else's import");
+        assert_eq!(theirs.nodes.len(), 1);
+
+        // And the half that makes it a boundary rather than a label: the
+        // instance list answers neither of them.
+        assert!(
+            state
+                .workflow(crate::ReadScope::Global, "house-import")
+                .is_none()
+        );
+        assert!(
+            state
+                .workflows(crate::ReadScope::Global, &WorkflowFilter::default(), now())
+                .workflows
+                .is_empty(),
+            "an instance viewer reads no project's graph"
+        );
+    }
+
+    #[test]
+    fn a_project_execution_is_on_its_own_list_and_on_no_other() {
+        let mut mine = Traversal::new("house-import", "exec-p").in_project(scope(0xaa));
+        let mut global = Traversal::new("house-import", "exec-g");
+        let events = vec![
+            mine.emit(EventType::RunStarted, "run-a", None, json!({})),
+            global.emit(EventType::RunStarted, "run-b", None, json!({})),
+        ];
+        let state = fold(&events);
+
+        let theirs = state.executions(
+            crate::ReadScope::Project(scope(0xaa)),
+            &ExecutionFilter::default(),
+            now(),
+        );
+        assert_eq!(
+            theirs
+                .executions
+                .iter()
+                .map(|row| row.workflow_run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["exec-p"]
+        );
+        assert_eq!(theirs.total_known, 1, "the total counts one side only");
+
+        let instance =
+            state.executions(crate::ReadScope::Global, &ExecutionFilter::default(), now());
+        assert_eq!(
+            instance
+                .executions
+                .iter()
+                .map(|row| row.workflow_run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["exec-g"],
+        );
+
+        // An id is not a way in from the wrong side, in either direction.
+        assert!(
+            state
+                .execution(crate::ReadScope::Global, "exec-p")
+                .is_none()
+        );
+        assert!(
+            state
+                .execution(crate::ReadScope::Project(scope(0xaa)), "exec-g")
+                .is_none()
+        );
+        assert!(
+            state
+                .execution(crate::ReadScope::Project(scope(0xbb)), "exec-p")
+                .is_none()
         );
     }
 }

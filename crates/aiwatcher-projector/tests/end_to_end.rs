@@ -914,7 +914,7 @@ async fn an_evaluation_report_reaches_the_projection_and_never_the_trace_store()
         .until("the evaluation to be projected", || async {
             harness
                 .read_model
-                .evaluation("nightly-2026-08-28")
+                .evaluation(ReadScope::Global, "nightly-2026-08-28")
                 .await
                 .is_some_and(|detail| detail.summary.status == EvaluationStatus::Succeeded)
         })
@@ -922,7 +922,7 @@ async fn an_evaluation_report_reaches_the_projection_and_never_the_trace_store()
 
     let detail = harness
         .read_model
-        .evaluation("nightly-2026-08-28")
+        .evaluation(ReadScope::Global, "nightly-2026-08-28")
         .await
         .expect("the evaluation");
     assert_eq!(detail.summary.suite, "catalog");
@@ -1005,7 +1005,7 @@ async fn a_declared_workflow_is_folded_into_a_graph_and_never_into_a_trace() {
         .until("the first node to finish", || async {
             harness
                 .read_model
-                .workflow_execution("exec-1")
+                .workflow_execution(ReadScope::Global, "exec-1")
                 .await
                 .is_some_and(|detail| detail.summary.nodes_succeeded == 1)
         })
@@ -1013,7 +1013,7 @@ async fn a_declared_workflow_is_folded_into_a_graph_and_never_into_a_trace() {
 
     let detail = harness
         .read_model
-        .workflow_execution("exec-1")
+        .workflow_execution(ReadScope::Global, "exec-1")
         .await
         .expect("the execution");
 

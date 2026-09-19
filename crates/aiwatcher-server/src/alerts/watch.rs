@@ -98,15 +98,24 @@ pub async fn execution_failures(
         });
     };
 
+    // The instance's own executions, and that is the decision rather than a
+    // default. An alert rule is an instance's and there is one channel for the
+    // deployment (ADR_0035), so a project's failure raised on it would put one
+    // project's work into a webhook every other project's administrator reads.
+    // What it costs is that a project's failed execution raises nothing yet,
+    // which is named in `docs/iam-02-data-plane.md` rather than discovered.
     let page = read_model
-        .workflow_executions(&ExecutionFilter {
-            window_seconds: Some(EXECUTION_LOOKBACK_SECONDS),
-            workflow_id: None,
-            status: Some(ExecutionStatus::Failed),
-            search: None,
-            after: None,
-            limit: Some(BATCH),
-        })
+        .workflow_executions(
+            aiwatcher_projector::ReadScope::Global,
+            &ExecutionFilter {
+                window_seconds: Some(EXECUTION_LOOKBACK_SECONDS),
+                workflow_id: None,
+                status: Some(ExecutionStatus::Failed),
+                search: None,
+                after: None,
+                limit: Some(BATCH),
+            },
+        )
         .await;
 
     let mut watched = Watched::default();

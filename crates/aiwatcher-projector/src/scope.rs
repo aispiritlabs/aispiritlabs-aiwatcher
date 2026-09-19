@@ -35,6 +35,29 @@ impl ReadScope {
             Self::Project(scope) => project == Some(scope),
         }
     }
+
+    /// The project this side is, if it is one.
+    ///
+    /// What a fold writes into a row it is creating, so a row is stamped with
+    /// the side it was folded on rather than with a second reading of the
+    /// event.
+    #[must_use]
+    pub const fn project(self) -> Option<ProjectScope> {
+        match self {
+            Self::Global => None,
+            Self::Project(scope) => Some(scope),
+        }
+    }
+
+    /// This side as a fold's key — the empty string for the global one.
+    ///
+    /// The spelling `crate::dimensions` already keys rows by, so a fold that
+    /// keys by `(project, id)` and a read that looks one up compute the same
+    /// string in one place rather than two.
+    #[must_use]
+    pub fn key(self) -> String {
+        ProjectScope::key_of(self.project())
+    }
 }
 
 #[cfg(test)]

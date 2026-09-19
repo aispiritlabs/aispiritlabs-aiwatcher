@@ -1262,7 +1262,7 @@ impl ActivityExecutor for TracesExecutor {
             // started, from when it was declared, which is earlier.
             let started = self
                 .read_model
-                .workflow_execution(&command.key.execution_id.to_string())
+                .workflow_execution(READS, &command.key.execution_id.to_string())
                 .await
                 .map(|execution| execution.summary.started_at);
             let before = i64::try_from(declared.run.settings.asked_since_seconds.unwrap_or(0))

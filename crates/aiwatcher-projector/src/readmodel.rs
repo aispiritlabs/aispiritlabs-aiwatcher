@@ -836,13 +836,18 @@ impl ReadModel {
     /// that name it. See [`crate::observations`].
     pub async fn variant_observations(
         &self,
+        scope: ReadScope,
         variant_ids: &[&str],
         window_seconds: Option<i64>,
         prices: Option<&aiwatcher_core::prices::ModelPrices>,
     ) -> Vec<crate::observations::VariantObservations> {
         let state = self.state.read().await;
         crate::observations::compute(
-            state.runs.values(),
+            // One side's runs, as every read of this fold takes: a variant ID
+            // is the content address of a declaration's pins, so one
+            // declaration made in two projects has one ID and a figure summed
+            // across both would be neither project's.
+            state.runs.values().filter(|run| scope.admits(run.project)),
             &state.spans,
             variant_ids,
             window_seconds,
@@ -861,23 +866,33 @@ impl ReadModel {
         crate::spans::compute(&state.spans, scope, filter, OffsetDateTime::now_utc())
     }
 
-    /// Evaluation reports, newest first. See [`crate::evaluations`].
-    pub async fn evaluations(&self, filter: &EvaluationFilter) -> EvaluationPage {
+    /// Evaluation reports on one side, newest first. See
+    /// [`crate::evaluations`].
+    pub async fn evaluations(&self, scope: ReadScope, filter: &EvaluationFilter) -> EvaluationPage {
         self.state
             .read()
             .await
             .evaluations
-            .page(filter, OffsetDateTime::now_utc())
+            .page(scope, filter, OffsetDateTime::now_utc())
     }
 
     /// One evaluation, with its cases, its report and its baseline.
-    pub async fn evaluation(&self, evaluation_id: &str) -> Option<EvaluationDetail> {
-        self.state.read().await.evaluations.detail(evaluation_id)
+    pub async fn evaluation(
+        &self,
+        scope: ReadScope,
+        evaluation_id: &str,
+    ) -> Option<EvaluationDetail> {
+        self.state
+            .read()
+            .await
+            .evaluations
+            .detail(scope, evaluation_id)
     }
 
     /// Resolve both reports under the same read lock.
     pub async fn evaluation_with_baseline(
         &self,
+        scope: ReadScope,
         evaluation_id: &str,
         baseline_id: Option<&str>,
     ) -> Option<EvaluationDetail> {
@@ -885,41 +900,64 @@ impl ReadModel {
             .read()
             .await
             .evaluations
-            .detail_with_baseline(evaluation_id, baseline_id)
+            .detail_with_baseline(scope, evaluation_id, baseline_id)
     }
 
     /// Suites: the level above an evaluation report.
-    /// The workflow catalog: every declared graph, and the ones only observed.
-    pub async fn workflows(&self, filter: &WorkflowFilter) -> WorkflowPage {
+    /// The workflow catalog on one side: every declared graph, and the ones
+    /// only observed.
+    pub async fn workflows(&self, scope: ReadScope, filter: &WorkflowFilter) -> WorkflowPage {
         self.state
             .read()
             .await
             .workflows
-            .workflows(filter, OffsetDateTime::now_utc())
+            .workflows(scope, filter, OffsetDateTime::now_utc())
     }
 
-    pub async fn workflow(&self, workflow_id: &str) -> Option<WorkflowDefinition> {
-        self.state.read().await.workflows.workflow(workflow_id)
-    }
-
-    pub async fn workflow_executions(&self, filter: &ExecutionFilter) -> ExecutionPage {
+    pub async fn workflow(
+        &self,
+        scope: ReadScope,
+        workflow_id: &str,
+    ) -> Option<WorkflowDefinition> {
         self.state
             .read()
             .await
             .workflows
-            .executions(filter, OffsetDateTime::now_utc())
+            .workflow(scope, workflow_id)
     }
 
-    pub async fn workflow_execution(&self, workflow_run_id: &str) -> Option<ExecutionDetail> {
-        self.state.read().await.workflows.execution(workflow_run_id)
+    pub async fn workflow_executions(
+        &self,
+        scope: ReadScope,
+        filter: &ExecutionFilter,
+    ) -> ExecutionPage {
+        self.state
+            .read()
+            .await
+            .workflows
+            .executions(scope, filter, OffsetDateTime::now_utc())
+    }
+
+    pub async fn workflow_execution(
+        &self,
+        scope: ReadScope,
+        workflow_run_id: &str,
+    ) -> Option<ExecutionDetail> {
+        self.state
+            .read()
+            .await
+            .workflows
+            .execution(scope, workflow_run_id)
     }
 
     pub async fn legacy_evaluations(
         &self,
+        scope: ReadScope,
         filter: &EvaluationFilter,
         excluded: &std::collections::BTreeSet<String>,
     ) -> EvaluationPage {
         self.state.read().await.evaluations.page_excluding(
+            scope,
             filter,
             OffsetDateTime::now_utc(),
             excluded,
@@ -927,6 +965,7 @@ impl ReadModel {
     }
     pub async fn legacy_evaluation(
         &self,
+        scope: ReadScope,
         id: &str,
         baseline: Option<&str>,
         excluded: &std::collections::BTreeSet<String>,
@@ -935,21 +974,22 @@ impl ReadModel {
             .read()
             .await
             .evaluations
-            .detail_excluding(id, baseline, excluded)
+            .detail_excluding(scope, id, baseline, excluded)
     }
     pub async fn legacy_evaluation_suites(
         &self,
+        scope: ReadScope,
         excluded: &std::collections::BTreeSet<String>,
     ) -> SuitePage {
         self.state
             .read()
             .await
             .evaluations
-            .suites_excluding(excluded)
+            .suites_excluding(scope, excluded)
     }
 
-    pub async fn evaluation_suites(&self) -> SuitePage {
-        self.state.read().await.evaluations.suites()
+    pub async fn evaluation_suites(&self, scope: ReadScope) -> SuitePage {
+        self.state.read().await.evaluations.suites(scope)
     }
 
     /// The metrics view: a fold over everything currently retained.
@@ -1278,7 +1318,9 @@ mod tests {
             model.apply(&envelope.record(1, 1, at, None)).await;
         }
 
-        let page = model.workflow_executions(&ExecutionFilter::default()).await;
+        let page = model
+            .workflow_executions(ReadScope::Global, &ExecutionFilter::default())
+            .await;
         assert!(
             page.executions.is_empty(),
             "a report is not a node, and the run it names is no execution of its own"
@@ -1533,7 +1575,9 @@ mod tests {
         assert_eq!(benchmark.variant_id.as_deref(), Some("v1"));
         assert_eq!(benchmark.evaluation_id.as_deref(), Some("answers-v1"));
 
-        let observed = model.variant_observations(&["v1"], None, None).await;
+        let observed = model
+            .variant_observations(ReadScope::Global, &["v1"], None, None)
+            .await;
         assert_eq!((observed[0].runs, observed[0].measured_runs), (1, 1));
     }
 

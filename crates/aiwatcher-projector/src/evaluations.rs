@@ -139,6 +139,17 @@ pub struct EvaluationSummary {
     /// its own stream in the log and its own partition — which is what keeps a
     /// report's events in order without serialising it behind agent traffic.
     pub evaluation_id: String,
+    /// Which project this report belongs to (ADR_0033), from the **first**
+    /// event folded into it — including when that first event carried none,
+    /// which is the global side and every report this build has held.
+    ///
+    /// Set once and never moved, which is [`crate::RunSummary::project`]'s
+    /// rule and is right here for its reason: an `evaluation_id` *is* a run
+    /// id, so it names one process rather than a name a producer reuses. It
+    /// is a fact about whose the report is, and says nothing about who may
+    /// read it — that is a grant, asked of IAM per request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<aiwatcher_core::ProjectScope>,
     /// What was measured. Falls back through `suite`, `suite_name`, `run_name`
     /// — MLflow's word — and finally the evaluation id, so a producer porting
     /// a `start_run(run_name=…)` call lands somewhere sensible without
@@ -203,6 +214,7 @@ impl EvaluationSummary {
     fn new(event: &RecordedEvent) -> Self {
         Self {
             evaluation_id: event.metadata.run_id.clone(),
+            project: event.metadata.project,
             suite: event.metadata.run_id.clone(),
             dataset: None,
             variant: None,
@@ -569,15 +581,21 @@ impl EvaluationState {
         self.shed_detail(config);
     }
 
-    /// Newest first, filtered, one page.
+    /// Newest first, on one side of the project boundary, filtered, one page.
     #[must_use]
-    pub fn page(&self, filter: &EvaluationFilter, now: OffsetDateTime) -> EvaluationPage {
-        self.page_excluding(filter, now, &Default::default())
+    pub fn page(
+        &self,
+        scope: crate::ReadScope,
+        filter: &EvaluationFilter,
+        now: OffsetDateTime,
+    ) -> EvaluationPage {
+        self.page_excluding(scope, filter, now, &Default::default())
     }
 
     /// Compatibility readers may exclude IDs owned by an authoritative registry.
     pub fn page_excluding(
         &self,
+        scope: crate::ReadScope,
         filter: &EvaluationFilter,
         now: OffsetDateTime,
         excluded: &std::collections::BTreeSet<String>,
@@ -593,6 +611,7 @@ impl EvaluationState {
             .filter(|id| !excluded.contains(*id))
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
+            .filter(|row| scope.admits(row.project))
             .filter(|row| since.is_none_or(|start| row.ended_at.unwrap_or(row.started_at) >= start))
             .filter(|row| filter.suite.as_ref().is_none_or(|want| &row.suite == want))
             .filter(|row| {
@@ -631,24 +650,27 @@ impl EvaluationState {
         }
     }
 
-    /// One evaluation, with its cases, its report, and its baseline.
+    /// One evaluation, with its cases, its report, and its baseline, if it is
+    /// on this side.
     #[must_use]
-    pub fn detail(&self, evaluation_id: &str) -> Option<EvaluationDetail> {
-        self.detail_with_baseline(evaluation_id, None)
+    pub fn detail(&self, scope: crate::ReadScope, evaluation_id: &str) -> Option<EvaluationDetail> {
+        self.detail_with_baseline(scope, evaluation_id, None)
     }
 
     /// Explicit baseline IDs are resolved as given, with no automatic fallback.
     #[must_use]
     pub fn detail_with_baseline(
         &self,
+        scope: crate::ReadScope,
         evaluation_id: &str,
         baseline_id: Option<&str>,
     ) -> Option<EvaluationDetail> {
-        self.detail_excluding(evaluation_id, baseline_id, &Default::default())
+        self.detail_excluding(scope, evaluation_id, baseline_id, &Default::default())
     }
 
     pub fn detail_excluding(
         &self,
+        scope: crate::ReadScope,
         evaluation_id: &str,
         baseline_id: Option<&str>,
         excluded: &std::collections::BTreeSet<String>,
@@ -657,9 +679,22 @@ impl EvaluationState {
             return None;
         }
         let held = self.held.get(evaluation_id)?;
-        let summary = held.summary.as_ref()?.clone();
+        let summary = held
+            .summary
+            .as_ref()
+            .filter(|row| scope.admits(row.project))?
+            .clone();
         let baseline = match baseline_id {
-            Some(id) => Some(self.held.get(id)?.summary.as_ref()?),
+            // A named baseline is held to the same side as the report it is
+            // being compared with. A report nobody may read is not one a
+            // comparison may quote the metrics of.
+            Some(id) => Some(
+                self.held
+                    .get(id)?
+                    .summary
+                    .as_ref()
+                    .filter(|row| scope.admits(row.project))?,
+            ),
             None => self.baseline_for(&summary, excluded),
         };
         let comparison = baseline.map(|baseline| self.compare(&summary, held, baseline));
@@ -674,13 +709,17 @@ impl EvaluationState {
         })
     }
 
-    /// Suites, newest activity first.
+    /// Suites on one side, newest activity first.
     #[must_use]
-    pub fn suites(&self) -> SuitePage {
-        self.suites_excluding(&Default::default())
+    pub fn suites(&self, scope: crate::ReadScope) -> SuitePage {
+        self.suites_excluding(scope, &Default::default())
     }
 
-    pub fn suites_excluding(&self, excluded: &std::collections::BTreeSet<String>) -> SuitePage {
+    pub fn suites_excluding(
+        &self,
+        scope: crate::ReadScope,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> SuitePage {
         let mut grouped: HashMap<(String, Option<String>), Vec<&EvaluationSummary>> =
             HashMap::new();
         for summary in self
@@ -689,6 +728,7 @@ impl EvaluationState {
             .filter(|id| !excluded.contains(*id))
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
+            .filter(|row| scope.admits(row.project))
         {
             grouped
                 .entry((summary.suite.clone(), summary.dataset.clone()))
@@ -775,6 +815,10 @@ impl EvaluationState {
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
             .filter(|row| row.evaluation_id != current.evaluation_id)
+            // The same project's, whichever side the read named. A baseline
+            // picked automatically must not be the one place a report from
+            // another project is quoted.
+            .filter(|row| row.project == current.project)
             .filter(|row| row.suite == current.suite && row.dataset == current.dataset)
             .filter(|row| row.status == EvaluationStatus::Succeeded)
             .filter(|row| row.started_at < current.started_at)
@@ -1121,7 +1165,9 @@ mod tests {
             ),
         ]);
 
-        let detail = state.detail("eval-1").expect("the evaluation");
+        let detail = state
+            .detail(crate::ReadScope::Global, "eval-1")
+            .expect("the evaluation");
         let summary = &detail.summary;
         assert_eq!(summary.suite, "catalog-floor-plan");
         assert_eq!(summary.dataset.as_deref(), Some("house-catalog@3"));
@@ -1150,7 +1196,9 @@ mod tests {
             json!({ "run_name": "floor-plan-nightly", "metrics": { "score": 1.0 } }),
         )]);
 
-        let detail = state.detail("eval-7").expect("the evaluation");
+        let detail = state
+            .detail(crate::ReadScope::Global, "eval-7")
+            .expect("the evaluation");
         assert_eq!(detail.summary.suite, "floor-plan-nightly");
         assert_eq!(
             detail.summary.status,
@@ -1176,7 +1224,10 @@ mod tests {
             ),
         ]);
 
-        let summary = state.detail("eval-2").expect("the evaluation").summary;
+        let summary = state
+            .detail(crate::ReadScope::Global, "eval-2")
+            .expect("the evaluation")
+            .summary;
         assert_eq!(summary.status, EvaluationStatus::Failed);
         assert_eq!(
             summary.error.as_deref(),
@@ -1231,7 +1282,7 @@ mod tests {
         let state = fold(&events);
 
         let comparison = state
-            .detail("eval-b")
+            .detail(crate::ReadScope::Global, "eval-b")
             .expect("the evaluation")
             .comparison
             .expect("a baseline on the same dataset");
@@ -1283,7 +1334,7 @@ mod tests {
 
         assert!(
             state
-                .detail("eval-new")
+                .detail(crate::ReadScope::Global, "eval-new")
                 .expect("the evaluation")
                 .comparison
                 .is_none(),
@@ -1309,7 +1360,7 @@ mod tests {
         ]);
 
         let comparison = state
-            .detail("eval-2")
+            .detail(crate::ReadScope::Global, "eval-2")
             .expect("the evaluation")
             .comparison
             .expect("a baseline");
@@ -1342,7 +1393,9 @@ mod tests {
             &config,
         );
 
-        let detail = state.detail("eval-1").expect("the evaluation");
+        let detail = state
+            .detail(crate::ReadScope::Global, "eval-1")
+            .expect("the evaluation");
         assert!(detail.report.is_none());
         assert!(detail.summary.report_dropped);
         assert!(
@@ -1370,7 +1423,9 @@ mod tests {
             );
         }
 
-        let detail = state.detail("eval-1").expect("the evaluation");
+        let detail = state
+            .detail(crate::ReadScope::Global, "eval-1")
+            .expect("the evaluation");
         assert_eq!(detail.cases.len(), 3);
         assert!(detail.cases_truncated);
         assert_eq!(detail.summary.cases_total, 10);
@@ -1414,7 +1469,9 @@ mod tests {
         }
 
         assert!(state.case_count <= 4, "held {} cases", state.case_count);
-        let oldest = state.detail("eval-0").expect("the evaluation");
+        let oldest = state
+            .detail(crate::ReadScope::Global, "eval-0")
+            .expect("the evaluation");
         assert!(
             oldest.cases.is_empty(),
             "the oldest gives up its cases first"
@@ -1427,7 +1484,7 @@ mod tests {
         assert_eq!(oldest.summary.pass_rate, Some(1.0));
         assert!(
             !state
-                .detail("eval-2")
+                .detail(crate::ReadScope::Global, "eval-2")
                 .expect("the evaluation")
                 .cases
                 .is_empty(),
@@ -1455,7 +1512,7 @@ mod tests {
             datetime!(2026-08-28 11:00:00 UTC),
             &[("K-1", true, 0.5)],
         ));
-        let page = fold(&events).suites();
+        let page = fold(&events).suites(crate::ReadScope::Global);
 
         assert_eq!(page.total, 2, "a dataset version is its own suite row");
         let newest = &page.suites[0];
@@ -1501,7 +1558,7 @@ mod tests {
             );
         }
 
-        assert!(state.detail("watching").is_some());
+        assert!(state.detail(crate::ReadScope::Global, "watching").is_some());
         assert!(state.len() <= 3, "held {} evaluations", state.len());
     }
 
@@ -1530,7 +1587,7 @@ mod tests {
         let state = fold(&events);
         assert_eq!(
             state
-                .detail("current")
+                .detail(crate::ReadScope::Global, "current")
                 .unwrap()
                 .comparison
                 .unwrap()
@@ -1539,11 +1596,11 @@ mod tests {
         );
         assert!(
             state
-                .detail_with_baseline("current", Some("missing"))
+                .detail_with_baseline(crate::ReadScope::Global, "current", Some("missing"))
                 .is_none()
         );
         let failed = state
-            .detail_with_baseline("current", Some("failed"))
+            .detail_with_baseline(crate::ReadScope::Global, "current", Some("failed"))
             .unwrap()
             .comparison
             .unwrap();
@@ -1552,7 +1609,7 @@ mod tests {
         assert!(failed.regressed.is_empty() && failed.fixed.is_empty());
         assert_eq!(
             state
-                .detail_with_baseline("current", Some("current"))
+                .detail_with_baseline(crate::ReadScope::Global, "current", Some("current"))
                 .unwrap()
                 .comparison
                 .unwrap()
@@ -1594,7 +1651,7 @@ mod tests {
                 }
                 events.extend(current);
                 let detail = fold(&events)
-                    .detail_with_baseline("current", Some("base"))
+                    .detail_with_baseline(crate::ReadScope::Global, "current", Some("base"))
                     .unwrap();
                 let comparison = detail.comparison.unwrap();
                 assert_eq!(
@@ -1639,7 +1696,9 @@ mod tests {
             at + time::Duration::minutes(3),
             json!({"cases_total": 3}),
         ));
-        let detail = fold(&events).detail("current").unwrap();
+        let detail = fold(&events)
+            .detail(crate::ReadScope::Global, "current")
+            .unwrap();
         assert!(detail.cases_truncated);
         let comparison = detail.comparison.unwrap();
         assert_eq!(comparison.common_cases, 1);
@@ -1653,7 +1712,11 @@ mod tests {
         for event in &events {
             state.apply(event, &config);
         }
-        let comparison = state.detail("current").unwrap().comparison.unwrap();
+        let comparison = state
+            .detail(crate::ReadScope::Global, "current")
+            .unwrap()
+            .comparison
+            .unwrap();
         assert!(!comparison.baseline_cases_complete);
         assert!(!comparison.details_complete);
     }
@@ -1687,6 +1750,7 @@ mod tests {
         ]);
 
         let page = state.page(
+            crate::ReadScope::Global,
             &EvaluationFilter {
                 window_seconds: Some(900),
                 ..EvaluationFilter::default()
@@ -1718,6 +1782,7 @@ mod tests {
         let state = fold(&events);
 
         let first = state.page(
+            crate::ReadScope::Global,
             &EvaluationFilter {
                 limit: Some(2),
                 ..EvaluationFilter::default()
@@ -1729,6 +1794,7 @@ mod tests {
         let cursor = first.next_cursor.clone().expect("more to read");
 
         let second = state.page(
+            crate::ReadScope::Global,
             &EvaluationFilter {
                 limit: Some(2),
                 after: Some(cursor),
@@ -1739,6 +1805,7 @@ mod tests {
         assert_eq!(second.evaluations[0].evaluation_id, "eval-2");
 
         let searched = state.page(
+            crate::ReadScope::Global,
             &EvaluationFilter {
                 search: Some("ALPHA".to_owned()),
                 ..EvaluationFilter::default()
@@ -1784,7 +1851,10 @@ mod tests {
                 }),
             ),
         ]);
-        let summary = &state.detail("eval-step").expect("the evaluation").summary;
+        let summary = &state
+            .detail(crate::ReadScope::Global, "eval-step")
+            .expect("the evaluation")
+            .summary;
         assert_eq!(summary.execution_id.as_deref(), Some("execution-1"));
         assert_eq!(summary.step_id.as_deref(), Some("evaluate_baseline"));
         assert_eq!(summary.suite, "held-out");
@@ -1806,7 +1876,10 @@ mod tests {
                 json!({ "metrics": { "mean_score": 0.9 } }),
             ),
         ]);
-        let summary = &state.detail("eval-script").expect("the evaluation").summary;
+        let summary = &state
+            .detail(crate::ReadScope::Global, "eval-script")
+            .expect("the evaluation")
+            .summary;
         assert_eq!(summary.execution_id, None);
         assert_eq!(summary.step_id, None);
         assert_eq!(summary.suite, "catalog-floor-plan");
@@ -1847,12 +1920,146 @@ mod tests {
             attempt(0, 0.4).into_iter().chain(attempt(5, 0.8)).collect();
         let state = fold(&events);
 
-        let page = state.page(&EvaluationFilter::default(), now());
+        let page = state.page(
+            crate::ReadScope::Global,
+            &EvaluationFilter::default(),
+            now(),
+        );
         assert_eq!(
             page.evaluations.len(),
             1,
             "one report per step, not one per attempt"
         );
         assert_eq!(page.evaluations[0].metrics["exact_match"], 0.8);
+    }
+
+    // ── The project boundary ─────────────────────────────────────────────────
+
+    fn scope(byte: u8) -> aiwatcher_core::ProjectScope {
+        aiwatcher_core::ProjectScope::new(
+            uuid::Uuid::from_bytes([byte; 16]),
+            uuid::Uuid::from_bytes([byte.wrapping_add(1); 16]),
+        )
+    }
+
+    fn in_project(
+        id: &str,
+        at: OffsetDateTime,
+        project: Option<aiwatcher_core::ProjectScope>,
+        data: serde_json::Value,
+    ) -> RecordedEvent {
+        let mut envelope = EventEnvelope::new(
+            EventType::EvalCompleted,
+            id,
+            at,
+            Source::new("evaluation-service", Sdk::Python),
+        )
+        .with_data(data);
+        envelope.project = project;
+        envelope.record(1, 1, at, None)
+    }
+
+    #[test]
+    fn a_report_is_read_on_its_own_side_and_on_no_other() {
+        let at = datetime!(2026-08-28 09:00:00 UTC);
+        let state = fold(&[
+            in_project(
+                "eval-mine",
+                at,
+                Some(scope(0xaa)),
+                json!({ "suite": "alpha" }),
+            ),
+            in_project("eval-global", at, None, json!({ "suite": "alpha" })),
+        ]);
+
+        let mine = state.page(
+            crate::ReadScope::Project(scope(0xaa)),
+            &EvaluationFilter::default(),
+            now(),
+        );
+        assert_eq!(
+            mine.evaluations
+                .iter()
+                .map(|row| row.evaluation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["eval-mine"]
+        );
+        assert_eq!(mine.total_known, 1, "the total counts one side only");
+
+        let instance = state.page(
+            crate::ReadScope::Global,
+            &EvaluationFilter::default(),
+            now(),
+        );
+        assert_eq!(
+            instance
+                .evaluations
+                .iter()
+                .map(|row| row.evaluation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["eval-global"],
+            "an instance viewer reads no project's report"
+        );
+
+        assert!(
+            state
+                .detail(crate::ReadScope::Global, "eval-mine")
+                .is_none()
+        );
+        assert!(
+            state
+                .detail(crate::ReadScope::Project(scope(0xbb)), "eval-mine")
+                .is_none()
+        );
+    }
+
+    /// A comparison is the one place a second report's numbers are quoted, so
+    /// it is held to the same side — whether the baseline was named or found.
+    #[test]
+    fn a_baseline_never_comes_from_another_project() {
+        let earlier = datetime!(2026-08-28 09:00:00 UTC);
+        let later = datetime!(2026-08-28 10:00:00 UTC);
+        let state = fold(&[
+            in_project(
+                "eval-theirs",
+                earlier,
+                Some(scope(0xbb)),
+                json!({ "suite": "alpha", "dataset": "cases@1", "status": "succeeded",
+                        "metrics": { "exact_match": 0.9 } }),
+            ),
+            in_project(
+                "eval-global",
+                earlier,
+                None,
+                json!({ "suite": "alpha", "dataset": "cases@1", "status": "succeeded",
+                        "metrics": { "exact_match": 0.7 } }),
+            ),
+            in_project(
+                "eval-mine",
+                later,
+                Some(scope(0xaa)),
+                json!({ "suite": "alpha", "dataset": "cases@1", "status": "succeeded",
+                        "metrics": { "exact_match": 0.8 } }),
+            ),
+        ]);
+
+        let detail = state
+            .detail(crate::ReadScope::Project(scope(0xaa)), "eval-mine")
+            .expect("my report");
+        assert!(
+            detail.comparison.is_none(),
+            "there is no earlier report of mine to compare with"
+        );
+
+        // Naming one does not reach past the boundary either.
+        assert!(
+            state
+                .detail_with_baseline(
+                    crate::ReadScope::Project(scope(0xaa)),
+                    "eval-mine",
+                    Some("eval-theirs"),
+                )
+                .is_none()
+        );
     }
 }
