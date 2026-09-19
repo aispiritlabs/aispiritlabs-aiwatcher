@@ -21,8 +21,8 @@ use aiwatcher_core::MessageId;
 use aiwatcher_datasets::QueryEngine;
 use aiwatcher_execution::message::PayloadDefault;
 use aiwatcher_execution::plan::{
-    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, FlowSourceRef, FlowStepSpec,
-    PlanStep, RetryPolicy, RuntimeBinding, RuntimeKind,
+    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
+    RuntimeBinding, RuntimeKind, ScoreEvaluationSpec,
 };
 use aiwatcher_execution::store::memory::MemoryWorkflowStore;
 use aiwatcher_execution::{
@@ -43,17 +43,22 @@ fn principal(subject: &str) -> Principal {
     Principal::new("https://id.example", subject).expect("a principal")
 }
 
+/// One step, of a kind a project has a performer for.
+///
+/// It is a measurement rather than a query on purpose: `start` refuses a
+/// project's plan naming a runtime whose performer would reach past the
+/// boundary (`RuntimeKind::outside_a_project`), and every query engine is one.
+/// These tests are about *ownership*, and an owner is the same fact whatever
+/// the step runs.
 fn plan() -> ExecutionPlan {
     ExecutionPlan::seal(
-        DefinitionKind::CurationPipeline,
+        DefinitionKind::Evaluation,
         "nightly".to_owned(),
         DefinitionRevision("ab".repeat(32)),
         vec![PlanStep {
             id: "read".to_owned(),
-            runtime: RuntimeBinding::FlowPhp(FlowStepSpec {
-                script: "data_frame()->read(runs)".to_owned(),
-                source: FlowSourceRef::default(),
-                blocks: Vec::new(),
+            runtime: RuntimeBinding::ScoreEvaluation(ScoreEvaluationSpec {
+                declaration: "nightly".to_owned(),
             }),
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -277,7 +282,7 @@ struct Refuses;
 #[async_trait::async_trait]
 impl aiwatcher_execution::ActivityExecutor for Refuses {
     fn runtime(&self) -> RuntimeKind {
-        RuntimeKind::FlowPhp
+        RuntimeKind::ScoreEvaluation
     }
 
     async fn execute(

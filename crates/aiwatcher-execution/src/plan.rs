@@ -220,6 +220,60 @@ impl RuntimeKind {
         Self::CLAIMED_BY_KEY.contains(&self)
     }
 
+    /// Why a project may not run a step of this kind, if it may not.
+    ///
+    /// `None` is a kind a project's own dispatcher performs, against a store,
+    /// a registry and an artifact prefix bound to that project. `Some` is a
+    /// kind whose performer would reach **past** the boundary, and the
+    /// sentence says how — because a refusal somebody has to guess the reason
+    /// for is one they route around (ADR_0033 pt. 7: what has no scoped form
+    /// is refused by name).
+    ///
+    /// Read when a run is *started*, so a project's plan is refused while
+    /// there is still nobody waiting on it. An attempt nothing claims is a run
+    /// that looks alive for ever, which is the failure this prevents.
+    #[must_use]
+    pub const fn outside_a_project(self) -> Option<&'static str> {
+        match self {
+            // One engine per deployment, reached over HTTP with no credential,
+            // reading the instance's own routes through its catalog. A
+            // project's query would be answered from the unassigned side —
+            // neither its own data nor a refusal, which is the worst of the
+            // three.
+            Self::FlowPhp | Self::DataFusion | Self::DuckDb => Some(
+                "a query engine reads this deployment's own routes with no credential \
+                 (AIWATCHER_QUERY_URL), so a project's query would be answered from the \
+                 unassigned side rather than from the project",
+            ),
+            // The same, one service along: a notebook is handed rows and runs
+            // in a runtime that is the deployment's.
+            Self::Marimo => Some(
+                "the notebook runtime is one service for the deployment \
+                 (AIWATCHER_ML_PIPELINE_URL) and a notebook is pinned by a path in it, not \
+                 by a project",
+            ),
+            // A worker's credential names queues; it does not name a project.
+            // An attempt dispatched to one would be claimable by every worker
+            // on that queue or by none, and neither is an answer.
+            Self::PythonTask | Self::ContainerJob => Some(
+                "a worker's token names queues rather than a project (AIWATCHER_TOKEN), so \
+                 nothing may claim a project's dispatched attempt",
+            ),
+            // Publishing writes a dataset version through the object store the
+            // serve role holds, which is the instance's.
+            Self::PublishDataset => Some(
+                "publishing a dataset version runs in the serve role against the \
+                 deployment's own object store",
+            ),
+            Self::ScoreEvaluation
+            | Self::JudgeEvaluation
+            | Self::ExternalEvaluation
+            | Self::EvaluationCases
+            | Self::EvaluationTraces
+            | Self::HumanInput => None,
+        }
+    }
+
     /// Whether performing this needs a process the server does not run.
     ///
     /// A pulled attempt is claimed by a worker — a process somebody else

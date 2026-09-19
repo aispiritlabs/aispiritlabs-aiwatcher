@@ -342,6 +342,33 @@ impl StartRefused {
     }
 }
 
+/// Every step of this plan a project has no performer for, at once.
+///
+/// Read before the transaction rather than after the claim: a project's
+/// attempt whose runtime nothing here claims would wait for a reactor that
+/// does not exist, and a run that looks alive for ever is worse than a refusal
+/// somebody can read. Every problem together, for the reason
+/// [`StartRefused::Refused`] already gives — one per round trip teaches
+/// somebody to press the button again instead of reading it.
+fn refuse_outside_a_project(plan: &ExecutionPlan) -> Result<(), StartRefused> {
+    let problems: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|step| {
+            let kind = step.runtime.kind();
+            kind.outside_a_project()
+                .map(|why| format!("step {} is {}: {why}", step.id, kind.as_str()))
+        })
+        .collect();
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(StartRefused::Refused {
+        summary: "this plan has steps a project has no performer for".to_owned(),
+        problems,
+    })
+}
+
 /// What may be started here, and with what.
 ///
 /// Borrowed rather than held: the registries and the handler belong to the
@@ -476,6 +503,9 @@ impl<S: WorkflowStore> Executions<'_, S> {
     pub async fn start(&self, plan: ExecutionPlan, run: StartRun) -> Result<Started, StartRefused> {
         let handler = self.handler()?;
         let payloads = self.payload_policy(run.payloads)?;
+        if run.project.is_some() {
+            refuse_outside_a_project(&plan)?;
+        }
         let scope = run
             .project
             .as_ref()
@@ -644,7 +674,7 @@ mod tests {
     use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 
     use super::*;
-    use crate::plan::{DefinitionRevision, PlanStep, RetryPolicy};
+    use crate::plan::{DefinitionRevision, PlanStep, RetryPolicy, RuntimeKind};
     use crate::store::memory::MemoryWorkflowStore;
 
     fn store() -> Arc<dyn ObjectStore> {
@@ -1209,5 +1239,45 @@ mod tests {
             executions.payload_policy(None).expect("the pinned policy"),
             PayloadPolicy::Sealed
         );
+    }
+
+    /// Every step a project has no performer for, named at once.
+    ///
+    /// The three that matter are three different reasons, and a refusal that
+    /// said only "unsupported" would send somebody looking for a flag: the
+    /// query engine and the notebook runtime read the deployment's own routes
+    /// with no credential, and a worker's token names queues rather than a
+    /// project.
+    #[test]
+    fn a_project_plan_naming_a_runtime_it_has_no_performer_for_is_refused_by_name() {
+        for (kind, needle) in [
+            (RuntimeKind::FlowPhp, "no credential"),
+            (RuntimeKind::DataFusion, "no credential"),
+            (RuntimeKind::DuckDb, "no credential"),
+            (RuntimeKind::Marimo, "notebook runtime"),
+            (RuntimeKind::PythonTask, "names queues"),
+            (RuntimeKind::ContainerJob, "names queues"),
+            (RuntimeKind::PublishDataset, "serve role"),
+        ] {
+            let why = kind
+                .outside_a_project()
+                .unwrap_or_else(|| panic!("{} has no project performer", kind.as_str()));
+            assert!(why.contains(needle), "{}: {why}", kind.as_str());
+        }
+        // And what a project's own dispatcher performs says nothing.
+        for kind in [
+            RuntimeKind::ScoreEvaluation,
+            RuntimeKind::JudgeEvaluation,
+            RuntimeKind::ExternalEvaluation,
+            RuntimeKind::EvaluationCases,
+            RuntimeKind::EvaluationTraces,
+            RuntimeKind::HumanInput,
+        ] {
+            assert!(
+                kind.outside_a_project().is_none(),
+                "{} is performed in a project",
+                kind.as_str()
+            );
+        }
     }
 }

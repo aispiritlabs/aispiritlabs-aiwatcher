@@ -18,22 +18,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use time::OffsetDateTime;
 
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
-use aiwatcher_datasets::QueryEngine;
 use aiwatcher_execution::activity::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
     ExecutorRegistry,
 };
-use aiwatcher_execution::message::PayloadDefault;
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, FlowSourceRef, FlowStepSpec,
     PlanStep, ResolvedWindow, RetryPolicy, RuntimeBinding, RuntimeKind,
 };
 use aiwatcher_execution::store::memory::MemoryWorkflowStore;
 use aiwatcher_execution::{
-    Admitting, ArtifactCatalog, CacheEntry, CatalogedArtifact, Decider, ExecutionAuthority,
-    ExecutionHandler, ExecutionId, ExecutionOwnership, Executions, FailureClass,
-    MemoryArtifactCatalog, Performed, ProjectStart, Reactor, RunIdentity, StartRun, StateType,
-    WorkflowStore, replay,
+    Admitting, ArtifactCatalog, CacheEntry, CatalogedArtifact, ExecutionAuthority,
+    ExecutionHandler, ExecutionId, ExecutionOwnership, FailureClass, MemoryArtifactCatalog,
+    Performed, ProjectStart, Reactor, StateType, WorkflowStore, replay,
 };
 use aiwatcher_iam::{OrganizationId, Principal, ProjectId, ProjectScope};
 use async_trait::async_trait;
@@ -252,29 +249,43 @@ impl Bound {
         let store = shared.for_project(scope).expect("a project store");
         let start = ProjectStart::new(scope, principal("alice"));
         let handler = ExecutionHandler::new(Arc::clone(&store));
-        let started = Executions {
-            handler: Some(&handler),
-            pipelines: None,
-            workflows: None,
-            payloads: PayloadDefault::default(),
-            archive: false,
-            engine: QueryEngine::default(),
-            query_timeout_seconds: None,
-            notify: None,
-        }
-        .start(
-            plan(),
-            StartRun {
-                identity: RunIdentity::Key("nightly".to_owned()),
-                parameters: BTreeMap::new(),
-                requested_by: "somebody".to_owned(),
-                decided_by: Decider::Local,
-                payloads: None,
-                project: Some(start.clone()),
-            },
-        )
-        .await
-        .expect("a project start");
+        // Written through the store rather than through
+        // `aiwatcher_execution::start`, on purpose. That use case refuses a
+        // project's plan naming a runtime a project has no performer for
+        // (`RuntimeKind::outside_a_project`), and every **cacheable** runtime
+        // is currently one of those — so today no plan a project may start
+        // reaches the index at all. What these tests hold is the reactor's
+        // ordering, which has to be true of any runtime a project ever
+        // performs, including the first cacheable one; so the run is created
+        // here and the use case's own refusal is proved in its own tests.
+        let execution = ExecutionId::new("nightly-in-a-project");
+        let message_id = aiwatcher_core::MessageId::new(format!("start/{execution}"));
+        let now = time::OffsetDateTime::now_utc();
+        handler
+            .start(
+                &execution,
+                aiwatcher_execution::WorkflowMessage::Command(
+                    aiwatcher_execution::WorkflowCommand::StartExecution {
+                        execution_id: execution.clone(),
+                        plan: Box::new(plan()),
+                        owner: aiwatcher_execution::ExecutionOwner::Local,
+                        mode: aiwatcher_execution::ExecutionMode::Compiled,
+                        payloads: Default::default(),
+                        requested_by: "somebody".to_owned(),
+                        input: BTreeMap::new(),
+                    },
+                ),
+                aiwatcher_execution::MessageMetadata::caused_by(
+                    &execution,
+                    &message_id,
+                    message_id.clone(),
+                    now,
+                ),
+                aiwatcher_execution::Now::at(now),
+                Some(ExecutionOwnership::of(&start, &plan())),
+            )
+            .await
+            .expect("a project start");
 
         let catalog = Arc::new(Counting::default());
         let executor = Arc::new(Fake::default());
@@ -287,7 +298,7 @@ impl Bound {
         .with_authority(Arc::clone(&authority) as Arc<dyn ExecutionAuthority>);
 
         Self {
-            execution: started.execution_id,
+            execution,
             store,
             ownership: ExecutionOwnership::of(&start, &plan()),
             authority,
