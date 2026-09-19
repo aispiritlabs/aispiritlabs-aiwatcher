@@ -18308,6 +18308,301 @@
         }
       }
     },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluation-suites": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Suites: the level above a report, and what MLflow calls an experiment.",
+        "description": "A separate resource rather than `/evaluations/suites`, so an evaluation\nthat happens to be called `suites` is still reachable.",
+        "operationId": "project_list_evaluation_suites",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuitePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluations": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Evaluation reports, newest first.",
+        "description": "The other half of the loop the traces come from: a trace says what one run\ndid, an evaluation says whether the thing producing those runs is getting\nbetter. They arrive on the same log and are folded apart — an `eval.*`\nevent produces no span and no row in the runs list. See\n`aiwatcher_projector::evaluations`.",
+        "operationId": "project_list_evaluations",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only reports that finished — or, while they are still running, started\n— in the last this-many seconds. See [`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "suite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/EvaluationStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the id, the suite, the dataset, the variant and the\nparameter values.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last evaluation id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/evaluations/{evaluation_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One evaluation: its parameters, its metrics, its cases, the document the\nproducer attached, and the previous evaluation of the same suite on the\nsame dataset.",
+        "operationId": "project_get_evaluation",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "description": "The evaluation to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline_id",
+            "in": "query",
+            "description": "Explicit baseline; missing IDs return 404, never an automatic replacement.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{organization}/projects/{project}/events/stream": {
       "get": {
         "tags": [
@@ -18423,6 +18718,178 @@
           },
           "404": {
             "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/experiments": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "The contexts results were published in, newest first — each an experiment:\nwhat it measures, how many results and how many variants.",
+        "operationId": "project_list_experiments",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentIndex"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/experiments/{context_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every result published in one context, newest first, compared with the\nbaseline when one is named — and the whole-run timing of each managed run\nbehind them.",
+        "operationId": "project_get_experiment",
+        "parameters": [
+          {
+            "name": "context_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "A result in this context every other row is compared with.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the read model still holds. A window counts every period it\nreaches into, whole, and says where counting began.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "503": {
             "description": "Current project authorization failed or is unavailable"
@@ -22203,6 +22670,458 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/workflow-executions": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Executions, newest first.",
+        "operationId": "project_list_workflow_executions",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only executions with activity in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ExecutionStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the execution id, the workflow id and the agents.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last execution id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/workflow-executions/{workflow_run_id}": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "One execution: its nodes, its declared edges, and the messages observed.",
+        "operationId": "project_get_workflow_execution",
+        "parameters": [
+          {
+            "name": "workflow_run_id",
+            "in": "path",
+            "description": "The execution to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/workflow-executions/{workflow_run_id}/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for one execution: history, a catch-up marker, then live.",
+        "description": "Scoped by `workflow_run_id` rather than by run, which is what makes a\nstage-per-pod workflow watchable: the pod that has not started yet is the\ninteresting one, and a subscription resolved to today's run ids would never\nsee it.",
+        "operationId": "project_stream_workflow_execution",
+        "parameters": [
+          {
+            "name": "workflow_run_id",
+            "in": "path",
+            "description": "The execution to follow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/workflows": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Every workflow the projection knows, most recently active first.",
+        "description": "Includes workflows nothing ever declared: a producer that has been setting\n`workflow_id` since before there was a graph to draw still belongs in the\npicker, with whatever shape its runs revealed.",
+        "operationId": "project_list_workflows",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only graphs with activity in the last this-many seconds. See\n[`crate::window`]. A declaration is not evicted by it — the catalog\nkeeps the shape, the window decides what is shown.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the id and the name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last workflow id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{organization}/projects/{project}/workflows/{workflow_id}": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "One workflow's declared shape.",
+        "operationId": "project_get_workflow",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "The workflow to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "401": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "403": {
+            "description": "Current project authorization failed or is unavailable"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Current project authorization failed or is unavailable"
           }
         }
       }
@@ -30832,6 +31751,17 @@
             "format": "double",
             "description": "From the cases where there are any, from `metrics.pass_rate` where the\nproducer only reported the aggregate."
           },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this report belongs to (ADR_0033), from the **first**\nevent folded into it — including when that first event carried none,\nwhich is the global side and every report this build has held.\n\nSet once and never moved, which is [`crate::RunSummary::project`]'s\nrule and is right here for its reason: an `evaluation_id` *is* a run\nid, so it names one process rather than a name a producer reuses. It\nis a fact about whose the report is, and says nothing about who may\nread it — that is a grant, asked of IAM per request."
+              }
+            ]
+          },
           "report_bytes": {
             "type": "integer",
             "description": "Size of the report document as it arrived, whether or not it was kept.",
@@ -31774,6 +32704,17 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project this traversal belongs to. Absent is the global side.\n\nPart of the key for the reason [`WorkflowDefinition::project`] gives: a\n`workflow_run_id` is a producer's text joining the stages of one\ntraversal, so two projects' executions are two rows and neither folds\nthe other's events."
+              }
+            ]
           },
           "runs": {
             "type": "array",
@@ -45939,6 +46880,17 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowNode"
             }
+          },
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectScope",
+                "description": "Which project declared it (ADR_0033, IAM-02 E2's remainder). Absent is\nthe global side, which is every graph this build folded before a\nproject could run one.\n\n**Part of the key, not a label on the row.** A `workflow_id` is a name\na producer re-declares on every execution, so two projects both running\n`house-import` is the ordinary case rather than a collision — and a\ncatalog keyed by the name alone would hold one shape, belonging to\nwhichever project declared first, with the other project's `/workflows`\nempty while it declares its graph every run. That is where this parts\ncompany with [`crate::RunSummary::project`], which keys by a run id: a\nrun is one process, and first-seen-wins leaves it where it started."
+              }
+            ]
           },
           "running": {
             "type": "integer",

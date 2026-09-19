@@ -3034,6 +3034,7 @@ export type EvaluationSummary = {
      * producer only reported the aggregate.
      */
     pass_rate?: number | null;
+    project?: null | ProjectScope;
     /**
      * Size of the report document as it arrived, whether or not it was kept.
      */
@@ -3476,6 +3477,7 @@ export type ExecutionSummary = {
     nodes_running: number;
     nodes_succeeded: number;
     nodes_total: number;
+    project?: null | ProjectScope;
     /**
      * The runs this traversal is made of. One for a single-process workflow,
      * one per stage for a stage-per-pod one.
@@ -11083,6 +11085,7 @@ export type WorkflowDefinition = {
     last_activity_at: string;
     name: string;
     nodes: Array<WorkflowNode>;
+    project?: null | ProjectScope;
     running: number;
     succeeded: number;
     /**
@@ -18879,6 +18882,151 @@ export type ProjectListScorecardVersionsResponses = {
 
 export type ProjectListScorecardVersionsResponse = ProjectListScorecardVersionsResponses[keyof ProjectListScorecardVersionsResponses];
 
+export type ProjectListEvaluationSuitesData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluation-suites';
+};
+
+export type ProjectListEvaluationSuitesErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListEvaluationSuitesResponses = {
+    200: SuitePage;
+};
+
+export type ProjectListEvaluationSuitesResponse = ProjectListEvaluationSuitesResponses[keyof ProjectListEvaluationSuitesResponses];
+
+export type ProjectListEvaluationsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only reports that finished — or, while they are still running, started
+         * — in the last this-many seconds. See [`crate::window`].
+         */
+        window_seconds?: number | null;
+        suite?: string | null;
+        dataset?: string | null;
+        variant?: string | null;
+        status?: null | EvaluationStatus;
+        /**
+         * Substring over the id, the suite, the dataset, the variant and the
+         * parameter values.
+         */
+        search?: string | null;
+        /**
+         * Cursor: the last evaluation id on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluations';
+};
+
+export type ProjectListEvaluationsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListEvaluationsResponses = {
+    200: EvaluationPage;
+};
+
+export type ProjectListEvaluationsResponse = ProjectListEvaluationsResponses[keyof ProjectListEvaluationsResponses];
+
+export type ProjectGetEvaluationData = {
+    body?: never;
+    path: {
+        /**
+         * The evaluation to fetch
+         */
+        evaluation_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Explicit baseline; missing IDs return 404, never an automatic replacement.
+         */
+        baseline_id?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/evaluations/{evaluation_id}';
+};
+
+export type ProjectGetEvaluationErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetEvaluationError = ProjectGetEvaluationErrors[keyof ProjectGetEvaluationErrors];
+
+export type ProjectGetEvaluationResponses = {
+    200: EvaluationDetail;
+};
+
+export type ProjectGetEvaluationResponse = ProjectGetEvaluationResponses[keyof ProjectGetEvaluationResponses];
+
 export type ProjectStreamEventsData = {
     body?: never;
     path: {
@@ -18944,6 +19092,99 @@ export type ProjectStreamEventsResponses = {
      */
     200: unknown;
 };
+
+export type ProjectListExperimentsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/experiments';
+};
+
+export type ProjectListExperimentsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListExperimentsError = ProjectListExperimentsErrors[keyof ProjectListExperimentsErrors];
+
+export type ProjectListExperimentsResponses = {
+    200: ExperimentIndex;
+};
+
+export type ProjectListExperimentsResponse = ProjectListExperimentsResponses[keyof ProjectListExperimentsResponses];
+
+export type ProjectGetExperimentData = {
+    body?: never;
+    path: {
+        context_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * A result in this context every other row is compared with.
+         */
+        baseline?: string | null;
+        /**
+         * How far back the observed runs reach, in seconds; absent or zero is
+         * everything the read model still holds. A window counts every period it
+         * reaches into, whole, and says where counting began.
+         */
+        window_seconds?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/experiments/{context_id}';
+};
+
+export type ProjectGetExperimentErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    501: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetExperimentError = ProjectGetExperimentErrors[keyof ProjectGetExperimentErrors];
+
+export type ProjectGetExperimentResponses = {
+    200: ExperimentView;
+};
+
+export type ProjectGetExperimentResponse = ProjectGetExperimentResponses[keyof ProjectGetExperimentResponses];
 
 export type ProjectListLabsData = {
     body?: never;
@@ -20642,6 +20883,251 @@ export type ProjectGetWorkflowDefinitionResponses = {
 };
 
 export type ProjectGetWorkflowDefinitionResponse = ProjectGetWorkflowDefinitionResponses[keyof ProjectGetWorkflowDefinitionResponses];
+
+export type ProjectListWorkflowExecutionsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only executions with activity in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
+        workflow_id?: string | null;
+        status?: null | ExecutionStatus;
+        /**
+         * Substring over the execution id, the workflow id and the agents.
+         */
+        search?: string | null;
+        /**
+         * Cursor: the last execution id on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-executions';
+};
+
+export type ProjectListWorkflowExecutionsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListWorkflowExecutionsResponses = {
+    200: ExecutionPage;
+};
+
+export type ProjectListWorkflowExecutionsResponse = ProjectListWorkflowExecutionsResponses[keyof ProjectListWorkflowExecutionsResponses];
+
+export type ProjectGetWorkflowExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The execution to fetch
+         */
+        workflow_run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-executions/{workflow_run_id}';
+};
+
+export type ProjectGetWorkflowExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetWorkflowExecutionError = ProjectGetWorkflowExecutionErrors[keyof ProjectGetWorkflowExecutionErrors];
+
+export type ProjectGetWorkflowExecutionResponses = {
+    200: ExecutionDetail;
+};
+
+export type ProjectGetWorkflowExecutionResponse = ProjectGetWorkflowExecutionResponses[keyof ProjectGetWorkflowExecutionResponses];
+
+export type ProjectStreamWorkflowExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The execution to follow
+         */
+        workflow_run_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Resume point. Usually unnecessary for SSE — the browser sends
+         * `Last-Event-ID` on its own — but explicit here for non-browser clients.
+         */
+        from?: string | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflow-executions/{workflow_run_id}/stream';
+};
+
+export type ProjectStreamWorkflowExecutionErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectStreamWorkflowExecutionResponses = {
+    /**
+     * text/event-stream of LiveFrame
+     */
+    200: unknown;
+};
+
+export type ProjectListWorkflowsData = {
+    body?: never;
+    path: {
+        organization: string;
+        project: string;
+    };
+    query?: {
+        /**
+         * Only graphs with activity in the last this-many seconds. See
+         * [`crate::window`]. A declaration is not evicted by it — the catalog
+         * keeps the shape, the window decides what is shown.
+         */
+        window_seconds?: number | null;
+        /**
+         * Substring over the id and the name.
+         */
+        search?: string | null;
+        /**
+         * Cursor: the last workflow id on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflows';
+};
+
+export type ProjectListWorkflowsErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    404: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectListWorkflowsResponses = {
+    200: WorkflowPage;
+};
+
+export type ProjectListWorkflowsResponse = ProjectListWorkflowsResponses[keyof ProjectListWorkflowsResponses];
+
+export type ProjectGetWorkflowData = {
+    body?: never;
+    path: {
+        /**
+         * The workflow to fetch
+         */
+        workflow_id: string;
+        organization: string;
+        project: string;
+    };
+    query?: never;
+    url: '/api/v1/orgs/{organization}/projects/{project}/workflows/{workflow_id}';
+};
+
+export type ProjectGetWorkflowErrors = {
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    400: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    401: unknown;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    403: unknown;
+    404: ErrorBody;
+    /**
+     * Current project authorization failed or is unavailable
+     */
+    503: unknown;
+};
+
+export type ProjectGetWorkflowError = ProjectGetWorkflowErrors[keyof ProjectGetWorkflowErrors];
+
+export type ProjectGetWorkflowResponses = {
+    200: WorkflowDefinition;
+};
+
+export type ProjectGetWorkflowResponse = ProjectGetWorkflowResponses[keyof ProjectGetWorkflowResponses];
 
 export type ListPromptsData = {
     body?: never;
